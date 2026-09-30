@@ -1,28 +1,6 @@
-"""FIPS 203 (ML-KEM) -- complete reference implementation, stdlib only.
-
-Implements K-PKE (NTT over Z_3329, ExpandA via SHAKE128, CBD sampling,
-compress/decompress, ByteEncode/ByteDecode), the derandomized ML-KEM interfaces
-KeyGen_internal(d, z), Encaps_internal(ek, m), Decaps_internal(dk, c)
-(Algorithms 16-18) and the external ones KeyGen(), Encaps(ek), Decaps(dk, c)
-(Algorithms 19-21, with the RBG passed in as a callable) for all three parameter
-sets (ML-KEM-512/768/1024), plus the FIPS 203 section 7.2 / 7.3 input checks as
-separate, callable predicates.
-
-Algorithms 16-18 are also available as lists of steps over a work record
-(`*_internal_steps`).  The one-shot functions are built from those lists, so the
-official vectors that anchor the one-shot functions anchor the steps as well; the
-KLEE harness halts between steps to model an interrupted long-running operation
-(Rule MGR8 of the KLEE specification).
-
-The input checks are separate predicates because <<KLEE-PQC-ML-KEM>> performs
-them at a point of its own choosing (when `encapsk`, `decapsk` or `ciphertext`
-finishes loading) and treats the outcomes differently: a key check failure is a
-configuration error, a ciphertext check failure a data error.
-
-Anchored by kat/mlkem-kat.py against official NIST ACVP-Server vectors
-(internalProjection.json of ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203);
-this module holds no vectors of its own.
-"""
+"""FIPS 203 (ML-KEM) reference implementation, stdlib only: K-PKE, Algorithms 16-18 (also as step
+lists, so a caller can halt between steps), 19-21 with the RBG passed in, and the 7.2/7.3 input checks.
+Anchored by mlkem-kat.py against NIST ACVP vectors."""
 
 import hashlib
 
@@ -108,14 +86,13 @@ def poly_sub(f, g):
 
 def sample_ntt(seed34):
     """SampleNTT: rejection-sample a polynomial in NTT domain from SHAKE128."""
-    # SHAKE128 stream; 3 bytes -> two candidate 12-bit values
     out = []
     xof = hashlib.shake_128(seed34)
-    buf = xof.digest(704)         # 704 bytes gives ~469 candidates; enough w.h.p.
+    buf = xof.digest(704)
     pos = 0
     while len(out) < 256:
         if pos + 3 > len(buf):
-            buf = xof.digest(len(buf) + 512)   # extend deterministically (same stream prefix)
+            buf = xof.digest(len(buf) + 512)   # same stream, longer
         c0, c1, c2 = buf[pos], buf[pos + 1], buf[pos + 2]
         pos += 3
         d1 = c0 + 256 * (c1 % 16)
@@ -240,11 +217,10 @@ def sizes(pset):
     return 384 * k + 32, 768 * k + 96, 32 * (du * k + dv), 32
 
 # ---------------------------------------------------------------- ML-KEM (Algorithms 16-18)
-# Each *_internal_steps(...) returns the algorithm as a list of callables over a work
-# record `w` (a dict).  The comments give the FIPS 203 line numbers each step covers.
+# Each *_internal_steps returns the algorithm as callables over a work dict w (FIPS 203 line numbers).
 
 def keygen_internal_steps(pset):
-    """Algorithm 16, ML-KEM.KeyGen_internal: `w` holds d, z on entry and ek, dk on exit."""
+    """Algorithm 16: w holds d, z on entry and ek, dk on exit."""
     def lines_1_2(w):             # (ek_PKE, dk_PKE) <- K-PKE.KeyGen(d); ek <- ek_PKE
         w['ek'], w['dk_pke'] = kpke_keygen(w['d'], pset)
     def line_3(w):                # dk <- (dk_PKE || ek || H(ek) || z)
@@ -252,7 +228,7 @@ def keygen_internal_steps(pset):
     return [lines_1_2, line_3]
 
 def encaps_internal_steps(pset):
-    """Algorithm 17, ML-KEM.Encaps_internal: `w` holds ek, m on entry and K, c on exit."""
+    """Algorithm 17: w holds ek, m on entry and K, c on exit."""
     def line_1(w):                # (K, r) <- G(m || H(ek))
         w['K'], w['r'] = G(w['m'] + H(w['ek']))
     def line_2(w):                # c <- K-PKE.Encrypt(ek, m, r)
@@ -260,10 +236,7 @@ def encaps_internal_steps(pset):
     return [line_1, line_2]
 
 def decaps_internal_steps(pset, disable_implicit_rejection=False):
-    """Algorithm 18, ML-KEM.Decaps_internal: `w` holds dk, c on entry and K on exit.
-
-    disable_implicit_rejection=True sabotages lines 9-11 for the harness's negative
-    control; never use it otherwise."""
+    """Algorithm 18: w holds dk, c on entry and K on exit (disable_implicit_rejection: negative control)."""
     k = PARAMS[pset][0]
     def lines_1_5(w):             # slice dk; m' <- K-PKE.Decrypt(dk_PKE, c)
         dk = w['dk']
@@ -297,14 +270,12 @@ def encaps_internal(ek, m, pset):
     return w['K'], w['c']
 
 def decaps_internal(dk, c, pset, disable_implicit_rejection=False):
-    """ML-KEM.Decaps_internal.  disable_implicit_rejection=True sabotages the
-    c != c' branch for the harness's negative control; never use otherwise."""
+    """Algorithm 18 (disable_implicit_rejection: negative control only)."""
     w = _run(decaps_internal_steps(pset, disable_implicit_rejection), {'dk': dk, 'c': c})
     return w['K']
 
 # ---------------------------------------------------------------- ML-KEM (Algorithms 19-21)
-# `rbg` is a callable returning 32 random bytes, or None when the RBG fails (the NULL
-# of the standard); a None result of these functions is the standard's bottom value.
+# rbg() returns 32 bytes, or None when the RBG fails; a None result is the standard's bottom.
 
 def keygen(pset, rbg):
     """Algorithm 19, ML-KEM.KeyGen()."""
@@ -315,25 +286,20 @@ def keygen(pset, rbg):
     return keygen_internal(d, z, pset)                 # lines 6-7
 
 def encaps(ek, pset, rbg):
-    """Algorithm 20, ML-KEM.Encaps(ek); the section 7.2 check is the caller's duty."""
+    """Algorithm 20, ML-KEM.Encaps(ek); the 7.2 check is the caller's."""
     m = rbg()                                          # line 1
     if m is None:                                      # lines 2-4
         return None
     return encaps_internal(ek, m, pset)                # lines 5-6
 
 def decaps(dk, c, pset):
-    """Algorithm 21, ML-KEM.Decaps(dk, c); the section 7.3 checks are the caller's duty."""
+    """Algorithm 21, ML-KEM.Decaps(dk, c); the 7.3 checks are the caller's."""
     return decaps_internal(dk, c, pset)                # lines 1-2
 
 # ---------------------------------------------------------------- FIPS 203 7.2 / 7.3 checks
-# <<KLEE-PQC-ML-KEM>> performs these when the corresponding field finishes loading.
 
 def check_encaps_input(ek, pset):
-    """FIPS 203 7.2: encapsulation key check (type + modulus).  True = valid.
-
-    <<KLEE-PQC-ML-KEM>>: performed upon completion of State _encapsk_Input_; a
-    failure is a CONFIGURATION error (Error State Invalid).
-    """
+    """FIPS 203 7.2 encapsulation key check (type, modulus); True if valid."""
     k = PARAMS[pset][0]
     if len(ek) != 384 * k + 32:
         return False                                   # type check
@@ -344,20 +310,12 @@ def check_encaps_input(ek, pset):
     return True
 
 def check_ciphertext(c, pset):
-    """FIPS 203 7.3: ciphertext type check.  True = valid.
-
-    <<KLEE-PQC-ML-KEM>>: performed upon completion of State _ciphertext_Input_; a
-    failure is a DATA error (State Failure), unlike the key checks below.
-    """
+    """FIPS 203 7.3 ciphertext type check; True if valid."""
     k, _, _, du, dv = PARAMS[pset]
     return len(c) == 32 * (du * k + dv)
 
 def check_decaps_key(dk, pset):
-    """FIPS 203 7.3: decapsulation key checks (type + hash).  True = valid.
-
-    <<KLEE-PQC-ML-KEM>>: performed upon completion of State _decapsk_Input_; a
-    failure is a CONFIGURATION error (Error State Invalid).
-    """
+    """FIPS 203 7.3 decapsulation key checks (type, hash); True if valid."""
     k = PARAMS[pset][0]
     if len(dk) != 768 * k + 96:
         return False                                   # dk type check
@@ -367,8 +325,5 @@ def check_decaps_key(dk, pset):
     return True
 
 def check_decaps_input(dk, c, pset):
-    """FIPS 203 7.3: both decapsulation input checks together.  True = valid.
-
-    Retained because the ACVP `decapsulationKeyCheck` vectors exercise the pair.
-    """
+    """FIPS 203 7.3 ciphertext and decapsulation key checks together; True if valid."""
     return check_ciphertext(c, pset) and check_decaps_key(dk, pset)

@@ -1,1715 +1,827 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE ML-KEM Machines (modules/ROOT/pages/Zkl-ISA-machines.adoc,
-anchor [[KLEE-PQC-ML-KEM]]) against FIPS 203.
-
-What this harness validates
----------------------------
-1.  *Standards conformance of what the spec delegates.*  kat/fips203.py is a real,
-    complete FIPS 203 implementation (K-PKE with NTT over Z_3329, ExpandA via
-    SHAKE128, CBD sampling, Compress/Decompress, ByteEncode/ByteDecode, the
-    derandomized Algorithms 16-18 and Algorithms 19-21 with the RBG passed in).
-    It is anchored here, byte for byte, against official NIST ACVP vectors for
-    all three parameter sets.
-
-2.  *The KLEE specification text as it now stands*, transcribed into a model of a
-    locker holding an ML-KEM CC (class MLKEMLocker):
-
-    - the sizes of <<KLEE-ML-KEM-sizes>>, of the Internal State and of the
-      Serialized Content, and the `kl.size` values they imply
-      (<<KLEE-instruction-size>>);
-    - the MDH layout of <<KLEE-metadata-header>>, the _Machine_ encoding of
-      <<KLEE-exec-encodings>>, and the State numbers of <<KLEE-State-field>>;
-    - the state machine -- _Ready_, _GenerateKeyPair_, _Encapsulate_,
-      _Decapsulate_, the three _*_Input_ and the two _*_Output_ States -- with the
-      `kl.setst` immediates of <<KLEE-instruction-setst>> and Rules SGR2, SGR4-SGR8,
-      SGR10 and SGR16 of <<KLEE-State-management>>;
-    - the loading and emitting of the long fields under Rule
-      <<KLEE-MGR-load-long-field>>, whose counter _W_ is _MachineUse_ in BYTES;
-    - the FIPS 203 {sect}7.2 / {sect}7.3 input checks, performed when a field
-      finishes loading: a key check failure is a *configuration* error (Error
-      State _Invalid_), a ciphertext type check failure a *data* error (State
-      _Failure_, a Valid State);
-    - the long-running operations of Rule <<KLEE-MGR-progress-discard>> (MGR8),
-      for which _MachineUse_ is the progress field _P_: a halted operation resumes
-      with the random values it drew, and every transition of the _State_ discards
-      them and their intermediate values;
-    - Encaps deriving both outputs from one drawn value, and Decaps running
-      unconditionally, implicit rejection being indistinguishable to the caller;
-    - `kl.derive` (<<KLEE-instruction-derive>>, <<KLEE-derive-endpoints>>): the
-      exportable field `sharedkey` into the key field of a separately provisioned
-      single-key Machine of at most 256 bits in State _Ready_, a restricted
-      transfer (Rule <<KLEE-DER-shared-secret>>) that narrows the destination's
-      policies (Rule <<KLEE-DER-narrowing>>); the outputs of the emitting States
-      into a hash, an unrestricted transfer (Rule
-      <<KLEE-DER-exec-implies-unrestricted>>); the Checks of Rule
-      <<KLEE-DER-checks>>, the Transfer Size Rule and the gate order of Rule
-      <<KLEE-SGR-gate-order>>.
-
-3.  *Where the text is silent, ambiguous or inconsistent*, an INFO line states the
-    reading the model takes and a SPEC-NOTE line records the defect.  Nothing is
-    patched silently.
-
-The model does not use `process_VLI`: <<KLEE-PQC-ML-KEM>> loads and emits its long
-fields under Rule <<KLEE-MGR-load-long-field>> alone, with a byte counter.  The RBG
-(<<KLEE-RBG>>) is injectable so that the derandomized official vectors can be used:
-FIPS 203 Algorithms 19 and 20 draw `d`, `z`, resp. `m`, and hand them to Algorithms
-16 and 17, which the vectors fix.
-
-Vector provenance
------------------
-    usnistgov/ACVP-Server, gen-val/json-files/ML-KEM-keyGen-FIPS203/
-        internalProjection.json          (tcId 1, 26, 51)
-    usnistgov/ACVP-Server, gen-val/json-files/ML-KEM-encapDecap-FIPS203/
-        internalProjection.json          (encapsulation tcId 1, 26, 51;
-                                          decapsulation tcId 76, 86, 88, 96;
-                                          encapsulationKeyCheck tcId 116, 117, 137;
-                                          decapsulationKeyCheck tcId 126, 128)
-    fetched 2026-08-26; the exact case identifiers are carried in each record.
-
-Negative controls (KAT-EXPECT-FAIL), each a deliberately wrong model that must fail
-a check the faithful model passes:
-    - decapsulation with the implicit-rejection branch disabled;
-    - loading with the FIPS 203 key checks disabled;
-    - resuming an interrupted operation with freshly drawn random values.
-"""
-
-import copy
-import os
-import sys
-
+"""KATs for the KLEE ML-KEM Machines (<<KLEE-PQC-ML-KEM>>): fips203.py against NIST ACVP-Server
+vectors (ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 internalProjection.json, fetched
+2026-08-26, tcId in each record), and a model of an ML-KEM locker against the spec text."""
+import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fips203 as K  # noqa: E402
+from common import (ERROR_STATES, MDH_FIELD, MDH_FIELDS, IllegalInstruction, check, control,  # noqa: E402
+                    done, info, mdh_pack, raises, section, sl, spec_note,
+                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
+                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID,
+                    KL_STATE_PRIV_VIOLATION as PRIV_VIOLATION, KL_STATE_EXPIRED as EXPIRED,
+                    KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_HASH_ABSORB as HASH_ABSORB,
+                    KL_STATE_SET_AUX_VALUE as SET_AUX)
 
-import fips203 as K                                       # noqa: E402
-from common import sl                                     # noqa: E402
+CLEAR_ADS = 64                                     # kl_cfg_clear_ads
+GEN, ENC, DEC, EK_IN, DK_IN, EK_OUT, CT_IN, CT_OUT = range(2, 10)
+NAME = dict(zip(range(2, 10), ('GenerateKeyPair', 'Encapsulate', 'Decapsulate', 'encapsk_Input',
+                               'decapsk_Input', 'encapsk_Output', 'ciphertext_Input', 'ciphertext_Output')))
+NAME.update({READY: 'Ready', SUCCESS: 'Success', FAILURE: 'Failure', INVALID: 'Invalid'})
+LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Success', 47)]   # the ML-KEM State list, verbatim
+LONG = (GEN, ENC, DEC)
+IN_F = {EK_IN: 'encapsk', DK_IN: 'decapsk', CT_IN: 'ciphertext'}
+OUT_F = {EK_OUT: 'encapsk', CT_OUT: 'ciphertext'}
+FIELDS = ('encapsk', 'decapsk', 'ciphertext', 'sharedkey')
+# <<KLEE-ML-KEM-sizes>> (bytes); Internal State (bits: decapsk, its encapsk, ciphertext, sharedkey) and
+# its byte total; Serialized Content (bits) and its "MDH included" bytes and 128-bit blocks.
+SIZES = {512: (800, 1632, 768, 32), 768: (1184, 2400, 1088, 32), 1024: (1568, 3168, 1568, 32)}
+IS_BITS = {512: (13056, 6400, 6144, 256), 768: (19200, 9472, 8704, 256), 1024: (25344, 12544, 12544, 256)}
+IS_BYTES = {512: 3232, 768: 4704, 1024: 6336}
+SC_BITS = {512: (13056, 6144, 256), 768: (19200, 8704, 256), 1024: (25344, 12544, 256)}
+SC_TOTAL = {512: (2448, 153), 768: (3536, 221), 1024: (4784, 299)}
 
-# ---------------------------------------------------------------- reporting
+def mc(typ, mode):                                 # <<KLEE-exec-encodings>>
+    return typ << 4 | mode
 
-_results = []
-_controls = {}
+def key(bits):
+    return {READY: ('key', bits)}
 
-
-def chk(name, ok, note=''):
-    _results.append(bool(ok))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{note}]" if note else ''))
-    return ok
-
-
-def info(text):
-    print(f"  INFO       {text}")
-
-
-def spec_note(text):
-    print(f"  SPEC-NOTE  {text}")
-
-
-def negative(label, name, ok):
-    """A negative control: `ok` is the verdict of a check run against a deliberately
-    wrong model, and must come out false."""
-    print(f'KAT-EXPECT-FAIL: {label}')
-    print(f"  {'PASS' if ok else 'FAIL'}  {label}: {name}   [expected to fail]")
-    _controls[label] = not ok
-
-
-# ================================================================ KLEE model
-#
-# MDH fields (hi, lo), both inclusive, from modules/ROOT/pages/Zkl-ISA-unpriv.adoc
-# <<KLEE-metadata-header>>.
-MDH_FIELDS = {
-    'Machine':          (11, 0),
-    'MachinePolicy':    (13, 12),
-    'MachineExtension': (15, 14),
-    'SCProtection':     (18, 16),
-    'State':            (24, 19),
-    'StateExtension':   (28, 25),
-    'KeyType':          (30, 29),
-    'AuxDataLen':       (45, 32),
-    'ADSDropped':       (47, 47),
-    'AuxInfo':          (61, 48),
-    'Version':          (63, 62),
-    'UsagePolicy':      (68, 64),
-    'Locality':         (77, 69),
-    'MachineUse':       (95, 80),
-    'ExpirationDate':   (115, 96),
-}
-MDH_RESERVED = [(31, 31), (46, 46), (79, 78), (127, 116)]
-
-F_MACHINE = MDH_FIELDS['Machine']
-F_STATE = MDH_FIELDS['State']
-F_STATEEXT = MDH_FIELDS['StateExtension']
-F_KEYTYPE = MDH_FIELDS['KeyType']
-F_AUXDATALEN = MDH_FIELDS['AuxDataLen']
-F_ADSDROPPED = MDH_FIELDS['ADSDropped']
-F_AUXINFO = MDH_FIELDS['AuxInfo']
-F_USAGEPOLICY = MDH_FIELDS['UsagePolicy']
-F_LOCALITY = MDH_FIELDS['Locality']
-F_MACHINEUSE = MDH_FIELDS['MachineUse']
-F_EXPIRATION = MDH_FIELDS['ExpirationDate']
-F_SCPROT = MDH_FIELDS['SCProtection']
-
-
-def mdh_get(mdh, fld):
-    hi, lo = fld
-    return sl(mdh, hi, lo)
-
-
-def mdh_set(mdh, fld, val):
-    hi, lo = fld
-    m = ((1 << (hi - lo + 1)) - 1) << lo
-    return (mdh & ~m) | ((val << lo) & m)
-
-
-# Global State numbers: <<KLEE-state-off>>, <<KLEE-states-valid>>, <<KLEE-states-error>>.
-S_UNCONFIGURED, S_READY, S_SUCCESS, S_FAILURE = 0, 1, 46, 47
-S_INVALID, S_PRIV_VIOLATION, S_EXPIRED = 49, 52, 53
-ERROR_STATES = range(48, 56)
-# The one architected `kl.setst` immediate above the States (<<KLEE-instruction-setst>>).
-KL_CFG_CLEAR_ADS = 64
-
-# ML-KEM States, from the list of [[KLEE-PQC-ML-KEM]] "State Machine".
-S_GENKEYPAIR, S_ENCAPSULATE, S_DECAPSULATE = 2, 3, 4
-S_EK_IN, S_DK_IN, S_EK_OUT, S_CT_IN, S_CT_OUT = 5, 6, 7, 8, 9
-MLKEM_STATES = {
-    S_GENKEYPAIR: 'GenerateKeyPair', S_ENCAPSULATE: 'Encapsulate',
-    S_DECAPSULATE: 'Decapsulate', S_EK_IN: 'encapsk_Input', S_DK_IN: 'decapsk_Input',
-    S_EK_OUT: 'encapsk_Output', S_CT_IN: 'ciphertext_Input', S_CT_OUT: 'ciphertext_Output',
-}
-STATE_NAME = dict(MLKEM_STATES)
-STATE_NAME.update({S_READY: 'Ready', S_SUCCESS: 'Success', S_FAILURE: 'Failure',
-                   S_INVALID: 'Invalid', S_EXPIRED: 'Expired'})
-# The same list restates three global States with these numbers, verbatim.
-MLKEM_LIST_GLOBAL = {'Ready': 1, 'Success': 22, 'Failure': 23}
-BOOK1_GLOBAL = {'Ready': S_READY, 'Success': S_SUCCESS, 'Failure': S_FAILURE}
-
-LONG_RUNNING = (S_GENKEYPAIR, S_ENCAPSULATE, S_DECAPSULATE)
-IN_FIELDS = {S_EK_IN: 'encapsk', S_DK_IN: 'decapsk', S_CT_IN: 'ciphertext'}
-OUT_FIELDS = {S_EK_OUT: 'encapsk', S_CT_OUT: 'ciphertext'}
-FIELD_NAMES = ('encapsk', 'decapsk', 'ciphertext', 'sharedkey')
-
-# <<KLEE-ML-KEM-sizes>>, in bytes: encapsk, decapsk, ciphertext, sharedkey.
-SPEC_SIZES = {512: (800, 1632, 768, 32), 768: (1184, 2400, 1088, 32),
-              1024: (1568, 3168, 1568, 32)}
-# The *Internal State* bullets, in bits: decapsk, the encapsk it embeds, ciphertext,
-# sharedkey.
-SPEC_IS_BITS = {512: (13056, 6400, 6144, 256), 768: (19200, 9472, 8704, 256),
-                1024: (25344, 12544, 12544, 256)}
-# "The size of the internal state of the three variants is 3232, 4704, and 6336 bytes,
-#  excluding metadata".
-SPEC_IS_BYTES = {512: 3232, 768: 4704, 1024: 6336}
-# The *Serialized Content* table, in bits: i decapsk, ii ciphertext, iii sharedkey.
-SPEC_SC_BITS = {512: (13056, 6144, 256), 768: (19200, 8704, 256),
-                1024: (25344, 12544, 256)}
-# "the serialized content is 2448, 3536 and 4784 bytes, that is 153, 221 and 299 blocks
-#  of 128 bits, the MDH included".
-SPEC_SC_TOTAL = {512: (2448, 153), 768: (3536, 221), 1024: (4784, 299)}
-
-
-def machine_code(typ, mode):
-    """<<KLEE-exec-encodings>>: the _Machine_ field is _Type_ [11:4] @ _Mode_ [3:0]."""
-    return (typ << 4) | mode
-
-
-MLKEM_MACHINE = {512: machine_code(11, 0), 768: machine_code(11, 1),
-                 1024: machine_code(11, 2)}
-PSET_OF_MACHINE = {code: ps for ps, code in MLKEM_MACHINE.items()}
-
-# Destination Machines for `kl.derive`: the importable key fields of
-# <<KLEE-derive-endpoints>>, with the key widths their Data Structures give, and the
-# scheme each implements, which decides whether Rule <<KLEE-DER-shared-secret>> lists
-# the pair: 'sym' (symmetric encryption), 'ecdh' (the private key `Scalar` of a
-# key-agreement curve of <<KLEE-ECC>>), or None.
-DEST_MACHINES = {
-    machine_code(0, 0):  ('AES128_ECB', (128,), 'sym'),
-    machine_code(0, 4):  ('AES128_GCM', (128,), 'sym'),
-    machine_code(1, 4):  ('AES192_GCM', (192,), 'sym'),
-    machine_code(2, 1):  ('AES256_CTR', (256,), 'sym'),
-    machine_code(3, 0):  ('SM4_ECB', (128,), 'sym'),
-    machine_code(8, 0):  ('Ascon-AEAD128', (128,), 'sym'),
-    machine_code(0, 3):  ('AES128_XEX', (128, 128), 'sym'),   # key1 (1), key2 (2)
-    machine_code(6, 10): ('KMAC128', (), None),               # key supplied in the PI only
-    machine_code(10, 0): ('secp256r1', (256,), 'ecdh'),
-    machine_code(10, 1): ('secp384r1', (384,), 'ecdh'),
-    machine_code(10, 3): ('ed25519', (256,), None),           # a signature scheme
-}
-S_ENCRYPT = 7                    # kl_state_encrypt, <<KLEE-state-constants-symmetric>>
-S_HASH_ABSORB = 2                # kl_state_hash_absorb, the same table
-SHA3_256 = machine_code(6, 1)
-SKID_ALL_ONES = (1 << 64) - 1
-KEY_FILL = 0x5A                  # the placeholder key a destination is provisioned with
-
-
-class IllegalInstruction(Exception):
-    """An illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>)."""
-
+MLKEM = {512: mc(11, 0), 768: mc(11, 1), 1024: mc(11, 2)}
+# kl.derive destination endpoints {State: (field, bits)}: <<KLEE-derive-endpoints>>; the ECC Scalar by DER5
+DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', {**key(192), SET_AUX: ('J0', 128)}),
+        mc(0, 4): ('AES128_GCM', {**key(128), SET_AUX: ('J0', 128)}), mc(2, 1): ('AES256_CTR', key(256)),
+        mc(3, 0): ('SM4_ECB', key(128)), mc(0, 7): ('AES128_CMAC', key(128)), mc(8, 0): ('Ascon-AEAD128', key(128)),
+        mc(0, 3): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {READY: ('K0', 512)}),
+        mc(6, 1): ('SHA3-256', {HASH_ABSORB: ('input', 0)}), mc(6, 10): ('KMAC128', {HASH_ABSORB: ('input', 0)}),
+        mc(10, 0): ('secp256r1', {READY: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {READY: ('Scalar', 384)}),
+        mc(10, 3): ('ed25519', {})}
+AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
+ALL_ONES_SKID = (1 << 64) - 1
+FILL = b'\x5a'                                     # placeholder key of a provisioned destination
+USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}     # <<KLEE-UsagePolicy>>
+HART = {'mode': 'M', 'now': 0}                     # privilege mode; secure clock (Zklexpire)
+h = bytes.fromhex
 
 class PrivilegeViolation(Exception):
-    """KLEE exception `kl_exc_privilege_violation` (Rule <<KLEE-SGR-usage-policy>>)."""
+    pass
 
+def fget(mdh, f):
+    return sl(mdh, *MDH_FIELD[f])
 
-# The issuing hart: the privilege mode, whose _UsagePolicy_ bit is given by
-# <<KLEE-UsagePolicy>>, and the secure clock, in whole hours since the epoch of
-# <<KLEE-Metadata-expiration-date>> (`Zklexpire` is taken as implemented).
-USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}
+def fset(mdh, f, v):
+    hi, lo = MDH_FIELD[f]
+    m = ((1 << hi - lo + 1) - 1) << lo
+    return mdh & ~m | v << lo & m
 
-
-class Hart:
-    mode = 'M'
-    now = 0
-
-
-HART = Hart()
-
-
-class ScriptedRBG:
-    """The RBG of <<KLEE-RBG>>, made injectable: every draw returns the next scripted
-    32-byte value, and None models an RBG failure (the NULL of FIPS 203)."""
-
+class RBG:
+    """<<KLEE-RBG>>, scripted: each draw returns the next value; None is a failure."""
     def __init__(self, *values):
-        self.values = list(values)
-        self.draws = 0
+        self.values, self.draws = list(values), 0
 
     def __call__(self):
-        assert self.values, 'test bug: the RBG script ran out of values'
         self.draws += 1
         return self.values.pop(0)
 
-
-def mgmt_provision(pi_mdh):
-    """The `kl.mgmt` that completes a provisioning: _State_ becomes _Ready_
-    (<<KLEE-data-formats>>), and _StateExtension_ and _MachineUse_ are replaced with
-    zero (<<KLEE-length-rule>>)."""
-    mdh = mdh_set(pi_mdh, F_STATE, S_READY)
-    mdh = mdh_set(mdh, F_STATEEXT, 0)
-    return mdh_set(mdh, F_MACHINEUSE, 0)
-
-
-def kl_size(mdh, content1_size, pi_content_size=0, content2_size=0):
-    """`kl.size` on a supplied MDH (<<KLEE-instruction-size>>)."""
-    st = mdh_get(mdh, F_STATE)
-    if st in ERROR_STATES:
-        return 16
-    if st == S_UNCONFIGURED:                       # the MDH of a PI
-        return 16 + pi_content_size
-    if mdh_get(mdh, F_AUXDATALEN) == 0:
-        return 32 + content1_size
-    return 64 + content1_size + content2_size
-
-
 class Locker:
-    """What every locker shares: the MDH, and the conditions Rule <<KLEE-SGR-gate-order>>
-    evaluates before a Machine's own rules."""
-
     mdh = 0
+    def get(self, f): return fget(self.mdh, f)
+    def put(self, f, v): self.mdh = fset(self.mdh, f, v)
+    state = property(lambda self: self.get('State'))
+    def barred(self): return self.get('UsagePolicy') >> USAGE_BIT[HART['mode']] & 1
 
-    def get(self, fld):
-        return mdh_get(self.mdh, fld)
+    def expired(self):                             # <<KLEE-Metadata-expiration-date>>
+        d = self.get('ExpirationDate')
+        return d != 0 and HART['now'] >= d
 
-    def put(self, fld, val):
-        self.mdh = mdh_set(self.mdh, fld, val)
-
-    @property
-    def state(self):
-        return self.get(F_STATE)
-
-    def in_error(self):
-        return self.state in ERROR_STATES
-
-    def usage_excludes_mode(self):
-        return (self.get(F_USAGEPOLICY) >> USAGE_BIT[HART.mode]) & 1 == 1
-
-    def expired(self):
-        # <<KLEE-Metadata-expiration-date>>: a non-zero date, and a clock reading not
-        # smaller than it.
-        date = self.get(F_EXPIRATION)
-        return date != 0 and HART.now >= date
-
-    def enter_error(self, st):
-        """A transition to an Error State: Rule <<KLEE-SGR-clear-locker-content-error-state>>
-        clears the Content beyond the MDH and releases the ADS."""
-        self.put(F_STATE, st)
-        self.put(F_AUXDATALEN, 0)
-        self.put(F_ADSDROPPED, 0)
+    def enter_error(self, st):                     # SGR10
+        for f, v in (('State', st), ('AuxDataLen', 0), ('ADSDropped', 0)):
+            self.put(f, v)
         self.clear_content()
 
     def gate(self):
-        """Rule <<KLEE-SGR-gate-order>> for a usage-controlled instruction naming this
-        locker alone.  True when the Machine's own rules are reached."""
-        if self.state == S_UNCONFIGURED:
-            raise IllegalInstruction('usage of an Unconfigured locker (SGR12)')
-        if self.in_error():
-            return False                           # SGR16: no operation, _State_ kept
-        if self.usage_excludes_mode():
-            raise PrivilegeViolation(self)         # SGR17
+        """<<KLEE-SGR-gate-order>> for one locker; True when the Machine's rules are reached."""
+        if self.state == UNCONF:
+            raise IllegalInstruction
+        if self.state in ERROR_STATES:
+            return False
+        if self.barred():
+            raise PrivilegeViolation
         if self.expired():
-            self.enter_error(S_EXPIRED)
+            self.enter_error(EXPIRED)
             return False
         return True
 
+class Dest(Locker):
+    """A kl.derive destination; only its key (or absorbed input) is modelled."""
+    def __init__(self, machine, state=READY, keytype=0, skid=0, **mdh):
+        self.name, self.eps = DEST[machine]
+        if keytype == 1 and skid == ALL_ONES_SKID:
+            keytype = 0                            # <<KLEE-KeyType-field>>: random key, KeyType 0
+        self.mdh = mdh_pack(Machine=machine, State=state, KeyType=keytype, **mdh)
+        self.key, self.absorbed = FILL * (self.eps.get(READY, ('', 0))[1] // 8), b''
 
-class KeyLocker(Locker):
-    """A locker provisioned with a single- or two-key Machine, used as a `kl.derive`
-    destination.  Only its key fields are modelled."""
-
-    def __init__(self, machine, state=S_READY, keytype=0, skid=0, usage=0,
-                 locality=0, expiration=0, scprot=0):
-        self.name, self.key_widths, self.kind = DEST_MACHINES[machine]
-        self.mdh = 0
-        self.put(F_MACHINE, machine)
-        self.put(F_SCPROT, scprot)
-        self.put(F_USAGEPOLICY, usage)
-        self.put(F_LOCALITY, locality)
-        self.put(F_EXPIRATION, expiration)
-        if keytype == 1 and skid == SKID_ALL_ONES:
-            # <<KLEE-KeyType-field>>: the key is generated when provisioning completes
-            # and _KeyType_ becomes 0, which is the placeholder CC of a `kl.derive`.
-            keytype = 0
-        self.put(F_KEYTYPE, keytype)
-        self.put(F_STATE, state)                   # provisioning itself leads to _Ready_
-        self.keys = [bytes([KEY_FILL]) * (w // 8) for w in self.key_widths]
-
-    def clear_content(self):
-        self.keys = [bytes(len(k)) for k in self.keys]
-
-    def admits_key_destination(self):
-        # Rule <<KLEE-DER-checks>>: "a destination whose key is written must be in
-        # State _Ready_".
-        return self.state == S_READY
-
-    def key_configurable(self):
-        # Rule <<KLEE-DER-SKID-no-export>>: "a key field of a locker whose _KeyType_ is 1
-        # is _never_ importable".
-        return self.get(F_KEYTYPE) != 1
-
-    def admits_source(self):
-        return False                               # no exportable field
-
-
-class HashLocker(Locker):
-    """A locker holding a hash Machine (<<KLEE-hash-functions-MACs-XOFs>>), the destination of
-    an unrestricted transfer (Rule <<KLEE-DER-exec-implies-unrestricted>>): its
-    importable endpoint is the `kl.exec` input of _Hash_Absorb_ (index 0 of
-    <<KLEE-derive-endpoints>>).  Only the absorbed bytes are modelled."""
-
-    kind = 'hash'
-    key_widths = ()
-
-    def __init__(self, state=S_HASH_ABSORB, usage=0, locality=0):
-        self.name = 'SHA3-256'
-        self.mdh = 0
-        self.put(F_MACHINE, SHA3_256)
-        self.put(F_USAGEPOLICY, usage)
-        self.put(F_LOCALITY, locality)
-        self.put(F_STATE, state)
-        self.absorbed = b''
-
-    def clear_content(self):
-        self.absorbed = b''
-
-    def admits_exec_destination(self):
-        return self.state == S_HASH_ABSORB
-
-    def admits_source(self):
-        return False
-
+    def clear_content(self): self.key, self.absorbed = bytes(len(self.key)), b''
+    hashing = property(lambda self: any(f == 'input' for f, _ in self.eps.values()))
 
 class MLKEMLocker(Locker):
-    """A locker holding an ML-KEM CC ([[KLEE-PQC-ML-KEM]]).
+    """An ML-KEM CC.  check_keys, resume_redraws and no_rejection build the negative controls;
+    ct_check forces a ciphertext type-check failure."""
+    name, eps, hashing, ADS_BLOCKS = 'ML-KEM', {}, False, 6
 
-    Only architecturally visible behaviour is modelled: the MDH, the four state
-    fields, the state machine, and the ADS an interrupted operation needs.  The
-    cryptography is delegated to kat/fips203.py, as the specification delegates it to
-    FIPS 203.
-
-    `check_keys`, `resume_redraws` and `disable_implicit_rejection` exist only to
-    build the deliberately wrong models of the negative controls; `ct_type_check`
-    lets a test force a failure of a check that a completed load cannot fail.
-    """
-
-    ADS_BLOCKS = 6            # an implementation-defined ADS size, while _P_ != 0
-
-    # `kl.derive` endpoints (<<KLEE-derive-endpoints>> and the ML-KEM text: "`sharedkey`
-    # is the only exportable field of an ML-KEM CC, and its index is 1").
-    EXPORTABLE = {'sharedkey': 1}
-    IMPORTABLE = {}
-
-    def __init__(self, pset, rbg=None, usage=0, locality=0, expiration=0, scprot=0,
-                 auxinfo=0, pi_extra=0, check_keys=True, resume_redraws=False,
-                 ct_type_check=None, disable_implicit_rejection=False):
-        self.pset = pset
-        self.k = K.PARAMS[pset][0]
-        self.size = dict(zip(FIELD_NAMES, SPEC_SIZES[pset]))
-        self.rbg = rbg
-        self.check_keys = check_keys
-        self.resume_redraws = resume_redraws
-        self.disable_implicit_rejection = disable_implicit_rejection
-        self.ct_type_check = ct_type_check or (lambda c: K.check_ciphertext(c, pset))
-        # The *Provisioning Input* "contains only the MDH", whose _State_ is
-        # _Unconfigured_ (<<KLEE-data-formats>>).
-        pi = 0
-        pi = mdh_set(pi, F_MACHINE, MLKEM_MACHINE[pset])
-        pi = mdh_set(pi, F_SCPROT, scprot)
-        pi = mdh_set(pi, F_USAGEPOLICY, usage)
-        pi = mdh_set(pi, F_LOCALITY, locality)
-        pi = mdh_set(pi, F_EXPIRATION, expiration)
-        pi = mdh_set(pi, F_AUXINFO, auxinfo)
-        self.pi = pi | pi_extra
-        self.ads = None
-        self.mdh = mgmt_provision(self.pi)
+    def __init__(self, ps, rbg=None, pi_extra=0, check_keys=True, resume_redraws=False, ct_check=None,
+                 no_rejection=False, **mdh):
+        self.ps, self.k, self.rbg, self.size = ps, K.PARAMS[ps][0], rbg, dict(zip(FIELDS, SIZES[ps]))
+        self.check_keys, self.resume_redraws, self.no_rejection = check_keys, resume_redraws, no_rejection
+        self.ct_check = ct_check or (lambda c: K.check_ciphertext(c, ps))
+        self.pi = mdh_pack(Machine=MLKEM[ps], **mdh) | pi_extra       # the PI is the MDH alone
+        # the completing kl.mgmt (<<KLEE-data-formats>>, <<KLEE-length-rule>>)
+        self.mdh = fset(fset(fset(self.pi, 'State', READY), 'StateExtension', 0), 'MachineUse', 0)
         self.clear_content()
 
-    # -- fields ---------------------------------------------------------
     def clear_content(self):
-        for name, n in self.size.items():
-            setattr(self, name, bytes(n))
+        for n in FIELDS:
+            setattr(self, n, bytes(self.size[n]))
         self.ads = None
 
-    def fields(self):
-        return tuple(getattr(self, n) for n in FIELD_NAMES)
+    def fields(self): return [getattr(self, n) for n in FIELDS]
+    use = property(lambda self: self.get('MachineUse'),         # W of MGR7 (bytes), P of MGR8
+                   lambda self, v: self.put('MachineUse', v))
 
-    @property
-    def pset_from_mdh(self):
-        return PSET_OF_MACHINE[self.get(F_MACHINE)]
-
-    @property
-    def use(self):
-        """_MachineUse_: the counter _W_ of Rule <<KLEE-MGR-load-long-field>> in the
-        loading and emitting States, in bytes, and the progress field _P_ of Rule
-        <<KLEE-MGR-progress-discard>> in the long-running ones."""
-        return self.get(F_MACHINEUSE)
-
-    @use.setter
-    def use(self, v):
-        self.put(F_MACHINEUSE, v)
-
-    def discard_progress(self):
-        """MGR8: _P_ is zeroed and the material kept for the operation destroyed."""
-        self.use = 0
-        self.ads = None
-        self.put(F_AUXDATALEN, 0)
+    def discard(self):                             # MGR8
+        self.use, self.ads = 0, None
+        self.put('AuxDataLen', 0)
 
     def enter_error(self, st):
         super().enter_error(st)
-        self.use = 0                               # MGR8: a transition zeroes _P_
+        self.use = 0
 
     def transition(self, st):
-        """A change of _State_ among the Valid States, by `kl.setst` or on completion
-        of an operation."""
-        self.put(F_STATE, st)
-        # MGR8 zeroes _P_ on every transition, a same-State `kl.setst` included; MGR7
-        # zeroes _W_ on entry into a loading or emitting State.
-        self.discard_progress()
-        if st == S_READY:
-            # "Upon transitioning to State _Ready_, the fields `encapsk`, `decapsk`,
-            #  `ciphertext` and `sharedkey` are cleared."
-            for name in FIELD_NAMES:
-                setattr(self, name, bytes(self.size[name]))
-        if st in IN_FIELDS:
-            # MGR7: "entering a loading state also zeroes the field, so that reloading
-            # replaces it".
-            name = IN_FIELDS[st]
-            setattr(self, name, bytes(self.size[name]))
+        self.put('State', st)
+        self.discard()
+        for n in FIELDS if st == READY else [IN_F[st]] if st in IN_F else []:
+            setattr(self, n, bytes(self.size[n]))  # _Ready_ clears all; MGR7 zeroes a loaded field
 
-    # -- instructions ---------------------------------------------------
-    def setst(self, immed):
-        """Form A `kl.setst Kd|K(Xd), #immed7`.  ML-KEM: "All uses of `kl.setst` do not
-        require an auxiliary parameter." """
-        if immed in (S_SUCCESS, S_FAILURE):
-            # SGR7: immediates 46 and 47 are a reserved encoding, decided without
-            # looking at the KLEE unit's state.
-            raise IllegalInstruction('kl.setst with #immed7 46 or 47')
-        if immed == S_UNCONFIGURED:                # kl.clear
+    def setst(self, imm):                          # Form A; ML-KEM uses no auxiliary parameter
+        if imm in (SUCCESS, FAILURE):
+            raise IllegalInstruction               # SGR7
+        if imm == UNCONF:
             self.mdh = 0
             self.clear_content()
-            return
-        if immed in ERROR_STATES:
-            # Accepted in any State and raising no exception; 54 and 55 give _Invalid_.
-            if self.state != S_UNCONFIGURED:
-                self.enter_error(S_INVALID if immed >= 54 else immed)
-            return
-        if not self.gate():                        # a usage-controlled `kl.setst`
-            return
-        if immed == KL_CFG_CLEAR_ADS:
-            # <<KLEE-instruction-clearads>>: the ADS goes, the _State_ stays.  Rule
-            # <<KLEE-IRR-long-running-no-data>> makes an operation whose ADS was removed
-            # restart, so the model also zeroes _P_ (see the INFO line below).
-            self.discard_progress()
-            return
-        if immed == S_READY or immed in MLKEM_STATES:
-            # "State transitions are allowed between any two valid states."
-            self.transition(immed)
-            return
-        # "Any other `#immed7` that the architecture or the current Machine does not
-        #  support transitions the locker to Error State _Invalid_."
-        self.enter_error(S_INVALID)
+        elif imm in ERROR_STATES:
+            if self.state != UNCONF:
+                self.enter_error(INVALID if imm >= 54 else imm)
+        elif self.gate():
+            if imm == CLEAR_ADS:
+                self.discard()
+            elif imm == READY or GEN <= imm <= CT_OUT:
+                self.transition(imm)
+            else:
+                self.enter_error(INVALID)
 
-    def exec_B(self, data):
-        """Form B `kl.exec Kn|K(Xn), INPUT` in an _*_Input_ State: loads the field
-        under Rule <<KLEE-MGR-load-long-field>>, _W_ = _MachineUse_ in bytes."""
+    def exec_B(self, data):                        # Form B in a loading State (MGR7)
         if not self.gate():
             return
-        st = self.state
-        if st not in IN_FIELDS:
-            self.enter_error(S_INVALID)            # SGR2, SGR5, MGR8, MGR1
+        name, w = IN_F.get(self.state), self.use
+        if name is None or w >= self.size[name]:
+            return self.enter_error(INVALID)
+        n, f = min(len(data), self.size[name] - w), getattr(self, name)
+        setattr(self, name, f[:w] + data[:n] + f[w + n:])
+        self.use = w + n
+        if self.use < self.size[name]:
             return
-        name = IN_FIELDS[st]
-        size, w = self.size[name], self.use
-        if w >= size:
-            # "Once _W_ reaches the size of the field, the transfer is complete. ...
-            #  no further `kl.exec` is allowed in it".
-            self.enter_error(S_INVALID)
-            return
-        amount = min(len(data), size - w)          # "Excess data ... is ignored"
-        field = bytearray(getattr(self, name))
-        field[w:w + amount] = data[:amount]
-        setattr(self, name, bytes(field))
-        self.use = w + amount                      # rises monotonically, kept at the end
-        if self.use == size:
-            self.load_complete(name)
+        v = getattr(self, name)                    # FIPS 203 7.2/7.3 checks, items 1-4
+        if name == 'ciphertext':
+            if not self.ct_check(v):
+                self.transition(FAILURE)           # data error
+        elif self.check_keys and not (K.check_encaps_input if name == 'encapsk' else K.check_decaps_key)(v, self.ps):
+            self.enter_error(INVALID)              # configuration error
 
-    def load_complete(self, name):
-        """The FIPS 203 {sect}7.2 / {sect}7.3 checks "performed when a field finishes
-        loading", split according to what a failure means."""
-        value = getattr(self, name)
-        if name == 'encapsk':
-            # 1. the encapsulation key check of {sect}7.2: type and modulus
-            if self.check_keys and not K.check_encaps_input(value, self.pset):
-                self.enter_error(S_INVALID)        # 3. a configuration error
-        elif name == 'decapsk':
-            # 2. the decapsulation key check of {sect}7.3: type and hash
-            if self.check_keys and not K.check_decaps_key(value, self.pset):
-                self.enter_error(S_INVALID)        # 3. a configuration error
-        else:
-            # 4. the ciphertext type check of {sect}7.3: a data error
-            if not self.ct_type_check(value):
-                self.transition(S_FAILURE)
-
-    def exec_C(self, nbytes):
-        """Form C `kl.exec OUTPUT, Kn|K(Xn)` in an _*_Output_ State.  Returns the
-        `OUTPUT` window of `nbytes` bytes."""
-        if not self.gate():
-            return bytes(nbytes)                   # SGR16: the output window is zeroed
-        st = self.state
-        if st not in OUT_FIELDS:
-            self.enter_error(S_INVALID)
-            return bytes(nbytes)
-        name = OUT_FIELDS[st]
-        size, w = self.size[name], self.use
-        if w >= size or w + nbytes > size:
-            # Nothing left to emit, or "an emitting `kl.exec` that would carry _W_ past
-            # the field size invalidates the locker" (MGR7).
-            self.enter_error(S_INVALID)
-            return bytes(nbytes)
-        self.use = w + nbytes
-        return getattr(self, name)[w:w + nbytes]
+    def exec_C(self, n):                           # Form C in an emitting State (MGR7)
+        if self.gate():
+            name, w = OUT_F.get(self.state), self.use
+            if name and w + n <= self.size[name]:
+                self.use = w + n
+                return getattr(self, name)[w:w + n]
+            self.enter_error(INVALID)
+        return bytes(n)                            # SGR16
 
     def exec_D(self, halt_after=None):
-        """Form D `kl.exec Kn|K(Xn)` in _GenerateKeyPair_, _Encapsulate_ or
-        _Decapsulate_.
-
-        `halt_after` = n halts the instruction precisely after n steps of the operation
-        (Rule <<KLEE-IRR-long-running-no-data>>, option 3 of Rule
-        <<KLEE-IRR-resumability-options>>); None lets it run to completion.  Returns
-        'retired', 'halted' or 'noop'.
-        """
+        """Form D; halt_after=n halts precisely after n steps (IRR4).  Returns 'retired', 'halted' or 'noop'."""
         if not self.gate():
             return 'noop'
         st = self.state
-        if st not in LONG_RUNNING:
-            # SGR2 in _Ready_, SGR5 in _Success_/_Failure_, MGR1 elsewhere.
-            self.enter_error(S_INVALID)
+        if st not in LONG:
+            self.enter_error(INVALID)
             return 'retired'
-        if self.use == 0 or self.resume_redraws:
-            # MGR8: "starts a new one, drawing fresh random values, if it is zero".
-            work = self.start(st)
-            if work is None:
-                # FIPS 203 returns its bottom value: "If `ML-KEM.KeyGen` fails, the
-                # state machine transitions to state _Failure_", and likewise for
-                # `ML-KEM.Encaps`.
-                self.transition(S_FAILURE)
+        if self.use == 0 or self.resume_redraws:   # MGR8: start anew, drawing fresh values
+            if st == GEN:                          # FIPS 203 Algorithm 19
+                d, z = self.rbg(), self.rbg()
+                w = None if d is None or z is None else {'d': d, 'z': z}
+            elif st == ENC:                        # Algorithm 20
+                m = self.rbg()
+                w = None if m is None else {'ek': self.encapsk, 'm': m}
+            else:
+                w = {'dk': self.decapsk, 'c': self.ciphertext}
+            if w is None:
+                self.transition(FAILURE)
                 return 'retired'
-            self.ads = {'work': work, 'next': 0}
-        steps = self.steps(st)
-        done = 0
-        while self.ads['next'] < len(steps):
-            if halt_after is not None and done >= halt_after:
-                # A precise halt: _P_ records the progress in an implementation-defined
-                # encoding and is never zero, and the values kept for the operation live
-                # in the ADS (Rule <<KLEE-IRR-long-running-no-data>>).
-                self.use = self.ads['next'] + 1
-                self.put(F_AUXDATALEN, self.ADS_BLOCKS)
+            self.ads = {'w': w, 'next': 0}
+        steps = (K.keygen_internal_steps(self.ps) if st == GEN else K.encaps_internal_steps(self.ps)
+                 if st == ENC else K.decaps_internal_steps(self.ps, self.no_rejection))
+        for n in range(len(steps) - self.ads['next']):
+            if halt_after is not None and n >= halt_after:
+                self.use = self.ads['next'] + 1    # P != 0 at a halt, the data in the ADS
+                self.put('AuxDataLen', self.ADS_BLOCKS)
                 return 'halted'
-            steps[self.ads['next']](self.ads['work'])
+            steps[self.ads['next']](self.ads['w'])
             self.ads['next'] += 1
-            done += 1
-        self.finish(st, self.ads['work'])
+        w = self.ads['w']
+        if st == GEN:
+            self.encapsk, self.decapsk = w['ek'], w['dk']
+        elif st == ENC:
+            self.sharedkey, self.ciphertext = w['K'], w['c']
+        else:
+            self.sharedkey = w['K']
+        self.transition(CT_OUT if st == ENC else SUCCESS)
         return 'retired'
 
-    def start(self, st):
-        """The random draws of FIPS 203 Algorithms 19 and 20; None is their bottom."""
-        if st == S_GENKEYPAIR:
-            d = self.rbg()                         # Algorithm 19, lines 1-2
-            z = self.rbg()
-            return None if d is None or z is None else {'d': d, 'z': z}
-        if st == S_ENCAPSULATE:
-            m = self.rbg()                         # Algorithm 20, line 1
-            return None if m is None else {'ek': self.encapsk, 'm': m}
-        return {'dk': self.decapsk, 'c': self.ciphertext}          # Algorithm 21
-
-    def steps(self, st):
-        if st == S_GENKEYPAIR:
-            return K.keygen_internal_steps(self.pset)
-        if st == S_ENCAPSULATE:
-            return K.encaps_internal_steps(self.pset)
-        return K.decaps_internal_steps(self.pset, self.disable_implicit_rejection)
-
-    def finish(self, st, work):
-        if st == S_GENKEYPAIR:
-            self.encapsk, self.decapsk = work['ek'], work['dk']
-            self.transition(S_SUCCESS)             # "Otherwise, ... state _Success_."
-        elif st == S_ENCAPSULATE:
-            # "derives from it *both* the shared key and the ciphertext"
-            self.sharedkey, self.ciphertext = work['K'], work['c']
-            self.transition(S_CT_OUT)              # "If `ML-KEM.Encaps` succeeds"
-        else:
-            # "`ML-KEM.Decaps` is executed unconditionally. The shared key, either
-            #  derived from the ciphertext or returned via implicit rejection is placed
-            #  in the `sharedkey` state field, and the state machine transitions to
-            #  state _Success_."
-            self.sharedkey = work['K']
-            self.transition(S_SUCCESS)
-
     def export_import(self, keep_ads=True):
-        """An export as an SCC and the import of that image into a locker
-        (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule MGR8
-        needs: `Content1` is the *Serialized Content* table -- `decapsk`, `ciphertext`,
-        `sharedkey`, in that order -- the MDH is restored with its _State_ and
-        _MachineUse_, and the importer either keeps the ADS or discards it."""
-        content1 = self.decapsk + self.ciphertext + self.sharedkey
-        new = copy.copy(self)
+        """Export as an SCC and import: Content1 = decapsk, ciphertext, sharedkey."""
+        new, c1 = copy.copy(self), self.decapsk + self.ciphertext + self.sharedkey
         a = self.size['decapsk']
         b = a + self.size['ciphertext']
-        new.decapsk, new.ciphertext, new.sharedkey = content1[:a], content1[a:b], content1[b:]
-        # The Serialized Content carries `encapsk` only inside `decapsk`.
+        new.decapsk, new.ciphertext, new.sharedkey = c1[:a], c1[a:b], c1[b:]
         new.encapsk = new.decapsk[384 * self.k:768 * self.k + 32]
         new.ads = copy.deepcopy(self.ads) if keep_ads else None
         if not keep_ads:
-            new.discard_progress()                 # MGR8: an import discarding the ADS
+            new.discard()
         return new
 
-    # -- `kl.derive` endpoints ------------------------------------------
-    kind = None                                    # nothing importable
-
-    def pair(self, dest):
-        """The transfer the architecture lists for (this CC, `dest`), or None.
-        'restricted': `sharedkey` into the key of "a supported single-key Machine"
-        (<<KLEE-PQC-ML-KEM>>) implementing a scheme of Rule <<KLEE-DER-shared-secret>>;
-        'exec': the output of an emitting State into a hash (Rule
-        <<KLEE-DER-exec-implies-unrestricted>>)."""
-        if dest.kind in ('sym', 'ecdh') and len(dest.key_widths) == 1:
-            return 'restricted'
-        if dest.kind == 'hash':
-            return 'exec'
-        return None
-
-    def admits_source(self, mode='restricted'):
-        if mode == 'exec':
-            return self.state in OUT_FIELDS
-        return self.state in (S_SUCCESS, S_FAILURE, S_CT_OUT)
-
-    def admits_key_destination(self):
-        return False
-
-    def emit_exec(self, n):
-        """The `n` bytes that Form C `kl.exec` instructions would emit, advancing _W_
-        as they would (Rule <<KLEE-derive-rule-both-fixed-size>>); None when they would
-        carry _W_ past the field (MGR7)."""
-        name = OUT_FIELDS[self.state]
-        w = self.use
+    def emit(self, n):                             # DER8: as Form C kl.exec would
+        name, w = OUT_F[self.state], self.use
         if w + n > self.size[name]:
             return None
         self.use = w + n
         return getattr(self, name)[w:w + n]
 
-
 def der2_narrow(dest, src):
-    """Rule <<KLEE-DER-narrowing>>, before any byte of a restricted transfer: the
-    destination MDH is narrowed by the source MDH.  False when the destination must
-    instead transition to _Invalid_ with nothing transferred."""
-    ls, ld = src.get(F_LOCALITY), dest.get(F_LOCALITY)
-    boot_s, boot_d = sl(ls, 5, 4), sl(ld, 5, 4)
-    if boot_s and boot_d and boot_s != boot_d:
-        return False                               # two differing Boot Session entries
-    if dest.get(F_SCPROT) < src.get(F_SCPROT):
-        return False                               # levels 0-3 of <<KLEE-SC-protection-levels>>
-    us, ud = src.get(F_USAGEPOLICY), dest.get(F_USAGEPOLICY)
-    dest.put(F_USAGEPOLICY, ((us | ud) & 0xF) | (us & ud & 0x10))
-    dest.put(F_LOCALITY, max(sl(ls, 1, 0), sl(ld, 1, 0))
-             | max(sl(ls, 3, 2), sl(ld, 3, 2)) << 2
-             | (boot_s or boot_d) << 4 | ((ls | ld) & 0x1C0))
-    dates = [d for d in (src.get(F_EXPIRATION), dest.get(F_EXPIRATION)) if d]
-    dest.put(F_EXPIRATION, min(dates) if dates else 0)
+    """<<KLEE-DER-narrowing>>; False when the destination must become _Invalid_ instead."""
+    ls, ld = src.get('Locality'), dest.get('Locality')
+    bs, bd = sl(ls, 5, 4), sl(ld, 5, 4)
+    if bs and bd and bs != bd or dest.get('SCProtection') < src.get('SCProtection'):
+        return False
+    us, ud = src.get('UsagePolicy'), dest.get('UsagePolicy')
+    dest.put('UsagePolicy', (us | ud) & 0xF | us & ud & 0x10)
+    dest.put('Locality', max(sl(ls, 1, 0), sl(ld, 1, 0)) | max(sl(ls, 3, 2), sl(ld, 3, 2)) << 2
+             | (bs or bd) << 4 | (ls | ld) & 0x1C0)
+    dates = [d for d in (src.get('ExpirationDate'), dest.get('ExpirationDate')) if d]
+    dest.put('ExpirationDate', min(dates) if dates else 0)
     return True
 
-
 def kl_derive(dest, src, length):
-    """`kl.derive Kd|K(Xd), Ks1|K(Xs1), Xs2`, the auxiliary GPR carrying `length`
-    alone (<<KLEE-instruction-derive>>).  Returns 'retired' or 'noop'."""
+    """kl.derive Kd, Ks1, Xs2 (Xs2 = length) from an ML-KEM source.  Returns 'retired' or 'noop'."""
     if dest is src:
-        raise IllegalInstruction('kl.derive with equal locker indices')
-    ends = (src, dest)
-    # Rule <<KLEE-SGR-gate-order>>: "each condition is evaluated for both endpoints,
-    # the source first, before the next".
-    for lk in ends:
-        if lk.state == S_UNCONFIGURED:
-            raise IllegalInstruction('kl.derive with an Unconfigured endpoint')
-    if any(lk.in_error() for lk in ends):
-        return 'noop'                              # "an Error State on either endpoint"
-    for lk in ends:
-        if lk.usage_excludes_mode():
-            raise PrivilegeViolation(lk)
+        raise IllegalInstruction
+    ends = (src, dest)                             # SGR19: each condition on both, source first
+    if any(lk.state == UNCONF for lk in ends):
+        raise IllegalInstruction
+    if any(lk.state in ERROR_STATES for lk in ends):
+        return 'noop'
+    if any(lk.barred() for lk in ends):
+        raise PrivilegeViolation
     for lk in ends:
         if lk.expired():
-            lk.enter_error(S_EXPIRED)
+            lk.enter_error(EXPIRED)
             return 'noop'
-    mode = src.pair(dest)
-    if mode is None:
-        # "Only listed ... pairs are allowed. ... Any other pair transitions both
-        #  lockers to Error State _Invalid_."
-        for lk in ends:
-            lk.enter_error(S_INVALID)
+    out = dest.hashing and src.state in OUT_F      # the DER6 output, else sharedkey
+    bad = ends if not dest.eps else [lk for lk, ok in (
+        (src, src.state in OUT_F if out else src.state not in (READY,) + LONG),     # DER5 a, MGR8
+        (dest, dest.state in dest.eps)) if not ok]
+    for lk in bad:                                 # "any other pair"; DER1 item 1
+        lk.enter_error(INVALID)
+    if bad:
         return 'retired'
-    # Rule <<KLEE-DER-checks>>, "each check being applied to the source before the
-    # destination, and with nothing transferred on any failure".
-    dest_ok = (dest.admits_exec_destination() if mode == 'exec'
-               else dest.admits_key_destination())
-    offending = [lk for lk, ok in ((src, src.admits_source(mode)), (dest, dest_ok))
-                 if not ok]
-    if offending:
-        for lk in offending:                       # 1. "the offending locker, or both"
-            lk.enter_error(S_INVALID)
-        return 'retired'
-    if mode == 'exec':
-        # An unrestricted transfer: no narrowing (DER3); the destination receives
-        # `eff_length` = `length` bytes (<<KLEE-derive-rule-both-fixed-size>>).
-        data = src.emit_exec(length)
+    if out:                                        # DER6, DER3; DER8: eff_length = length
+        data = src.emit(length)
         if data is None:
-            src.enter_error(S_INVALID)
-            return 'retired'
-        dest.absorbed += data
+            src.enter_error(INVALID)               # MGR7
+        else:
+            dest.absorbed += data
         return 'retired'
-    if not dest.key_configurable():
-        dest.enter_error(S_INVALID)                # 2. a constraint on the transfer
-        return 'retired'
-    dest_length = dest.key_widths[0] // 8
-    if length < dest_length or len(src.sharedkey) < dest_length:
-        # 4. "requires `length` >= `dest_length` and a source field ... of at least
-        #  `dest_length` bytes, and receives exactly `dest_length` bytes"
-        dest.enter_error(S_INVALID)
-        return 'retired'
-    if not der2_narrow(dest, src):
-        dest.enter_error(S_INVALID)
-        return 'retired'
-    # "the `m` least significant bits of the shared key are used"
-    dest.keys[0] = src.sharedkey[:dest_length]
+    field, bits = dest.eps[dest.state]
+    n = bits // 8
+    if field not in ('key', 'Scalar') or bits > 256 or dest.get('KeyType') == 1 or length < n \
+            or len(src.sharedkey) < n or not der2_narrow(dest, src):
+        dest.enter_error(INVALID)                  # <<KLEE-PQC-ML-KEM>> (DER1 item 2); DER4; DER1 item 4; DER2
+    else:
+        dest.key = src.sharedkey[:n]
     return 'retired'
 
+def kl_size(mdh, content1):
+    """<<KLEE-instruction-size>> for an MDH without ADS; an ML-KEM PI has no Content."""
+    st = fget(mdh, 'State')
+    return 16 if st == UNCONF or st in ERROR_STATES else 32 + content1
 
-# ================================================================ helpers
+# ---------------------------------------------------------------- helpers
 
-def _raises(exc, fn):
-    try:
-        fn()
-    except exc:
-        return True
-    return False
-
-
-def all_zero(*values):
-    return all(not any(v) for v in values)
-
-
-def load(cc, state, data, chunks=None):
-    """`kl.setst` into a loading State, then Form B `kl.exec` transfers."""
-    cc.setst(state)
+def load(cc, st, data, chunks=None):
+    cc.setst(st)
     off = 0
-    for n in (chunks or [len(data)]):
+    for n in chunks or [len(data)]:
         cc.exec_B(data[off:off + n])
         off += n
     return cc
 
+def emit(cc, chunks): return b''.join(cc.exec_C(n) for n in chunks)
+def zero(*vs): return not any(any(v) for v in vs)
 
-def emit(cc, chunks):
-    return b''.join(cc.exec_C(n) for n in chunks)
+def run(cc, st, **kw):
+    cc.setst(st)
+    return cc.exec_D(**kw)
 
+def derived(dest, src, length=16):
+    kl_derive(dest, src, length)
+    return dest
+
+def vec(kind, ps=None, reason=''):
+    return next(v for v in VECTORS[kind] if ps in (None, v['pset']) and v.get('reason', '').startswith(reason))
+
+def encapsulated(**mdh):
+    v = vec('encaps', 768)
+    cc = load(MLKEMLocker(768, rbg=RBG(h(v['m'])), **mdh), EK_IN, h(v['ek']))
+    run(cc, ENC)
+    return cc
+
+def decaps_ready(x):
+    cc = load(load(MLKEMLocker(x['pset']), DK_IN, h(x['dk'])), CT_IN, h(x['c']))
+    cc.setst(DEC)
+    return cc
 
 def malformed_ek(ps):
-    """An `encapsk` whose first coefficient is encoded as q, so that it fails the
-    modulus check of FIPS 203 {sect}7.2 but has the right length."""
-    ek, _ = K.keygen_internal(bytes(32), bytes(32), ps)
-    t0 = K.byte_decode(12, ek[:384])
-    return K.byte_encode(12, [K.Q] + t0[1:]) + ek[384:]
+    """An encapsk of the right length whose first coefficient is q (FIPS 203 7.2)."""
+    ek = K.keygen_internal(bytes(32), bytes(32), ps)[0]
+    return K.byte_encode(12, [K.Q] + K.byte_decode(12, ek[:384])[1:]) + ek[384:]
 
-
-def content1_bytes(ps):
-    return sum(SPEC_SC_BITS[ps]) // 8
-
-
-def vector(kind, pset=None, reason=None):
-    for v in VECTORS[kind]:
-        if (pset is None or v['pset'] == pset) and \
-           (reason is None or v.get('reason', '').startswith(reason)):
-            return v
-    raise AssertionError('test bug: no such vector')
-
-
-# ================================================================ tests
+# ---------------------------------------------------------------- tests
 
 def t_sizes():
-    print('\n-- Sizes: <<KLEE-ML-KEM-sizes>>, Internal State, Serialized Content --')
-    for ps in (512, 768, 1024):
-        ek, dk, ct, ss = SPEC_SIZES[ps]
-        chk(f'ML-KEM-{ps}: the table (encapsk, decapsk, ciphertext, sharedkey) equals '
-            'FIPS 203', SPEC_SIZES[ps] == K.sizes(ps), str(SPEC_SIZES[ps]))
-        chk(f'ML-KEM-{ps}: the Internal State bit sizes are 8 x the table',
-            SPEC_IS_BITS[ps] == (8 * dk, 8 * ek, 8 * ct, 8 * ss))
-        c1 = content1_bytes(ps)
-        chk(f'ML-KEM-{ps}: Serialized Content = decapsk, ciphertext, sharedkey, a whole '
-            'number of 128-bit blocks (no padding needed)',
-            SPEC_SC_BITS[ps] == (8 * dk, 8 * ct, 8 * ss) and (8 * c1) % 128 == 0,
-            f'Content1 = {c1} B')
-        total, blocks = SPEC_SC_TOTAL[ps]
-        chk(f'ML-KEM-{ps}: "{total} bytes, {blocks} blocks of 128 bits, the MDH included" '
-            '= MDH + Content1', total == 16 + c1 and 16 * blocks == total)
-        chk(f'ML-KEM-{ps}: the internal state of {SPEC_IS_BYTES[ps]} B is encapsk + '
-            'decapsk + ciphertext + sharedkey', SPEC_IS_BYTES[ps] == ek + dk + ct + ss)
-        cc = MLKEMLocker(ps)
-        chk(f'ML-KEM-{ps}: kl.size gives 16 B for the PI (the MDH alone) and 32 + '
-            'Content1 for a locker in a Valid State without ADS',
-            kl_size(cc.pi, c1) == 16 and kl_size(cc.mdh, c1) == 32 + c1,
-            f'{kl_size(cc.mdh, c1)} B')
+    section('Sizes, Serialized Content, kl.size')
+    for ps in SIZES:
+        ek, dk, ct, ss = SIZES[ps]
+        c1, (total, blocks), cc, k = sum(SC_BITS[ps]) // 8, SC_TOTAL[ps], MLKEMLocker(ps), K.PARAMS[ps][0]
         e, d = K.keygen_internal(bytes(32), bytes(32), ps)
-        k = K.PARAMS[ps][0]
-        chk(f'ML-KEM-{ps}: decapsk embeds encapsk, and the H(encapsk) the hash check '
-            'compares', d[384 * k:768 * k + 32] == e
-            and d[768 * k + 32:768 * k + 64] == K.H(e))
-    info('<<KLEE-PQC-ML-KEM>> calls 2448/3536/4784 B "the serialized content ..., the '
-         'MDH included", while the Machines chapter defines the Serialized Content as excluding the '
-         'MDH; read as MDH + Content1.  An exported SCC is 16 B longer still (the SIV), '
-         'which is what kl.size returns.')
-    info('The internal-state sizes 3232/4704/6336 B count encapsk apart from the copy '
-         'inside decapsk, although the Internal State list names only decapsk, '
-         'ciphertext and sharedkey.  The model keeps encapsk as a field of its own, as '
-         'the State Machine text requires: it is set by _encapsk_Input_ or '
-         '_GenerateKeyPair_ only.')
-    back = load(MLKEMLocker(768), S_EK_IN, bytes.fromhex(vector('encaps', 768)['ek'])) \
-        .export_import()
-    spec_note('the Serialized Content carries encapsk only inside decapsk, yet encapsk '
-              'is a field of its own: a peer\'s encapsk loaded for _Encapsulate_ into a '
-              'CC with no decapsk does not survive export and import (after the round '
-              f'trip the model\'s encapsk is {"all zero" if not any(back.encapsk) else "kept"}), '
-              'and a CC holding its own decapsk together with a peer\'s encapsk cannot '
-              'be represented at all.')
-
+        for name, ok in (
+                ('size table = FIPS 203', SIZES[ps] == K.sizes(ps)),
+                ('Internal State bits = 8 x table', IS_BITS[ps] == (8 * dk, 8 * ek, 8 * ct, 8 * ss)),
+                ('Serialized Content = decapsk, ciphertext, sharedkey, whole 128-bit blocks',
+                 SC_BITS[ps] == (8 * dk, 8 * ct, 8 * ss) and c1 % 16 == 0),
+                (f'{total} B, {blocks} blocks = MDH + Content1', total == 16 + c1 == 16 * blocks),
+                (f'internal state {IS_BYTES[ps]} B = encapsk + decapsk + ciphertext + sharedkey',
+                 IS_BYTES[ps] == ek + dk + ct + ss),
+                ('kl.size: 16 for the PI, 32 + Content1 in a Valid State',
+                 kl_size(cc.pi, c1) == 16 and kl_size(cc.mdh, c1) == 32 + c1),
+                ('decapsk embeds encapsk and H(encapsk)',
+                 d[384 * k:768 * k + 32] == e and d[768 * k + 32:768 * k + 64] == K.H(e))):
+            check(f'ML-KEM-{ps}: {name}', ok)
+    spec_note('Serialized Content sizes are "the MDH included", but the Machines chapter excludes the MDH '
+              'from the Serialized Content; read as MDH + Content1')
+    info('internal-state sizes count encapsk apart from its copy in decapsk; the model keeps encapsk as a '
+         'separate field')
+    if zero(load(MLKEMLocker(768), EK_IN, h(vec('encaps', 768)['ek'])).export_import().encapsk):
+        spec_note('encapsk is serialized only inside decapsk, so a peer encapsk loaded without a decapsk is '
+                  'lost on export/import')
 
 def t_mdh():
-    print('\n-- MDH layout, _Machine_ encoding, State numbers, provisioning --')
-    spans = sorted(list(MDH_FIELDS.values()) + MDH_RESERVED, key=lambda f: f[1])
-    nxt, tiles = 0, True
-    for hi, lo in spans:
-        tiles &= lo == nxt
-        nxt = hi + 1
-    chk('<<KLEE-metadata-header>>: the fields and the Reserved bits tile MDH[127:0]',
-        tiles and nxt == 128)
-    length_fields = ('Machine', 'MachinePolicy', 'KeyType', 'StateExtension',
-                     'AuxDataLen', 'ADSDropped')
-    chk('<<KLEE-length-rule>>: every field that fixes a PI or SCC length lies in '
-        'MDH[63:0]', all(MDH_FIELDS[f][0] < 64 for f in length_fields))
-    chk('<<KLEE-exec-encodings>>: ML-KEM-512/768/1024 are Type 11, Modes 0/1/2',
-        [MLKEM_MACHINE[p] for p in (512, 768, 1024)] == [0x0B0, 0x0B1, 0x0B2],
-        '0x0B0, 0x0B1, 0x0B2')
-    chk('the parameter set follows from the provisioned _Machine_ field',
-        all(MLKEMLocker(p).pset_from_mdh == p for p in (512, 768, 1024)))
-    ids = sorted(MLKEM_STATES)
-    chk('the ML-KEM States 2-9 are distinct and lie in the Machine-defined range 2-45 '
-        'of <<KLEE-states-valid>>',
-        len(set(ids)) == len(ids) and all(2 <= s <= 45 for s in ids), str(ids))
-    junk = mdh_set(mdh_set(0, F_STATEEXT, 0b1010), F_MACHINEUSE, 0x1234)
-    cc = MLKEMLocker(768, pi_extra=junk)
-    chk('provisioning: the PI\'s _State_ is _Unconfigured_, and the completing kl.mgmt '
-        'sets _Ready_ and zeroes _StateExtension_ and _MachineUse_',
-        mdh_get(cc.pi, F_STATE) == S_UNCONFIGURED and cc.state == S_READY
-        and cc.get(F_STATEEXT) == 0 and cc.use == 0 and all_zero(*cc.fields()))
-    stale = [n for n, v in MLKEM_LIST_GLOBAL.items() if BOOK1_GLOBAL[n] != v]
-    if stale:
-        spec_note('the State list of <<KLEE-PQC-ML-KEM>> still gives '
-                  + ', '.join(f'_{n}_ ({MLKEM_LIST_GLOBAL[n]})' for n in stale)
-                  + ', while <<KLEE-states-valid>> defines '
-                  + ', '.join(f'_{n}_ = {BOOK1_GLOBAL[n]}' for n in stale)
-                  + ' and leaves 2-45 to the Machine; the model follows the Instructions chapter.  The '
-                    'ECC and ML-DSA State lists carry the same stale numbers.')
-    spec_note('the Instructions chapter says _AuxInfo_ is "currently used only by ML-KEM '
-              'and ML-DSA", but <<KLEE-PQC-ML-KEM>> defines no use for it: its former '
-              'role -- the policies required of a kl.derive destination, in the 16-bit '
-              'format of MDH[79:64], which does not fit the 14-bit field -- sits in a '
-              'commented-out block.  <<KLEE-Metadata-validity>> makes a non-zero '
-              '_AuxInfo_ invalid "for a Machine that does not use it", so whether it is '
-              'invalid for ML-KEM is undecided; the model provisions _AuxInfo_ = 0.')
+    section('MDH, Machine encoding, State numbers, provisioning')
+    spans = sorted((lo, hi) for _, hi, lo in MDH_FIELDS)
+    check('MDH fields and Reserved bits tile [127:0]',
+          [lo for lo, _ in spans] == [0] + [hi + 1 for _, hi in spans[:-1]] and spans[-1][1] == 127)
+    check('fields fixing PI/SCC lengths lie in MDH[63:0] (<<KLEE-length-rule>>)', all(
+        MDH_FIELD[f][0] < 64 for f in ('Machine', 'MachinePolicy', 'KeyType', 'StateExtension', 'AuxDataLen',
+                                        'ADSDropped')))
+    check('ML-KEM-512/768/1024 = Type 11, Modes 0/1/2', None, list(MLKEM.values()), [0xB0, 0xB1, 0xB2])
+    check('parameter set follows from the provisioned Machine',
+          all(MLKEMLocker(p).get('Machine') == MLKEM[p] for p in SIZES))
+    check('ML-KEM States lie in the Machine range 2-45', all(2 <= s <= 45 for s in {*IN_F, *OUT_F, *LONG}))
+    glob = {'Ready': READY, 'Success': SUCCESS, 'Failure': FAILURE}
+    check('State list numbers of Ready/Success/Failure = <<KLEE-states-valid>>', None,
+          sorted(n for _, n in LISTED_GLOBAL), sorted(glob.values()))
+    for s, n in LISTED_GLOBAL:
+        if glob[s] != n:
+            spec_note(f'the ML-KEM State list labels {n} _{s}_; <<KLEE-states-valid>> names it _{NAME[n]}_')
+    cc = MLKEMLocker(768, pi_extra=mdh_pack(StateExtension=0b1010, MachineUse=0x1234))
+    check('PI State _Unconfigured_; kl.mgmt sets _Ready_, zeroes StateExtension and MachineUse',
+          fget(cc.pi, 'State') == UNCONF and cc.state == READY and cc.get('StateExtension') == 0
+          and cc.use == 0 and zero(*cc.fields()))
+    spec_note('the MDH table says AuxInfo is used by ML-KEM, but <<KLEE-PQC-ML-KEM>> defines no use for it '
+              '(the text is commented out); the model provisions AuxInfo = 0')
 
-
-def t_keygen():
-    print('\n-- ML-KEM.KeyGen (FIPS 203 Algorithms 19 and 16) vs ACVP vectors --')
+def t_fips203():
+    section('FIPS 203 Algorithms 16-21 vs ACVP')
     for v in VECTORS['keyGen']:
-        d, z = bytes.fromhex(v['d']), bytes.fromhex(v['z'])
+        d, z, rbg = h(v['d']), h(v['z']), RBG(h(v['d']), h(v['z']))
         ek, dk = K.keygen_internal(d, z, v['pset'])
-        chk(f"KeyGen_internal ML-KEM-{v['pset']}  {v['src']}",
-            ek.hex() == v['ek'] and dk.hex() == v['dk'])
-        rbg = ScriptedRBG(d, z)
-        chk(f"KeyGen (Algorithm 19) draws d then z  ML-KEM-{v['pset']}  {v['src']}",
-            K.keygen(v['pset'], rbg) == (ek, dk) and rbg.draws == 2)
-    chk('KeyGen returns the bottom value when the RBG fails',
-        K.keygen(768, ScriptedRBG(bytes(32), None)) is None)
-
-
-def t_encaps():
-    print('\n-- ML-KEM.Encaps (FIPS 203 Algorithms 20 and 17) vs ACVP vectors --')
+        check(f"KeyGen_internal ML-KEM-{v['pset']} {v['src']}", ek.hex() == v['ek'] and dk.hex() == v['dk'])
+        check(f"KeyGen draws d then z, {v['src']}", K.keygen(v['pset'], rbg) == (ek, dk) and rbg.draws == 2)
+    check('KeyGen returns bottom on RBG failure', K.keygen(768, RBG(bytes(32), None)) is None)
     for v in VECTORS['encaps']:
-        ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
+        ek, m, rbg = h(v['ek']), h(v['m']), RBG(h(v['m']))
         ss, c = K.encaps_internal(ek, m, v['pset'])
-        chk(f"Encaps_internal ML-KEM-{v['pset']}  {v['src']}",
-            c.hex() == v['c'] and ss.hex() == v['k'])
-        rbg = ScriptedRBG(m)
-        chk(f"Encaps (Algorithm 20) draws m  ML-KEM-{v['pset']}  {v['src']}",
-            K.encaps(ek, v['pset'], rbg) == (ss, c) and rbg.draws == 1)
-    chk('Encaps returns the bottom value when the RBG fails',
-        K.encaps(bytes.fromhex(VECTORS['encaps'][0]['ek']), 512,
-                 ScriptedRBG(None)) is None)
-
-
-def t_decaps():
-    print('\n-- ML-KEM.Decaps (FIPS 203 Algorithms 21 and 18) vs ACVP vectors --')
+        check(f"Encaps_internal ML-KEM-{v['pset']} {v['src']}", c.hex() == v['c'] and ss.hex() == v['k'])
+        check(f"Encaps draws m, {v['src']}", K.encaps(ek, v['pset'], rbg) == (ss, c) and rbg.draws == 1)
+    check('Encaps returns bottom on RBG failure', K.encaps(h(VECTORS['encaps'][0]['ek']), 512, RBG(None)) is None)
     for v in VECTORS['decaps']:
-        ss = K.decaps(bytes.fromhex(v['dk']), bytes.fromhex(v['c']), v['pset'])
-        chk(f"Decaps ML-KEM-{v['pset']}  {v['src']}  ({v['reason']})", ss.hex() == v['k'])
-    v = vector('decaps', reason='modified')
-    dk = bytes.fromhex(v['dk'])
-    chk(f"Decaps ML-KEM-{v['pset']} {v['src']}: the rejected key is J(z || c)",
-        K.J(dk[-32:] + bytes.fromhex(v['c'])).hex() == v['k'])
+        check(f"Decaps ML-KEM-{v['pset']} {v['src']} ({v['reason']})",
+              K.decaps(h(v['dk']), h(v['c']), v['pset']).hex() == v['k'])
+    v = vec('decaps', reason='modified')
+    check(f"{v['src']}: rejected key = J(z || c)", K.J(h(v['dk'])[-32:] + h(v['c'])).hex() == v['k'])
 
-
-def t_input_validation():
-    print('\n-- FIPS 203 7.2/7.3 checks, performed when a field finishes loading --')
+def t_input_checks():
+    section('FIPS 203 7.2/7.3 checks when a field finishes loading')
     for v in VECTORS['ekCheck']:
-        got = K.check_encaps_input(bytes.fromhex(v['ek']), v['pset'])
-        chk(f"encapsulation key check (7.2)  {v['src']}  ({v['reason']})",
-            got == v['pass'], 'accepted' if got else 'rejected')
+        check(f"7.2 encapsulation key check {v['src']} ({v['reason']})",
+              K.check_encaps_input(h(v['ek']), v['pset']) == v['pass'])
     for v in VECTORS['dkCheck']:
-        got = K.check_decaps_input(bytes.fromhex(v['dk']),
-                                   bytes(K.sizes(v['pset'])[2]), v['pset'])
-        chk(f"decapsulation input checks (7.3)  {v['src']}  ({v['reason']})",
-            got == v['pass'], 'accepted' if got else 'rejected')
-
+        check(f"7.3 decapsulation input checks {v['src']} ({v['reason']})",
+              K.check_decaps_input(h(v['dk']), bytes(K.sizes(v['pset'])[2]), v['pset']) == v['pass'])
     ps = 768
-    bad = malformed_ek(ps)
-    good = K.keygen_internal(bytes(32), bytes(32), ps)[0]
-    chk('a hand-made encapsk with a coefficient equal to q fails the modulus check '
-        'while having the length the type check wants',
-        K.check_encaps_input(bad, ps) is False and len(bad) == SPEC_SIZES[ps][0])
-    chk('the same encapsk passes once that coefficient is reduced',
-        K.check_encaps_input(good, ps) is True and good[384:] == bad[384:])
-
-    # The state machine: "Upon completion of State _encapsk_Input_ ..."
+    bad, good = malformed_ek(ps), K.keygen_internal(bytes(32), bytes(32), ps)[0]
+    check('encapsk with a coefficient = q fails the modulus check, not the type check',
+          not K.check_encaps_input(bad, ps) and len(bad) == SIZES[ps][0])
+    check('... and passes once reduced', K.check_encaps_input(good, ps) and good[384:] == bad[384:])
     for v in VECTORS['ekCheck']:
-        cc = load(MLKEMLocker(v['pset']), S_EK_IN, bytes.fromhex(v['ek']))
-        if v['pass']:
-            ok = (cc.state == S_EK_IN and cc.use == cc.size['encapsk']
-                  and cc.encapsk.hex() == v['ek'])
-            want = 'the State is kept and _MachineUse_ is the field size'
-        else:
-            ok = cc.state == S_INVALID and cc.use == 0 and all_zero(*cc.fields())
-            want = 'Error State _Invalid_ (49), the Content cleared'
-        chk(f"_encapsk_Input_ of {v['src']} ({v['reason']}): {want}", ok)
+        cc = load(MLKEMLocker(v['pset']), EK_IN, h(v['ek']))
+        check(f"_encapsk_Input_ {v['src']}: " + ('State kept, MachineUse = size' if v['pass'] else
+                                                 '_Invalid_, Content cleared'),
+              cc.state == EK_IN and cc.use == cc.size['encapsk'] and cc.encapsk.hex() == v['ek'] if v['pass']
+              else cc.state == INVALID and cc.use == 0 and zero(*cc.fields()))
     for v in VECTORS['dkCheck']:
-        cc = load(MLKEMLocker(v['pset']), S_DK_IN, bytes.fromhex(v['dk']))
-        chk(f"_decapsk_Input_ of {v['src']} ({v['reason']}): "
-            + ('the State is kept' if v['pass'] else 'Error State _Invalid_ (49)'),
-            cc.state == (S_DK_IN if v['pass'] else S_INVALID))
-
-    cc = MLKEMLocker(ps)
-    cc.setst(S_EK_IN)
-    cc.exec_B(bad[:384])
-    cc.exec_B(bad[384:784])
+        cc = load(MLKEMLocker(v['pset']), DK_IN, h(v['dk']))
+        check(f"_decapsk_Input_ {v['src']}: " + ('State kept' if v['pass'] else '_Invalid_'),
+              cc.state == (DK_IN if v['pass'] else INVALID))
+    cc = load(MLKEMLocker(ps), EK_IN, bad, (384, 400))
     before = cc.state
     cc.exec_B(bad[784:])
-    chk('the key check runs at the kl.exec that completes the load, not before',
-        before == S_EK_IN and cc.state == S_INVALID)
-
-    # The type checks of 7.2/7.3 on a completed load.
+    check('key check runs at the completing kl.exec', before == EK_IN and cc.state == INVALID)
     ok = True
-    for ps2 in (512, 768, 1024):
-        e2, d2 = K.keygen_internal(bytes(32), bytes(32), ps2)
-        cc = MLKEMLocker(ps2)
-        load(cc, S_EK_IN, e2)
-        ok &= cc.state == S_EK_IN and len(cc.encapsk) == SPEC_SIZES[ps2][0]
-        load(cc, S_DK_IN, d2)
-        ok &= cc.state == S_DK_IN and len(cc.decapsk) == SPEC_SIZES[ps2][1]
-        load(cc, S_CT_IN, (bytes(range(256)) * 7)[:SPEC_SIZES[ps2][2]])
-        ok &= (cc.state == S_CT_IN and K.check_ciphertext(cc.ciphertext, ps2)
-               and len(cc.ciphertext) == SPEC_SIZES[ps2][2])
-    chk('a completed load always has the length the FIPS 203 type checks require, so '
-        'the three type checks pass and only the modulus and hash checks can fail', ok)
-    info('The field size is fixed by the State, so the ciphertext type check cannot '
-         'fail through _ciphertext_Input_ and the _Failure_ branch is unreachable that '
-         'way; the next check forces the failure to exercise the branch as written.')
-
-    dv = vector('decaps', ps, 'valid')
-    cc = MLKEMLocker(ps, ct_type_check=lambda c: False)
-    load(cc, S_DK_IN, bytes.fromhex(dv['dk']))
-    load(cc, S_CT_IN, bytes.fromhex(dv['c']))
-    chk('(forced) a ciphertext type check failure gives State _Failure_ (47), a Valid '
-        'State, with the Content kept -- not an Error State',
-        cc.state == S_FAILURE and cc.decapsk.hex() == dv['dk'] and cc.use == 0)
-    cc.ct_type_check = lambda c: K.check_ciphertext(c, ps)
-    load(cc, S_CT_IN, bytes.fromhex(dv['c']))
-    cc.setst(S_DECAPSULATE)
-    cc.exec_D()
-    chk('... and "the caller may supply another ciphertext": from _Failure_, reload and '
-        'decapsulate', cc.state == S_SUCCESS and cc.sharedkey.hex() == dv['k'], dv['src'])
-
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(bytes(32)))
-    load(cc, S_EK_IN, bad[:-16])                   # the last 16 bytes never arrive
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    spec_note('the checks run only when a field finishes loading and the Machine keeps '
-              'no record of completion, so a partly loaded key is used unchecked: here '
-              'an encapsk missing its last 16 B, with a coefficient equal to q, reached '
-              f'State _{STATE_NAME.get(cc.state, cc.state)}_ through _Encapsulate_, and '
-              'the 7.2 check '
-              f'{"rejects" if not K.check_encaps_input(cc.encapsk, ps) else "accepts"} '
-              'the key it used.  FIPS 203 7.2/7.3 require the checks before every '
-              'Encaps and Decaps.')
-
+    for p in SIZES:
+        cc = MLKEMLocker(p)
+        e, d = K.keygen_internal(bytes(32), bytes(32), p)
+        for st, data in ((EK_IN, e), (DK_IN, d), (CT_IN, (bytes(range(256)) * 7)[:SIZES[p][2]])):
+            ok &= load(cc, st, data).state == st and len(getattr(cc, IN_F[st])) == cc.size[IN_F[st]]
+        ok &= K.check_ciphertext(cc.ciphertext, p)
+    check('a completed load has the lengths the type checks require', ok)
+    info('the ciphertext type check cannot fail through _ciphertext_Input_; its _Failure_ branch is forced')
+    dv = vec('decaps', ps, 'valid')
+    cc = load(load(MLKEMLocker(ps, ct_check=lambda c: False), DK_IN, h(dv['dk'])), CT_IN, h(dv['c']))
+    check('ciphertext type check failure: _Failure_ (a Valid State), Content kept',
+          cc.state == FAILURE and cc.decapsk.hex() == dv['dk'] and cc.use == 0)
+    cc.ct_check = lambda c: K.check_ciphertext(c, ps)
+    run(load(cc, CT_IN, h(dv['c'])), DEC)
+    check('from _Failure_ another ciphertext can be supplied and decapsulated',
+          cc.state == SUCCESS and cc.sharedkey.hex() == dv['k'])
+    cc = load(MLKEMLocker(ps, rbg=RBG(bytes(32))), EK_IN, bad[:-16])
+    run(cc, ENC)
+    if cc.state == CT_OUT and not K.check_encaps_input(cc.encapsk, ps):
+        spec_note('the 7.2/7.3 checks run only when a field completes, so a partly loaded encapsk failing 7.2 '
+                  'is used by _Encapsulate_')
 
 def t_state_machine():
-    print('\n-- State machine, and the long-field transfers of Rule MGR7 --')
+    section('State machine and long-field transfers (MGR7)')
     ps = 768
-    v = vector('encaps', ps)
-    ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
-    size = SPEC_SIZES[ps][0]
-
-    cc = MLKEMLocker(ps)
-    cc.setst(S_DK_IN)
-    cc.exec_B(b'\x11' * 160)
+    v, kv = vec('encaps', ps), vec('keyGen', ps)
+    ek, m, d, z, size = h(v['ek']), h(v['m']), h(kv['d']), h(kv['z']), SIZES[ps][0]
+    cc = load(MLKEMLocker(ps), DK_IN, b'\x11' * 160)
     was = cc.use
-    cc.setst(S_EK_IN)
-    chk('entering a loading State zeroes _MachineUse_', was == 160 and cc.use == 0)
-    seen, off = [], 0
-    for n in (128, 512, 400, 144):                 # 1184 bytes in uneven transfers
-        cc.exec_B(ek[off:off + n])
-        off += n
+    cc.setst(EK_IN)
+    check('entering a loading State zeroes MachineUse', was == 160 and cc.use == 0)
+    seen = []
+    for a, b in ((0, 128), (128, 640), (640, 1040), (1040, 1184)):
+        cc.exec_B(ek[a:b])
         seen.append(cc.use)
-    chk('_MachineUse_ counts the BYTES transferred so far', seen == [128, 640, 1040, 1184],
-        str(seen))
-    chk('encapsk is loaded byte-exactly, and _MachineUse_ is not reset when the field '
-        'completes', cc.encapsk == ek and cc.use == size and cc.state == S_EK_IN)
+    check('MachineUse counts bytes', None, seen, [128, 640, 1040, 1184])
+    check('field loaded byte-exactly; MachineUse kept at completion',
+          cc.encapsk == ek and cc.use == size and cc.state == EK_IN)
     cc.exec_B(bytes(16))
-    chk('a further kl.exec once the field is complete gives Error State _Invalid_',
-        cc.state == S_INVALID)
-
-    cc = MLKEMLocker(ps)
-    cc.setst(S_EK_IN)
-    cc.exec_B(ek[:1024])
-    cc.exec_B(ek[1024:] + b'\xAA' * 64)            # 224 B offered, 160 B needed
-    chk('the excess of the final loading transfer is ignored',
-        cc.use == size and cc.encapsk == ek and cc.state == S_EK_IN)
-    cc.setst(S_EK_IN)
-    chk('a same-State kl.setst zeroes _MachineUse_ and the field (SGR4, MGR7)',
-        cc.use == 0 and cc.encapsk == bytes(size))
+    check('kl.exec after completion: _Invalid_', cc.state == INVALID)
+    cc = load(MLKEMLocker(ps), EK_IN, ek + b'\xaa' * 64, (1024, 224))
+    check('excess of the final loading transfer ignored', cc.use == size and cc.encapsk == ek and cc.state == EK_IN)
+    cc.setst(EK_IN)
+    check('same-State kl.setst zeroes MachineUse and the field (SGR4, MGR7)',
+          cc.use == 0 and cc.encapsk == bytes(size))
     cc.exec_B(b'\x77' * 32)
-    chk('reloading replaces the field rather than combining it with the old contents',
-        cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
-
+    check('reloading replaces the field', cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
     cc = MLKEMLocker(ps)
     cc.exec_D()
-    chk('no kl.exec is allowed in State _Ready_ (SGR2): Error State _Invalid_',
-        cc.state == S_INVALID)
+    check('kl.exec in _Ready_: _Invalid_ (SGR2)', cc.state == INVALID)
 
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    chk('Encapsulate succeeds into State _ciphertext_Output_ (3 -> 9), _MachineUse_ '
-        'zeroed on entry', cc.state == S_CT_OUT and cc.use == 0)
-    chk('the shared key and the ciphertext both derive from the one drawn value',
-        cc.sharedkey.hex() == v['k'] and cc.ciphertext.hex() == v['c'], v['src'])
-    out = emit(cc, (512, 512, 64))
-    chk('_ciphertext_Output_ emits the ACVP ciphertext; _MachineUse_ reaches 1088',
-        out.hex() == v['c'] and cc.use == SPEC_SIZES[ps][2], v['src'])
+    cc = encapsulated()
+    check('_Encapsulate_ -> _ciphertext_Output_, MachineUse zeroed', cc.state == CT_OUT and cc.use == 0)
+    check('shared key and ciphertext from the one drawn value',
+          cc.sharedkey.hex() == v['k'] and cc.ciphertext.hex() == v['c'])
+    check('_ciphertext_Output_ emits the ACVP ciphertext',
+          emit(cc, (512, 512, 64)).hex() == v['c'] and cc.use == SIZES[ps][2])
     got = cc.exec_C(16)
-    chk('a further emitting kl.exec gives _Invalid_ and a zeroed OUTPUT',
-        cc.state == S_INVALID and got == bytes(16))
-
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    part = emit(cc, (512, 512))
-    over = cc.exec_C(128)                          # 1024 + 128 > 1088
-    chk('an emitting kl.exec that would carry _MachineUse_ past the field size '
-        'invalidates the locker and writes zeros',
-        part.hex() == v['c'][:2048] and cc.state == S_INVALID and over == bytes(128))
-
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
+    check('emitting after completion: _Invalid_, OUTPUT zeroed', cc.state == INVALID and got == bytes(16))
+    cc = encapsulated()
+    part, over = emit(cc, (512, 512)), cc.exec_C(128)
+    check('emitting past the field size: _Invalid_, OUTPUT zeroed (MGR7)',
+          part.hex() == v['c'][:2048] and cc.state == INVALID and over == bytes(128))
+    cc = encapsulated()
     cc.exec_C(512)
-    filled = not all_zero(cc.encapsk, cc.ciphertext, cc.sharedkey)
-    cc.setst(S_READY)
-    chk('kl.setst _Ready_ clears encapsk, decapsk, ciphertext, sharedkey and '
-        '_MachineUse_',
-        filled and all_zero(*cc.fields()) and cc.use == 0 and cc.state == S_READY)
+    filled = not zero(cc.encapsk, cc.ciphertext, cc.sharedkey)
+    cc.setst(READY)
+    check('kl.setst _Ready_ clears the four fields and MachineUse',
+          filled and zero(*cc.fields()) and cc.use == 0 and cc.state == READY)
 
-    kv = vector('keyGen', ps)
-    d, z = bytes.fromhex(kv['d']), bytes.fromhex(kv['z'])
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z))
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D()
-    chk('GenerateKeyPair succeeds into State _Success_ (46) with the ACVP key pair and '
-        '_MachineUse_ zero',
-        cc.state == S_SUCCESS and cc.use == 0 and cc.encapsk.hex() == kv['ek']
-        and cc.decapsk.hex() == kv['dk'], kv['src'])
+    def generated():
+        cc = MLKEMLocker(ps, rbg=RBG(d, z, m))
+        run(cc, GEN)
+        return cc
+    cc = generated()
+    check('_GenerateKeyPair_ -> _Success_ with the ACVP key pair', cc.state == SUCCESS and cc.use == 0
+          and cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
     got = cc.exec_C(16)
-    chk('kl.exec in State _Success_ (SGR5: only for a Machine with arbitrarily long '
-        'output) gives _Invalid_, an empty OUTPUT and a cleared Content',
-        cc.state == S_INVALID and got == bytes(16) and all_zero(*cc.fields()))
-
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z, m))
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D()
-    cc.setst(S_EK_OUT)
-    chk('_Success_ -> _encapsk_Output_ by kl.setst ("transitions are allowed between '
-        'any two valid states")', cc.state == S_EK_OUT and cc.use == 0)
-    out = emit(cc, (320, 320, 320, 224))
-    chk('_encapsk_Output_ emits the ACVP encapsulation key in exact transfers',
-        out.hex() == kv['ek'] and cc.use == SPEC_SIZES[ps][0], kv['src'])
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    chk('_Encapsulate_ uses the encapsk that _GenerateKeyPair_ set',
-        cc.state == S_CT_OUT
-        and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(bytes.fromhex(kv['ek']),
-                                                               m, ps))
-    info('SGR6 lists only _Ready_, _Unconfigured_ and the Error States as kl.setst '
-         'targets from _Success_/_Failure_, and the NOTE of SGR5 calls _Ready_ the only '
-         'other exit of ML-KEM\'s _Success_; <<KLEE-PQC-ML-KEM>> allows transitions '
-         '"between any two valid states", and SGR5 invalidates a kl.setst allowed '
-         'neither by the architecture nor by the Machine.  The model follows the '
-         'Machine: otherwise a generated key pair could never be emitted or used.')
-
+    check('kl.exec in _Success_: _Invalid_, OUTPUT zeroed, Content cleared (SGR5)',
+          cc.state == INVALID and got == bytes(16) and zero(*cc.fields()))
+    cc = generated()
+    cc.setst(EK_OUT)
+    check('_Success_ -> _encapsk_Output_ by kl.setst', cc.state == EK_OUT and cc.use == 0)
+    check('_encapsk_Output_ emits the ACVP encapsk', emit(cc, (320, 320, 320, 224)).hex() == kv['ek'] and cc.use == size)
+    run(cc, ENC)
+    check('_Encapsulate_ uses the encapsk of _GenerateKeyPair_',
+          cc.state == CT_OUT and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(h(kv['ek']), m, ps))
+    info('SGR6 admits only _Ready_, _Unconfigured_ and Error States from _Success_; the model follows the '
+         'Machine\'s "between any two valid states"')
     states = set()
-    for x in [y for y in VECTORS['decaps'] if y['pset'] == ps]:
-        cc = MLKEMLocker(ps)
-        load(cc, S_DK_IN, bytes.fromhex(x['dk']))
-        load(cc, S_CT_IN, bytes.fromhex(x['c']))
-        cc.setst(S_DECAPSULATE)
+    for x in (y for y in VECTORS['decaps'] if y['pset'] == ps):
+        cc = decaps_ready(x)
         cc.exec_D()
         states.add(cc.state)
-        chk(f"Decapsulate ML-KEM-{ps} {x['src']} ({x['reason']}) gives the vector's "
-            'shared key', cc.sharedkey.hex() == x['k'] and cc.state == S_SUCCESS)
-    chk('Decaps is unconditional: a valid and an implicitly rejected ciphertext both '
-        'reach _Success_, indistinguishably', states == {S_SUCCESS},
-        f'States seen: {sorted(states)}')
+        check(f"_Decapsulate_ {x['src']} ({x['reason']})", cc.sharedkey.hex() == x['k'] and cc.state == SUCCESS)
+    check('valid and implicitly rejected ciphertexts both reach _Success_', None, states, {SUCCESS})
 
-    cc = load(MLKEMLocker(ps), S_EK_IN, ek)
-    for imm in (S_SUCCESS, S_FAILURE):
-        chk(f'kl.setst #{imm} is a reserved encoding: illegal-instruction exception, '
-            'nothing changed (SGR7)',
-            _raises(IllegalInstruction, lambda: cc.setst(imm))
-            and cc.state == S_EK_IN and cc.encapsk == ek)
+    cc = load(MLKEMLocker(ps), EK_IN, ek)
+    for imm in (SUCCESS, FAILURE):
+        check(f'kl.setst #{imm}: illegal instruction, nothing changed (SGR7)',
+              raises(cc.setst, imm) and cc.state == EK_IN and cc.encapsk == ek)
     for imm in (10, 45, 65):
         c2 = MLKEMLocker(ps)
         c2.setst(imm)
-        chk(f'kl.setst #{imm}, an immediate ML-KEM does not define, gives _Invalid_',
-            c2.state == S_INVALID)
-    cc.setst(S_PRIV_VIOLATION)
-    chk('kl.setst with an Error-State immediate reaches that Error State without an '
-        'exception, the Content cleared (SGR10)',
-        cc.state == S_PRIV_VIOLATION and all_zero(*cc.fields()) and cc.use == 0)
+        check(f'kl.setst #{imm} (undefined): _Invalid_', c2.state == INVALID)
+    cc.setst(PRIV_VIOLATION)
+    check('kl.setst to an Error State: no exception, Content cleared (SGR10)',
+          cc.state == PRIV_VIOLATION and zero(*cc.fields()) and cc.use == 0)
     cc.setst(54)
-    chk('kl.setst #54, a reserved Error State, gives _Invalid_', cc.state == S_INVALID)
-    cc.setst(S_EK_IN)
+    check('kl.setst #54 (reserved Error State): _Invalid_', cc.state == INVALID)
+    cc.setst(EK_IN)
     cc.exec_B(ek)
     got = cc.exec_C(16)
     cc.exec_D()
-    chk('using a locker in an Error State: no operation, the _State_ unchanged, the OUTPUT '
-        'zeroed (SGR16)',
-        cc.state == S_INVALID and got == bytes(16) and all_zero(*cc.fields()))
-
-    for st in LONG_RUNNING:
+    check('use in an Error State: no operation, State kept, OUTPUT zeroed (SGR16)',
+          cc.state == INVALID and got == bytes(16) and zero(*cc.fields()))
+    for st in LONG:
         c2 = MLKEMLocker(ps)
         c2.setst(st)
         c2.exec_B(bytes(16))
-        chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (MGR8: besides '
-            'kl.setst, only Form D is admitted)', c2.state == S_INVALID)
-
+        check(f'Form B kl.exec in _{NAME[st]}_: _Invalid_ (MGR8)', c2.state == INVALID)
 
 def t_long_running():
-    print('\n-- Long-running operations: Rule MGR8, _MachineUse_ as the field P --')
+    section('Long-running operations: MachineUse as P (MGR8)')
     ps = 768
-    kv = vector('keyGen', ps)
-    ev = vector('encaps', ps)
-    d, z = bytes.fromhex(kv['d']), bytes.fromhex(kv['z'])
-    ek, m = bytes.fromhex(ev['ek']), bytes.fromhex(ev['m'])
+    kv, ev = vec('keyGen', ps), vec('encaps', ps)
+    d, z, ek, m = h(kv['d']), h(kv['z']), h(ev['ek']), h(ev['m'])
     d2, z2, m2 = bytes(range(32)), bytes(range(32, 64)), bytes(range(64, 96))
-    ek2, _ = K.keygen_internal(d2, z2, ps)
+    fresh = K.keygen_internal(d2, z2, ps)
 
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, None))
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D()
-    chk('an RBG failure in GenerateKeyPair (KeyGen returns bottom) gives State '
-        '_Failure_ (47), P zeroed',
-        cc.state == S_FAILURE and cc.use == 0 and all_zero(cc.encapsk, cc.decapsk))
-    cc = MLKEMLocker(ps, rbg=ScriptedRBG(None))
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    chk('an RBG failure in Encapsulate gives State _Failure_, with no ciphertext and no '
-        'shared key', cc.state == S_FAILURE and all_zero(cc.ciphertext, cc.sharedkey))
+    def halted_gen():
+        rbg = RBG(d, z, d2, z2)
+        cc = MLKEMLocker(ps, rbg=rbg)
+        return cc, rbg, run(cc, GEN, halt_after=1)
 
-    rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    cc.setst(S_GENKEYPAIR)
-    r = cc.exec_D(halt_after=1)
-    chk('a halted GenerateKeyPair: P is non-zero, the _State_ and the Content are '
-        'unchanged, and the operation\'s data is in an ADS',
-        r == 'halted' and cc.use != 0 and cc.state == S_GENKEYPAIR
-        and all_zero(*cc.fields()) and cc.get(F_AUXDATALEN) >= 2, f'P = {cc.use}')
+    cc = MLKEMLocker(ps, rbg=RBG(d, None))
+    run(cc, GEN)
+    check('RBG failure in _GenerateKeyPair_: _Failure_, P zero',
+          cc.state == FAILURE and cc.use == 0 and zero(cc.encapsk, cc.decapsk))
+    cc = load(MLKEMLocker(ps, rbg=RBG(None)), EK_IN, ek)
+    run(cc, ENC)
+    check('RBG failure in _Encapsulate_: _Failure_, no ciphertext or key',
+          cc.state == FAILURE and zero(cc.ciphertext, cc.sharedkey))
+    cc, rbg, r = halted_gen()
+    check('halt: P != 0, State and Content unchanged, data in an ADS', r == 'halted' and cc.use != 0
+          and cc.state == GEN and zero(*cc.fields()) and cc.get('AuxDataLen') >= 2)
     p = cc.use
-    r = cc.exec_D(halt_after=0)
-    chk('P is not changed by re-execution that makes no further progress',
-        r == 'halted' and cc.use == p)
+    check('P unchanged by re-execution without progress', cc.exec_D(halt_after=0) == 'halted' and cc.use == p)
     r = cc.exec_D()
-    chk('resumed with P non-zero: no new draw, the ACVP key pair, _Success_, and P and '
-        'the ADS gone on completion',
-        r == 'retired' and rbg.draws == 2 and cc.state == S_SUCCESS and cc.use == 0
-        and cc.get(F_AUXDATALEN) == 0 and cc.encapsk.hex() == kv['ek']
-        and cc.decapsk.hex() == kv['dk'], kv['src'])
-
-    rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D(halt_after=1)
-    cc.setst(S_GENKEYPAIR)
+    check('resumed: no new draw, ACVP key pair, P and ADS gone on completion', r == 'retired' and rbg.draws == 2
+          and cc.state == SUCCESS and cc.use == 0 and cc.get('AuxDataLen') == 0
+          and cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
+    cc, rbg, _ = halted_gen()
+    cc.setst(GEN)
     zeroed = cc.use == 0 and cc.ads is None
     cc.exec_D()
-    chk('a same-State kl.setst zeroes P and destroys the values drawn; the next kl.exec '
-        'draws fresh ones', zeroed and rbg.draws == 4
-        and (cc.encapsk, cc.decapsk) == K.keygen_internal(d2, z2, ps))
-
-    for target in (S_READY, S_INVALID):
-        cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z))
-        cc.setst(S_GENKEYPAIR)
-        cc.exec_D(halt_after=1)
+    check('same-State kl.setst zeroes P and discards the draws; fresh draws follow',
+          zeroed and rbg.draws == 4 and (cc.encapsk, cc.decapsk) == fresh)
+    for target in (READY, INVALID):
+        cc = halted_gen()[0]
         cc.setst(target)
-        chk(f'kl.setst _{STATE_NAME[target]}_ during a halted operation zeroes P and '
-            'discards its data',
-            cc.use == 0 and cc.ads is None and cc.state == target)
-
-    rbg = ScriptedRBG(m, m2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D(halt_after=1)
-    load(cc, S_EK_IN, ek2)
-    cc.setst(S_ENCAPSULATE)
-    cc.exec_D()
-    chk('an Encapsulate halted under one key and re-entered under another draws a fresh '
-        'value: the first is never consumed against the second key (GR10)',
-        rbg.draws == 2 and cc.state == S_CT_OUT
-        and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(ek2, m2, ps))
-
-    rbg = ScriptedRBG(m, m2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    load(cc, S_EK_IN, ek)
-    cc.setst(S_ENCAPSULATE)
-    halts = 0
+        check(f'kl.setst _{NAME[target]}_ while halted zeroes P, discards the data',
+              cc.use == 0 and cc.ads is None and cc.state == target)
+    rbg = RBG(m, m2)
+    cc = load(MLKEMLocker(ps, rbg=rbg), EK_IN, ek)
+    run(cc, ENC, halt_after=1)
+    run(load(cc, EK_IN, fresh[0]), ENC)
+    check('_Encapsulate_ halted, re-entered under another key: fresh draw (GR10)', rbg.draws == 2
+          and cc.state == CT_OUT and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(fresh[0], m2, ps))
+    rbg = RBG(m, m2)
+    cc, halts = load(MLKEMLocker(ps, rbg=rbg), EK_IN, ek), 0
+    cc.setst(ENC)
     while cc.exec_D(halt_after=1) == 'halted':
         halts += 1
-    chk('an Encapsulate halted after every step resumes to the ACVP result with a '
-        'single draw', halts == 1 and rbg.draws == 1 and cc.state == S_CT_OUT
-        and cc.sharedkey.hex() == ev['k'] and cc.ciphertext.hex() == ev['c'], ev['src'])
-
-    for x in [y for y in VECTORS['decaps'] if y['pset'] == ps]:
-        cc = MLKEMLocker(ps)
-        load(cc, S_DK_IN, bytes.fromhex(x['dk']))
-        load(cc, S_CT_IN, bytes.fromhex(x['c']))
-        cc.setst(S_DECAPSULATE)
-        halts, ps_seen = 0, set()
+    check('_Encapsulate_ halted at every step: ACVP result, one draw', halts == 1 and rbg.draws == 1
+          and cc.state == CT_OUT and cc.sharedkey.hex() == ev['k'] and cc.ciphertext.hex() == ev['c'])
+    for x in (y for y in VECTORS['decaps'] if y['pset'] == ps):
+        cc, halts, seen = decaps_ready(x), 0, set()
         while cc.exec_D(halt_after=1) == 'halted':
             halts += 1
-            ps_seen.add(cc.use)
-        chk(f"a Decapsulate halted after every step ({x['src']}, {x['reason']}) resumes "
-            "to the vector's shared key, P never zero at a halt",
-            halts == 3 and 0 not in ps_seen and cc.state == S_SUCCESS
-            and cc.sharedkey.hex() == x['k'])
-
-    rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D(halt_after=1)
+            seen.add(cc.use)
+        check(f"_Decapsulate_ halted at every step ({x['src']}): vector key, P never 0 at a halt",
+              halts == 3 and 0 not in seen and cc.state == SUCCESS and cc.sharedkey.hex() == x['k'])
+    cc, rbg, _ = halted_gen()
     kept = cc.export_import(keep_ads=True)
-    same = kept.use == cc.use and kept.state == S_GENKEYPAIR
+    same = kept.use == cc.use and kept.state == GEN
     kept.exec_D()
-    chk('export and import keeping the ADS leave P unchanged, and the operation resumes '
-        'to the ACVP key pair',
-        same and rbg.draws == 2 and kept.state == S_SUCCESS
-        and kept.encapsk.hex() == kv['ek'], kv['src'])
-
-    rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D(halt_after=1)
+    check('export/import keeping the ADS: P kept, resumes to the ACVP key pair',
+          same and rbg.draws == 2 and kept.state == SUCCESS and kept.encapsk.hex() == kv['ek'])
+    cc, rbg, _ = halted_gen()
     dropped = cc.export_import(keep_ads=False)
-    zeroed = dropped.use == 0 and dropped.state == S_GENKEYPAIR
+    zeroed = dropped.use == 0 and dropped.state == GEN
     dropped.exec_D()
-    chk('an import that discards the ADS zeroes P, so the operation restarts with fresh '
-        'values', zeroed and rbg.draws == 4
-        and (dropped.encapsk, dropped.decapsk) == K.keygen_internal(d2, z2, ps))
-
-    x = vector('decaps', ps)
-    cc = MLKEMLocker(ps)
-    load(cc, S_DK_IN, bytes.fromhex(x['dk']))
-    load(cc, S_CT_IN, bytes.fromhex(x['c']))
-    cc.setst(S_DECAPSULATE)
+    check('import discarding the ADS zeroes P: restart with fresh values',
+          zeroed and rbg.draws == 4 and (dropped.encapsk, dropped.decapsk) == fresh)
+    x = vec('decaps', ps)
+    cc = decaps_ready(x)
     cc.exec_D(halt_after=2)
-    moved = cc.export_import(keep_ads=True)
+    moved = cc.export_import()
     moved.exec_D()
-    chk('a Decapsulate exported and imported mid-operation completes with the vector\'s '
-        'shared key', moved.state == S_SUCCESS and moved.sharedkey.hex() == x['k'],
-        x['src'])
-
-    rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMLocker(ps, rbg=rbg)
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D(halt_after=1)
-    cc.setst(KL_CFG_CLEAR_ADS)
-    kept_state = cc.state == S_GENKEYPAIR and cc.get(F_AUXDATALEN) == 0 and cc.use == 0
+    check('_Decapsulate_ exported and imported mid-operation completes',
+          moved.state == SUCCESS and moved.sharedkey.hex() == x['k'])
+    cc, rbg, _ = halted_gen()
+    cc.setst(CLEAR_ADS)
+    kept_state = cc.state == GEN and cc.get('AuxDataLen') == 0 and cc.use == 0
     cc.exec_D()
-    chk('kl.clearads keeps the _State_, removes the ADS, and the operation restarts',
-        kept_state and rbg.draws == 4
-        and (cc.encapsk, cc.decapsk) == K.keygen_internal(d2, z2, ps))
-    info('MGR8 does not list kl.clearads among the events that zero P, yet IRR4 makes '
-         'an operation whose ADS was removed with kl.clearads restart, and a non-zero P '
-         'means "resume"; the model zeroes P on kl.clearads.')
-
+    check('kl.clearads keeps the State, removes the ADS; the operation restarts',
+          kept_state and rbg.draws == 4 and (cc.encapsk, cc.decapsk) == fresh)
+    info('MGR8 does not list kl.clearads among the events zeroing P, but IRR4 restarts the operation; '
+         'the model zeroes P')
 
 def t_derive():
-    print('\n-- kl.derive: sharedkey into the key field of a provisioned locker --')
-    ps = 768
-    v = vector('encaps', ps)
-    ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
-    ss = bytes.fromhex(v['k'])
-    placeholder = bytes([KEY_FILL]) * 16
-
-    def encapsulated(**kw):
-        cc = MLKEMLocker(ps, rbg=ScriptedRBG(m), **kw)
-        load(cc, S_EK_IN, ek)
-        cc.setst(S_ENCAPSULATE)
-        cc.exec_D()
-        return cc
-
-    src = encapsulated()
-    chk('the sharedkey held in the CC is the ACVP shared secret', src.sharedkey == ss,
-        v['src'])
+    section('kl.derive: <<KLEE-derive-endpoints>> and the DER rules')
+    ps, v = 768, vec('encaps', 768)
+    ss, ph, src = h(v['k']), FILL * 16, encapsulated()
+    check('sharedkey is the ACVP shared secret', src.sharedkey == ss)
     emit(src, (1088,))
-    for code in (machine_code(0, 0), machine_code(1, 4), machine_code(2, 1),
-                 machine_code(3, 0), machine_code(8, 0)):
-        dest = KeyLocker(code)
-        bits = dest.key_widths[0]
-        kl_derive(dest, src, -(-bits // 8))
-        chk(f'source in _ciphertext_Output_ -> {dest.name}: length = ceil({bits}/8) '
-            f'transfers the {bits} least significant bits of sharedkey'
-            + (' (the whole shared key)' if bits == 256 else ''),
-            dest.keys[0] == ss[:bits // 8] and dest.state == S_READY
-            and src.state == S_CT_OUT and src.sharedkey == ss
-            and src.use == SPEC_SIZES[ps][2])
-
-    dest = KeyLocker(machine_code(0, 0))
-    kl_derive(dest, src, 33)
-    chk('a length above the destination key (33 B into AES-128) transfers exactly '
-        'dest_length bytes (DER1 item 4, DER8)', dest.keys[0] == ss[:16]
-        and dest.state == S_READY)
-    for n in (15, 0):
-        dest = KeyLocker(machine_code(2, 1))
+    for code in (mc(0, 0), mc(1, 4), mc(2, 1), mc(3, 0), mc(0, 7), mc(8, 0)):
+        dest = Dest(code)
+        n = len(dest.key)
         kl_derive(dest, src, n)
-        chk(f'length = {n} B, below the 32-B key of AES256_CTR: the destination becomes '
-            '_Invalid_, nothing is transferred, the source is untouched',
-            dest.state == S_INVALID and dest.keys[0] == bytes(32)
-            and src.state == S_CT_OUT and src.sharedkey == ss)
-    info('<<KLEE-PQC-ML-KEM>> says length = ceil(m/8); Rules DER1 (item 4) and DER5 '
-         'require only length >= the key size and deliver exactly the key size.  The '
-         'model follows the Rules.')
-
-    dest = KeyLocker(machine_code(0, 4), state=S_ENCRYPT)
-    kl_derive(dest, src, 16)
-    chk('a destination not in _Ready_ (AES128_GCM in _Encrypt_) becomes _Invalid_; the '
-        'source is untouched', dest.state == S_INVALID and src.state == S_CT_OUT)
-    dest = KeyLocker(machine_code(0, 4), state=S_SUCCESS)
-    kl_derive(dest, src, 16)
-    chk('a locker in _Success_ may not be the destination of a kl.derive (SGR5): _Invalid_',
-        dest.state == S_INVALID)
-
-    dest = KeyLocker(machine_code(10, 0))
-    kl_derive(dest, src, 32)
-    chk('secp256r1 in _Ready_ receives sharedkey in its private key `Scalar` (DER5: '
-        '"into a private key field of a Machine implementing a public key agreement '
-        'scheme")', dest.keys[0] == ss and dest.state == S_READY)
-    dest = KeyLocker(machine_code(10, 1))
-    kl_derive(dest, src, 48)
-    chk('secp384r1: the 32-B shared key is shorter than the 48-B `Scalar`, so the '
-        'destination becomes _Invalid_ (DER1 item 4); the source is untouched',
-        dest.state == S_INVALID and src.state == S_CT_OUT and src.sharedkey == ss)
-    for code in (machine_code(0, 3), machine_code(6, 10), machine_code(10, 3)):
-        s2 = encapsulated()
-        dest = KeyLocker(code)
-        kl_derive(dest, s2, 32)
-        chk(f'{dest.name} (not a single-key Machine of a DER5 scheme) is no listed pair: '
-            'both lockers become _Invalid_', dest.state == S_INVALID
-            and s2.state == S_INVALID)
-    s2 = encapsulated()
-    other = MLKEMLocker(ps)
-    kl_derive(other, s2, 32)
-    chk('an ML-KEM destination (nothing importable) is no listed pair: both lockers '
-        'become _Invalid_', other.state == S_INVALID and s2.state == S_INVALID)
-
-    dest = KeyLocker(machine_code(0, 0), keytype=1, skid=0x1234)
-    kl_derive(dest, src, 16)
-    chk('a key field of a locker whose _KeyType_ is 1 is never importable (DER4): the '
-        'destination becomes _Invalid_', dest.state == S_INVALID
-        and src.state == S_CT_OUT)
-    dest = KeyLocker(machine_code(0, 0), keytype=1, skid=SKID_ALL_ONES)
-    kl_derive(dest, src, 16)
-    chk('the placeholder pattern -- provisioned with the all-ones SKID, so _KeyType_ 0 '
-        'and a random key -- receives the shared key',
-        dest.get(F_KEYTYPE) == 0 and dest.keys[0] == ss[:16] and dest.state == S_READY)
-
-    dv = vector('decaps', reason='valid')
-    cd = MLKEMLocker(dv['pset'])
-    load(cd, S_DK_IN, bytes.fromhex(dv['dk']))
-    load(cd, S_CT_IN, bytes.fromhex(dv['c']))
-    cd.setst(S_DECAPSULATE)
+        check(f'_ciphertext_Output_ -> {dest.name} key: the {n} least significant bytes of sharedkey',
+              dest.key == ss[:n] and dest.state == READY and src.state == CT_OUT and src.sharedkey == ss
+              and src.use == SIZES[ps][2])
+    dest = derived(Dest(AES128_ECB), src, 33)
+    check('length above the key size: exactly dest_length bytes (DER1 item 4, DER8)',
+          dest.key == ss[:16] and dest.state == READY)
+    for n in (15, 0):
+        dest = derived(Dest(AES256_CTR), src, n)
+        check(f'length {n} below the 32-B key: destination _Invalid_, source untouched',
+              dest.state == INVALID and dest.key == bytes(32) and src.state == CT_OUT and src.sharedkey == ss)
+    for st, nm in ((ENCRYPT, 'Encrypt'), (SUCCESS, 'Success')):
+        dest = derived(Dest(AES128_GCM, state=st), src)
+        check(f'destination in _{nm}_ (DER1 item 1; SGR5): _Invalid_, source untouched',
+              dest.state == INVALID and src.state == CT_OUT)
+    dest = derived(Dest(mc(10, 0)), src, 32)
+    check('secp256r1 in _Ready_ receives sharedkey as its private key Scalar (DER5)',
+          dest.key == ss and dest.state == READY)
+    dest = derived(Dest(mc(10, 1)), src, 48)
+    check('secp384r1: Scalar longer than sharedkey: destination _Invalid_ (DER1 item 4)',
+          dest.state == INVALID and src.state == CT_OUT and src.sharedkey == ss)
+    spec_note('DER5 "always" allows the shared secret into a key-agreement private key, but '
+              '<<KLEE-derive-endpoints>> lists no ECC destination and <<KLEE-PQC-ML-KEM>> a symmetric one; the '
+              'model follows DER5, writing the Scalar in _Ready_ (DER1) rather than _Set_Scalar_ (DER5 b)')
+    dv = vec('decaps', ps, 'valid')
+    cd = decaps_ready(dv)
     cd.exec_D()
-    dest = KeyLocker(machine_code(2, 1))
-    kl_derive(dest, cd, 32)
-    chk('source in _Success_ after _Decapsulate_ (SGR5): AES256_CTR receives the '
-        'decapsulated shared key',
-        dest.keys[0].hex() == dv['k'] and cd.state == S_SUCCESS, dv['src'])
-
-    for st in (S_READY,) + LONG_RUNNING:
+    for code, st, s in ((mc(0, 3), READY, src), (mc(4, 7), READY, src), (AES128_GCM, SET_AUX, src),
+                        (SHA3_256, HASH_ABSORB, cd)):
+        dest = derived(Dest(code, state=st), s, 64)
+        check(f'{dest.name} {dest.eps[st][0]}: not one key of at most 256 bits in _Ready_: destination '
+              '_Invalid_, source untouched', dest.state == INVALID and s.state in (CT_OUT, SUCCESS))
+    spec_note('<<KLEE-derive-endpoints>> admits "any combination" (also piping ML-KEM fields through a hash) '
+              'and DER5 any symmetric encryption key, but <<KLEE-PQC-ML-KEM>> requires a single-key Machine '
+              'with a key of at most 256 bits in _Ready_; the model follows <<KLEE-PQC-ML-KEM>> (DER1 item 2)')
+    dest = derived(Dest(mc(6, 10)), src)
+    check('KMAC128 in _Ready_ (endpoint in _Hash_Absorb_): destination _Invalid_ (DER1 item 1)',
+          dest.state == INVALID and src.state == CT_OUT)
+    for dest in (Dest(mc(10, 3)), MLKEMLocker(ps)):
+        s2 = encapsulated()
+        check(f'{dest.name} destination (no importable field): unlisted pair, both _Invalid_',
+              derived(dest, s2, 32).state == INVALID and s2.state == INVALID)
+    dest = derived(Dest(AES128_ECB, keytype=1, skid=0x1234), src)
+    check('KeyType 1 key never importable (DER4): destination _Invalid_',
+          dest.state == INVALID and src.state == CT_OUT)
+    dest = derived(Dest(AES128_ECB, keytype=1, skid=ALL_ONES_SKID), src)
+    check('all-ones SKID placeholder (KeyType 0) receives the key',
+          dest.get('KeyType') == 0 and dest.key == ss[:16] and dest.state == READY)
+    check('source in _Success_ after _Decapsulate_ (SGR5): key delivered',
+          derived(Dest(AES256_CTR), cd, 32).key.hex() == dv['k'] and cd.state == SUCCESS)
+    s2 = encapsulated()
+    s2.setst(EK_IN)
+    dest = derived(Dest(AES128_ECB), s2)
+    check('source in _encapsk_Input_ (sharedkey "any" State): key delivered',
+          dest.key == ss[:16] and s2.state == EK_IN)
+    for st in (READY,) + LONG:
         s2 = encapsulated()
         s2.setst(st)
-        dest = KeyLocker(machine_code(0, 0))
-        kl_derive(dest, s2, 16)
-        chk(f'a source in _{STATE_NAME[st]}_ does not admit the endpoint: the source '
-            'becomes _Invalid_ and the destination is untouched (DER1 item 1)',
-            s2.state == S_INVALID and dest.state == S_READY
-            and dest.keys[0] == placeholder)
-    info('No text names the source States that admit the `sharedkey` endpoint.  Read '
-         'as: _Success_ and _Failure_ (SGR5, which admits kl.derive on an exportable '
-         'field there) and _ciphertext_Output_, where _Encapsulate_ leaves the CC; the '
-         'long-running States admit only Form D kl.exec and kl.setst (MGR8), and no '
-         'other State admits kl.derive (MGR1).  _Failure_ is not exercised.')
-
-    chk('kl.derive naming the same locker twice raises an illegal-instruction exception',
-        _raises(IllegalInstruction, lambda: kl_derive(src, src, 32)))
-    blank = KeyLocker(machine_code(0, 0))
+        dest = derived(Dest(AES128_ECB), s2)
+        check(f'source in _{NAME[st]}_: source _Invalid_, destination untouched (DER1 item 1)',
+              s2.state == INVALID and dest.state == READY and dest.key == ph)
+    spec_note('sharedkey is a source in "any" State, but MGR8 bars kl.derive in the long-running States, _Ready_ '
+              'has cleared it and no flag records whether it was produced; the model admits the other Valid States')
+    check('equal lockers: illegal instruction', raises(kl_derive, src, src, 32))
+    blank = Dest(AES128_ECB)
     blank.mdh = 0
-    chk('kl.derive with an Unconfigured endpoint raises an illegal-instruction '
-        'exception', _raises(IllegalInstruction, lambda: kl_derive(blank, src, 16)))
+    check('Unconfigured endpoint: illegal instruction', raises(kl_derive, blank, src, 16))
+    dest, s3 = Dest(AES128_ECB), encapsulated()
+    dest.enter_error(PRIV_VIOLATION)
+    check('Error State on the destination: no-op', kl_derive(dest, s3, 16) == 'noop'
+          and dest.state == PRIV_VIOLATION and s3.state == CT_OUT and s3.sharedkey == ss)
+    s3.setst(INVALID)
+    dest = Dest(AES128_ECB)
+    check('Error State on the source: no-op', kl_derive(dest, s3, 16) == 'noop' and dest.state == READY
+          and dest.key == ph)
 
-    dest = KeyLocker(machine_code(0, 0))
-    dest.enter_error(S_PRIV_VIOLATION)
-    s3 = encapsulated()
-    r = kl_derive(dest, s3, 16)
-    chk('an Error State on the destination makes the whole kl.derive a no-op',
-        r == 'noop' and dest.state == S_PRIV_VIOLATION and s3.state == S_CT_OUT
-        and s3.sharedkey == ss)
-    s3.setst(S_INVALID)
-    dest = KeyLocker(machine_code(0, 0))
-    r = kl_derive(dest, s3, 16)
-    chk('an Error State on the source makes the whole kl.derive a no-op',
-        r == 'noop' and dest.state == S_READY and dest.keys[0] == placeholder)
+    HART['mode'] = 'U'
+    su = encapsulated(UsagePolicy=0b01110, Locality=0b000001110)
+    dest = Dest(AES128_ECB, UsagePolicy=0b00001)
+    check('destination barred in the mode: kl_exc_privilege_violation, nothing changed',
+          raises(kl_derive, dest, su, 16, exc=PrivilegeViolation) and dest.state == READY
+          and dest.key == ph and su.state == CT_OUT)
+    dest = derived(Dest(AES128_ECB, UsagePolicy=0b10000, Locality=0b101000101), su)
+    check('DER2: UsagePolicy OR bits 0-3, AND bit 4; Locality stricter per chain, bits 6-8 OR-ed',
+          dest.key == ss[:16] and dest.get('UsagePolicy') == 0b01110 and dest.get('Locality') == 0b101001110)
+    HART['mode'] = 'M'
+    for skw, dkw, why in (({'Locality': 0b010000}, {'Locality': 0b100000}, 'differing Boot Session entries'),
+                          ({'SCProtection': 2}, {'SCProtection': 1}, 'lower SCProtection')):
+        s2 = encapsulated(**skw)
+        dest = derived(Dest(AES128_ECB, **dkw), s2)
+        check(f'DER2 {why}: destination _Invalid_, nothing moved',
+              dest.state == INVALID and dest.key == bytes(16) and s2.state == CT_OUT)
+    dest = derived(Dest(AES128_ECB, SCProtection=3), s2)
+    check('DER2 higher SCProtection: key received, level kept', dest.key == ss[:16] and dest.get('SCProtection') == 3)
+    HART['now'] = 1000
+    s4 = encapsulated(ExpirationDate=5000)
+    dest = derived(Dest(AES128_ECB, ExpirationDate=1000), s4)
+    check('expired destination: _Expired_, key cleared (SGR10), source untouched', dest.state == EXPIRED
+          and dest.key == bytes(16) and s4.state == CT_OUT and s4.sharedkey == ss)
+    for date in (9000, 0):
+        dest = derived(Dest(AES128_ECB, ExpirationDate=date), s4)
+        check(f'DER2 ExpirationDate {date} -> the smaller non-zero date',
+              dest.key == ss[:16] and dest.get('ExpirationDate') == 5000)
+    s5 = encapsulated(ExpirationDate=1001)
+    HART['now'] = 1001
+    dest = derived(Dest(AES128_ECB, ExpirationDate=1001), s5)
+    check('both expired: the source (checked first) becomes _Expired_, the destination is not reached',
+          s5.state == EXPIRED and dest.state == READY and dest.key == ph)
+    HART['now'] = 0
 
-    # Rule <<KLEE-DER-narrowing>>: sharedkey is a restricted transfer (DER5).
-    HART.mode = 'U'
-    try:
-        src_u = encapsulated(usage=0b01110, locality=0b000001110)
-        dest = KeyLocker(machine_code(0, 0), usage=0b00001)
-        raised = _raises(PrivilegeViolation, lambda: kl_derive(dest, src_u, 16))
-        chk('the _UsagePolicy_ of each endpoint is evaluated on its own: a destination '
-            'barred in the current mode raises kl_exc_privilege_violation, with no '
-            'State changed and nothing transferred',
-            raised and dest.state == S_READY and dest.keys[0] == placeholder
-            and src_u.state == S_CT_OUT)
-        dest = KeyLocker(machine_code(0, 0), usage=0b10000, locality=0b101000101)
-        kl_derive(dest, src_u, 16)
-        chk('DER2: the destination _UsagePolicy_ becomes the OR of bits 0-3 and the AND '
-            'of bit 4, its _Locality_ the stricter entry of each HW Binding chain with '
-            'bits 6-8 OR-ed', dest.keys[0] == ss[:16]
-            and dest.get(F_USAGEPOLICY) == 0b01110
-            and dest.get(F_LOCALITY) == 0b101001110)
-    finally:
-        HART.mode = 'M'
-    s2 = encapsulated(locality=0b000010000)       # PhysBootScrt
-    dest = KeyLocker(machine_code(0, 0), locality=0b000100000)     # VirtBootScrt
-    kl_derive(dest, s2, 16)
-    chk('DER2: two differing non-zero Boot Session entries make the destination '
-        '_Invalid_, nothing transferred', dest.state == S_INVALID
-        and dest.keys[0] == bytes(16) and s2.state == S_CT_OUT)
-    s2 = encapsulated(scprot=2)
-    dest = KeyLocker(machine_code(0, 0), scprot=1)
-    kl_derive(dest, s2, 16)
-    chk('DER2: a destination whose _SCProtection_ is lower than the source\'s becomes '
-        '_Invalid_', dest.state == S_INVALID and s2.state == S_CT_OUT)
-    dest = KeyLocker(machine_code(0, 0), scprot=3)
-    kl_derive(dest, s2, 16)
-    chk('... and a higher one receives the key, its _SCProtection_ kept',
-        dest.keys[0] == ss[:16] and dest.get(F_SCPROT) == 3)
-
-    HART.now = 1000
-    try:
-        s4 = encapsulated(expiration=5000)
-        dest = KeyLocker(machine_code(0, 0), expiration=1000)
-        kl_derive(dest, s4, 16)
-        chk('an expired destination transitions to _Expired_ (53), its key cleared by '
-            'SGR10 rather than written; the source is untouched',
-            dest.state == S_EXPIRED and dest.keys[0] == bytes(16)
-            and s4.state == S_CT_OUT and s4.sharedkey == ss)
-        dest = KeyLocker(machine_code(0, 0), expiration=9000)
-        kl_derive(dest, s4, 16)
-        chk('DER2: the destination _ExpirationDate_ becomes the smaller non-zero date',
-            dest.keys[0] == ss[:16] and dest.get(F_EXPIRATION) == 5000)
-        dest = KeyLocker(machine_code(0, 0))
-        kl_derive(dest, s4, 16)
-        chk('... and inherits the source\'s when it had none',
-            dest.get(F_EXPIRATION) == 5000)
-        s5 = encapsulated(expiration=1001)
-        HART.now = 1001
-        dest = KeyLocker(machine_code(0, 0))
-        kl_derive(dest, s5, 16)
-        chk('an expired source transitions to _Expired_, the destination being reached '
-            'only by the next condition', s5.state == S_EXPIRED
-            and dest.state == S_READY and dest.keys[0] == placeholder)
-    finally:
-        HART.now = 0
-
-    # Rule <<KLEE-DER-exec-implies-unrestricted>>: what _encapsk_Output_ and
-    # _ciphertext_Output_ emit through kl.exec may be moved into a hash.
-    s6 = encapsulated(usage=0b00110, locality=0b000000011)
-    h = HashLocker()
-    kl_derive(h, s6, 512)
+    s6, hl = encapsulated(UsagePolicy=0b00110, Locality=0b11), Dest(SHA3_256, state=HASH_ABSORB)
+    kl_derive(hl, s6, 512)
     mid = s6.use
-    kl_derive(h, s6, 576)
-    chk('DER6: _ciphertext_Output_ -> SHA3-256 in _Hash_Absorb_ moves the ciphertext '
-        'in two transfers, _MachineUse_ advancing as Form C kl.exec would',
-        h.absorbed.hex() == v['c'] and mid == 512 and s6.use == 1088
-        and s6.state == S_CT_OUT and h.state == S_HASH_ABSORB, v['src'])
-    chk('DER3: an unrestricted transfer applies no narrowing to the destination',
-        h.get(F_USAGEPOLICY) == 0 and h.get(F_LOCALITY) == 0)
-    kl_derive(h, s6, 16)
-    chk('a further transfer would carry _MachineUse_ past the field: the source becomes '
-        '_Invalid_ (MGR7) and nothing is absorbed', s6.state == S_INVALID
-        and len(h.absorbed) == 1088)
-    kv = vector('keyGen', ps)
-    g = MLKEMLocker(ps, rbg=ScriptedRBG(bytes.fromhex(kv['d']), bytes.fromhex(kv['z'])))
-    g.setst(S_GENKEYPAIR)
-    g.exec_D()
-    g.setst(S_EK_OUT)
-    h = HashLocker()
-    kl_derive(h, g, SPEC_SIZES[ps][0])
-    chk('DER6: _encapsk_Output_ -> SHA3-256 absorbs the generated encapsk, from which '
-        'H(encapsk) follows', h.absorbed.hex() == kv['ek']
-        and K.H(h.absorbed) == g.decapsk[768 * 3 + 32:768 * 3 + 64], kv['src'])
+    kl_derive(hl, s6, 576)
+    check('DER6: _ciphertext_Output_ -> SHA3-256 in two transfers, MachineUse as Form C', hl.absorbed.hex() == v['c']
+          and mid == 512 and s6.use == 1088 and s6.state == CT_OUT and hl.state == HASH_ABSORB)
+    check('DER3: no narrowing', hl.get('UsagePolicy') == 0 and hl.get('Locality') == 0)
+    kl_derive(hl, s6, 16)
+    check('transfer past the field: source _Invalid_ (MGR7), nothing absorbed',
+          s6.state == INVALID and len(hl.absorbed) == 1088)
+    kv = vec('keyGen', ps)
+    g = MLKEMLocker(ps, rbg=RBG(h(kv['d']), h(kv['z'])))
+    run(g, GEN)
+    g.setst(EK_OUT)
+    hl = derived(Dest(SHA3_256, state=HASH_ABSORB), g, SIZES[ps][0])
+    check('DER6: _encapsk_Output_ -> SHA3-256; H(encapsk) matches decapsk',
+          hl.absorbed.hex() == kv['ek'] and K.H(hl.absorbed) == g.decapsk[768 * 3 + 32:768 * 3 + 64])
     s7 = encapsulated()
-    h = HashLocker(state=S_READY)
-    kl_derive(h, s7, 32)
-    chk('a hash destination in _Ready_ does not admit the endpoint: only it becomes '
-        '_Invalid_', h.state == S_INVALID and s7.state == S_CT_OUT)
+    hl = derived(Dest(SHA3_256), s7, 32)
+    check('hash destination in _Ready_: only it becomes _Invalid_', hl.state == INVALID and s7.state == CT_OUT)
+    spec_note('in _encapsk_Output_ and _ciphertext_Output_ both sharedkey and the kl.exec output (DER6) are '
+              'source endpoints and nothing selects one; the model uses the output for a hash destination')
+    spec_note('"any other pair" invalidates both lockers (listed pairs name States), DER1 item 1 only the '
+              'offender; model: both for a Machine without endpoints, the offender otherwise')
 
-    spec_note('<<KLEE-PQC-ML-KEM>> still calls this transfer "Form 00" with source '
-              'index i = 1 and destination index j, and <<KLEE-derive-endpoints>> '
-              'numbers the fields, but <<KLEE-instruction-derive>> has neither: "No '
-              'parameter is passed to kl.derive to select the source and destination '
-              'data".  The model takes the endpoints from the Machines and States of '
-              'the two lockers.')
-    spec_note('<<KLEE-instruction-derive>> sends both lockers to _Invalid_ for "any other '
-              'pair", a listed pair naming the States too, while DER1 item 1 invalidates '
-              'only the locker whose State does not admit its endpoint.  The model '
-              'invalidates both for an unlisted Machine pair and the offending locker '
-              'for a State mismatch.')
-    spec_note('the transfers of DER5 and DER6 "are listed for every pair of Machines '
-              'that implement the respective schemes", yet the table of '
-              '<<KLEE-derive-endpoints>> gives ML-KEM no exportable field but sharedkey '
-              'and <<KLEE-ECC>> no importable field, and <<KLEE-PQC-ML-KEM>> calls '
-              'sharedkey "the only exportable field".  The model admits sharedkey into '
-              'the `Scalar` of a key-agreement curve in _Ready_ (the State DER1 and '
-              '<<KLEE-PQC-ML-KEM>> require, although DER5 asks for "a State which allows '
-              'the configuration of a field", _Set_Scalar_ for <<KLEE-ECC>>), and '
-              'encapsk/ciphertext output into a hash.  XEX is excluded by the '
-              '"single-key Machine" of <<KLEE-PQC-ML-KEM>>, although DER5 names every '
-              'symmetric encryption Machine.')
-    spec_note('<<KLEE-derive-endpoints>> says no constraint applies to the destination\'s '
-              'policies unless a Machine states otherwise, but sharedkey is a restricted '
-              'transfer (DER5) and DER2 narrows the destination, invalidating it on a '
-              'lower _SCProtection_ or a conflicting Boot Session entry.  The model '
-              'applies DER2.')
-
-
-def t_negative_controls():
-    print('\n-- negative controls --')
-    v = vector('decaps', reason='modified')
-    ss = K.decaps_internal(bytes.fromhex(v['dk']), bytes.fromhex(v['c']), v['pset'],
-                           disable_implicit_rejection=True)
-    negative('implicit rejection disabled',
-             f"{v['src']} must still yield K-bar = J(z || c)", ss.hex() == v['k'])
-
-    cc = load(MLKEMLocker(768, check_keys=False), S_EK_IN, malformed_ek(768))
-    negative('key checks disabled',
-             'a malformed encapsk must reach Error State _Invalid_',
-             cc.state == S_INVALID)
-
-    kv = vector('keyGen', 768)
-    rbg = ScriptedRBG(bytes.fromhex(kv['d']), bytes.fromhex(kv['z']),
-                      bytes(range(32)), bytes(range(32, 64)))
-    cc = MLKEMLocker(768, rbg=rbg, resume_redraws=True)
-    cc.setst(S_GENKEYPAIR)
-    cc.exec_D(halt_after=1)
+def t_controls():
+    section('Negative controls')
+    v, kv = vec('decaps', reason='modified'), vec('keyGen', 768)
+    control('implicit rejection disabled', K.decaps_internal(
+        h(v['dk']), h(v['c']), v['pset'], disable_implicit_rejection=True).hex() != v['k'])
+    control('key checks disabled',
+            load(MLKEMLocker(768, check_keys=False), EK_IN, malformed_ek(768)).state != INVALID)
+    cc = MLKEMLocker(768, rbg=RBG(h(kv['d']), h(kv['z']), bytes(range(32)), bytes(range(32, 64))),
+                     resume_redraws=True)
+    run(cc, GEN, halt_after=1)
     cc.exec_D()
-    negative('resumption redraws random values',
-             'a resumed GenerateKeyPair must yield the ACVP key pair',
-             cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
-
-
-def main():
-    print('KLEE ML-KEM known-answer tests (FIPS 203, [[KLEE-PQC-ML-KEM]])')
-    t_sizes()
-    t_mdh()
-    t_keygen()
-    t_encaps()
-    t_decaps()
-    t_input_validation()
-    t_state_machine()
-    t_long_running()
-    t_derive()
-    t_negative_controls()
-    print()
-    for label, fired in _controls.items():
-        if not fired:
-            print(f'  FAIL  the negative control "{label}" did not fire')
-    ok = all(_results) and all(_controls.values()) and len(_controls) == 3
-    print(f'{sum(_results)}/{len(_results)} checks passed; '
-          f'{sum(_controls.values())}/{len(_controls)} negative controls fired')
-    print('KAT-RESULT:', 'PASS' if ok else 'FAIL')
-    return 0 if ok else 1
-
+    control('resumption redraws random values', cc.encapsk.hex() != kv['ek'] or cc.decapsk.hex() != kv['dk'])
 
 # ---------------------------------------------------------------- vectors
 # Official NIST ACVP-Server vectors; see the module docstring for provenance.
@@ -2668,4 +1780,6 @@ VECTORS = {
 }
 
 if __name__ == '__main__':
-    sys.exit(main())
+    for t in (t_sizes, t_mdh, t_fips203, t_input_checks, t_state_machine, t_long_running, t_derive, t_controls):
+        t()
+    done()

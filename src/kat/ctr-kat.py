@@ -1,395 +1,179 @@
 #!/usr/bin/env python3
-"""CTR and XCTR keystream generation (<<KLEE-keystream-modes>> in
-modules/ROOT/pages/Zkl-ISA-machines.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
-
-The specification keeps the keystream state as two separate fields, `IV` of `n`
-bits and `ctr` of `j` bits, and forms the block fed to the keystream function as
-
-    CTR  :  tmp <- keystream_block(bswap(ctr) @ IV)      with b = n + j
-    XCTR :  tmp <- keystream_block(IV xor ctr)           with b = n = j
-
-followed by tick_ctr() and OUTPUT <- tmp.  Under <<KLEE-Notation>> the LEFT operand
-of `@` occupies the more significant bits, and byte i of a byte string lives at bits
-[8i+7:8i].  So `bswap(ctr) @ IV` puts the IV in the *first* n/8 bytes of the counter
-block and the counter, big-endian, in the *trailing* j/8 bytes, which is what
-SP 800-38A requires.  The `bswap` is load-bearing: without it the counter would be
-little-endian in those bytes.
-
-Models
-------
-REF-CTR   SP 800-38A written directly on byte strings: counter block =
-          nonce || big-endian(ctr, j bits), incremented as an integer mod 2^j.
-REF-XCTR  The HCTR2 paper's XCTR on byte strings: E_K(IV xor LE(i, 128)), the
-          counter little-endian and full width, numbered from 1.
-KLEE      A model of a Cryptographic Locker holding a CTR/XCTR CC (class
-          KeystreamLocker).  It covers provisioning from a PI (the MDH first, then the key
-          or SKID) and the States _Ready_ and _Operate_ with the values of
-          <<KLEE-state-constants-symmetric>>.  It also covers the Form C kl.setst that
-          sets `IV` (keeping its n least significant bits), the Form B
-          `kl.setst #kl_state_set_aux_value, Xs` that sets `ctr <- lsb_j(Xs)` from a
-          64-bit Xs, and the (multi-block) Form C kl.exec.  The Machine text gives
-          only the per-block operation.  The block loop is rule MGR3 of
-          <<KLEE-Machines-other-rules>>: for i = 0, b, ..., KLLEN - b, in that order,
-          the operation produces OUTPUT[i+b-1:i].  So the keystream block for the
-          counter value ctr + q is the q-th block of the output byte string.
-NEG       Two negative controls, both of which must fail SP 800-38A: the CTR formula
-          with the `bswap` dropped (a little-endian counter in the trailing bytes),
-          and a multi-block kl.exec that fills the blocks from the most significant
-          position down (the keystream blocks in reverse address order).
-
-What changed in the specification, and how this file follows it
-----------------------------------------------------------------
-* A Form B kl.setst carries a 64-bit operand (<<KLEE-instruction-setst>>, Rule
-  <<KLEE-GR-multiple-GPRs>>).  The former check with n = 0, j = 128 loaded the whole
-  SP 800-38A initial counter block f0f1...ff into `ctr` through that operand, which
-  cannot hold it.  F.5 is now reproduced with the splits (n, j) = (64, 64), (96, 32)
-  and (112, 16).  The Form C INPUT is the whole initial block T1, of which the
-  Machine keeps the n least significant bits (its first n/8 bytes).  Form B loads
-  the integer value of the trailing j/8 bytes.  This anchors the nonce/counter splits
-  on the standard vectors; the old file could only compare them with REF.
-* The allowed transitions are now _Ready_ -> _Operate_ and _Operate_ -> _Ready_
-  (formerly "any"), so any other target State invalidates the locker.
-* The multi-block loop is rule MGR3 and the granularity rule is MGR2.  A kl.exec in
-  _Ready_ falls under Rules <<KLEE-SGR-no-exec-in-ready>> and
-  <<KLEE-MGR-not-allowed-instructions>>.
-* The Serialized Content no longer lists the MDH: `key` (or SKID) is at position i,
-  `IV` at ii and `ctr` at iii, zero-padded to a multiple of 128 bits.
-* <<KLEE-derive-endpoints>> makes `key` (1) the only importable field; kl.derive
-  into it follows DER1 check 4 (`length` >= dest_length, exactly dest_length bytes,
-  no zero-filling), DER4 and DER8 of <<KLEE-instruction-derive>>.
-
-Vectors and provenance
-----------------------
-* SP 800-38A Appendix F.5.1 (CTR-AES128), F.5.3 (CTR-AES192), F.5.5 (CTR-AES256):
-  initial counter block f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff over the four standard
-  plaintext blocks.  Transcribed from the Linux kernel crypto/testmgr.h,
-  aes_ctr_tv_template, entries commented "From NIST Special Publication 800-38A,
-  Appendix F.5" (raw.githubusercontent.com/torvalds/linux, master, fetched
-  2026-08-26).
-* XCTR: google/hctr2 test_vectors/ours/XCTR/XCTR_AES{128,256}.json
-  (raw.githubusercontent.com/google/hctr2, main, fetched 2026-08-26).  These are
-  the reference vectors of the HCTR2 paper's own implementation, so XCTR here is
-  anchored on a reference implementation, not on a standards body's vectors ---
-  no NIST XCTR vectors exist.
-
-Anchor levels: CTR is standard-vector anchored for the splits (64, 64), (96, 32)
-and (112, 16), including resumption, export/import and kl.derive.  Other splits
-(including n = 0, j = 128) are reference-consistency anchored, with REF-CTR, itself
-anchored, as the oracle.  XCTR is reference-implementation anchored.
-"""
-import os
-import random
-import sys
-
+"""CTR/XCTR keystream Machines (<<KLEE-keystream-modes>>) through a model locker, against
+SP 800-38A F.5 and the google/hctr2 XCTR reference vectors; also the general rules, the
+PI/SCC layout and kl.derive."""
+import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (aes_encrypt, b2v, v2b, bswap, bxor, cat, sl, mdh_pack, MDH_FIELD,
+                    KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
+                    KL_STATE_INVALID, ERROR_STATES, section, check, control, info, spec_note, done)
 
-from common import aes_encrypt, b2v, bswap, bxor, cat, sl, v2b
+B, ONES64 = 128, (1 << 64) - 1
+RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATE_INVALID
+CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
+MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <<KLEE-exec-encodings>>
+           for m, mode in (('CTR', 1), ('XCTR', 2))}
+KIND = {v: k for k, v in MACHINE.items()}
 
-B = 128                         # block size b of the keystream function (AES)
+fld = lambda m, name: sl(m, *MDH_FIELD[name])
 
-# ---------------------------------------------------------------- constants
-# <<KLEE-metadata-header>>: (hi, lo) of the MDH fields this file uses
-F_MACHINE, F_MACHINEPOLICY = (11, 0), (13, 12)
-F_STATE, F_KEYTYPE = (24, 19), (30, 29)
+def put(m, name, x):
+    hi, lo = MDH_FIELD[name]
+    return m & ~(((1 << (hi - lo + 1)) - 1) << lo) | x << lo
 
-# <<KLEE-state-off>>, <<KLEE-states-valid>>, <<KLEE-states-error>>
-ST_UNCONFIGURED, ST_READY, ST_INVALID = 0, 1, 49
-# <<KLEE-state-constants-symmetric>>
-ST_OPERATE, ST_ENCRYPT, ST_SET_AUX_VALUE = 2, 7, 13
+pad16 = lambda bits: -(-bits // 128) * 16
 
-# <<KLEE-Machine-field>>
-POL_BOTH = 0b11
-ONES64 = (1 << 64) - 1
+def kl_size(mdh, c1_size, pi_size):          # <<KLEE-instruction-size>>, AuxDataLen = 0
+    st = fld(mdh, 'State')
+    return 16 if st in ERROR_STATES else 16 + pi_size if st == 0 else 32 + c1_size
 
-CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}   # name -> k
+def build_pi(cipher, key_field, mode='CTR', keytype=0):
+    return v2b(mdh_pack(Machine=MACHINE[cipher, mode], MachinePolicy=3, KeyType=keytype), 16) \
+        + v2b(key_field, pad16(64 if keytype else CIPHERS[cipher]))
 
+def ref(key, block, msg):                     # byte-string keystream reference
+    return bxor(b''.join(aes_encrypt(key, block(i)) for i in range(-(-len(msg) // 16))), msg)
 
-def machine(typ, mode):
-    """<<KLEE-exec-encodings>>: _Machine_ = Type in bits [11:4], Mode in bits [3:0]."""
-    return (typ << 4) | mode
-
-
-# <<KLEE-exec-encodings>>: CTR is Mode 1 and XCTR Mode 2 of Types 0-2
-KS_MACHINES = {}
-for _t, _c in enumerate(CIPHERS):
-    KS_MACHINES[machine(_t, 1)] = (_c, 'CTR')
-    KS_MACHINES[machine(_t, 2)] = (_c, 'XCTR')
-KS_OF = {v: k for k, v in KS_MACHINES.items()}
-
-# <<KLEE-derive-endpoints>> (work in progress), row of <<KLEE-keystream-modes>>
-KS_IMPORTABLE = {1: 'key'}
+# SP 800-38A CTR: nonce || big-endian(ctr, j bits); HCTR2 XCTR: IV xor little-endian(ctr, 128 bits)
+ref_ctr = lambda key, nonce, j, ctr, msg: ref(
+    key, lambda i: nonce + ((ctr + i) % (1 << j)).to_bytes(j // 8, 'big'), msg)
+ref_xctr = lambda key, iv, ctr, msg: ref(key, lambda i: bxor(iv, (ctr + i).to_bytes(16, 'little')), msg)
 
 
-def fget(v, f):
-    return sl(v, f[0], f[1])
-
-
-def fset(v, f, x):
-    hi, lo = f
-    m = ((1 << (hi - lo + 1)) - 1) << lo
-    return (v & ~m) | ((x << lo) & m)
-
-
-def make_mdh(mach, policy, keytype=0, state=ST_UNCONFIGURED):
-    mdh = fset(0, F_MACHINE, mach)
-    mdh = fset(mdh, F_MACHINEPOLICY, policy)
-    mdh = fset(mdh, F_KEYTYPE, keytype)
-    return fset(mdh, F_STATE, state)
-
-
-def kl_getst(mdh):
-    """kl.getst on RV64 (<<KLEE-instruction-getst>>): kl.getmdl, srli 19, andi 0x3F."""
-    return ((mdh & ONES64) >> 19) & 0x3F
-
-
-def padded_bytes(bits):
-    """Length in bytes of `bits` once implicitly zero-padded to a multiple of 128 bits."""
-    return -(-bits // 128) * 16
-
-
-def kl_size(mdh, content1_size, pi_content_size):
-    """<<KLEE-instruction-size>> for a supplied MDH (Forms B/C) with _AuxDataLen_ = 0."""
-    st = kl_getst(mdh)
-    if 48 <= st <= 55:
-        return 16
-    if st == ST_UNCONFIGURED:            # the MDH of a PI
-        return 16 + pi_content_size
-    return 32 + content1_size
-
-
-def build_pi(mach, keytype, field, policy=POL_BOTH):
-    """A PI: the MDH (position i), then `key` or the SKID (position ii), zero-padded."""
-    k = CIPHERS[KS_MACHINES[mach][0]]
-    width = 64 if keytype == 1 else k
-    return v2b(make_mdh(mach, policy, keytype), 16) + v2b(field, padded_bytes(width))
-
-
-# ---------------------------------------------------------------- REF models
-def ref_ctr(key, nonce, j, ctr0, msg):
-    """SP 800-38A CTR: block = nonce || big-endian(ctr, j/8 bytes)."""
-    out, ctr = b'', ctr0
-    for i in range(0, len(msg), 16):
-        ks = aes_encrypt(key, nonce + ctr.to_bytes(j // 8, 'big'))
-        chunk = msg[i:i + 16]
-        out += bxor(ks[:len(chunk)], chunk)
-        ctr = (ctr + 1) % (1 << j)
-    return out
-
-
-def ref_xctr(key, iv, ctr0, msg):
-    """HCTR2's XCTR: block = IV xor little-endian(ctr, 16 bytes), counter from 1."""
-    out, ctr = b'', ctr0
-    for i in range(0, len(msg), 16):
-        ks = aes_encrypt(key, bxor(iv, ctr.to_bytes(16, 'little')))
-        chunk = msg[i:i + 16]
-        out += bxor(ks[:len(chunk)], chunk)
-        ctr = (ctr + 1) % (1 << 128)
-    return out
-
-
-# ---------------------------------------------------------------- the KLEE model
-class KeystreamLocker:
-    """A locker holding a CTR or XCTR CC (<<KLEE-keystream-modes>>).
-
-    For CTR, `n` and `j` are parameters of the implementation: no field of the MDH,
-    of the PI or of the SCC selects them (see the SPEC-NOTE printed by this file).
-    """
+class KsLocker:
+    """n and j of CTR are implementation parameters: no MDH, PI or SCC field selects them."""
 
     def __init__(self, n=None, j=None, sks=None, variant='spec', order='spec'):
-        self.n, self.j = n, j
-        self.mdh = 0                     # _Unconfigured_
-        self.key = self.skid = self.IV = self.ctr = None
-        self.sks = sks or {}
-        self.variant, self.order = variant, order
+        self.n, self.j, self.sks, self.variant, self.order = n, j, sks or {}, variant, order
+        self.mdh, self.key, self.skid, self.IV, self.ctr = 0, None, None, None, None
 
-    # ------------------------------------------------------------ helpers
-    @property
-    def state(self):
-        return kl_getst(self.mdh)
-
-    @property
-    def keytype(self):
-        return fget(self.mdh, F_KEYTYPE)
+    state = property(lambda s: fld(s.mdh, 'State'))
+    keytype = property(lambda s: fld(s.mdh, 'KeyType'))
 
     def params(self):
-        """(cipher, k, mode, n, j) with the constraints of the Parameters list."""
-        cipher, mode = KS_MACHINES[fget(self.mdh, F_MACHINE)]
-        if mode == 'XCTR':
-            n = j = B                    # b = n = j
-        else:
-            n, j = self.n, self.j
-            assert n + j == B and n % 8 == 0 and j % 8 == 0 and j > 0   # b = n + j
-        return cipher, CIPHERS[cipher], mode, n, j
+        cipher, mode = KIND[fld(self.mdh, 'Machine')]
+        n, j = (B, B) if mode == 'XCTR' else (self.n, self.j)      # b = n = j, resp. b = n + j
+        assert n + j == B or mode == 'XCTR'
+        return CIPHERS[cipher], mode, n, j
 
-    def key_field_width(self):
-        return 64 if self.keytype == 1 else self.params()[1]
-
-    def in_error(self):
-        return 48 <= self.state <= 55
+    kw = property(lambda s: 64 if s.keytype == 1 else s.params()[0])
 
     def invalidate(self):
-        self.mdh = fset(self.mdh, F_STATE, ST_INVALID)
+        self.mdh = put(self.mdh, 'State', INV)
         self.key = self.skid = self.IV = self.ctr = None
 
-    def enter_ready(self):
-        """"In State _Ready_, the `ctr` and `IV` fields are set to 0." """
-        self.mdh = fset(self.mdh, F_STATE, ST_READY)
-        self.IV = self.ctr = 0
+    def enter_ready(self):                    # "In State Ready, the ctr and IV fields are set to 0"
+        self.mdh, self.IV, self.ctr = put(self.mdh, 'State', RDY), 0, 0
 
     def _install(self, field, importing):
         if self.keytype == 0:
             self.key = field
         elif field == ONES64 and not importing:
-            # random key material; _KeyType_ is then set to 0 (<<KLEE-KeyType-field>>)
-            self.key = random.Random(2026).getrandbits(self.params()[1])
-            self.mdh = fset(self.mdh, F_KEYTYPE, 0)
+            self.key, self.mdh = random.Random(1).getrandbits(self.params()[0]), put(self.mdh, 'KeyType', 0)
         elif field != ONES64 and field in self.sks:
             self.skid, self.key = field, self.sks[field]
         else:
-            self.invalidate()            # unresolved SKID (<<KLEE-MVR-open>>)
+            self.invalidate()
 
-    # ------------------------------------------------------------ configuration
     def provision(self, pi):
-        self.mdh = b2v(pi[:16])          # position i: the MDH
-        self._install(sl(b2v(pi[16:]), self.key_field_width() - 1, 0), False)
-        if not self.in_error():
-            self.enter_ready()           # provisioning ends in _Ready_
+        self.mdh = b2v(pi[:16])
+        self._install(sl(b2v(pi[16:]), self.kw - 1, 0), False)
+        if self.state not in ERROR_STATES:
+            self.enter_ready()
 
-    def content1(self):
-        """Serialized Content: key or SKID (i), IV (ii), ctr (iii); the MDH is not part of it."""
-        _, _, _, n, j = self.params()
-        kw = self.key_field_width()
-        field = self.skid if self.keytype == 1 else self.key
-        return v2b(cat((self.ctr, j), (self.IV, n), (field, kw)), padded_bytes(kw + n + j))
+    def content1(self):                       # key or SKID (i), IV (ii), ctr (iii)
+        _, _, n, j = self.params()
+        return v2b(cat((self.ctr, j), (self.IV, n), (self.skid if self.keytype else self.key, self.kw)),
+                   pad16(self.kw + n + j))
 
-    def import_scc(self, mdh, content1):
-        self.mdh = mdh
-        _, _, _, n, j = self.params()
-        kw = self.key_field_width()
-        v = b2v(content1)
-        self.IV = sl(v, kw + n - 1, kw) if n else 0
-        self.ctr = sl(v, kw + n + j - 1, kw + n)
-        self._install(sl(v, kw - 1, 0), True)
+    def import_scc(self, mdh, c1):
+        self.mdh, v = mdh, b2v(c1)
+        _, _, n, j = self.params()
+        self.IV, self.ctr = sl(v, self.kw + n - 1, self.kw), sl(v, self.kw + n + j - 1, self.kw + n)
+        self._install(sl(v, self.kw - 1, 0), True)
 
-    # ------------------------------------------------------------ usage
-    def setst(self, immed, form='A', operand=None, KLLEN=0):
-        """kl.setst.  `form` is 'A' (no operand), 'A/iobuf' (the KLIOBUF substitution of
-        Form C; `operand` = the bytes [0, kliobuftop)), 'B' (`operand` = the 64-bit Xs)
-        or 'C' (`operand` = a KLLEN-bit vector value)."""
-        if self.in_error():
+    def setst(self, immed, form='A', operand=None, KLLEN=128):
+        """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
+        if self.state in ERROR_STATES:
             return
-        _, _, _, n, j = self.params()
-        st = self.state
-        if immed == ST_READY and form == 'A':
-            self.enter_ready()                                   # _Operate_ -> _Ready_, SGR8
-        elif (immed == ST_OPERATE and st in (ST_READY, ST_OPERATE)
-              and form in ('C', 'A/iobuf')):
+        _, _, n, j = self.params()
+        if immed == RDY and form == 'A':
+            self.enter_ready()
+        elif immed == OP and self.state in (RDY, OP) and form in ('C', 'A/iobuf'):
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
-            self.IV = sl(value, n - 1, 0) if n else 0            # n least significant bits
-            self.mdh = fset(self.mdh, F_STATE, ST_OPERATE)
-        elif (immed == ST_SET_AUX_VALUE and st in (ST_READY, ST_OPERATE)
-              and form == 'B'):
-            xs = sl(operand, 63, 0)                              # Xs is a 64-bit operand
-            self.ctr = sl(xs, j - 1, 0) if j < 64 else xs        # lsb_j(Xs); _State_ unchanged
+            self.IV, self.mdh = sl(value, n - 1, 0) if n else 0, put(self.mdh, 'State', OP)
+        elif immed == AUX and self.state in (RDY, OP) and form == 'B':
+            self.ctr = sl(operand, min(j, 64) - 1, 0)             # lsb_j(Xs), State unchanged
         else:
-            self.invalidate()                                    # not an allowed instruction
+            self.invalidate()                                     # MGR1
 
     def exec(self, KLLEN, klstart=0, out=0, halt_after=None, iobuf=False):
-        """(Multi-block) Form C kl.exec, or its Form D substitution into the KLIOBUF.
-
-        The operand is output only: `out` is its prior value.  Returns (out, klstart).
-        """
+        """Form C kl.exec (output only), or Form D into the KLIOBUF; returns (output, klstart)."""
         lo = 8 * klstart
-        window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
-        if self.in_error():
+        window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
+        if self.state in ERROR_STATES:
             return out & ~window, 0
-        if lo % B or lo >= KLLEN:
-            # an output-only operand: a klstart that is no interruption point, and an
-            # empty window, both yield no operation (<<KLEE-CSR-klstart>>)
-            return out, klstart
-        if KLLEN % B:
-            if iobuf:                    # KLIOBUF used only as output: no operation
-                return out, klstart
-            self.invalidate()            # MGR2
+        if lo % B or lo >= KLLEN or KLLEN % B and iobuf:
+            return out, klstart               # output only: <<KLEE-CSR-klstart>>, <<KLEE-usage-input-output>>
+        if KLLEN % B or self.state != OP:
+            self.invalidate()                 # MGR2, SGR2
             return out & ~window, 0
-        if self.state != ST_OPERATE:     # e.g. kl.exec in _Ready_
-            self.invalidate()
-            return out & ~window, 0
-        cipher, k, mode, n, j = self.params()
-        key = v2b(self.key, k // 8)
-        positions = list(range(lo, KLLEN, B))      # MGR3: i = 0, b, ..., in that order
-        if self.order != 'spec':
-            positions.reverse()                    # NEG: most significant block first
-        for q, i in enumerate(positions):
-            if halt_after is not None and q == halt_after:
-                return out, i // 8                 # precise halt
-            if mode == 'CTR':
-                if self.variant == 'spec':
-                    blk = cat((bswap(self.ctr, j // 8), j), (self.IV, n))   # bswap(ctr) @ IV
-                else:
-                    blk = cat((self.ctr, j), (self.IV, n))                  # NEG: no bswap
+        k, mode, n, j = self.params()
+        key, pos = v2b(self.key, k // 8), list(range(lo, KLLEN, B))   # MGR3
+        for q, i in enumerate(pos if self.order == 'spec' else pos[::-1]):
+            if q == halt_after:
+                return out, i // 8
+            if mode == 'XCTR':
+                blk = self.IV ^ self.ctr
             else:
-                blk = self.IV ^ self.ctr                                    # IV xor ctr
-            tmp = b2v(aes_encrypt(key, v2b(blk, B // 8)))   # tmp <- keystream_block(...)
-            self.ctr = (self.ctr + 1) % (1 << j)            # tick_ctr()
-            out = (out & ~(((1 << B) - 1) << i)) | (tmp << i)   # OUTPUT <- tmp
+                blk = cat((bswap(self.ctr, j // 8) if self.variant == 'spec' else self.ctr, j), (self.IV, n))
+            tmp = b2v(aes_encrypt(key, v2b(blk, 16)))
+            self.ctr = (self.ctr + 1) % (1 << j)                    # tick_ctr()
+            out = out & ~(((1 << B) - 1) << i) | tmp << i
         return out, 0
 
-    # ------------------------------------------------------------ kl.derive
-    def derive_dest(self, src, length):
-        """This locker as the kl.derive destination: `key`, the only importable field
-        (kl.derive has no field selector); DER1 check 4, DER4, DER8."""
-        if self.in_error():
-            return False
-        dest_length = self.params()[1] // 8
-        if (self.state != ST_READY or self.keytype == 1
-                or length < dest_length or len(src) < dest_length):
-            self.invalidate()
-            return False
-        self.key = b2v(src[:dest_length])        # exactly dest_length bytes
+    def derive_key(self, src, length):
+        """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker (no listed
+        pair) or DRBG output bytes (DER7, unrestricted: no narrowing)."""
+        if isinstance(src, KsLocker):
+            return src.invalidate(), self.invalidate()
+        n = self.params()[0] // 8
+        if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
+            return self.invalidate()          # DER1 checks 1, 2 (DER4), 4
+        self.key = b2v(src[:n])
         return True
 
 
+def derive_to_hash(cl, h, length):
+    """DER6: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; DER8 discards the unused tail."""
+    if cl.state != OP:
+        return cl.invalidate()                # DER1 check 1
+    return h.update(keystream(cl, length)) or True
+
 def keystream(cl, nbytes, per_block=False):
-    """Keystream bytes from Form C kl.exec: one multi-block instruction, or one per block."""
-    nblk = -(-nbytes // 16)
-    if per_block:
-        out = b''.join(v2b(cl.exec(B)[0], 16) for _ in range(nblk))
-    else:
-        out = v2b(cl.exec(nblk * B)[0], nblk * 16)
-    return out[:nbytes]                          # the caller discards excess bits
+    nb = -(-nbytes // 16)
+    parts = [(B, 16)] * nb if per_block else [(nb * B, nb * 16)]
+    return b''.join(v2b(cl.exec(L)[0], m) for L, m in parts)[:nbytes]
 
+def ctr_cl(key, n, j, ivv=None, ctr0=None, keytype=0, mode='CTR', **kw):
+    """A provisioned locker; key is bytes, or an AES-128 key field (value or SKID)."""
+    cl = KsLocker(n, j, **kw)
+    cl.provision(build_pi(f"AES-{len(key) * 8}" if isinstance(key, bytes) else 'AES-128',
+                          b2v(key) if isinstance(key, bytes) else key, mode, keytype))
+    return operate(cl, ivv, ctr0)
 
-def ctr_cl(cipher, key, n, j, keytype=0, sks=None, **kw):
-    cl = KeystreamLocker(n, j, sks=sks, **kw)
-    cl.provision(build_pi(KS_OF[(cipher, 'CTR')], keytype, key))
+def operate(cl, ivv=None, ctr0=None):         # Form C IV <- ivv, then Form B ctr <- ctr0
+    if ivv is not None:
+        cl.setst(OP, 'C', ivv)
+    if ctr0 is not None:
+        cl.setst(AUX, 'B', ctr0)
     return cl
 
+def kl_ctr(key, ivv, n, j, msg, ctr0=0, per_block=False, **kw):
+    return bxor(keystream(ctr_cl(key, n, j, ivv, ctr0, **kw), len(msg), per_block), msg)
 
-def enter_operate(cl, iv_value, ctr0, ctr_first=False, KLLEN=128):
-    """Form C kl.setst #kl_state_operate (IV <- INPUT) and Form B set initial counter."""
-    if ctr_first:
-        cl.setst(ST_SET_AUX_VALUE, 'B', ctr0)
-    cl.setst(ST_OPERATE, 'C', iv_value, KLLEN)
-    if not ctr_first:
-        cl.setst(ST_SET_AUX_VALUE, 'B', ctr0)
-
-
-def kl_ctr(key, iv_value, n, j, msg, ctr0=0, per_block=False, **kw):
-    cipher = f"AES-{len(key) * 8}"
-    cl = ctr_cl(cipher, b2v(key), n, j, **kw)
-    enter_operate(cl, iv_value, ctr0)
-    return bxor(keystream(cl, len(msg), per_block), msg)
-
-
-def kl_xctr(key, iv_value, msg, ctr0=0, form_b=True):
-    cipher = f"AES-{len(key) * 8}"
-    cl = KeystreamLocker()
-    cl.provision(build_pi(KS_OF[(cipher, 'XCTR')], 0, b2v(key)))
-    cl.setst(ST_OPERATE, 'C', iv_value, 128)
-    if form_b:
-        cl.setst(ST_SET_AUX_VALUE, 'B', ctr0)
-    return bxor(keystream(cl, len(msg)), msg)
+def kl_xctr(key, ivv, msg, ctr0=None):
+    return bxor(keystream(ctr_cl(key, None, None, ivv, ctr0, mode='XCTR'), len(msg)), msg)
 
 
 # ---------------------------------------------------------------- vectors
@@ -398,7 +182,7 @@ SP38A_PT = bytes.fromhex("6bc1bee22e409f96e93d7e117393172a"
                          "30c81c46a35ce411e5fbc1191a0a52ef"
                          "f69f2445df4f9b17ad2b417be66c3710")
 SP38A_ICB = bytes.fromhex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
-SP38A_F5 = [
+SP38A_F5 = [  # SP 800-38A F.5.1/F.5.3/F.5.5, via Linux crypto/testmgr.h aes_ctr_tv_template
     ("F.5.1 CTR-AES128", "2b7e151628aed2a6abf7158809cf4f3c",
      "874d6191b620e3261bef6864990db6ce"
      "9806f66b7970fdff8617187bb9fffdff"
@@ -416,8 +200,7 @@ SP38A_F5 = [
      "2b0930daa23de94ce87017ba2d84988d"
      "dfc9c58db67aada613c2dd08457941a6"),
 ]
-
-# google/hctr2 XCTR reference vectors: (label, key, nonce, plaintext, ciphertext)
+# google/hctr2 test_vectors/ours/XCTR/XCTR_AES{128,256}.json: (label, key, nonce, plaintext, ciphertext)
 HCTR2_XCTR = [
     ("XCTR-AES128 len 16", "bc1b120c3f18cc1f5a1dab81a8687c63",
      "22c1dd250b18cba54ada150773d98810",
@@ -446,318 +229,177 @@ HCTR2_XCTR = [
      "abe6335634605d4b2e1613d477de2d2b"),
 ]
 
-T1 = b2v(SP38A_ICB)                  # the whole initial counter block, as a value
-F5_SPLITS = ((64, 64), (96, 32), (112, 16))
+# ---------------------------------------------------------------- checks
+def eq(name, got, want):
+    return check(name, None, got, want)
 
+H, PT, T1 = bytes.fromhex, SP38A_PT, b2v(SP38A_ICB)      # T1: the whole initial counter block
+c0 = lambda n: int.from_bytes(SP38A_ICB[n // 8:], 'big')  # its trailing j/8 bytes, big-endian
 
-def f5_ctr0(n):
-    """The integer whose big-endian encoding is the trailing (128 - n)/8 bytes of T1."""
-    return int.from_bytes(SP38A_ICB[n // 8:], 'big')
-
-
-# ---------------------------------------------------------------- run
-ok = True
-neg_fired = {'bswap': False, 'order': False}
-W = 64
-
-
-def chk(label, got, want):
-    global ok
-    good = got == want
-    ok = ok and good
-    print(f"  {label:<{W}} {'PASS' if good else 'FAIL'}")
-    if not good:
-        print(f"      got  {got}")
-        print(f"      want {want}")
-    return good
-
-
-def info(text):
-    print(f"INFO  {text}")
-
-
-def spec_note(text):
-    print(f"SPEC-NOTE  {text}")
-
-
-print("== SP 800-38A F.5: REF-CTR implements the standard")
-icb = int.from_bytes(SP38A_ICB, 'big')       # the whole block is the counter: n=0, j=128
+section("SP 800-38A F.5: reference, and a locker (Form C IV <- T1, Form B ctr, one kl.exec of 4b)")
 for name, k, c in SP38A_F5:
-    key = bytes.fromhex(k)
-    chk(name + " REF", ref_ctr(key, b'', 128, icb, SP38A_PT).hex(), c)
+    key = H(k)
+    eq(f"{name} reference (n, j) = (0, 128)", ref_ctr(key, b'', 128, c0(0), PT).hex(), c)
+    for n, j in ((64, 64), (96, 32), (112, 16)):
+        eq(f"{name} locker, (n, j) = ({n}, {j})", kl_ctr(key, T1, n, j, PT, c0(n)).hex(), c)
+    eq(f"{name} locker, (96, 32), four kl.exec with KLLEN = b",
+       kl_ctr(key, T1, 96, 32, PT, c0(96), per_block=True).hex(), c)
+F51 = [(H(k), c) for _, k, c in SP38A_F5]
+control("counter without bswap (little-endian in the trailing bytes) misses F.5",
+        all(kl_ctr(key, T1, 64, 64, PT, c0(64), variant='neg').hex() != c for key, c in F51))
+control("blocks filled most significant first (MGR3 reversed) misses F.5",
+        all(kl_ctr(key, T1, 64, 64, PT, c0(64), order='neg').hex() != c for key, c in F51))
+key, c = F51[0]
+got = kl_ctr(key, T1, 120, 8, PT, 0xff)
+eq("(n, j) = (120, 8): ctr wraps mod 2^8 after 0xff, so F.5.1 is not reproduced",
+   (got.hex() != c, got), (True, ref_ctr(key, SP38A_ICB[:15], 8, 0xff, PT)))
 
-print("\n== KLEE: F.5 through a locker, one Form C kl.exec with KLLEN = 4b (MGR3)")
-print("   Form C kl.setst #kl_state_operate with INPUT = T1 (KLLEN = 128 > n: the")
-print("   n least significant bits, the first n/8 bytes, become IV); Form B")
-print("   #kl_state_set_aux_value with Xs = the trailing j/8 bytes read big-endian")
-for name, k, c in SP38A_F5:
-    key = bytes.fromhex(k)
-    for n, j in F5_SPLITS:
-        chk(f"{name} KLEE, (n, j) = ({n}, {j})",
-            kl_ctr(key, T1, n, j, SP38A_PT, ctr0=f5_ctr0(n)).hex(), c)
-    chk(f"{name} KLEE, (96, 32), four kl.exec with KLLEN = b",
-        kl_ctr(key, T1, 96, 32, SP38A_PT, ctr0=f5_ctr0(96), per_block=True).hex(), c)
-
-print("\n== Negative controls, (n, j) = (64, 64)")
-print("KAT-EXPECT-FAIL: NEG little-endian counter")
-print("KAT-EXPECT-FAIL: NEG MS-first order")
-print(f"\n   {'vector':<24} {'KLEE (spec)':<14} {'NEG little-endian counter':<28}"
-      f"{'NEG MS-first order'}")
-for name, k, c in SP38A_F5:
-    key = bytes.fromhex(k)
-    good = kl_ctr(key, T1, 64, 64, SP38A_PT, ctr0=f5_ctr0(64)).hex() == c
-    neg1 = kl_ctr(key, T1, 64, 64, SP38A_PT, ctr0=f5_ctr0(64), variant='neg').hex() != c
-    neg2 = kl_ctr(key, T1, 64, 64, SP38A_PT, ctr0=f5_ctr0(64), order='neg').hex() != c
-    ok = ok and good
-    neg_fired['bswap'] |= neg1
-    neg_fired['order'] |= neg2
-    print(f"   {name:<24} {'PASS' if good else 'FAIL':<14} "
-          f"{'FAIL' if neg1 else 'PASS (does not discriminate)':<28}"
-          f"{'FAIL' if neg2 else 'PASS (does not discriminate)'}")
-print()
-key = bytes.fromhex(SP38A_F5[0][1])
-got = kl_ctr(key, T1, 120, 8, SP38A_PT, ctr0=f5_ctr0(120))
-chk("(n, j) = (120, 8): ctr wraps mod 2^8 after 0xff, F.5.1 not reproduced",
-    (got.hex() != SP38A_F5[0][2], got),
-    (True, ref_ctr(key, SP38A_ICB[:15], 8, 0xff, SP38A_PT)))
-
-print("\n== Nonce/counter splits: KLEE vs REF-CTR [reference-consistency only]")
-print("   b = n + j, IV in the first n/8 bytes, counter big-endian in the last j/8;")
-print("   starting counters 0, 1, 7 and the wrap point 2^j - 2, or, for j > 64,")
-print("   2^64 - 1 (the largest value a Form B Xs holds; its tick carries into bit 64)")
-key = bytes.fromhex(SP38A_F5[0][1])
+section("Other splits: locker vs reference [reference-consistency only]")
 msg = bytes(range(80))
 for n, j in ((96, 32), (64, 64), (120, 8), (32, 96), (112, 16), (0, 128)):
     nonce = bytes(range(1, n // 8 + 1))
     starts = (0, 1, 7, (1 << j) - 2 if j <= 64 else ONES64)
-    got = [kl_ctr(key, b2v(nonce), n, j, msg, ctr0=s) for s in starts]
-    want = [ref_ctr(key, nonce, j, s, msg) for s in starts]
-    chk(f"n = {n:3d}, j = {j:3d}  (4 starting counters)", got, want)
-info("(n, j) = (0, 128) cannot reproduce F.5: its initial counter block exceeds the "
-     "64 bits a Form B kl.setst can load into `ctr`, and Form C sets no counter bits.")
+    eq(f"n = {n}, j = {j}, starting counters {starts[:3]} and the wrap point",
+       [kl_ctr(key, b2v(nonce), n, j, msg, s) for s in starts],
+       [ref_ctr(key, nonce, j, s, msg) for s in starts])
 
-print("\n== Form B set initial counter: ctr <- lsb_j(Xs), _State_ unchanged")
-name, k, c = SP38A_F5[0]
-key = bytes.fromhex(k)
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64) + 2)       # jump into the stream at block 2
-chk("F.5.1 blocks 2..3 via Form B (random access)",
-    bxor(keystream(cl, 32), SP38A_PT[32:]).hex(), c[64:])
-cl = ctr_cl('AES-128', b2v(key), 96, 32)
-enter_operate(cl, b2v(bytes(range(1, 13))), (0xdeadbeef << 32) | 5)
-chk("lsb_j truncation of Xs (j = 32): only the low 32 bits survive",
-    keystream(cl, 32), ref_ctr(key, bytes(range(1, 13)), 32, 5, bytes(32)))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_SET_AUX_VALUE, 'B', f5_ctr0(64))
-st_ready = cl.state
-cl.setst(ST_OPERATE, 'C', T1, 128)
-st_op = cl.state
-cl.setst(ST_SET_AUX_VALUE, 'B', f5_ctr0(64))
-chk("Form B in _Ready_ and in _Operate_ leaves _State_ at 1, resp. 2",
-    (st_ready, st_op, cl.state), (ST_READY, ST_OPERATE, ST_OPERATE))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64), ctr_first=True)
-chk("Form B in _Ready_, then Form C: ctr survives the transition, F.5.1",
-    bxor(keystream(cl, 64), SP38A_PT).hex(), c)
-info("'In State _Ready_, the ctr and IV fields are set to 0' is read as happening on "
-     "entry to _Ready_: Form B is allowed in _Ready_, and the transition to _Operate_ "
-     "sets only IV.")
-info("Form B carries 64 bits, so for j > 64 (XCTR, or CTR with n < 64) lsb_j(Xs) is "
-     "read as Xs zero-extended to j bits; <<KLEE-Notation>> defines lsb_c only for "
-     "c <= |x|.")
+section("Form B kl.setst #kl_state_set_aux_value: ctr <- lsb_j(Xs), State unchanged")
+eq("F.5.1 blocks 2..3 by random access",
+   bxor(keystream(ctr_cl(key, 64, 64, T1, c0(64) + 2), 32), PT[32:]).hex(), c[64:])
+eq("lsb_j(Xs) with j = 32 keeps only the low 32 bits",
+   keystream(ctr_cl(key, 96, 32, b2v(bytes(range(1, 13))), 0xdeadbeef << 32 | 5), 32),
+   ref_ctr(key, bytes(range(1, 13)), 32, 5, bytes(32)))
+cl = ctr_cl(key, 64, 64, ctr0=c0(64))
+st = cl.state
+cl.setst(OP, 'C', T1)
+eq("Form B in Ready (State stays 1), then Form C: ctr survives the transition, F.5.1",
+   (st, cl.state, bxor(keystream(cl, 64), PT).hex()), (RDY, OP, c))
+cl.setst(AUX, 'B', c0(64))
+eq("Form B in Operate leaves State 2", cl.state, OP)
+info("Ready zeroes IV and ctr on entry only: a Form B ctr set in Ready survives the Form C move to Operate.")
+info("Form B carries 64 bits: for j > 64, lsb_j(Xs) is read as Xs zero-extended (lsb_c needs c <= |x|).")
 
-print("\n== XCTR [reference-implementation anchor: google/hctr2]")
-print("   HCTR2 numbers the counter from 1, while a KLEE CC leaves State _Ready_")
-print("   with ctr = 0, so the Form B operation supplies the initial counter 1;")
-print("   the keystream comes from one multi-block Form C kl.exec (MGR3)")
-for name, k, iv, p, c in HCTR2_XCTR:
-    key, nonce = bytes.fromhex(k), bytes.fromhex(iv)
-    pt, ct = bytes.fromhex(p), bytes.fromhex(c)
-    chk(name + " REF", ref_xctr(key, nonce, 1, pt).hex(), c)
-    chk(name + " KLEE (Form B ctr <- 1)", kl_xctr(key, b2v(nonce), pt, ctr0=1).hex(), c)
-    chk(name + " KLEE decrypt round-trip",
-        kl_xctr(key, b2v(nonce), ct, ctr0=1).hex(), p)
+section("XCTR [reference-implementation anchor: google/hctr2; Form B sets HCTR2's initial ctr = 1]")
+for name, xk, xiv, xp, xc in HCTR2_XCTR:
+    eq(f"{name} reference / locker encrypt / locker decrypt",
+       (ref_xctr(H(xk), H(xiv), 1, H(xp)).hex(), kl_xctr(H(xk), b2v(H(xiv)), H(xp), 1).hex(),
+        kl_xctr(H(xk), b2v(H(xiv)), H(xc), 1).hex()), (xc, xc, xp))
+iv, m64 = bytes(range(16)), bytes(range(64))
+eq("XCTR with ctr = 0 as left by Ready matches the reference", kl_xctr(key, b2v(iv), m64),
+   ref_xctr(key, iv, 0, m64))
+eq("XCTR streams with ctr = 0 and ctr = 1 differ",
+   kl_xctr(key, b2v(iv), m64, 0) != kl_xctr(key, b2v(iv), m64, 1), True)
+eq("CTR (96, 32) and XCTR keystreams differ",
+   kl_ctr(key, b2v(iv[:12]), 96, 32, m64) != kl_xctr(key, b2v(iv[:12] + bytes(4)), m64), True)
 
-print("\n== XCTR/CTR mutual consistency and separation")
-key = bytes.fromhex(SP38A_F5[0][1])
-iv = bytes(range(16))
-msg = bytes(range(64))
-chk("REF-XCTR == KLEE-XCTR over 4 blocks, ctr = 0 as left by _Ready_",
-    kl_xctr(key, b2v(iv), msg, form_b=False).hex(), ref_xctr(key, iv, 0, msg).hex())
-# the KLEE default start (ctr = 0) must differ from HCTR2's (ctr = 1): the Form B
-# step above is necessary, not decorative.
-chk("ctr = 0 and ctr = 1 XCTR streams differ",
-    kl_xctr(key, b2v(iv), msg, 0) != kl_xctr(key, b2v(iv), msg, 1), True)
-# CTR and XCTR must not coincide, or the specification's distinction is vacuous
-nonce = bytes(range(1, 13))
-chk("CTR and XCTR produce different keystreams",
-    kl_ctr(key, b2v(nonce), 96, 32, msg) != kl_xctr(key, b2v(nonce + bytes(4)), msg,
-                                                    form_b=False), True)
-
-print("\n== RULES: States, transitions and the general rules (F.5.1, (n, j) = (64, 64))")
-name, k, c = SP38A_F5[0]
-key = bytes.fromhex(k)
-chk("state constants: Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49",
-    (ST_READY, ST_OPERATE, ST_SET_AUX_VALUE, ST_INVALID), (1, 2, 13, 49))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-chk("provisioning completes in _Ready_ with IV = ctr = 0",
-    (cl.state, cl.IV, cl.ctr), (ST_READY, 0, 0))
-res, _ = cl.exec(512, out=ONES64)
-chk("kl.exec in _Ready_: _Invalid_, output window zeroed, Content cleared",
-    (cl.state, res, cl.key), (ST_INVALID, 0, None))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_ENCRYPT, 'C', T1, 128)
-chk("kl.setst #kl_state_encrypt: not a listed transition -> _Invalid_",
-    cl.state, ST_INVALID)
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_OPERATE, 'B', T1 & ONES64)
-chk("kl.setst #kl_state_operate in Form B (Form C required) -> _Invalid_",
-    cl.state, ST_INVALID)
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_SET_AUX_VALUE, 'C', f5_ctr0(64), 128)
-chk("#kl_state_set_aux_value in Form C (Form B only) -> _Invalid_", cl.state, ST_INVALID)
-
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64))
-first = keystream(cl, 64)
-cl.setst(ST_READY)
+section("States, transitions and general rules (F.5.1, (n, j) = (64, 64))")
+eq("State values Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49", (RDY, OP, AUX, INV), (1, 2, 13, 49))
+cl = ctr_cl(key, 64, 64)
+eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR2)",
+   (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
+for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
+                    ("#kl_state_operate in Form B (Form C required)", (OP, 'B', T1 & ONES64)),
+                    ("#kl_state_set_aux_value in Form C (Form B only)", (AUX, 'C', c0(64)))):
+    cl = ctr_cl(key, 64, 64)
+    cl.setst(*args)
+    eq(f"{label} -> Invalid (MGR1)", cl.state, INV)
+cl = ctr_cl(key, 64, 64, T1, c0(64))
+keystream(cl, 64)
+cl.setst(RDY)
 cleared = (cl.state, cl.IV, cl.ctr)
-cl.setst(ST_OPERATE, 'C', T1, 128)
-chk("_Operate_ -> _Ready_ zeroes IV and ctr; re-entry restarts at ctr = 0",
-    (cleared, bxor(keystream(cl, 64), SP38A_PT)),
-    ((ST_READY, 0, 0), ref_ctr(key, SP38A_ICB[:8], 64, 0, SP38A_PT)))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_OPERATE, 'C', 0x1234, 128)       # a wrong IV
-cl.setst(ST_SET_AUX_VALUE, 'B', f5_ctr0(64))
-cl.setst(ST_OPERATE, 'C', T1, 128)           # same-State kl.setst (SGR4)
-chk("_Operate_ -> _Operate_ (SGR4): IV replaced, ctr kept; F.5.1",
-    (cl.state, bxor(keystream(cl, 64), SP38A_PT).hex()), (ST_OPERATE, c))
-info("a same-State kl.setst #kl_state_operate (SGR4) is read as the Form C "
-     "transition into _Operate_: it replaces IV and, _Ready_ not being entered, "
-     "keeps ctr.")
-
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-cl.setst(ST_OPERATE, 'A/iobuf', SP38A_ICB)   # KLIOBUF, kliobuftop = 16, Form A
-cl.setst(ST_SET_AUX_VALUE, 'B', f5_ctr0(64))
-buf = bytes(64)                              # kliobuftop = 64: Form D replacing Form C
-res, _ = cl.exec(8 * 64, out=b2v(buf), iobuf=True)
-chk("Form A kl.setst and Form D kl.exec with the KLIOBUF: F.5.1",
-    bxor(v2b(res, 64), SP38A_PT).hex(), c)
-info("'a Form C kl.setst instruction must be issued' is read as 'is expected', so the "
-     "Form A substitution of <<KLEE-usage-input-output>> applies; read as 'required' "
-     "it would make CTR unusable without Zklv.")
-
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64))
-res, _ = cl.exec(136, out=(1 << 136) - 1)    # vector KLLEN = 17 bytes
-chk("MGR2 (vector): KLLEN = 136 -> no operation, _Invalid_, window zeroed",
-    (cl.state, res), (ST_INVALID, 0))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64))
-prior = b2v(bytes(range(17)))
-res, _ = cl.exec(136, out=prior, iobuf=True)  # KLIOBUF with kliobuftop = 17
-chk("KLIOBUF output only, kliobuftop = 17 -> no operation, no state change",
-    (cl.state, cl.ctr, res), (ST_OPERATE, f5_ctr0(64), prior))
-info("an output-only KLIOBUF operand of invalid length performs no operation "
-     "(<<KLEE-usage-input-output>>), while MGR2 invalidates the locker for the same KLLEN "
-     "in a vector Form C; the specific rule is applied to the KLIOBUF case, per "
-     "'except when explicitly stated otherwise'.")
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64))
-res, ks = cl.exec(512, klstart=8, out=7)
-chk("klstart = 8 (output only, no interruption point) -> no operation",
-    (cl.state, cl.ctr, res), (ST_OPERATE, f5_ctr0(64), 7))
+cl.setst(OP, 'C', T1)
+eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
+   (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, SP38A_ICB[:8], 64, 0, PT)))
+cl = ctr_cl(key, 64, 64, 0x1234, c0(64))
+cl.setst(OP, 'C', T1)
+eq("Operate -> Operate (SGR4): IV replaced, ctr kept; F.5.1",
+   (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
+info("a same-State kl.setst #kl_state_operate (SGR4) replaces IV and keeps ctr (Ready is not entered).")
+cl = ctr_cl(key, 64, 64)
+cl.setst(OP, 'A/iobuf', SP38A_ICB)
+cl.setst(AUX, 'B', c0(64))
+eq("Form A kl.setst and Form D kl.exec with the KLIOBUF (kliobuftop 16, 64): F.5.1",
+   bxor(v2b(cl.exec(512, iobuf=True)[0], 64), PT).hex(), c)
+info("'a Form C kl.setst ... must be issued' is read as 'expected': its Form A KLIOBUF substitution applies.")
+cl = ctr_cl(key, 64, 64, T1, c0(64))
+eq("MGR2 (vector): KLLEN = 136 -> Invalid, window zeroed",
+   (cl.exec(136, out=(1 << 136) - 1)[0], cl.state), (0, INV))
+prior, cl = b2v(bytes(range(17))), ctr_cl(key, 64, 64, T1, c0(64))
+eq("KLIOBUF output only, kliobuftop = 17 -> no operation, no state change",
+   (cl.exec(136, out=prior, iobuf=True)[0], cl.state, cl.ctr), (prior, OP, c0(64)))
+info("output-only KLIOBUF of invalid length: the no-operation rule of <<KLEE-usage-input-output>> beats MGR2.")
+cl = ctr_cl(key, 64, 64, T1, c0(64))
+eq("klstart = 8 (output only, no interruption point) -> no operation",
+   (cl.exec(512, klstart=8, out=7)[0], cl.state, cl.ctr), (7, OP, c0(64)))
 for q in (1, 2, 3):
     for iob in (False, True):
-        cl = ctr_cl('AES-128', b2v(key), 64, 64)
-        enter_operate(cl, T1, f5_ctr0(64))
+        cl = ctr_cl(key, 64, 64, T1, c0(64))
         part, ks = cl.exec(512, halt_after=q, iobuf=iob)
         whole, ks2 = cl.exec(512, klstart=ks, out=part, iobuf=iob)
-        chk(f"{'Form D' if iob else 'Form C'} kl.exec halted after {q} block(s) "
-            f"(klstart = {16 * q}), resumed",
-            (ks, bxor(v2b(whole, 64), SP38A_PT).hex(), ks2), (16 * q, c, 0))
-cl = ctr_cl('AES-128', b2v(key), 120, 8)
-enter_operate(cl, T1, 0xff)
+        eq(f"Form {'D' if iob else 'C'} kl.exec halted after {q} block(s), resumed",
+           (ks, bxor(v2b(whole, 64), PT).hex(), ks2), (16 * q, c, 0))
+cl = ctr_cl(key, 120, 8, T1, 0xff)
 cl.exec(B)
-chk("no block limit: ctr wraps from 2^j - 1 to 0 and the locker stays in _Operate_",
-    (cl.ctr, cl.state), (0, ST_OPERATE))
+eq("no block limit: ctr wraps from 2^j - 1 to 0 and the locker stays in Operate", (cl.ctr, cl.state), (0, OP))
 
-print("\n== DATA: Provisioning Input and Serialized Content")
-print("   (sizes in bytes, worked out by hand from the tables; SCC with _AuxDataLen_ = 0)")
+section("PI and Serialized Content (sizes by hand, AuxDataLen = 0)")
 SKID = 0x0123456789abcdef
-SKS = {SKID: b2v(key)}                       # the F.5.1 key as a system key
+SKS = {SKID: b2v(key)}
 for cipher, kt, pi_size, c1_size in (('AES-128', 0, 32, 32), ('AES-192', 0, 48, 48),
                                      ('AES-256', 0, 48, 48), ('AES-128', 1, 32, 32)):
-    field = SKID if kt else (1 << CIPHERS[cipher]) - 1
-    pi = build_pi(KS_OF[(cipher, 'CTR')], kt, field)
-    cl = KeystreamLocker(64, 64, sks=SKS)
+    pi = build_pi(cipher, SKID if kt else (1 << CIPHERS[cipher]) - 1, keytype=kt)
+    cl = KsLocker(64, 64, SKS)
     cl.provision(pi)
-    chk(f"{cipher} {'SKID' if kt else 'by value'}: PI {pi_size}, Content1 {c1_size}, "
-        f"kl.size {pi_size} / {32 + c1_size}",
-        (len(pi), kl_size(make_mdh(KS_OF[(cipher, 'CTR')], POL_BOTH, kt), 0, len(pi) - 16),
-         len(cl.content1()), kl_size(cl.mdh, len(cl.content1()), 0)),
-        (pi_size, pi_size, c1_size, 32 + c1_size))
-# after two blocks of F.5.1: key || IV (first 8 bytes of T1) || bin(ctr, 64)
-C1_VALUE = (k + "f0f1f2f3f4f5f6f7" + "01fffdfcfbfaf9f8")
-C1_SKID = ("efcdab8967452301" + "f0f1f2f3f4f5f6f7" + "01fffdfcfbfaf9f8" + "00" * 8)
-for label, kt, field, want_c1 in (("by value", 0, b2v(key), C1_VALUE),
-                                  ("by SKID", 1, SKID, C1_SKID)):
-    cl = ctr_cl('AES-128', field, 64, 64, keytype=kt, sks=SKS)
-    enter_operate(cl, T1, f5_ctr0(64))
+    eq(f"{cipher} {'SKID' if kt else 'by value'}: PI {pi_size}, Content1 {c1_size}, "
+       f"kl.size {pi_size}/{32 + c1_size}",
+       (len(pi), kl_size(b2v(pi[:16]), 0, len(pi) - 16), len(cl.content1()), kl_size(cl.mdh, c1_size, 0)),
+       (pi_size, pi_size, c1_size, 32 + c1_size))
+TAIL = "f0f1f2f3f4f5f6f7" + "01fffdfcfbfaf9f8"            # IV, then bin(ctr, 64) after 2 blocks
+for label, kt, field, want_c1 in (("by value", 0, b2v(key), SP38A_F5[0][1] + TAIL),
+                                  ("by SKID", 1, SKID, "efcdab8967452301" + TAIL + "00" * 8)):
+    cl, cl2 = ctr_cl(field, 64, 64, T1, c0(64), keytype=kt, sks=SKS), KsLocker(64, 64, SKS)
     head = keystream(cl, 32)
-    c1 = cl.content1()
-    cl2 = KeystreamLocker(64, 64, sks=SKS)
-    cl2.import_scc(cl.mdh, c1)
-    tail = keystream(cl2, 32)
-    chk(f"{label}: Content1 after 2 blocks = {len(want_c1) // 2} B, key|IV|ctr",
-        c1.hex(), want_c1)
-    chk(f"{label}: import it and finish: F.5.1",
-        (cl2.state, bxor(head + tail, SP38A_PT).hex()), (ST_OPERATE, c))
-cl = ctr_cl('AES-128', b2v(key), 64, 64)
-enter_operate(cl, T1, f5_ctr0(64))
+    cl2.import_scc(cl.mdh, cl.content1())
+    eq(f"{label}: Content1 after 2 blocks = key|IV|ctr; imported, it finishes F.5.1",
+       (cl.content1().hex(), cl2.state, bxor(head + keystream(cl2, 32), PT).hex()), (want_c1, OP, c))
+cl, other = ctr_cl(key, 64, 64, T1, c0(64)), KsLocker(96, 32)
 head = keystream(cl, 32)
-other = KeystreamLocker(96, 32)
 other.import_scc(cl.mdh, cl.content1())
-chk("the same SCC imported with (n, j) = (96, 32) continues a different stream",
-    bxor(head + keystream(other, 32), SP38A_PT).hex() != c, True)
-cl = KeystreamLocker(64, 64, sks=SKS)
-cl.provision(build_pi(KS_OF[('AES-128', 'CTR')], 1, ONES64))
-chk("all-ones SKID: random key, _KeyType_ 0, Content1 32 B (key by value)",
-    (cl.state, cl.keytype, len(cl.content1())), (ST_READY, 0, 32))
-spec_note("the counter size j (hence n = b - j) of a CTR Machine is fixed by no field: "
-          "<<KLEE-exec-encodings>> has one AES128_CTR, and neither the PI nor the "
-          "Serialized Content carries j.  The length rule is unaffected (n + j = b), but "
-          "the IV truncation, the wrap of tick_ctr and the IV/ctr boundary inside "
-          "Content1 all depend on it, so two implementations choosing different splits "
-          "interpret the same SCC differently (previous line).  This file exercises "
-          "several splits as implementation parameters.")
-info("the CTR/XCTR text gates no transition on _MachinePolicy_; the PIs of this file "
-     "set both bits.")
+eq("the same SCC imported with (n, j) = (96, 32) continues a different stream",
+   bxor(head + keystream(other, 32), PT).hex() != c, True)
+cl = KsLocker(64, 64, SKS)
+cl.provision(build_pi('AES-128', ONES64, keytype=1))
+eq("all-ones SKID: random key, KeyType 0, Content1 32 B",
+   (cl.state, cl.keytype, len(cl.content1())), (RDY, 0, 32))
+spec_note("no field fixes the CTR counter size j (n = b - j), on which the IV truncation, the tick_ctr "
+          "wrap and the IV/ctr boundary in Content1 depend: implementations may read one SCC differently.")
+info("<<KLEE-keystream-modes>> gates no transition on MachinePolicy; the PIs here set both bits.")
 
-print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
-source = key + bytes.fromhex("5a" * 16)      # a 32-byte source field
-cl = ctr_cl('AES-128', 0, 64, 64)
-done = cl.derive_dest(source, 32)
-enter_operate(cl, T1, f5_ctr0(64))
-chk("derive 32 bytes into the 16-byte key, then F.5.1",
-    (done, bxor(keystream(cl, 64), SP38A_PT).hex()), (True, c))
-for length in (8, 0):
-    cl = ctr_cl('AES-128', 0, 64, 64)
-    chk(f"length {length} < 16: destination _Invalid_, no zero-filled key (DER1)",
-        (cl.derive_dest(source, length), cl.state), (False, ST_INVALID))
-cl = ctr_cl('AES-128', 0, 64, 64)
-enter_operate(cl, T1, 0)
-chk("destination in _Operate_ -> _Invalid_",
-    (cl.derive_dest(source, 32), cl.state), (False, ST_INVALID))
-cl = ctr_cl('AES-128', SKID, 64, 64, keytype=1, sks=SKS)
-chk("key of a _KeyType_ 1 locker is never importable (DER4) -> _Invalid_",
-    (cl.derive_dest(source, 32), cl.state), (False, ST_INVALID))
+section("kl.derive (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>)")
+drbg = key + H("5a" * 16)
 
-for label, fired in (("little-endian counter", neg_fired['bswap']),
-                     ("MS-first order", neg_fired['order'])):
-    if not fired:
-        print(f"\nnegative control '{label}' did not fire: the test is not discriminating")
-        ok = False
+def derived(length, keytype=0, state_op=False):
+    cl = ctr_cl(SKID if keytype else 0, 64, 64, T1 if state_op else None, keytype=keytype, sks=SKS)
+    if cl.derive_key(drbg, length):
+        return cl.state, bxor(keystream(operate(cl, T1, c0(64)), 64), PT).hex()
+    return cl.state, cl.key
 
-print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
-sys.exit(0 if ok else 1)
+eq("DRBG output (DER7), length 32, into the 16-byte key (DER1 check 4), then F.5.1", derived(32), (RDY, c))
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (DER4)", (32, 1)),
+                    ("destination in Operate (DER1 check 1)", (32, 0, True))):
+    eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
+src, dst = ctr_cl(key, 64, 64, T1, c0(64)), ctr_cl(key, 64, 64)
+dst.derive_key(src, 16)
+eq("CTR keystream into a CTR key (no listed pair) -> both Invalid", (src.state, dst.state), (INV, INV))
+cl, h = ctr_cl(key, 64, 64, T1, c0(64)), hashlib.sha256()
+ok = derive_to_hash(cl, h, 40)
+eq("DER6: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
+   (ok, h.hexdigest(), bxor(keystream(cl, 16), PT[48:]).hex()),
+   (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
+cl = ctr_cl(key, 64, 64)
+derive_to_hash(cl, hashlib.sha256(), 40)
+eq("DER6 with the source in Ready (not an endpoint) -> source Invalid", cl.state, INV)
+spec_note("<<KLEE-derive-endpoints>> lists no source for CTR/XCTR, yet their keystream is obtainable by "
+          "kl.exec, so DER6 admits it into a hash/MAC; this harness follows DER6.")
+done()

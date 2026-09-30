@@ -1,115 +1,15 @@
 #!/usr/bin/env python3
-"""ECB mode (<<KLEE-ECB-mode>> in modules/ROOT/pages/Zkl-ISA-machines.adoc) against FIPS 197,
-SP 800-38A F.1 and GB/T 32907-2016 (SM4).
-
-What is checked
----------------
-REF    A plain byte-string ECB reference: split the message into b-bit blocks in
-       address order and apply enc_blk/dec_blk to each.  Anchored directly on the
-       published vectors.
-
-KLEE   The ECB Machine as the specification now states it, driven through a small
-       model of a Cryptographic Locker (class EcbLocker): a PI is provisioned, the locker is
-       moved between _Ready_, _Encrypt_ and _Decrypt_ with kl.setst, and data is
-       processed with the (multi-block) Form A kl.exec, whose per-block operation
-       <<KLEE-ECB-mode>> gives as
-
-           OUTPUT <- enc_blk(key, INPUT)      resp.      OUTPUT <- dec_blk(key, INPUT)
-
-       The block loop is no longer written in the ECB text.  It is now rule MGR3 of
-       <<KLEE-Machines-other-rules>>: for i = 0, b, 2b, ..., KLLEN - b, in that
-       order, the per-block operation consumes INPUT[i+b-1:i] and produces
-       OUTPUT[i+b-1:i].  Under <<KLEE-Notation>> byte j of a byte string sits at
-       bits [8j+7:8j], so the least significant block of the KLEE value is the
-       block at the lowest address, and the byte-string view of the result must
-       equal REF.  The 4-block operands are built with cat() (left operand more
-       significant, so the blocks are listed in reverse address order).
-
-NEG    A negative control mapping the most significant block of the value to the
-       first block of the string.  It must disagree with the vectors.
-
-RULES  Behaviour the ECB text now leaves to the general rules: a kl.exec in _Ready_
-       invalidates the locker (Rules <<KLEE-SGR-no-exec-in-ready>> and
-       <<KLEE-MGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
-       performs no operation and invalidates the locker (MGR2), the output window is
-       zeroed (Rule <<KLEE-SGR-usage-locker-error-state>>) and the Content cleared
-       (Rule <<KLEE-SGR-clear-locker-content-error-state>>); the _MachinePolicy_ gate on
-       the transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8 of
-       <<KLEE-State-management>>); the KLIOBUF substitution
-       (<<KLEE-usage-input-output>>); the interruption points and resumption of a
-       multi-block kl.exec (<<KLEE-CSR-klstart>>, Rule
-       <<KLEE-IRR-block-iterated-instructions>>); the Metadata Validity Rule
-       (<<KLEE-Metadata-validity>>) for a zero _MachinePolicy_ and for a _State_ ECB
-       does not have.
-
-DATA   The Provisioning Input and the Serialized Content as "Definition of a
-       Machine in KLEE" now describes them.  The PI starts with the 128-bit MDH,
-       which the Machine tables no longer list, and the key (or the 64-bit SKID of
-       <<KLEE-rules-system-keys>>) is at its position ii.  The MDH is not part of the
-       Serialized Content, where the key is at position i.  Both are zero-padded to a
-       multiple of 128 bits.  The sizes are checked against kl.size
-       (<<KLEE-instruction-size>>), hand-computed from those tables.  SKID resolution
-       and the all-ones SKID are checked against <<KLEE-KeyType-field>>,
-       <<KLEE-system-keys>> and <<KLEE-MVR-open>>.
-
-DERIVE The destination endpoint `key` (1) of <<KLEE-derive-endpoints>> (marked work
-       in progress), with Rule DER1 check 4 (<<KLEE-DER-checks>>: a key needs
-       `length` >= dest_length and receives exactly dest_length bytes, no
-       zero-filling), DER4 (<<KLEE-DER-SKID-no-export>>) and DER8
-       (<<KLEE-derive-rule-both-fixed-size>>).  kl.derive carries no field selector
-       (only `length`), so the endpoint is the one the Machine and State define.
-
-BOOK 4 The informative example <<KLEE-pseudocode-ECB-encryption>>: its Error State test.
-
-SM4 is included because KLEE names it as an instantiable block cipher, and because
-it exercises the value/byte-string mapping with a cipher whose own specification is
-written big-endian.
-
-Vectors and provenance
-----------------------
-* FIPS 197 Appendix C.1/C.2/C.3 -- single-block AES-128/192/256.  (Also re-checked
-  inside common.py's self-test; repeated here so this file stands alone.)
-* SP 800-38A Appendix F.1.1/F.1.2 (ECB-AES128), F.1.3/F.1.4 (ECB-AES192),
-  F.1.5/F.1.6 (ECB-AES256) -- the four-block message.  These twelve output blocks
-  were additionally recomputed with the independent AES in common.py, whose
-  own anchor is FIPS 197.
-* SM4 S-box: transcribed from the OpenSSL SM4 reference implementation,
-  crypto/sm4/sm4.c, SM4_S[256] (raw.githubusercontent.com/openssl/openssl,
-  master, fetched 2026-08-26).  The table is only a starting point: the
-  implementation built on it is anchored below on the GB/T standard vectors.
-* GB/T 32907-2016 Example 1 (single block, key = plaintext =
-  0123456789abcdeffedcba9876543210 -> 681edf34d206965e86b3e94f536e4246).  Also
-  reproduced in the Linux kernel crypto/testmgr.h sm4_tv_template as
-  "GB/T 32907-2016 Example 1".
-* GB/T 32907-2016 Example 2, the full 1,000,000-round iteration vector
-  (-> 595298c7c6fd271f0402f804c33d3f66).  This runs in about 30 s in pure Python,
-  which fits the time budget, so the vector is used whole rather than truncated.
-  The intermediate values at rounds 100/1000/10000 are recorded alongside it as
-  reference-implementation checkpoints (they are not published constants, and are
-  labelled as such); they exist only so that a failure can be localized.
-* SM4 multi-block ECB: GB/T 32907-2016 A.2.1.1 and A.2.1.2, as reproduced in the
-  Linux kernel crypto/testmgr.h sm4_tv_template.
-
-Anchor levels: the vector checks are standard-vector anchored.  The RULES, DATA and
-DERIVE checks are anchored on the same vectors where a vector can express the rule
-(a derived key must reproduce F.1.3, a resumed kl.exec must reproduce F.1.1).
-Otherwise they compare the model with sizes and byte layouts worked out by hand
-from the specification's tables.
-
-Coverage note: SM4 decryption is checked only by round-tripping and by the
-reverse-round-key inversion of the published encryption vectors; no independent
-published SM4 decryption vector is used.
-"""
-import os
-import random
-import sys
-
+"""ECB Machines (<<KLEE-ECB-mode>>) through a model locker, against FIPS 197, SP 800-38A F.1
+and GB/T 32907-2016 (SM4); also the general rules, the PI/SCC layout and kl.derive into `key`."""
+import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
+                    KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT,
+                    KL_STATE_DECRYPT, KL_STATE_INVALID, ERROR_STATES,
+                    section, check, control, info, done)
 
-from common import aes_decrypt, aes_encrypt, b2v, cat, sl, v2b
-
-# ---------------------------------------------------------------- SM4
-# S-box: OpenSSL crypto/sm4/sm4.c, SM4_S[256].
+# ---------------------------------------------------------------- SM4 (GB/T 32907-2016)
+# S-box: OpenSSL crypto/sm4/sm4.c SM4_S[256]; anchored below on the GB/T vectors.
 SM4_SBOX = bytes.fromhex(
     "d690e9fecce13db716b614c228fb2c052b679a762abe04c3aa44132649860699"
     "9c4250f491ef987a33540b43edcfac62e4b31ca9c908e89580df94fa758f3fa6"
@@ -120,320 +20,178 @@ SM4_SBOX = bytes.fromhex(
     "8d1baf92bbddbc7f11d95c411f105ad80ac13188a5cd7bbd2d74d012b8e5b4b0"
     "8969974a0c96777e65b9f109c56ec68418f07dec3adc4d2079ee5f3ed7cb3948")
 SM4_FK = (0xA3B1BAC6, 0x56AA3350, 0x677D9197, 0xB27022DC)
+S = SM4_SBOX
 
+rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+tau = lambda a: (S[a >> 24] << 24) | (S[(a >> 16) & 255] << 16) | (S[(a >> 8) & 255] << 8) | S[a & 255]
+words = lambda b: [int.from_bytes(b[i:i + 4], 'big') for i in range(0, 16, 4)]
 
-def _rotl32(x, n):
-    return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
-
-
-def _sm4_tau(a):
-    return ((SM4_SBOX[(a >> 24) & 0xFF] << 24) | (SM4_SBOX[(a >> 16) & 0xFF] << 16)
-            | (SM4_SBOX[(a >> 8) & 0xFF] << 8) | SM4_SBOX[a & 0xFF])
-
-
-def _sm4_T(a):
-    b = _sm4_tau(a)
-    return b ^ _rotl32(b, 2) ^ _rotl32(b, 10) ^ _rotl32(b, 18) ^ _rotl32(b, 24)
-
-
-def _sm4_Tp(a):
-    b = _sm4_tau(a)
-    return b ^ _rotl32(b, 13) ^ _rotl32(b, 23)
-
-
-def sm4_key_schedule(key):
-    """The 32 round keys of GB/T 32907-2016 5.2 (words big-endian, as the standard writes them)."""
-    mk = [int.from_bytes(key[4 * i:4 * i + 4], 'big') for i in range(4)]
-    k = [mk[i] ^ SM4_FK[i] for i in range(4)]
-    rks = []
+def sm4_rks(key):
+    k = [w ^ f for w, f in zip(words(key), SM4_FK)]
     for i in range(32):
-        ck = 0
-        for j in range(4):
-            ck = (ck << 8) | ((28 * i + 7 * j) & 0xFF)
-        k.append(k[i] ^ _sm4_Tp(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ ck))
-        rks.append(k[i + 4])
-    return rks
+        ck = int.from_bytes(bytes((28 * i + 7 * j) & 255 for j in range(4)), 'big')
+        t = tau(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ ck)
+        k.append(k[i] ^ t ^ rotl(t, 13) ^ rotl(t, 23))
+    return k[4:]
 
+def sm4_block(rks, blk):
+    x = words(blk)
+    for rk in rks:
+        t = tau(x[-3] ^ x[-2] ^ x[-1] ^ rk)
+        x.append(x[-4] ^ t ^ rotl(t, 2) ^ rotl(t, 10) ^ rotl(t, 18) ^ rotl(t, 24))
+    return b''.join(w.to_bytes(4, 'big') for w in reversed(x[-4:]))
 
-def _sm4_block(rks, blk):
-    x = [int.from_bytes(blk[4 * i:4 * i + 4], 'big') for i in range(4)]
-    for i in range(32):
-        x.append(x[i] ^ _sm4_T(x[i + 1] ^ x[i + 2] ^ x[i + 3] ^ rks[i]))
-    return b''.join(x[35 - i].to_bytes(4, 'big') for i in range(4))
+sm4_encrypt = lambda key, blk: sm4_block(sm4_rks(key), blk)
+sm4_decrypt = lambda key, blk: sm4_block(sm4_rks(key)[::-1], blk)   # round keys reversed
 
+# ---------------------------------------------------------------- the model
+B = 128
+ONES64 = (1 << 64) - 1
+POL_ENC, POL_DEC, POL_BOTH = 1, 2, 3
+CIPHERS = {'AES-128': (aes_encrypt, aes_decrypt, 128), 'AES-192': (aes_encrypt, aes_decrypt, 192),
+           'AES-256': (aes_encrypt, aes_decrypt, 256), 'SM4': (sm4_encrypt, sm4_decrypt, 128)}
+MACHINE = {c: t << 4 for t, c in enumerate(CIPHERS)}       # <<KLEE-exec-encodings>>: Type t, Mode 0
+CIPHER_OF = {m: c for c, m in MACHINE.items()}
 
-def sm4_encrypt(key, blk):
-    return _sm4_block(sm4_key_schedule(key), blk)
+fld = lambda m, name: sl(m, *MDH_FIELD[name])
 
+def put(m, name, x):
+    hi, lo = MDH_FIELD[name]
+    return m & ~(((1 << (hi - lo + 1)) - 1) << lo) | x << lo
 
-def sm4_decrypt(key, blk):
-    """Decryption is the same round function with the round keys reversed (GB/T 32907-2016 5.4)."""
-    return _sm4_block(list(reversed(sm4_key_schedule(key))), blk)
+pad16 = lambda bits: -(-bits // 128) * 16
 
+def kl_size(mdh, c1_size, pi_size):          # <<KLEE-instruction-size>>, AuxDataLen = 0
+    st = fld(mdh, 'State')
+    return 16 if st in ERROR_STATES else 16 + pi_size if st == 0 else 32 + c1_size
 
-# ---------------------------------------------------------------- constants
-B = 128                         # the block size b of every cipher in this file
+def build_pi(cipher, key_field, policy=POL_BOTH, keytype=0, **mdh):
+    k = 64 if keytype else CIPHERS[cipher][2]
+    return v2b(mdh_pack(Machine=MACHINE[cipher], MachinePolicy=policy, KeyType=keytype, **mdh), 16) \
+        + v2b(key_field, pad16(k))
 
-# <<KLEE-metadata-header>>: (hi, lo) of the MDH fields this file uses
-F_MACHINE, F_MACHINEPOLICY = (11, 0), (13, 12)
-F_STATE, F_KEYTYPE = (24, 19), (30, 29)
+def narrow(dst, src):
+    """<<KLEE-DER-narrowing>>: the narrowed destination MDH, or None (destination Invalid)."""
+    u, us = fld(dst, 'UsagePolicy'), fld(src, 'UsagePolicy')
+    lo, ls = fld(dst, 'Locality'), fld(src, 'Locality')
+    if fld(dst, 'SCProtection') < fld(src, 'SCProtection'):
+        return None
+    if sl(lo, 5, 4) and sl(ls, 5, 4) and sl(lo, 5, 4) != sl(ls, 5, 4):
+        return None
+    loc = (max(sl(lo, 1, 0), sl(ls, 1, 0)) | max(sl(lo, 3, 2), sl(ls, 3, 2)) << 2   # stricter entry
+           | (sl(lo, 5, 4) | sl(ls, 5, 4)) << 4 | (sl(lo, 8, 6) | sl(ls, 8, 6)) << 6)
+    e = [x for x in (fld(dst, 'ExpirationDate'), fld(src, 'ExpirationDate')) if x]
+    dst = put(put(dst, 'UsagePolicy', (u | us) & 15 | u & us & 16), 'Locality', loc)
+    return put(dst, 'ExpirationDate', min(e) if e else 0)
 
-# <<KLEE-state-off>>, <<KLEE-states-valid>>, <<KLEE-states-error>>
-ST_UNCONFIGURED, ST_READY, ST_INVALID = 0, 1, 49
-# <<KLEE-state-constants-symmetric>>
-ST_OPERATE, ST_ENCRYPT, ST_DECRYPT = 2, 7, 8
-
-# <<KLEE-Machine-field>>: lower bit of _MachinePolicy_ = encryption, upper = decryption
-POL_ENC, POL_DEC = 0b01, 0b10
-POL_BOTH = POL_ENC | POL_DEC
-
-ONES64 = (1 << 64) - 1          # the all-ones SKID (<<KLEE-KeyType-field>>)
-
-
-def machine(typ, mode):
-    """<<KLEE-exec-encodings>>: _Machine_ = Type in bits [11:4], Mode in bits [3:0]."""
-    return (typ << 4) | mode
-
-
-# cipher name -> (enc_blk, dec_blk, k)
-CIPHERS = {
-    'AES-128': (aes_encrypt, aes_decrypt, 128),
-    'AES-192': (aes_encrypt, aes_decrypt, 192),
-    'AES-256': (aes_encrypt, aes_decrypt, 256),
-    'SM4': (sm4_encrypt, sm4_decrypt, 128),
-}
-# <<KLEE-exec-encodings>>: the ECB Machines are Mode 0 of Types 0-3
-ECB_MACHINES = {machine(0, 0): 'AES-128', machine(1, 0): 'AES-192',
-                machine(2, 0): 'AES-256', machine(3, 0): 'SM4'}
-ECB_OF = {v: k for k, v in ECB_MACHINES.items()}
-
-# <<KLEE-derive-endpoints>> (work in progress), row of <<KLEE-ECB-mode>>
-ECB_EXPORTABLE = {}             # "A secret key is never an exportable source."
-ECB_IMPORTABLE = {1: 'key'}
-
-
-def fget(v, f):
-    return sl(v, f[0], f[1])
-
-
-def fset(v, f, x):
-    hi, lo = f
-    m = ((1 << (hi - lo + 1)) - 1) << lo
-    return (v & ~m) | ((x << lo) & m)
-
-
-def make_mdh(mach, policy, keytype=0, state=ST_UNCONFIGURED):
-    mdh = fset(0, F_MACHINE, mach)
-    mdh = fset(mdh, F_MACHINEPOLICY, policy)
-    mdh = fset(mdh, F_KEYTYPE, keytype)
-    return fset(mdh, F_STATE, state)
-
-
-def kl_getst(mdh):
-    """kl.getst on RV64 (<<KLEE-instruction-getst>>): kl.getmdl, srli 19, andi 0x3F."""
-    return ((mdh & ((1 << 64) - 1)) >> 19) & 0x3F
-
-
-def padded_bytes(bits):
-    """Length in bytes of `bits` once implicitly zero-padded to a multiple of 128 bits."""
-    return -(-bits // 128) * 16
-
-
-def kl_size(mdh, content1_size, pi_content_size):
-    """<<KLEE-instruction-size>> for a supplied MDH (Forms B/C) with _AuxDataLen_ = 0."""
-    st = kl_getst(mdh)
-    if 48 <= st <= 55:
-        return 16
-    if st == ST_UNCONFIGURED:            # the MDH of a PI
-        return 16 + pi_content_size
-    return 32 + content1_size            # a Valid State
-
-
-def build_pi(mach, policy, keytype, field):
-    """A PI: the MDH (position i), then the key or SKID (position ii), zero-padded."""
-    k = CIPHERS[ECB_MACHINES[mach]][2]
-    width = 64 if keytype == 1 else k
-    return v2b(make_mdh(mach, policy, keytype), 16) + v2b(field, padded_bytes(width))
-
-
-# ---------------------------------------------------------------- REF
-def ref_ecb(enc, key, data, bsz=16):
-    """Byte-string ECB: apply the block function to each b-bit block in address order."""
-    return b''.join(enc(key, data[i:i + bsz]) for i in range(0, len(data), bsz))
-
-
-# ---------------------------------------------------------------- the KLEE model
 class EcbLocker:
-    """A locker holding an ECB CC, per <<KLEE-ECB-mode>> and the general rules."""
+    def __init__(self, sks=None, order='spec'):
+        self.mdh, self.key, self.skid = 0, None, None
+        self.sks, self.order = sks or {}, order
 
-    def __init__(self, sks=None, rng=None, order='spec'):
-        self.mdh = 0                     # _Unconfigured_: every MDH field reads zero
-        self.key = self.skid = None
-        self.sks = sks or {}
-        self.rng = rng or random.Random(2026)
-        self.order = order               # 'spec' (MGR3) or the NEG misreading
+    state = property(lambda s: fld(s.mdh, 'State'))
+    keytype = property(lambda s: fld(s.mdh, 'KeyType'))
+    cipher = property(lambda s: CIPHERS[CIPHER_OF[fld(s.mdh, 'Machine')]])
+    key_width = property(lambda s: 64 if s.keytype == 1 else s.cipher[2])
 
-    # ------------------------------------------------------------ helpers
-    @property
-    def state(self):
-        return kl_getst(self.mdh)
+    def invalidate(self):                     # <<KLEE-SGR-clear-locker-content-error-state>>
+        self.mdh, self.key, self.skid = put(self.mdh, 'State', KL_STATE_INVALID), None, None
 
-    @property
-    def keytype(self):
-        return fget(self.mdh, F_KEYTYPE)
-
-    def cipher(self):
-        return CIPHERS[ECB_MACHINES[fget(self.mdh, F_MACHINE)]]
-
-    def key_field_width(self):
-        """`k` or 64 (the SKID, <<KLEE-rules-system-keys>>)."""
-        return 64 if self.keytype == 1 else self.cipher()[2]
-
-    def in_error(self):
-        return 48 <= self.state <= 55
-
-    def invalidate(self):
-        """Error State _Invalid_; the Content beyond the MDH is cleared."""
-        self.mdh = fset(self.mdh, F_STATE, ST_INVALID)
-        self.key = self.skid = None
-
-    def _install(self, field, importing):
-        """Take the key field of a PI or SCC (<<KLEE-KeyType-field>>, <<KLEE-system-keys>>)."""
+    def _install(self, field, importing):     # <<KLEE-KeyType-field>>, <<KLEE-MVR-open>>
         if self.keytype == 0:
             self.key = field
         elif field == ONES64 and not importing:
-            # random key material; _KeyType_ is then set to 0
-            self.key = self.rng.getrandbits(self.cipher()[2])
-            self.mdh = fset(self.mdh, F_KEYTYPE, 0)
+            self.key, self.mdh = random.Random(1).getrandbits(self.cipher[2]), put(self.mdh, 'KeyType', 0)
         elif field != ONES64 and field in self.sks:
             self.skid, self.key = field, self.sks[field]
         else:
-            # unresolved SKID, or the all-ones SKID in an SCC (<<KLEE-MVR-open>>)
             self.invalidate()
 
-    # ------------------------------------------------------------ configuration
     def provision(self, pi):
-        """kl.mgmt opening a provisioning with the PI's MDH, kl.mv, completing kl.mgmt."""
-        self.mdh, self.key, self.skid = b2v(pi[:16]), None, None     # position i
-        if fget(self.mdh, F_MACHINEPOLICY) == 0:
-            self.invalidate()            # "At least one of the bits must be set"
-            return
-        self._install(sl(b2v(pi[16:]), self.key_field_width() - 1, 0), False)
-        if not self.in_error():
-            self.mdh = fset(self.mdh, F_STATE, ST_READY)   # provisioning ends in _Ready_
+        self.mdh, self.key, self.skid = b2v(pi[:16]), None, None
+        if fld(self.mdh, 'MachinePolicy') == 0:   # <<KLEE-Machine-field>>: at least one bit
+            return self.invalidate()
+        self._install(sl(b2v(pi[16:]), self.key_width - 1, 0), False)
+        if self.state not in ERROR_STATES:
+            self.mdh = put(self.mdh, 'State', KL_STATE_READY)
 
-    def content1(self):
-        """The Serialized Content: key or SKID at position i; the MDH is not part of it."""
-        field = self.skid if self.keytype == 1 else self.key
-        return v2b(field, padded_bytes(self.key_field_width()))
+    def content1(self):                       # Serialized Content: key or SKID at position i
+        return v2b(self.skid if self.keytype else self.key, pad16(self.key_width))
 
-    def import_scc(self, mdh, content1):
-        """Import from the plaintext of an SCC; _State_ is restored from the MDH."""
+    def import_scc(self, mdh, c1):
         self.mdh, self.key, self.skid = mdh, None, None
-        if self.state not in (ST_READY, ST_ENCRYPT, ST_DECRYPT):
-            self.invalidate()            # a _State_ the Machine does not support
-            return
-        self._install(sl(b2v(content1), self.key_field_width() - 1, 0), True)
+        if self.state not in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT):
+            return self.invalidate()
+        self._install(sl(b2v(c1), self.key_width - 1, 0), True)
 
-    # ------------------------------------------------------------ usage
     def setst(self, immed):
-        """Form A kl.setst #immed (<<KLEE-ECB-mode>> names no Form and no operand)."""
-        if self.in_error():
-            return                       # no operation, _State_ unchanged
-        pol = fget(self.mdh, F_MACHINEPOLICY)
-        if (immed == ST_READY                                   # SGR8
-                or (immed == ST_ENCRYPT and pol & POL_ENC)      # "if encryption is allowed"
-                or (immed == ST_DECRYPT and pol & POL_DEC)):    # "if decryption is allowed"
-            self.mdh = fset(self.mdh, F_STATE, immed)           # "From any valid state"
+        if self.state in ERROR_STATES:
+            return                            # <<KLEE-SGR-usage-locker-error-state>>
+        pol = fld(self.mdh, 'MachinePolicy')
+        if (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
+                or immed == KL_STATE_DECRYPT and pol & POL_DEC):
+            self.mdh = put(self.mdh, 'State', immed)
         else:
-            self.invalidate()            # a transition the Machine does not allow
+            self.invalidate()                 # MGR1
 
-    def exec(self, inp, KLLEN, klstart=0, out=None, halt_after=None):
-        """(Multi-block) Form A kl.exec, or its Form D substitution (in place).
-
-        `inp` and `out` are the KLLEN-bit operands (`out` defaults to `inp`: Vd = Vs2,
-        which is how a substituted Form A behaves); `klstart` is in bytes.  A precise
-        halt after `halt_after` blocks is modelled as the shorter instruction that
-        Rule <<KLEE-IRR-block-iterated-instructions>> equates it with.
-        Returns (new value of the output operand, klstart).
-        """
-        out = inp if out is None else out
-        lo = 8 * klstart
-        window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
-        if self.in_error():
-            return out & ~window, 0      # no operation; the window is zeroed
-        if lo % B:                       # an input klstart that is no interruption point
-            self.invalidate()
+    def exec(self, inp, KLLEN, klstart=0, halt_after=None):
+        """Form A kl.exec with Vd = Vs2 (or its Form D substitution); returns (output, klstart)."""
+        lo, out = 8 * klstart, inp
+        window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
+        if self.state in ERROR_STATES:
             return out & ~window, 0
-        if lo >= KLLEN:
-            return out, klstart          # empty window: no operation
-        if (self.state not in (ST_ENCRYPT, ST_DECRYPT)     # kl.exec in _Ready_
-                or KLLEN % B):                             # MGR2: granularity b
-            self.invalidate()
+        if lo >= KLLEN and lo % B == 0:
+            return out, klstart               # <<KLEE-CSR-klstart>>: empty window
+        if lo % B or self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
+            self.invalidate()                 # klstart, SGR2, MGR2
             return out & ~window, 0
-        enc, dec, k = self.cipher()
-        f = enc if self.state == ST_ENCRYPT else dec
-        key = v2b(self.key, k // 8)
-        nblk = KLLEN // B
-        # MGR3: i = 0, b, ..., KLLEN - b, in that order
-        for q, i in enumerate(range(lo, KLLEN, B)):
-            if halt_after is not None and q == halt_after:
-                return out, i // 8       # precise halt, prefix-complete klstart
-            res = b2v(f(key, v2b(sl(inp, i + B - 1, i), B // 8)))
-            dst = i if self.order == 'spec' else (nblk - 1) * B - i
-            out = (out & ~(((1 << B) - 1) << dst)) | (res << dst)
-        return out, 0                    # retired: klstart <- 0
+        enc, dec, k = self.cipher
+        f, key = enc if self.state == KL_STATE_ENCRYPT else dec, v2b(self.key, k // 8)
+        for q, i in enumerate(range(lo, KLLEN, B)):   # MGR3
+            if q == halt_after:
+                return out, i // 8
+            dst = i if self.order == 'spec' else KLLEN - B - i
+            out = out & ~(((1 << B) - 1) << dst) | b2v(f(key, v2b(sl(inp, i + B - 1, i), 16))) << dst
+        return out, 0
 
-    # ------------------------------------------------------------ kl.derive
-    def derive_dest(self, src, length):
-        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>): the
-        endpoint is `key`, the only importable field (kl.derive has no field selector).
-
-        `src` stands for the bytes the source endpoint supplies.
-        """
-        if self.in_error():
+    def derive_key(self, src, length):
+        """kl.derive into `key` (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>);
+        `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (DER5) or 'drbg' (DER7)."""
+        if isinstance(src, EcbLocker):        # ECB is no listed source: any other pair
+            return src.invalidate(), self.invalidate()
+        kind, data, src_mdh = src
+        n = self.cipher[2] // 8
+        if self.state in ERROR_STATES:
             return False
-        dest_length = self.cipher()[2] // 8
-        if (self.state != ST_READY               # "filled with the destination locker in State _Ready_"
-                or self.keytype == 1             # DER4: never importable
-                or length < dest_length          # DER1 check 4 (length = 0 included)
-                or len(src) < dest_length):      # DER1 check 4: the source is too short
-            self.invalidate()
-            return False
-        self.key = b2v(src[:dest_length])        # exactly dest_length bytes (DER1, DER8)
+        if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
+            return self.invalidate()          # DER1 checks 1, 2 (DER4), 4
+        if kind == 'shared':                  # restricted: DER2; DRBG is unrestricted: DER3
+            m = narrow(self.mdh, src_mdh)
+            if m is None:
+                return self.invalidate()
+            self.mdh = m
+        self.key = b2v(data[:n])              # exactly dest_length bytes (DER1 check 4, DER8)
         return True
 
+def blocks_value(data):                       # cat() lists the most significant block first
+    return cat(*[(b2v(data[i:i + 16]), B) for i in range(len(data) - 16, -1, -16)])
 
-def kl_derive_from_ecb(src_cl, dst_cl, length):
-    """kl.derive with an ECB locker as the source.  ECB has no exportable field, so no
-    pair lists it and both lockers are invalidated."""
-    assert not ECB_EXPORTABLE
-    src_cl.invalidate()
-    dst_cl.invalidate()
-    return False
+def ref(f, key, data):                        # byte-string ECB reference
+    return b''.join(f(key, data[i:i + 16]) for i in range(0, len(data), 16))
 
-
-def new_cl(cipher, key_hex, policy=POL_BOTH, **kw):
-    cl = EcbLocker(**kw)
-    cl.provision(build_pi(ECB_OF[cipher], policy, 0, b2v(bytes.fromhex(key_hex))))
-    return cl
-
-
-def blocks_value(data):
-    """The KLEE value of a byte string of whole blocks, built with cat()."""
-    blocks = [data[i:i + 16] for i in range(0, len(data), 16)]
-    # cat() takes the most significant part first: reverse the address order
-    return cat(*[(b2v(blk), B) for blk in reversed(blocks)])
-
-
-def cl_run(cl, data, klstart=0, halt_after=None):
-    out, ks = cl.exec(blocks_value(data), 8 * len(data), klstart, halt_after=halt_after)
+def run(cl, data, **kw):
+    out, ks = cl.exec(blocks_value(data), 8 * len(data), **kw)
     return v2b(out, len(data)), ks
 
+def new_cl(cipher, key_hex, policy=POL_BOTH, state=None, **kw):
+    cl = EcbLocker(**kw)
+    cl.provision(build_pi(cipher, b2v(bytes.fromhex(key_hex)), policy))
+    if state is not None:
+        cl.setst(state)
+    return cl
 
 # ---------------------------------------------------------------- vectors
-# FIPS 197 Appendix C.
-FIPS197 = [
+FIPS197 = [  # FIPS 197 Appendix C
     ("C.1 AES-128", "000102030405060708090a0b0c0d0e0f",
      "00112233445566778899aabbccddeeff", "69c4e0d86a7b0430d8cdb78070b4c55a"),
     ("C.2 AES-192", "000102030405060708090a0b0c0d0e0f1011121314151617",
@@ -441,13 +199,11 @@ FIPS197 = [
     ("C.3 AES-256", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
      "00112233445566778899aabbccddeeff", "8ea2b7ca516745bfeafc49904b496089"),
 ]
-
-# SP 800-38A Appendix F.1: the same four-block plaintext under three key sizes.
 SP38A_PT = ("6bc1bee22e409f96e93d7e117393172a"
             "ae2d8a571e03ac9c9eb76fac45af8e51"
             "30c81c46a35ce411e5fbc1191a0a52ef"
             "f69f2445df4f9b17ad2b417be66c3710")
-SP38A_F1 = [
+SP38A_F1 = [  # SP 800-38A Appendix F.1
     ("F.1.1/F.1.2 ECB-AES128", "AES-128", "2b7e151628aed2a6abf7158809cf4f3c",
      "3ad77bb40d7a3660a89ecaf32466ef97"
      "f5d3d58503b9699de785895a96fdbaaf"
@@ -465,20 +221,15 @@ SP38A_F1 = [
      "b6ed21b99ca6f4f9f153e7b1beafed1d"
      "23304b7a39f9f3ff067d8d8f9e24ecc7"),
 ]
-
-# GB/T 32907-2016.
 SM4_KEY1 = "0123456789abcdeffedcba9876543210"
-SM4_EX1_CT = "681edf34d206965e86b3e94f536e4246"
-# GB/T 32907-2016 Example 2: encrypt the plaintext under its own key 1e6 times.
-SM4_EX2_ROUNDS = 1000000
-SM4_EX2_CT = "595298c7c6fd271f0402f804c33d3f66"
-# Reference-implementation checkpoints, for localizing a failure only.
-SM4_EX2_CHECKPOINTS = {
+SM4_EX1_CT = "681edf34d206965e86b3e94f536e4246"          # GB/T 32907-2016 Example 1
+SM4_EX2_ROUNDS, SM4_EX2_CT = 1000000, "595298c7c6fd271f0402f804c33d3f66"   # Example 2
+SM4_EX2_CHECKPOINTS = {  # reference-implementation checkpoints, not published constants
     100: "8da24cb1008bd3271aa3b60105a7d5fd",
     1000: "d735e91cc5689cf312bcc1efb740e813",
     10000: "2d8bfc27381c68ecb316320ee72ba074",
 }
-SM4_MULTI = [
+SM4_MULTI = [  # GB/T 32907-2016 A.2.1.1/A.2.1.2, via Linux crypto/testmgr.h sm4_tv_template
     ("A.2.1.1 SM4-ECB", SM4_KEY1,
      "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffffaaaaaaaabbbbbbbb",
      "5ec8143de509cff7b5179f8f474b86192f1d305a7fb17df985f81c8482192304"),
@@ -487,291 +238,156 @@ SM4_MULTI = [
      "c5876897e4a59bbba72a10c83872245b12dd90bc2d200692b529a4155ac9e600"),
 ]
 
-# ---------------------------------------------------------------- run
-ok = True
-neg_fired = False
-W = 58
+# ---------------------------------------------------------------- checks
+def eq(name, got, want):
+    return check(name, None, got, want)
 
+H, pt = bytes.fromhex, bytes.fromhex(SP38A_PT)
+RDY, ENC, DEC, INV = KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT, KL_STATE_INVALID
+both = lambda ci, k, p, c: (run(new_cl(ci, k, state=ENC), H(p))[0].hex(),
+                            run(new_cl(ci, k, state=DEC), H(c))[0].hex())
 
-def chk(label, got, want):
-    global ok
-    good = got == want
-    ok = ok and good
-    print(f"  {label:<{W}} {'PASS' if good else 'FAIL'}")
-    if not good:
-        print(f"      got  {got}")
-        print(f"      want {want}")
-    return good
-
-
-def info(text):
-    print(f"INFO  {text}")
-
-
-def spec_note(text):
-    print(f"SPEC-NOTE  {text}")
-
-
-pt = bytes.fromhex(SP38A_PT)
-
-print("== FIPS 197 Appendix C: single-block AES (REF, and a KLEE locker with KLLEN = b)")
+section("FIPS 197 C: single block, reference and locker with KLLEN = b")
 for name, k, p, c in FIPS197:
-    key, ptb, ct = bytes.fromhex(k), bytes.fromhex(p), bytes.fromhex(c)
-    chk(name + " encrypt", aes_encrypt(key, ptb).hex(), c)
-    chk(name + " decrypt", aes_decrypt(key, ct).hex(), p)
-    cipher = f"AES-{len(key) * 8}"
-    cl = new_cl(cipher, k)
-    cl.setst(ST_ENCRYPT)
-    chk(name + " KLEE locker, KLLEN = b", cl_run(cl, ptb)[0].hex(), c)
-    cl.setst(ST_DECRYPT)
-    chk(name + " KLEE locker decrypt, KLLEN = b", cl_run(cl, ct)[0].hex(), p)
+    eq(f"{name} encrypt / decrypt", (aes_encrypt(H(k), H(p)).hex(), aes_decrypt(H(k), H(c)).hex()), (c, p))
+    eq(f"{name} locker encrypt / decrypt", both(f"AES-{len(k) * 4}", k, p, c), (c, p))
 
-print("\n== SP 800-38A F.1: four-block ECB, REF (byte string)")
-for name, _, k, c in SP38A_F1:
-    key = bytes.fromhex(k)
-    chk(name + " encrypt", ref_ecb(aes_encrypt, key, pt).hex(), c)
-    chk(name + " decrypt", ref_ecb(aes_decrypt, key, bytes.fromhex(c)).hex(), SP38A_PT)
+section("SP 800-38A F.1: four blocks, reference and one kl.exec with KLLEN = 4b (MGR3)")
+for name, ci, k, c in SP38A_F1:
+    eq(f"{name} reference", (ref(aes_encrypt, H(k), pt).hex(), ref(aes_decrypt, H(k), H(c)).hex()),
+       (c, SP38A_PT))
+    eq(f"{name} locker encrypt / decrypt", both(ci, k, SP38A_PT, c), (c, SP38A_PT))
+control("most significant block first (MGR3 order reversed) misses every F.1 vector",
+        all(run(new_cl(ci, k, state=ENC, order='neg'), pt)[0].hex() != c for _, ci, k, c in SP38A_F1))
 
-print("\n== MGR3: one kl.exec with KLLEN = 4b, least significant block position first")
-print("   (the 4-block operand is built with cat(); its LEFT part is the most")
-print("    significant, i.e. the LAST block of the byte string)")
-print("\nKAT-EXPECT-FAIL: NEG big-endian misread")
-print(f"\n   {'vector':<32} {'KLEE spec order':<16} {'NEG big-endian misread'}")
-for name, cipher, k, c in SP38A_F1:
-    cl = new_cl(cipher, k)
-    cl.setst(ST_ENCRYPT)
-    spec = cl_run(cl, pt)[0].hex()
-    neg_cl = new_cl(cipher, k, order='neg')
-    neg_cl.setst(ST_ENCRYPT)
-    neg = cl_run(neg_cl, pt)[0].hex()
-    good_spec = spec == c
-    good_neg = neg != c                      # the control must NOT reproduce the vector
-    ok = ok and good_spec
-    neg_fired = neg_fired or good_neg
-    print(f"   {name:<32} {'PASS' if good_spec else 'FAIL':<16} "
-          f"{'FAIL' if good_neg else 'PASS (does not discriminate)'}")
-print()
-for name, cipher, k, c in SP38A_F1:
-    cl = new_cl(cipher, k)
-    cl.setst(ST_DECRYPT)
-    chk(name + " decrypt, one kl.exec", cl_run(cl, bytes.fromhex(c))[0].hex(), SP38A_PT)
-
-print("\n== SM4 (GB/T 32907-2016)")
-k1 = bytes.fromhex(SM4_KEY1)
-chk("Example 1 single block", sm4_encrypt(k1, k1).hex(), SM4_EX1_CT)
-chk("Example 1 decrypt", sm4_decrypt(k1, bytes.fromhex(SM4_EX1_CT)).hex(), SM4_KEY1)
-rks = sm4_key_schedule(k1)
-x = k1
+section("SM4 (GB/T 32907-2016)")
+k1 = H(SM4_KEY1)
+eq("Example 1 encrypt / decrypt", (sm4_encrypt(k1, k1).hex(), sm4_decrypt(k1, H(SM4_EX1_CT)).hex()),
+   (SM4_EX1_CT, SM4_KEY1))
+rks, x = sm4_rks(k1), k1
 for r in range(1, SM4_EX2_ROUNDS + 1):
-    x = _sm4_block(rks, x)
+    x = sm4_block(rks, x)
     if r in SM4_EX2_CHECKPOINTS:
-        chk(f"Example 2 round {r} [ref-impl checkpoint]", x.hex(),
-            SM4_EX2_CHECKPOINTS[r])
-chk(f"Example 2 full {SM4_EX2_ROUNDS} rounds", x.hex(), SM4_EX2_CT)
+        eq(f"Example 2 round {r} [ref-impl checkpoint]", x.hex(), SM4_EX2_CHECKPOINTS[r])
+eq(f"Example 2, {SM4_EX2_ROUNDS} rounds", x.hex(), SM4_EX2_CT)
 for name, k, p, c in SM4_MULTI:
-    key = bytes.fromhex(k)
-    chk(name + " REF", ref_ecb(sm4_encrypt, key, bytes.fromhex(p)).hex(), c)
-    chk(name + " REF decrypt", ref_ecb(sm4_decrypt, key, bytes.fromhex(c)).hex(), p)
-    cl = new_cl('SM4', k)                    # SM4_ECB: Type 3, Mode 0
-    cl.setst(ST_ENCRYPT)
-    chk(name + " KLEE locker (SM4_ECB), one kl.exec", cl_run(cl, bytes.fromhex(p))[0].hex(), c)
-    cl.setst(ST_DECRYPT)
-    chk(name + " KLEE locker decrypt, one kl.exec", cl_run(cl, bytes.fromhex(c))[0].hex(), p)
+    eq(f"{name} reference", (ref(sm4_encrypt, H(k), H(p)).hex(), ref(sm4_decrypt, H(k), H(c)).hex()), (c, p))
+    eq(f"{name} SM4_ECB locker encrypt / decrypt, one kl.exec", both('SM4', k, p, c), (c, p))
 
-print("\n== RULES: States, transitions and the general rules (F.1.1 key and data)")
-name, cipher, k, c = SP38A_F1[0]
-ct = bytes.fromhex(c)
-chk("state constants: Ready 1, Operate 2, Encrypt 7, Decrypt 8, Invalid 49",
-    (ST_READY, ST_OPERATE, ST_ENCRYPT, ST_DECRYPT, ST_INVALID), (1, 2, 7, 8, 49))
-cl = new_cl(cipher, k)
-chk("provisioning completes in _Ready_ (kl.getst = 1)", cl.state, ST_READY)
-cl.setst(ST_ENCRYPT)
-chk("kl.setst #kl_state_encrypt: kl.getst = 7", cl.state, ST_ENCRYPT)
-out, _ = cl_run(cl, pt)
-cl.setst(ST_DECRYPT)                         # "From any valid state": no stop in _Ready_
-chk("_Encrypt_ -> _Decrypt_ directly, then decrypt F.1.1",
-    (cl.state, cl_run(cl, out)[0].hex()), (ST_DECRYPT, SP38A_PT))
-cl.setst(ST_DECRYPT)                         # same-State kl.setst (SGR4)
-chk("_Decrypt_ -> _Decrypt_ (SGR4) leaves the locker usable",
-    (cl.state, cl_run(cl, ct)[0].hex()), (ST_DECRYPT, SP38A_PT))
-cl.setst(ST_READY)
-chk("back to _Ready_ (SGR8): kl.getst = 1", cl.state, ST_READY)
-res, _ = cl.exec(blocks_value(pt), 512)
-chk("kl.exec in _Ready_: _Invalid_ and output window zeroed", (cl.state, res),
-    (ST_INVALID, 0))
-chk("_Invalid_ locker: Content cleared (only the MDH remains)", (cl.key, cl.skid), (None, None))
-cl.setst(ST_READY)
-res, _ = cl.exec(blocks_value(pt), 512)
-chk("_Invalid_ locker: kl.setst and kl.exec perform no operation", (cl.state, res),
-    (ST_INVALID, 0))
+section("States, transitions and general rules (F.1.1)")
+_, ci, k, c = SP38A_F1[0]
+ct, v = H(c), blocks_value(pt)
+eq("State values Ready 1, Operate 2, Encrypt 7, Decrypt 8, Invalid 49",
+   (RDY, KL_STATE_OPERATE, ENC, DEC, INV), (1, 2, 7, 8, 49))
+cl = new_cl(ci, k)
+eq("provisioning completes in Ready", cl.state, RDY)
+cl.setst(ENC)
+out = run(cl, pt)[0]
+cl.setst(DEC)
+eq("Encrypt -> Decrypt directly (from any valid state)", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
+cl.setst(DEC)
+eq("same-State kl.setst (SGR4)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
+cl.setst(RDY)
+eq("back to Ready (SGR8)", cl.state, RDY)
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR2, SGR10, SGR16)",
+   (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
+cl.setst(RDY)
+eq("Invalid locker: kl.setst and kl.exec perform no operation (SGR16)", (cl.state, cl.exec(v, 512)[0]),
+   (INV, 0))
+for pol, immed, want in ((POL_DEC, DEC, DEC), (POL_DEC, ENC, INV), (POL_ENC, DEC, INV),
+                         (POL_BOTH, KL_STATE_OPERATE, INV)):
+    eq(f"MachinePolicy {pol:02b}: kl.setst #{immed} -> State {want}", new_cl(ci, k, pol, state=immed).state,
+       want)
+eq("decrypt-only locker decrypts F.1.2", run(new_cl(ci, k, POL_DEC, state=DEC), ct)[0].hex(), SP38A_PT)
+cl = new_cl(ci, k, state=ENC)
+eq("MGR2: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[:17]), 136)[0], cl.state),
+   (0, INV))
+eq("Form D substitution (kliobuftop = 64): output in place of input",
+   v2b(new_cl(ci, k, state=ENC).exec(b2v(pt), 512)[0], 64).hex(), c)
+for q in (1, 2, 3):                           # <<KLEE-IRR-block-iterated-instructions>>
+    cl = new_cl(ci, k, state=ENC)
+    part, ks = run(cl, pt, halt_after=q)
+    res, ks2 = cl.exec(b2v(part), 512, klstart=ks)
+    eq(f"halt after {q} block(s), resume at klstart = {16 * q}", (ks, v2b(res, 64).hex(), ks2),
+       (16 * q, c, 0))
+cl = new_cl(ci, k, state=ENC)
+eq("input klstart = 8 (no interruption point): Invalid, window from klstart zeroed",
+   (cl.exec(v, 512, klstart=8)[0], cl.state), (b2v(pt[:8]), INV))
+cl = new_cl(ci, k, state=ENC)
+eq("klstart = KLLEN/8: empty window, no operation", (cl.exec(v, 512, klstart=64)[0], cl.state), (v, ENC))
 
-cl = new_cl(cipher, k, policy=POL_DEC)
-cl.setst(ST_DECRYPT)
-chk("_MachinePolicy_ = decrypt only: _Decrypt_ allowed, F.1.2 decrypts",
-    (cl.state, cl_run(cl, ct)[0].hex()), (ST_DECRYPT, SP38A_PT))
-cl.setst(ST_ENCRYPT)
-chk("_MachinePolicy_ = decrypt only: kl.setst #kl_state_encrypt -> _Invalid_",
-    cl.state, ST_INVALID)
-cl = new_cl(cipher, k, policy=POL_ENC)
-cl.setst(ST_DECRYPT)
-chk("_MachinePolicy_ = encrypt only: kl.setst #kl_state_decrypt -> _Invalid_",
-    cl.state, ST_INVALID)
-cl = new_cl(cipher, k)
-cl.setst(ST_OPERATE)
-chk("kl.setst #kl_state_operate (not an ECB State) -> _Invalid_", cl.state, ST_INVALID)
-
-cl = new_cl(cipher, k)
-cl.setst(ST_ENCRYPT)
-inp = b2v(pt[:17])
-res, _ = cl.exec(inp, 136)                   # KLLEN = 17 bytes, not a multiple of b
-chk("MGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed",
-    (cl.state, res), (ST_INVALID, 0))
-
-cl = new_cl(cipher, k)
-cl.setst(ST_ENCRYPT)
-buf = bytearray(pt)                          # KLIOBUF with kliobuftop = 64
-res, _ = cl.exec(b2v(bytes(buf)), 8 * 64)    # Form D replacing Form A: in place
-chk("Form D substitution (kliobuftop = 64), output in place of input",
-    v2b(res, 64).hex(), c)
-
-print()
-for q in (1, 2, 3):
-    cl = new_cl(cipher, k)
-    cl.setst(ST_ENCRYPT)
-    part, ks = cl_run(cl, pt, halt_after=q)      # precise halt after q blocks
-    resumed, ks2 = cl.exec(b2v(part), 512, klstart=ks)
-    chk(f"kl.exec halted after {q} block(s) (klstart = {16 * q}), resumed",
-        (ks, v2b(resumed, 64).hex(), ks2), (16 * q, c, 0))
-cl = new_cl(cipher, k)
-cl.setst(ST_ENCRYPT)
-res, _ = cl.exec(blocks_value(pt), 512, klstart=8)
-chk("klstart = 8, not an interruption point (input) -> _Invalid_",
-    (cl.state, res & ((1 << 64) - 1), res >> 64), (ST_INVALID, b2v(pt[:8]), 0))
-cl = new_cl(cipher, k)
-cl.setst(ST_ENCRYPT)
-res, ks = cl.exec(blocks_value(pt), 512, klstart=64)
-chk("klstart = 64 = KLLEN/8: empty window, no operation",
-    (cl.state, v2b(res, 64)), (ST_ENCRYPT, pt))
-
-print("\n== DATA: Provisioning Input and Serialized Content")
-print("   (sizes in bytes, worked out by hand from the tables; SCC with _AuxDataLen_ = 0)")
+section("PI and Serialized Content (sizes by hand, AuxDataLen = 0)")
 SKID = 0x0123456789abcdef
-SKS = {SKID: b2v(bytes.fromhex(SP38A_F1[1][2]))}          # an AES-192 system key
-rows = [
-    # label, F.1 vector, keytype, key field, PI size, Content1 (hex)
-    ("AES-128 by value", SP38A_F1[0], 0, b2v(bytes.fromhex(SP38A_F1[0][2])), 32,
-     SP38A_F1[0][2]),
-    ("AES-192 by value", SP38A_F1[1], 0, b2v(bytes.fromhex(SP38A_F1[1][2])), 48,
-     SP38A_F1[1][2] + "00" * 8),
-    ("AES-256 by value", SP38A_F1[2], 0, b2v(bytes.fromhex(SP38A_F1[2][2])), 48,
-     SP38A_F1[2][2]),
-    ("AES-192 by SKID", SP38A_F1[1], 1, SKID, 32,
-     "efcdab8967452301" + "00" * 8),
-]
-for label, (_, cipher, _, want), kt, field, pi_size, c1 in rows:
-    mach = ECB_OF[cipher]
-    pi = build_pi(mach, POL_BOTH, kt, field)
-    cl = EcbLocker(sks=SKS)
+SKS = {SKID: b2v(H(SP38A_F1[1][2]))}
+for label, (_, ci, key, want), kt, pi_size, c1 in (
+        ("AES-128 by value", SP38A_F1[0], 0, 32, SP38A_F1[0][2]),
+        ("AES-192 by value", SP38A_F1[1], 0, 48, SP38A_F1[1][2] + "00" * 8),
+        ("AES-256 by value", SP38A_F1[2], 0, 48, SP38A_F1[2][2]),
+        ("AES-192 by SKID", SP38A_F1[1], 1, 32, "efcdab8967452301" + "00" * 8)):
+    pi = build_pi(ci, SKID if kt else b2v(H(key)), keytype=kt)
+    cl, cl2 = EcbLocker(SKS), EcbLocker(SKS)
     cl.provision(pi)
-    mdh = cl.mdh
-    chk(f"{label}: PI = {pi_size}, kl.size(PI MDH) = {pi_size}",
-        (len(pi), kl_size(make_mdh(mach, POL_BOTH, kt), 0, len(pi) - 16)),
-        (pi_size, pi_size))
-    chk(f"{label}: Content1 = {len(c1) // 2} B, kl.size = {32 + len(c1) // 2}",
-        (cl.content1().hex(), kl_size(mdh, len(cl.content1()), 0)),
-        (c1, 32 + len(c1) // 2))
-    cl.setst(ST_ENCRYPT)
-    half, _ = cl_run(cl, pt[:32])
-    cl2 = EcbLocker(sks=SKS)
-    cl2.import_scc(cl.mdh, cl.content1())    # _State_ _Encrypt_ travels in the MDH
-    rest, _ = cl_run(cl2, pt[32:])
-    chk(f"{label}: export after 2 blocks, import, finish F.1", (half + rest).hex(), want)
-cl = EcbLocker(sks=SKS)
-cl.provision(build_pi(ECB_OF['AES-192'], POL_BOTH, 1, SKID + 1))
-chk("unresolved SKID at provisioning -> _Invalid_", cl.state, ST_INVALID)
-cl = EcbLocker(sks=SKS)
-cl.provision(build_pi(ECB_OF['AES-192'], POL_BOTH, 1, ONES64))
-chk("all-ones SKID: random key, _KeyType_ 0, Content1 = 32 B (key by value)",
-    (cl.state, cl.keytype, len(cl.content1()), kl_size(cl.mdh, len(cl.content1()), 0)),
-    (ST_READY, 0, 32, 64))
-cl2 = EcbLocker(sks=SKS)
-cl2.import_scc(make_mdh(ECB_OF['AES-192'], POL_BOTH, 1, ST_READY),
-               v2b(ONES64, 16))
-chk("SCC carrying the all-ones SKID in a Complete State -> _Invalid_",
-    cl2.state, ST_INVALID)
-cl = EcbLocker(sks=SKS)
-cl.provision(build_pi(ECB_OF['AES-128'], 0, 0, b2v(bytes.fromhex(SP38A_F1[0][2]))))
-chk("PI with _MachinePolicy_ = 0 (invalid Metadata) -> _Invalid_", cl.state, ST_INVALID)
-cl2 = EcbLocker()
-cl2.import_scc(make_mdh(ECB_OF['AES-128'], POL_BOTH, 0, ST_OPERATE),
-               bytes.fromhex(SP38A_F1[0][2]))
-chk("SCC whose _State_ (2) ECB does not have -> _Invalid_", (cl2.state, cl2.key),
-    (ST_INVALID, None))
+    n1 = len(c1) // 2
+    eq(f"{label}: PI {pi_size} B = kl.size, Content1 {n1} B, kl.size {32 + n1}",
+       (len(pi), kl_size(b2v(pi[:16]), 0, len(pi) - 16), cl.content1().hex(), kl_size(cl.mdh, n1, 0)),
+       (pi_size, pi_size, c1, 32 + n1))
+    cl.setst(ENC)
+    half = run(cl, pt[:32])[0]
+    cl2.import_scc(cl.mdh, cl.content1())
+    eq(f"{label}: export after 2 blocks, import (State Encrypt), finish F.1",
+       (half + run(cl2, pt[32:])[0]).hex(), want)
+m192 = mdh_pack(Machine=MACHINE['AES-192'], MachinePolicy=POL_BOTH, KeyType=1, State=RDY)
+cl = EcbLocker(SKS)
+cl.provision(build_pi('AES-192', SKID + 1, keytype=1))
+eq("unresolved SKID at provisioning -> Invalid (<<KLEE-MVR-open>>)", cl.state, INV)
+cl.provision(build_pi('AES-192', ONES64, keytype=1))
+eq("all-ones SKID: random key, KeyType 0, Content1 32 B, kl.size 64",
+   (cl.state, cl.keytype, kl_size(cl.mdh, len(cl.content1()), 0)), (RDY, 0, 64))
+cl.import_scc(m192, v2b(ONES64, 16))
+eq("SCC carrying the all-ones SKID in a Complete State -> Invalid", cl.state, INV)
+cl.provision(build_pi('AES-128', b2v(H(SP38A_F1[0][2])), policy=0))
+eq("PI with MachinePolicy = 0 -> Invalid", cl.state, INV)
+cl.import_scc(put(put(m192, 'KeyType', 0), 'State', KL_STATE_OPERATE), H(SP38A_F1[1][2]))
+eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, None))
 
-print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
-name, cipher, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
-source = bytes.fromhex(k) + bytes.fromhex("a5" * 8)  # a 32-byte source field
+section("kl.derive into `key` (destination in Ready; DER1-DER5, DER7, DER8)")
+_, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
+secret = H(k) + H("a5" * 8)
+SRC = mdh_pack(UsagePolicy=0b00010, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
+DST = dict(UsagePolicy=0b10001, Locality=0b0_01_00_10, SCProtection=1)
+narrowed = lambda m: (fld(m, 'UsagePolicy'), fld(m, 'Locality'), fld(m, 'ExpirationDate'))
 
-
-def derived(length, state=None, keytype=0, src=source):
-    cl = EcbLocker(sks=SKS)
-    field = SKID if keytype else 0
-    cl.provision(build_pi(ECB_OF[cipher], POL_BOTH, keytype, field))
-    if state is not None:
+def derived(kind='shared', length=32, data=secret, state=None, keytype=0, src=SRC):
+    cl = EcbLocker(SKS)
+    cl.provision(build_pi(ci, SKID if keytype else 0, keytype=keytype, **DST))
+    if state:
         cl.setst(state)
-    done = cl.derive_dest(src, length)
-    return cl, done
+    ok = cl.derive_key((kind, data, src), length)
+    cl.setst(ENC)
+    return ok, cl.state, run(cl, pt)[0].hex() if ok else cl.key, cl.mdh
 
+for kind, length in (('shared', 32), ('shared', 24), ('drbg', 32)):
+    eq(f"{kind}, length {length} >= 24: exactly 24 bytes become the key, F.1.3",
+       derived(kind, length)[:3], (True, ENC, c))
+eq("shared secret (restricted, DER2): UsagePolicy, Locality, ExpirationDate narrowed",
+   narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
+eq("DRBG output (unrestricted, DER3): destination MDH not narrowed",
+   narrowed(derived('drbg')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
+for label, kw in (("length 16 < 24 (DER1 check 4, no zero-fill)", dict(length=16)),
+                  ("length 0 (DER1 check 4 fails before DER8)", dict(length=0)),
+                  ("source field of 16 bytes < 24 (DER1 check 4)", dict(data=secret[:16])),
+                  ("destination in Encrypt (DER1 check 1)", dict(state=ENC)),
+                  ("KeyType 1 destination (DER4)", dict(keytype=1)),
+                  ("source SCProtection above destination (DER2)", dict(src=put(SRC, 'SCProtection', 2))),
+                  ("differing Boot Session entries (DER2)", dict(src=put(SRC, 'Locality', 0b0_10_00_00)))):
+    eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
+src_cl, dst_cl = new_cl(ci, k), new_cl(ci, "00" * 24)
+dst_cl.derive_key(src_cl, 24)
+eq("ECB locker as source (no listed pair) -> both Invalid", (src_cl.state, dst_cl.state), (INV, INV))
+info("kl.derive into `key`: byte t of the transfer is byte t of the key; a KeyType-1 destination "
+     "(DER4) invalidates only the destination, as KeyType is not in the endpoint descriptor.")
 
-cl, done = derived(32)
-cl.setst(ST_ENCRYPT)
-chk("length 32 > 24: exactly 24 bytes received, source truncated; F.1.3 reproduced",
-    (done, cl_run(cl, pt)[0].hex()), (True, c))
-cl, done = derived(24)
-cl.setst(ST_ENCRYPT)
-chk("length 24 = dest_length: F.1.3 reproduced", (done, cl_run(cl, pt)[0].hex()), (True, c))
-cl, done = derived(16)
-chk("length 16 < 24: destination _Invalid_, no zero-filled key (DER1 check 4)",
-    (done, cl.state, cl.key), (False, ST_INVALID, None))
-cl, done = derived(0)
-chk("length 0 < 24: destination _Invalid_ (DER1 check 4, INFO below)",
-    (done, cl.state), (False, ST_INVALID))
-cl, done = derived(24, src=source[:16])
-chk("source field of 16 bytes < 24: destination _Invalid_ (DER1 check 4)",
-    (done, cl.state), (False, ST_INVALID))
-cl, done = derived(32, state=ST_ENCRYPT)
-chk("destination in _Encrypt_ -> _Invalid_", (done, cl.state), (False, ST_INVALID))
-cl, done = derived(32, keytype=1)
-chk("key of a _KeyType_ 1 locker is never importable (DER4) -> _Invalid_",
-    (done, cl.state), (False, ST_INVALID))
-src_cl = new_cl(cipher, k)
-dst_cl = new_cl(cipher, "00" * 24)
-done = kl_derive_from_ecb(src_cl, dst_cl, 24)
-chk("ECB locker as a source (a key is never exportable) -> both _Invalid_",
-    (done, src_cl.state, dst_cl.state), (False, ST_INVALID, ST_INVALID))
-info("kl.derive into `key`: byte t of the transfer is taken as byte t of the key "
-     "(<<KLEE-Notation>>); the endpoint table is marked work in progress.")
-info("kl.derive into `key` with length = 0 fails DER1 check 4 (length >= dest_length), "
-     "so the destination is invalidated; DER8's \"length = 0 transfers nothing and ... "
-     "changes no state\" holds only \"if the checks above pass\".")
-info("a derive whose source endpoint does not exist invalidates both lockers, per "
-     "'Any other pair transitions both lockers to Error State _Invalid_' "
-     "(<<KLEE-instruction-derive>>).")
-
-print("\n== BOOK 4: <<KLEE-pseudocode-ECB-encryption>> [informative]")
-# The example checks `if (48 <= X1 <= 55) then: handle error` after each kl.getst.
-def is_err(s):
-    return 48 <= s <= 55
-
-
-chk("the example's test lets every Valid State (1-47) through",
-    [s for s in range(1, 48) if is_err(s)], [])
-chk("the example's test catches every Error State (48-55)",
-    all(is_err(s) for s in range(48, 56)), True)
-
-if not neg_fired:
-    print("\nnegative control did not fire: the block-order test is not discriminating")
-    ok = False
-
-print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
-sys.exit(0 if ok else 1)
+section("<<KLEE-pseudocode-ECB-encryption>> [informative]: its Error State test")
+eq("'48 <= X1 <= 55' passes every Valid State and catches every Error State",
+   [s for s in range(1, 56) if 48 <= s <= 55], list(ERROR_STATES))
+done()

@@ -1,740 +1,367 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-EdDSA>>).
+"""KATs for the elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-EdDSA>>): a locker model driven by
+kl.setst / kl.exec / kl.derive against RFC 6979, RFC 8032, GM/T 0003.5 and RFC 5639 data.
+The RBG draw of k is injected (RFC 6979's deterministic k)."""
 
-WHAT IS BEING TESTED.  This harness does not test an implementation; it tests the
-*specification text* of `modules/ROOT/pages/Zkl-ISA-machines.adoc`, sections `[[KLEE-ECC]]` and
-`[[KLEE-EdDSA]]`.  A model of a KLEE locker -- its fields, its
-`block_base`-tracked "set"/"output" transfers, its state machine and its allowed
-transitions -- is built strictly from that text, and standard vectors are then
-pushed through the model exactly as a caller would drive a real KLEE unit
-(`kl.setst` / `kl.exec` / output transfers).  If the spec's prescription
-disagreed with the standard, the model would produce the wrong answer and the
-case would FAIL.
-
-ANCHOR LEVELS, strongest first.  Each case prints its level.
-
-  [KAT]   Published known-answer vector reproduced bit-exactly.
-            * secp256r1, secp384r1, secp521r1 ECDSA -- RFC 6979 A.2.5/A.2.6/A.2.7
-              (messages "sample" and "test"; the RFC's deterministic k is injected
-              in place of the RBG draw, see NOTE ON k BELOW).  The RFC also
-              publishes the public keys Ux,Uy, which anchor Point_Mul.
-            * ed25519 -- RFC 8032 7.1 TEST 1/2/3; ed25519ph -- RFC 8032 7.3.
-            * ed448 -- RFC 8032 7.4 (blank, 1 octet, 1 octet with context).
-            * SM2 -- the worked example of GM/T 0003.5-2012 / GB/T 32918.5-2017
-              Appendix A (message "message digest"), whose Z_A / e derivation is
-              re-derived here with SM3 when the platform provides it.
-  [PARAM] Published domain parameters validated (curve equation for G, n*G = O,
-          cofactor), then k-injected sign -> verify round-trips.
-            * brainpoolP256r1 / P384r1 / P512r1 (RFC 5639 3.4/3.6/3.7).  No
-              ECDSA KAT vectors are published for these curves in the RFCs, so
-              this is deliberately the weaker anchor.
-  [MODEL] Properties of the specification itself: state-machine legality, entry
-          conditions, field-retention (`Xs`) semantics, representation rules,
-          retry rules, the `Progress` discipline of Rule
-          <<KLEE-MGR-progress-discard>> (MGR8) for the interruptible States, and
-          `kl.derive` of the _Output_ into a hash (Rule
-          <<KLEE-DER-exec-implies-unrestricted>>).
-          Anchored on the spec text, not on an external vector.
-
-NOTE ON k.  A real KLEE unit draws the per-signature secret k from the RBG
-(<<KLEE-RBG>>) into `RndNum`; it is never supplied by software.  A signature over
-a random k has no known answer, so -- as is standard practice for ECDSA KATs --
-the model exposes the RBG as an injectable source and RFC 6979's deterministic k
-is fed in.  This tests every part of the specified computation except the draw
-itself.  The retry rules are additionally tested end-to-end by making the model's
-first draw degenerate and checking that a *second* draw is taken and used.
-
-SPEC BUG DEMONSTRATIONS.  Where the literal text is defective, this harness keeps
-the literal behaviour visible in a labelled informational line rather than
-silently patching it (see the SPEC-NOTE lines in the output).
-
-Offline, stdlib only (hashlib is used for SHA-2/SHA-3/SHAKE, which the spec
-delegates to the hash extensions).
-"""
-
+import hashlib
 import os
 import sys
-import time
-import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (b2v, v2b, section, check, control, info, spec_note, raises, done,  # noqa: E402
+                    IllegalInstruction, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
+                    KL_STATE_FAILURE as FAILURE, KL_STATE_HASH_ABSORB as HASH_ABSORB)
+import ecc_curves as EC                                                                # noqa: E402
 
-from common import b2v, v2b                              # noqa: E402
-import ecc_curves as EC                                  # noqa: E402
-
-
-# ==================================================================== reporting
-
-_FAILURES = []
-_NEG_PENDING = set()
-_NEG_FIRED = set()
-
-
-def head(title):
-    print()
-    print(title)
-    print('-' * len(title))
-
-
-def chk(level, name, ok, detail=''):
-    tag = 'PASS' if ok else 'FAIL'
-    print(f'  {tag}  [{level:5}] {name}' + (f'   {detail}' if detail and not ok else ''))
-    if not ok:
-        _FAILURES.append(name)
-    return ok
+(SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
+ OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
+SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec',
+             SET_SIG: 'sig'}
+# <<KLEE-ECC>> Parameters: b, h, j, u, v
+PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
+          'secp521r1': (576, 576, 576, 2, 2), 'brainpoolP256r1': (256, 256, 256, 2, 2),
+          'brainpoolP384r1': (384, 384, 384, 2, 2), 'brainpoolP512r1': (512, 512, 512, 2, 2),
+          'sm2p256v1': (256, 256, 256, 2, 2), 'ed25519': (256, 512, 0, 1, 2),
+          'ed448': (456, 512, 0, 1, 2)}
+MSB_ZERO = {'secp521r1': 55}
 
 
-def note(text):
-    print(f'  SPEC-NOTE     {text}')
-
-
-def info(text):
-    print(f'  info          {text}')
-
-
-def declare_negative(label):
-    """Announce a negative control to run-kats.py and to the reader."""
-    _NEG_PENDING.add(label)
-    print(f'KAT-EXPECT-FAIL: {label}')
-
-
-def negative(label, must_fail, name):
-    """A negative control: `must_fail` is True when the wrong thing was rejected."""
-    if must_fail:
-        _NEG_FIRED.add(label)
-        print(f'  {label}  FAIL  {name} -- rejected as required (this FAIL is expected)')
-    else:
-        print(f'  PASS  [MODEL] {name} -- NOT rejected; negative control lost its power')
-        _FAILURES.append(f'negative control {label} did not fire')
-
-
-# ==================================================================== KLEE model
-
-# States of <<KLEE-ECC>> ("States:" list) plus the two of <<KLEE-EdDSA>>.
-READY, SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN = 1, 2, 3, 4, 5
-SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG, OUTPUT = 6, 7, 8, 9, 10
-MSG_ABSORB, SET_CTX = 11, 12
-# _Success_ and _Failure_ of <<KLEE-states-valid>>; the <<KLEE-ECC>> list still says
-# 22 and 23 (SPEC-NOTE in test_state_machine).
-SUCCESS, FAILURE = 46, 47
-ECC_LIST_GLOBAL = {'Success': 22, 'Failure': 23}
-HASH_ABSORB = 2                  # kl_state_hash_absorb, <<KLEE-state-constants-symmetric>>
-
-SNAME = {READY: 'Ready', SET_GEN: 'Set_Generator', SET_SCALAR: 'Set_Scalar',
-         POINT_MUL: 'Point_Mul', SIGN_GEN: 'Sign_Generate', SIGN_VER: 'Sign_Verify',
-         SET_HASH: 'Set_Hash', SET_SECONDPT: 'Set_SecondPt', SET_SIG: 'Set_Signature',
-         OUTPUT: 'Output', MSG_ABSORB: 'Msg_Absorb', SET_CTX: 'Set_Ctx',
-         SUCCESS: 'Success', FAILURE: 'Failure'}
-
-
-class KLEEInvalid(Exception):
-    """The locker transitioned to Error State _Invalid_.  For a `kl.derive`, `who`
-    says which endpoint did: 'source', 'destination' or 'both'."""
-
+class Invalid(Exception):
+    """Transition to Error State _Invalid_; `who` names the kl.derive endpoint(s)."""
     def __init__(self, msg='', who=None):
         super().__init__(msg)
         self.who = who
 
 
-class IllegalInstruction(Exception):
-    """An illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>)."""
-
-
-# -- the transition relation, transcribed from "Allowed State Transitions" ----
-
-def transition_targets(state, eddsa, literal):
-    """The set of states reachable from `state` by a single `kl.setst`.
-
-    `literal=False` transcribes the bullet list of <<KLEE-ECC>> as it now reads:
-    the five _Set_ states are named collectively, any two of them may transition
-    freely, and all of them are sources for _Point_Mul_/_Sign_Generate_/
-    _Sign_Verify_.  <<KLEE-EdDSA>> grants _Set_Ctx_ that same membership in words.
-
-    _Ready_ is a target of every valid state because <<KLEE-ECC>> does not forbid it
-    and SGR8 then permits it; this is how a caller abandons a long-running operation,
-    which Rule <<KLEE-MGR-progress-discard>> requires to discard its Progress.  SGR4
-    admits the current State itself, except in _Success_ and _Failure_, which are
-    never `kl.setst` targets: they are reached on completion, and their immediates
-    are reserved (SGR7).  <<KLEE-EdDSA>> removes _Point_Mul_.
-
-    `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
-    had no exit at all (review finding M10, since resolved).  It is kept so that
-    test_sign_then_verify_one_cc()
-    test_m10_dead_end() can demonstrate what the defect was and detect a
-    regression.
-    """
-    free = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT}
-    if not literal:
-        free = free | {SET_SIG}
-    if eddsa:
-        free = free | {SET_CTX}
-    entry = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT, SET_SIG}
-    if eddsa:
-        entry = entry | {SET_CTX}
-    ops = {SIGN_GEN, SIGN_VER} if eddsa else {POINT_MUL, SIGN_GEN, SIGN_VER}
+def targets(state, eddsa, sig_exit=True):
+    """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, SGR4, SGR8."""
+    entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
+    free = entry - (set() if sig_exit else {SET_SIG})
+    ops = {SIGN_GEN, SIGN_VER} | (set() if eddsa else {POINT_MUL})
+    absorb = {MSG_ABSORB} if eddsa else set()
     if state == READY:
-        t = entry | ops
-    elif state in free:
-        t = free | ops | {READY}
-    elif state == MSG_ABSORB and eddsa:
-        t = free | ops | {MSG_ABSORB, READY}
+        t = entry | ops | absorb
+    elif state in free or (eddsa and state == MSG_ABSORB):
+        t = free | ops | absorb | {READY}
     elif state in (POINT_MUL, SIGN_GEN):
         t = {OUTPUT, READY}
     elif state in (OUTPUT, SIGN_VER, SUCCESS, FAILURE):
         t = {READY}
     else:
         t = set()
-    if eddsa and (state == READY or state in free):
-        t = t | {MSG_ABSORB}
-    if state not in (SUCCESS, FAILURE) and (state != POINT_MUL or not eddsa):
-        t = t | {state}                                   # SGR4
-    return t
+    return t | ({state} if state not in (SUCCESS, FAILURE) else set())
 
 
 def retry_required(mode, r, s, k, n):
-    """The retry rules of the "Random numbers and retry rules" bullet.
-
-    FIPS 186-5 6.4.1 (NIST and Brainpool): retry if r = 0 or s = 0.
-    GM/T 0003.2-2012 (SM2):                retry if r = 0, r + k = n, or s = 0.
-    """
-    if mode == 'sm2':
-        return r == 0 or (r + k) % n == 0 or s == 0
-    return r == 0 or s == 0
+    return r == 0 or s == 0 or (mode == 'sm2' and (r + k) % n == 0)
 
 
 class Locker:
-    """A model of a KLEE locker holding an elliptic-curve CC."""
-
-    def __init__(self, curve, b, h, j, u, v, mode,
-                 policy_sign=True, policy_verify=True, literal=False):
-        self.c = curve
-        self.b, self.h, self.j, self.u, self.v = b, h, j, u, v
-        self.mode = mode                        # 'ecdsa' | 'sm2' | 'eddsa'
-        self.policy_sign = policy_sign
-        self.policy_verify = policy_verify
-        self.literal = literal
-        self.fw = b // 8                        # width of a b-bit field, bytes
-        self.ptlen = u * self.fw
-        self.siglen = v * self.fw
-        self.hashlen = h // 8
-        self.state = READY
-        self.default_gen = self._enc_point(curve.G)
-        self.provision()
-
-    # -- provisioning ----------------------------------------------------
-    def provision(self):
-        self.gen = self.default_gen
-        self.scalar = bytes(self.fw)            # "Scalar is set to zero"
-        self.sec = None
-        self.sig = None
-        self.hash = None
-        self.rnd = None
-        self.has_sec = self.has_sig = self.has_hash = self.has_rnd = False
-        self.out_type = False
-        self.progress = 0                       # _MachineUse_[15:1], MGR8's field P
-        self.block_base = 0
-        self.msg_pass = 0
-        self.ctx = b''
-        self._absorb = None
-        self._pass_xs = None
-        self._r = None
-        self._kprime = None
-        self._loading = None                    # (field name, target length)
+    def __init__(self, c, sign=True, verify=True, sig_exit=True):
+        self.c, self.policy, self.sig_exit = c, (sign, verify), sig_exit
+        self.b, self.h, self.j, self.u, self.v = PARAMS[c.name]
+        self.mode = 'eddsa' if c.edwards else 'sm2' if c is EC.SM2C else 'ecdsa'
+        self.fw = self.b // 8
+        self.size = {'gen': self.u * self.fw, 'sec': self.u * self.fw, 'scalar': self.fw,
+                     'hash': self.h // 8, 'sig': self.v * self.fw}
+        self.default_gen = self.gen = self.enc(c.G)
+        self.scalar, self.sec, self.sig, self.hash, self.rnd = bytes(self.fw), None, None, None, None
+        self.has, self.out_type, self.progress, self.bb, self.loading = set(), False, 0, 0, None
+        self.msg_pass, self.ctx, self.absorb, self.pass_xs, self.r, self.kp = 0, b'', None, None, None, None
         self.state = READY
 
-    # -- KLEE representation of field elements and points -----------------
-    def _sentinel(self):
-        return b'\xff' * self.fw
-
-    def _enc_field(self, x):
-        return v2b(x, self.fw)
-
-    def _enc_point(self, P):
-        if self.c.edwards:
-            return self.c.encode(P) if P is not None else self._sentinel()
+    # points: little-endian coordinates, all-ones sentinel for infinity
+    def enc(self, P):
         if P is None:
-            return self._sentinel() * 2
-        return self._enc_field(P[0]) + self._enc_field(P[1])
+            return b'\xff' * self.fw * self.u
+        return self.c.encode(P) if self.c.edwards else v2b(P[0], self.fw) + v2b(P[1], self.fw)
 
-    def _dec_point(self, data):
-        """Decode; returns ('inf', None), ('pt', P) or ('bad', None)."""
+    def dec(self, data):
+        if data == b'\xff' * self.fw * self.u:
+            return 'inf', None
         if self.c.edwards:
-            if data == self._sentinel():
-                return ('inf', None)
             P = self.c.decode(data)
-            return ('pt', P) if P is not None else ('bad', None)
-        if data == self._sentinel() * 2:
-            return ('inf', None)
-        x = b2v(data[:self.fw])
-        y = b2v(data[self.fw:])
-        if x >= self.c.p or y >= self.c.p:
-            return ('bad', None)
-        return ('pt', (x, y))
+        else:
+            P = (b2v(data[:self.fw]), b2v(data[self.fw:]))
+            P = P if max(P) < self.c.p else None
+        return ('pt', P) if P else ('bad', None)
 
     def repr_ok(self, data):
-        """The `b`-bit representation rule: for secp521r1 the 55 most significant
-        bits of every b-bit field must be zero, the all-ones sentinel excepted."""
-        if not self.c.msb_zero:
-            return True
-        for i in range(0, len(data), self.fw):
-            f = data[i:i + self.fw]
-            if f == self._sentinel():
-                continue
-            if b2v(f) >> (self.b - self.c.msb_zero):
-                return False
-        return True
+        z = MSB_ZERO.get(self.c.name, 0)
+        return all(f == b'\xff' * self.fw or not b2v(f) >> (self.b - z)
+                   for f in (data[i:i + self.fw] for i in range(0, len(data), self.fw)))
 
-    # -- state transitions ------------------------------------------------
-    def setst(self, target, form='A', xs=0, rand_scalar=None):
-        eddsa = self.mode == 'eddsa'
-        if target in (SUCCESS, FAILURE):
-            raise IllegalInstruction('kl.setst with #immed7 46 or 47 (SGR7)')
-        if target not in transition_targets(self.state, eddsa, self.literal):
-            raise KLEEInvalid(f'{SNAME[self.state]} -> {SNAME.get(target, target)}'
-                             ' is not an allowed transition (MGR1)')
-        if self.state == MSG_ABSORB:
-            self._finalize_pass()
-        # MGR8: P is zeroed, and the material kept for the operation destroyed, on
-        # every transition of _State_ -- including a same-State kl.setst, one to
-        # _Ready_ and one to an Error State -- and the operation restarts.
-        self.discard_progress()
-        self.block_base = 0
-        self._loading = None
-
-        if target == SET_GEN:
-            if form == 'A' or xs == 0:
-                self.gen = self.default_gen              # default base point
-            else:
-                self._loading = ('gen', self.ptlen)
-        elif target in (SET_SCALAR, SET_HASH, SET_SECONDPT, SET_SIG):
-            fld = {SET_SCALAR: 'scalar', SET_HASH: 'hash',
-                   SET_SECONDPT: 'sec', SET_SIG: 'sig'}[target]
-            if fld == 'scalar':
-                self.scalar = bytes(self.fw)
-            else:
-                setattr(self, fld, None)
-                setattr(self, 'has_' + fld, False)
-            if target == SET_SCALAR and form == 'B' and xs != 0:
-                # random private key generated inside the locker, never disclosed
-                if rand_scalar is None:
-                    raise KLEEInvalid('model needs an injected RBG value')
-                self.scalar = self._enc_field(rand_scalar)
-            else:
-                ln = {'scalar': self.fw, 'hash': self.hashlen,
-                      'sec': self.ptlen, 'sig': self.siglen}[fld]
-                self._loading = (fld, ln)
-        elif target == SET_CTX:
-            if xs > 255:
-                raise KLEEInvalid('ctxlen > 255')
-            self.ctx = b''
-            self._loading = ('ctx', xs) if xs else None
-        elif target == MSG_ABSORB:
-            self._enter_msg_absorb(xs)
-        elif target == POINT_MUL:
-            pass                                          # checks are in exec
-        elif target == SIGN_GEN:
-            self._check_sign_entry()
-        elif target == SIGN_VER:
-            self._check_verify_entry()
-        elif target == READY:
-            self._return_to_ready(form, xs)
-        self.state = target
-
-    # -- MGR8: Progress, and the material that is meaningful only with it -----
     @property
-    def machine_use(self):
-        """_MachineUse_ as <<KLEE-ECC-MachineUse>> lays it out: bit 0 OutputType,
-        bits [15:1] Progress."""
-        return (1 if self.out_type else 0) | (self.progress << 1)
+    def machine_use(self):              # <<KLEE-ECC-MachineUse>>
+        return int(self.out_type) | self.progress << 1
 
-    def discard_progress(self):
-        """MGR8: zero P and destroy the material kept for the interrupted
-        operation.  RndNum is that material for <<KLEE-ECC>> (and `r`, `k'` for
-        <<KLEE-EdDSA>>, which keeps no random value of its own)."""
-        self.progress = 0
-        self.rnd = None
-        self.has_rnd = False
+    def discard(self):                  # MGR8
+        self.progress, self.rnd = 0, None
+        self.has.discard('rnd')
 
     def halt(self, progress=1, k=None):
-        """A precise halt of the long-running kl.exec of the current State, under
-        <<KLEE-IRR-long-running-no-data>>: Progress records how far it got and is
-        never zero at a halt; the State does not change.  In _Sign_Generate_ the
-        per-signature secret has already been drawn into RndNum, which HasRndNum
-        records "for the duration of the operation", so the halt keeps it."""
-        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER):
-            raise KLEEInvalid(f'{SNAME[self.state]} holds no long-running operation')
-        if progress == 0 or progress > 0x7FFF:
-            raise KLEEInvalid('Progress at a halt is non-zero and fits bits [15:1]')
+        """Precise halt of the current long-running kl.exec (IRR4)."""
+        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 15:
+            raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
-            if k is None:
-                raise KLEEInvalid('a halted Sign_Generate holds the drawn RndNum')
             self.rnd = v2b(k, self.j // 8)
-            self.has_rnd = True
+            self.has.add('rnd')
         self.progress = progress
 
-    def _check_sign_entry(self):
-        if not self.policy_sign:
-            raise KLEEInvalid('signature generation not permitted by MachinePolicy')
-        if self.mode == 'eddsa':
-            if int.from_bytes(self.scalar, 'little') == 0:
-                raise KLEEInvalid('no seed configured')
-            if self.msg_pass == 2:
-                return                                    # pure mode
-            if self.msg_pass == 0 and self.has_hash:
-                return                                    # pre-hash mode
-            raise KLEEInvalid('Sign_Generate entered with msg_pass='
-                             f'{self.msg_pass}, HasHash={self.has_hash}')
-        if not self.has_hash:
-            raise KLEEInvalid('Sign_Generate requires HasHash')
-        d = b2v(self.scalar)
-        if not (1 <= d < self.c.n):
-            raise KLEEInvalid('Scalar does not hold a configured private key')
-
-    def _check_verify_entry(self):
-        if not self.policy_verify:
-            raise KLEEInvalid('verification not permitted by MachinePolicy')
-        if self.mode == 'eddsa':
-            if self.msg_pass == 3:                        # verification pass complete
-                return
-            if self.msg_pass == 0 and self.has_hash:      # pre-hash
-                return
-            raise KLEEInvalid('Sign_Verify entered with msg_pass='
-                             f'{self.msg_pass}, HasHash={self.has_hash}')
-        if not (self.has_sec and self.has_hash and self.has_sig):
-            raise KLEEInvalid('Sign_Verify requires HasSecondPt, HasHash, HasSignature')
-
-    def _return_to_ready(self, form, xs):
-        """The `Xs` field bits of the "Upon returning to State _Ready_" bullet.
-        Uniform polarity: a set bit discards the field it names, a clear bit
-        retains it. Bit 0 Generator, Bit 1 SecondPt, Bit 2 Scalar, Bit 3 Hash,
-        Bit 4/5 the copies, Bit 6 Signature. Form A sets no bit, so it retains
-        everything."""
-        if form == 'B':
-            if xs & (1 << 4):                             # Generator -> SecondPt
-                self.sec = self.gen
-                self.has_sec = True
-            if xs & (1 << 5):                             # SecondPt -> Generator
-                if self.sec is not None:
-                    self.gen = self.sec
-            if xs & 1:
-                self.gen = self.default_gen
-            if xs & 2:
-                self.sec = None
-                self.has_sec = False
-            if xs & 4:
-                self.scalar = bytes(self.fw)
-            if xs & 8:
-                self.hash = None
-                self.has_hash = False
-            if xs & (1 << 6):
-                self.sig = None
-                self.has_sig = False
-        self.msg_pass = 0
-        self.ctx = b''
-        self._r = self._kprime = None
-
-    # -- Form B kl.exec: block-tracked loading ---------------------------
-    def exec_in(self, data):
+    def setst(self, t, xs=0, rand=None):
+        """kl.setst #t; Form A is modelled as xs = 0."""
+        if t in (SUCCESS, FAILURE):
+            raise IllegalInstruction                                  # SGR7
+        if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit):
+            raise Invalid('transition not allowed')                   # MGR1
         if self.state == MSG_ABSORB:
-            self._absorb += data
-            return
-        if self._loading is None:
-            raise KLEEInvalid(f'no kl.exec expected in state {SNAME[self.state]}')
-        fld, ln = self._loading
-        if self.block_base >= ln:
-            raise KLEEInvalid('block_base already complete; no further kl.exec')
-        take = data[:ln - self.block_base]                # excess data ignored
-        # `scalar` is zero-filled rather than absent when a Set_ state is entered,
-        # so it is rebuilt from the bytes accepted so far rather than appended to.
-        base = self.scalar[:self.block_base] if fld == 'scalar' else (
-            getattr(self, fld) or b'')
-        setattr(self, fld, base + take)
-        self.block_base += len(data)
-        if self.block_base >= ln:
-            self.block_base = ln
-            val = getattr(self, fld)
-            if fld in ('scalar', 'hash', 'sec', 'sig', 'gen') and not self.repr_ok(val):
-                raise KLEEInvalid(f'{fld} violates the {self.b}-bit representation rule')
-            if fld in ('sec', 'sig', 'hash'):
-                setattr(self, 'has_' + fld, True)
+            self._finalize_pass()
+        self.discard()
+        self.bb, self.loading, self.buf = 0, None, b''
+        f = SET_FIELD.get(t)
+        if f == 'gen' and not xs:
+            self.gen = self.default_gen
+        elif f:
+            if f == 'scalar':
+                self.scalar = bytes(self.fw)
+            elif f != 'gen':
+                setattr(self, f, None)
+                self.has.discard(f)
+            if f == 'scalar' and xs:
+                self.scalar = v2b(rand, self.fw)                      # drawn inside, never loaded
+            else:
+                self.loading = f
+        elif t == SET_CTX:
+            if xs > 255:
+                raise Invalid('ctxlen > 255')
+            self.ctx, self.size['ctx'], self.loading = b'', xs, 'ctx' if xs else None
+        elif t == MSG_ABSORB:
+            self._enter_pass(xs)
+        elif t == SIGN_GEN:
+            self._sign_entry()
+        elif t == SIGN_VER:
+            self._verify_entry()
+        elif t == READY:
+            self._ready(xs)
+        self.state = t
 
-    # -- Form D kl.exec: the operation of the current state --------------
-    def exec_run(self, rbg=None, degenerate_hook=None):
+    def _sign_entry(self):
+        if not self.policy[0]:
+            raise Invalid('MachinePolicy[0] clear')
+        if self.mode == 'eddsa':
+            if not any(self.scalar) or not (self.msg_pass == 2 or self.msg_pass == 0 and 'hash' in self.has):
+                raise Invalid('no seed, or neither pure nor pre-hash path')
+        elif 'hash' not in self.has or not 1 <= b2v(self.scalar) < self.c.n:
+            raise Invalid('HasHash and a configured private key required')
+
+    def _verify_entry(self):
+        if not self.policy[1]:
+            raise Invalid('MachinePolicy[1] clear')
+        if self.mode == 'eddsa':
+            if not (self.msg_pass == 3 or self.msg_pass == 0 and 'hash' in self.has):
+                raise Invalid('neither pure nor pre-hash path')
+        elif not {'sec', 'hash', 'sig'} <= self.has:
+            raise Invalid('HasSecondPt, HasHash, HasSignature required')
+
+    def _ready(self, xs):
+        """Ready-return Xs bits; a set bit discards, a clear bit retains."""
+        if xs & 16:
+            self.sec = self.gen
+            self.has.add('sec')
+        if xs & 32 and 'sec' in self.has:
+            self.gen = self.sec
+        if xs & 1:
+            self.gen = self.default_gen
+        if xs & 4:
+            self.scalar = bytes(self.fw)
+        for bit, f in ((2, 'sec'), (8, 'hash'), (64, 'sig')):
+            if xs & bit:
+                setattr(self, f, None)
+                self.has.discard(f)
+        self.msg_pass, self.ctx, self.r, self.kp = 0, b'', None, None
+
+    def exec_in(self, data):
+        """Form B kl.exec: MGR7 loading with W = block_base, or message absorption."""
+        if self.state == MSG_ABSORB:
+            self.absorb += data
+            return
+        f = self.loading
+        if f is None or self.bb >= self.size[f]:
+            raise Invalid('no kl.exec expected')
+        n = self.size[f]
+        self.buf += data[:n - self.bb]
+        self.bb += len(data)
+        if self.bb >= n:
+            if f != 'ctx' and not self.repr_ok(self.buf):
+                raise Invalid(f'{f} violates the b-bit representation')
+            setattr(self, f, self.buf)
+            if f in ('sec', 'sig', 'hash'):
+                self.has.add(f)
+
+    def exec_run(self, rbg=(), bad=None, be=False):
+        """Form D kl.exec; `bad(attempt)` forces a degenerate draw, `be` mis-encodes EdDSA S."""
         if self.state == POINT_MUL:
             return self._point_mul()
         if self.state == SIGN_GEN:
-            return self._sign(rbg, degenerate_hook)
+            return self._eddsa_sign(be) if self.mode == 'eddsa' else self._sign(rbg, bad)
         if self.state == SIGN_VER:
-            return self._verify()
-        raise KLEEInvalid(f'Form D kl.exec not expected in {SNAME[self.state]}')
+            ok = self._eddsa_verify() if self.mode == 'eddsa' else self._verify()
+            self.discard()
+            self.state = SUCCESS if ok else FAILURE
+            return ok
+        raise Invalid('Form D kl.exec not expected')
+
+    def _to_output(self, out_type):
+        self.discard()
+        self.out_type, self.bb, self.state = out_type, 0, OUTPUT
 
     def _point_mul(self):
         k = b2v(self.scalar)
-        if not (1 <= k < self.c.n):
-            raise KLEEInvalid('Point_Mul requires 1 <= int(Scalar) < n')
-        src = self.sec if self.has_sec else self.gen
-        kind, P = self._dec_point(src)
-        if kind == 'bad':
-            raise KLEEInvalid('base point is not a valid encoding')
-        if kind == 'pt' and not self.c.in_subgroup(P):
-            raise KLEEInvalid('base point is not on the curve / not in the subgroup')
-        R = self.c.mul(k, P) if kind == 'pt' else None
-        self.sec = self._enc_point(R)
-        self.has_sec = True
-        self.discard_progress()              # completion: P zeroed (no random material)
-        self.out_type = False
-        self.block_base = 0
-        self.state = OUTPUT
+        if not 1 <= k < self.c.n:
+            raise Invalid('Scalar out of range')
+        kind, P = self.dec(self.sec if 'sec' in self.has else self.gen)
+        if kind == 'bad' or kind == 'pt' and not self.c.in_subgroup(P):
+            raise Invalid('base point not on the curve / subgroup')
+        R = self.c.mul(k, P) if P else None
+        self.sec = self.enc(R)
+        self.has.add('sec')
+        self._to_output(False)
         return R
 
-    def _sign(self, rbg, degenerate_hook):
-        if self.mode == 'eddsa':
-            return self._eddsa_sign()
-        n, c = self.c.n, self.c
-        d = b2v(self.scalar)
-        e = b2v(self.hash)
-        # "If Progress is zero, the per-signature secret k is drawn from the RBG into
-        # RndNum ...; otherwise the interrupted operation is resumed with the RndNum
-        # held" (MGR8).  A resumed operation therefore consumes no RBG value; should
-        # the held k turn out degenerate, the retry rules draw the next one.
-        held = [b2v(self.rnd)] if self.progress and self.has_rnd else []
-        it = iter(held + list(rbg or []))
+    def _sign(self, rbg, bad):
+        c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
+        draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
-            k = next(it)
+            k = next(draws)
             self.rnd = v2b(k, self.j // 8)
-            self.has_rnd = True
+            self.has.add('rnd')
+            x1 = c.mul_g(k)[0]
             if self.mode == 'sm2':
-                x1 = c.mul_g(k)[0]
                 r = (e + x1) % n
-                s = (pow(1 + d, -1, n) * (k - r * d)) % n
+                s = pow(1 + d, -1, n) * (k - r * d) % n
             else:
-                x1 = c.mul_g(k)[0]
                 r = x1 % n
-                s = (pow(k, -1, n) * (e + r * d)) % n
-            forced = bool(degenerate_hook and degenerate_hook(attempt))
-            if forced or retry_required(self.mode, r, s, k, n):
-                attempt += 1
-                continue
-            break
-        self.sig = self._enc_field(r) + self._enc_field(s)
-        self.has_sig = True
-        self.discard_progress()              # completion: P zeroed, RndNum destroyed
-        self.out_type = True
-        self.block_base = 0
-        self.state = OUTPUT
+                s = pow(k, -1, n) * (e + r * d) % n
+            if not (bad and bad(attempt)) and not retry_required(self.mode, r, s, k, n):
+                break
+            attempt += 1
+        self.sig = v2b(r, self.fw) + v2b(s, self.fw)
+        self.has.add('sig')
+        self._to_output(True)
         return r, s, attempt
 
     def _verify(self):
-        if self.mode == 'eddsa':
-            ok = self._eddsa_verify()
-        else:
-            ok = self._weierstrass_verify()
-        self.discard_progress()              # completion: P zeroed
-        self.state = SUCCESS if ok else FAILURE
-        return ok
-
-    def _weierstrass_verify(self):
         c, n = self.c, self.c.n
-        r = b2v(self.sig[:self.fw])
-        s = b2v(self.sig[self.fw:])
-        if not (1 <= r < n and 1 <= s < n):
+        r, s, e = b2v(self.sig[:self.fw]), b2v(self.sig[self.fw:]), b2v(self.hash)
+        kind, Q = self.dec(self.sec)
+        if not (1 <= r < n and 1 <= s < n) or kind != 'pt' or not c.in_subgroup(Q):
             return False
-        kind, Q = self._dec_point(self.sec)
-        if kind != 'pt' or not c.in_subgroup(Q):
-            return False
-        e = b2v(self.hash)
         if self.mode == 'sm2':
             t = (r + s) % n
-            if t == 0:
-                return False
-            X = c.add(c.mul_g(s), c.mul(t, Q))
-            if X is None:
-                return False
-            return (e + X[0]) % n == r
+            X = c.add(c.mul_g(s), c.mul(t, Q)) if t else None
+            return X is not None and (e + X[0]) % n == r
         w = pow(s, -1, n)
         X = c.add(c.mul_g(e * w % n), c.mul(r * w % n, Q))
-        if X is None:
-            return False
-        return X[0] % n == r
+        return X is not None and X[0] % n == r
 
-    # -- Form C kl.exec: block-tracked output ----------------------------
     def exec_out(self, nbytes):
+        """Form C kl.exec in _Output_: zero-filled past the end, then _Success_."""
         if self.state != OUTPUT:
-            raise KLEEInvalid('output transfer outside State Output')
+            raise Invalid('output transfer outside _Output_')
         buf = self.sig if self.out_type else self.sec
-        total = self.siglen if self.out_type else self.ptlen
-        chunk = buf[self.block_base:self.block_base + nbytes]
-        chunk = chunk + bytes(nbytes - len(chunk))        # zero-filled tail
-        self.block_base = min(self.block_base + nbytes, total)
-        if self.block_base >= total:
+        chunk = buf[self.bb:self.bb + nbytes]
+        self.bb += nbytes
+        if self.bb >= len(buf):
             self.state = SUCCESS
-        return chunk
+        return chunk + bytes(nbytes - len(chunk))
 
     def output_all(self, chunk=None):
-        total = self.siglen if self.out_type else self.ptlen
-        chunk = chunk or total
         out = b''
         while self.state == OUTPUT:
-            out += self.exec_out(chunk)
-        return out[:total]
+            out += self.exec_out(chunk or 1 << 10)
+        return out[:len(self.sig if self.out_type else self.sec)]
 
-    # ================================================ EdDSA-specific model
-    def _H(self, data):
-        if self.c is EC.ED25519:
-            return hashlib.sha512(data).digest()
-        return hashlib.shake_256(data).digest(114)
+    # <<KLEE-EdDSA>>
+    def H(self, data):
+        return hashlib.sha512(data).digest() if self.c is EC.ED25519 else \
+            hashlib.shake_256(data).digest(114)
 
-    def _dom(self, x):
-        if self.c is EC.ED25519:
-            if x == 0 and not self.ctx:
-                return b''                                # pure Ed25519, empty ctx
-            return b'SigEd25519 no Ed25519 collisions' + bytes([x, len(self.ctx)]) + self.ctx
-        return b'SigEd448' + bytes([x, len(self.ctx)]) + self.ctx
+    def dom(self, x):
+        if self.c is EC.ED448:
+            return b'SigEd448' + bytes([x, len(self.ctx)]) + self.ctx
+        if x == 0 and not self.ctx:
+            return b''
+        return b'SigEd25519 no Ed25519 collisions' + bytes([x, len(self.ctx)]) + self.ctx
 
-    def _keys(self):
-        """(clamped scalar s, prefix, encoded public key A) from the seed."""
-        hh = self._H(self.scalar)
-        half = self.fw
-        a = bytearray(hh[:half])
+    def keys(self):
+        """(clamped s, prefix, encoded A) from the seed, RFC 8032 5.1.5 / 5.2.5."""
+        hh = self.H(self.scalar)
+        a = bytearray(hh[:self.fw])
         if self.c is EC.ED25519:
             a[0] &= 248
-            a[31] &= 127
-            a[31] |= 64
+            a[31] = a[31] & 127 | 64
         else:
             a[0] &= 252
             a[55] |= 128
             a[56] = 0
-        s = int.from_bytes(bytes(a), 'little')
-        prefix = hh[half:2 * half]
-        A = self.c.encode(self.c.mul_g(s))
-        return s, prefix, A
+        s = int.from_bytes(a, 'little')
+        return s, hh[self.fw:2 * self.fw], self.c.encode(self.c.mul_g(s))
 
-    def _enter_msg_absorb(self, xs):
-        if xs == 0:
-            if not self.policy_sign:
-                raise KLEEInvalid('signing pass 1 without signature-generation policy')
-            if int.from_bytes(self.scalar, 'little') == 0:
-                raise KLEEInvalid('signing pass 1 without a configured seed')
-            self.msg_pass = 0
-            _, prefix, _ = self._keys()
-            self._absorb = self._dom(0) + prefix
-        elif xs == 1:
-            if self.msg_pass != 1:
-                raise KLEEInvalid('signing pass 2 requires msg_pass = 1')
-            _, _, A = self._keys()
-            self._absorb = self._dom(0) + self.sig[:self.fw] + A
-        elif xs == 2:
-            if not self.policy_verify:
-                raise KLEEInvalid('verification pass without verification policy')
-            if not (self.has_sig and self.has_sec):
-                raise KLEEInvalid('verification pass requires HasSignature and HasSecondPt')
-            self.msg_pass = 0
-            self._absorb = self._dom(0) + self.sig[:self.fw] + self.sec
+    def _enter_pass(self, xs):
+        if xs == 0 and self.policy[0] and any(self.scalar):
+            self.msg_pass, self.absorb = 0, self.dom(0) + self.keys()[1]
+        elif xs == 1 and self.msg_pass == 1:
+            self.absorb = self.dom(0) + self.sig[:self.fw] + self.keys()[2]
+        elif xs == 2 and self.policy[1] and {'sig', 'sec'} <= self.has:
+            self.msg_pass, self.absorb = 0, self.dom(0) + self.sig[:self.fw] + self.sec
         else:
-            raise KLEEInvalid(f'Msg_Absorb with Xs = {xs}')
-        self._pass_xs = xs
+            raise Invalid(f'Msg_Absorb Xs = {xs}: precondition unmet')
+        self.pass_xs = xs
 
     def _finalize_pass(self):
-        digest = self._H(self._absorb)
-        val = int.from_bytes(digest, 'little') % self.c.L
-        if self._pass_xs == 0:
-            self._r = val
-            R = self.c.encode(self.c.mul_g(val))
-            self.sig = R + bytes(self.fw)                 # R only; HasSignature NOT set
+        xs, data, self.absorb, self.pass_xs = self.pass_xs, self.absorb, None, None
+        val = b2v(self.H(data)) % self.c.L
+        if xs == 0:
+            self.r = val
+            self.sig = self.c.encode(self.c.mul_g(val)) + bytes(self.fw)   # HasSignature not set
             self.msg_pass = 1
-        elif self._pass_xs == 1:
-            # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
-            # message and must match the value stored in pass 1, binding the two passes;
-            # otherwise the locker is invalidated and msg_pass stays at 1.
-            dom = self._dom(0)
-            msg = self._absorb[len(dom) + 2 * self.fw:]       # dom @ R @ A @ M
-            _, prefix, _ = self._keys()
-            r2 = int.from_bytes(self._H(dom + prefix + msg), 'little') % self.c.L
-            if r2 != self._r:
-                self._absorb = None
-                self._pass_xs = None
-                raise KLEEInvalid('pass-2 message differs from pass-1 message')
-            self._kprime = val
-            self.msg_pass = 2
-        else:                                             # pass Xs = 2: verification
-            self._kprime = val
-            # 3, not 1: signing pass 1 also records a completed pass, and were both
-            # to use 1 a caller could run signing pass 1 and then enter _Sign_Verify_,
-            # which would verify against a k' that was never computed (<<KLEE-EdDSA>>).
-            self.msg_pass = 3
-        self._absorb = None
-        self._pass_xs = None
+            return
+        if xs == 1:
+            msg = data[len(self.dom(0)) + 2 * self.fw:]
+            if b2v(self.H(self.dom(0) + self.keys()[1] + msg)) % self.c.L != self.r:
+                raise Invalid('pass-2 message differs from pass 1')
+        self.kp, self.msg_pass = val, 2 if xs == 1 else 3
 
-    def _eddsa_sign(self, be_scalar=False):
-        s, prefix, A = self._keys()
+    def _eddsa_sign(self, be=False):
+        s, prefix, A = self.keys()
         L = self.c.L
-        if self.msg_pass == 2:                            # pure
-            r, kp = self._r, self._kprime
-            R = self.sig[:self.fw]
-        else:                                             # pre-hash
-            m = self.hash
-            r = int.from_bytes(self._H(self._dom(1) + prefix + m), 'little') % L
+        if self.msg_pass == 2:
+            r, kp, R = self.r, self.kp, self.sig[:self.fw]
+        else:
+            r = b2v(self.H(self.dom(1) + prefix + self.hash)) % L
             R = self.c.encode(self.c.mul_g(r))
-            kp = int.from_bytes(self._H(self._dom(1) + R + A + m), 'little') % L
-        S = (r + kp * s) % L
-        enc = S.to_bytes(self.fw, 'big' if be_scalar else 'little')
-        self.sig = R + enc
-        self.has_sig = True
-        self._r = self._kprime = None
+            kp = b2v(self.H(self.dom(1) + R + A + self.hash)) % L
+        self.sig = R + ((r + kp * s) % L).to_bytes(self.fw, 'big' if be else 'little')
+        self.has.add('sig')
+        self.r = self.kp = None
         self.msg_pass = 0
-        self.out_type = True
-        self.block_base = 0
-        self.state = OUTPUT
+        self._to_output(True)
         return self.sig
 
     def _eddsa_verify(self):
-        c = self.c
-        R_enc = self.sig[:self.fw]
-        S = int.from_bytes(self.sig[self.fw:], 'little')
-        if S >= c.L:
+        c, R_enc = self.c, self.sig[:self.fw]
+        S, R, A = b2v(self.sig[self.fw:]), c.decode(R_enc), c.decode(self.sec)
+        if S >= c.L or R is None or A is None:
             return False
-        R = c.decode(R_enc)
-        A = c.decode(self.sec)
-        if R is None or A is None:
-            return False
-        if self.msg_pass == 3:                            # pure: k' from the verification pass
-            kp = self._kprime
-        else:
-            kp = int.from_bytes(self._H(self._dom(1) + R_enc + self.sec + self.hash),
-                                'little') % c.L
-        h = c.h
-        lhs = c.mul(h * S % (c.L * h), c.B)
-        rhs = c.add(c.mul(h, R), c.mul(h * kp % (c.L * h), A))
-        return lhs == rhs
+        kp = self.kp if self.msg_pass == 3 else \
+            b2v(self.H(self.dom(1) + R_enc + self.sec + self.hash)) % c.L
+        return c.mul(c.h * S, c.B) == c.add(c.mul(c.h, R), c.mul(c.h * kp, A))
 
 
-# ------------------------------------------------------------ Locker constructors
-# The b / h / j / u / v values are those tabulated in <<KLEE-ECC>> "Parameters".
+# ---------------------------------------------------------------- vectors
 
-CURVE_PARAMS = {
-    'secp256r1':       dict(b=256, h=256, j=256, u=2, v=2, mode='ecdsa'),
-    'secp384r1':       dict(b=384, h=384, j=384, u=2, v=2, mode='ecdsa'),
-    'secp521r1':       dict(b=576, h=576, j=576, u=2, v=2, mode='ecdsa'),
-    'brainpoolP256r1': dict(b=256, h=256, j=256, u=2, v=2, mode='ecdsa'),
-    'brainpoolP384r1': dict(b=384, h=384, j=384, u=2, v=2, mode='ecdsa'),
-    'brainpoolP512r1': dict(b=512, h=512, j=512, u=2, v=2, mode='ecdsa'),
-    'sm2p256v1':       dict(b=256, h=256, j=256, u=2, v=2, mode='sm2'),
-    'ed25519':         dict(b=256, h=512, j=0,   u=1, v=2, mode='eddsa'),
-    'ed448':           dict(b=456, h=512, j=0,   u=1, v=2, mode='eddsa'),
-}
-
-
-def make_locker(curve, **kw):
-    p = dict(CURVE_PARAMS[curve.name])
-    p.update(kw)
-    return Locker(curve, **p)
-
-
-# ==================================================================== vectors
-
-# RFC 6979 Appendix A.2.5 (P-256), A.2.6 (P-384), A.2.7 (P-521).
-# Fetched from https://www.rfc-editor.org/rfc/rfc6979.txt during development.
+# RFC 6979 A.2.5 (P-256), A.2.6 (P-384), A.2.7 (P-521).
 RFC6979 = {
     'secp256r1': dict(
         x=0xC9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721,
@@ -776,8 +403,7 @@ RFC6979 = {
         ]),
 }
 
-# RFC 8032 section 7.1 (Ed25519), 7.3 (Ed25519ph), 7.4 (Ed448).
-# Fetched from https://www.rfc-editor.org/rfc/rfc8032.txt during development.
+# RFC 8032 7.1 (Ed25519), 7.3 (Ed25519ph), 7.4 (Ed448): name, seed, pk, msg, [ctx,] sig.
 RFC8032_ED25519 = [
     ('7.1 TEST 1 (empty message)',
      '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
@@ -840,8 +466,7 @@ RFC8032_ED448 = [
      '5428407e85dcbc98a49155c13764e66c3c00'),
 ]
 
-# GM/T 0003.5-2012 / GB/T 32918.5-2017 Appendix A, worked example for the
-# recommended 256-bit curve, message "message digest", ID_A = "1234567812345678".
+# GM/T 0003.5-2012 / GB/T 32918.5-2017 Appendix A, message "message digest".
 SM2_VEC = dict(
     ida=b'1234567812345678',
     msg=b'message digest',
@@ -855,1101 +480,503 @@ SM2_VEC = dict(
     s=0xB1B6AA29DF212FD8763182BC0D421CA1BB9038FD1F7F42D4840B69C485BBC1AA)
 
 
-# ==================================================================== helpers
+# ---------------------------------------------------------------- drivers
 
-def ecdsa_e(curve, digest):
-    """FIPS 186-5 6.4: the leftmost min(N, outlen) bits of the digest, as an
-    integer.  The spec makes this the *caller's* job; the model receives the
-    result in `Hash`."""
-    n_bits = curve.n.bit_length()
-    e = int.from_bytes(digest, 'big')
-    if len(digest) * 8 > n_bits:
-        e >>= len(digest) * 8 - n_bits
-    return e
+def ecdsa_e(c, digest):
+    """FIPS 186-5 6.4: leftmost min(N, outlen) bits (the caller's job)."""
+    return int.from_bytes(digest, 'big') >> max(0, len(digest) * 8 - c.n.bit_length())
 
 
-def drive_sign(cr, e_int, k_list, hook=None):
-    """Drive a full signature generation the way a caller would."""
-    cr.setst(SET_HASH)
-    cr.exec_in(v2b(e_int, cr.hashlen))
+def load(cr, st, data, chunk=None, xs=None):
+    cr.setst(st, int(st == SET_GEN) if xs is None else xs)
+    step = chunk or len(data) or 1
+    for i in range(0, len(data), step):
+        cr.exec_in(data[i:i + step])
+    return cr
+
+
+def locker(c, *loads, **kw):
+    cr = Locker(c, **kw)
+    for st, data in loads:
+        load(cr, st, data)
+    return cr
+
+
+def pt(c, P):
+    return Locker(c).enc(P)
+
+
+def sign(c, d, e, ks, bad=None):
+    cr = locker(c, (SET_SCALAR, v2b(d, PARAMS[c.name][0] // 8)))
+    load(cr, SET_HASH, v2b(e, PARAMS[c.name][1] // 8))
     cr.setst(SIGN_GEN)
-    out = cr.exec_run(rbg=k_list, degenerate_hook=hook)
-    sig = cr.output_all(chunk=16)
-    return out, sig
+    r, s, att = cr.exec_run(ks, bad)
+    return (r, s), cr.output_all(16), att, cr
 
 
-def load_field(cr, state, data, chunk=None):
-    """setst into a Set_ state and stream `data` in through Form B kl.exec."""
-    cr.setst(state)
-    if chunk is None:
-        cr.exec_in(data)
-    else:
-        for i in range(0, len(data), chunk):
-            cr.exec_in(data[i:i + chunk])
-
-
-def fresh(curve, **kw):
-    return make_locker(curve, **kw)
-
-
-# ==================================================================== the tests
-
-def test_parameters():
-    head('Domain parameters and the b / h / j / u / v table of <<KLEE-ECC>>')
-    for name, c in EC.WEIERSTRASS_CURVES.items():
-        p = CURVE_PARAMS[name]
-        level = 'PARAM' if name.startswith('brainpool') else 'KAT'
-        ok = c.is_on_curve(c.G) and c.mul(c.n, c.G) is None and c.h == 1
-        chk(level, f'{name}: G on curve, n*G = O, cofactor 1', ok)
-        # b must be wide enough for a field element, and a whole number of bytes
-        need = c.p.bit_length()
-        chk('MODEL', f'{name}: spec b = {p["b"]} holds a {need}-bit field element',
-            p['b'] >= need and p['b'] % 8 == 0)
-    for name, c in EC.EDWARDS_CURVES.items():
-        p = CURVE_PARAMS[name]
-        chk('KAT', f'{name}: B on curve, L*B = identity',
-            c.is_on_curve(c.B) and c.mul(c.L, c.B) == (0, 1))
-        chk('MODEL', f'{name}: spec b = {p["b"]}, u = 1 (compressed point of {p["b"]//8} bytes)',
-            p['b'] == c.bbits and p['u'] == 1 and p['v'] == 2)
-    chk('MODEL', 'secp521r1: b = 576 with 55 zero msbs covers the 521-bit field',
-        CURVE_PARAMS['secp521r1']['b'] - EC.P521.msb_zero == 521)
-    note('the Serialized Content numbers the optional fields iv-vii, but the text sizes'
-         ' "the optional Fields v to viii", calls `RndNum` "Position viii", and'
-         ' <<KLEE-EdDSA>> places `msg_pass` "at Position xi", which is `r` (x in its'
-         ' table).')
-
-
-def test_ecdsa_kats():
-    head('ECDSA against RFC 6979 (k injected in place of the RBG draw)')
-    for cname, vec in RFC6979.items():
-        c = EC.WEIERSTRASS_CURVES[cname]
-        d = vec['x']
-        # --- Point_Mul anchored on the RFC's published public key U = xG
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(d, cr.fw), chunk=8)
-        cr.setst(POINT_MUL)
-        Q = cr.exec_run()
-        out = cr.output_all(chunk=16)
-        ok = Q == (vec['Ux'], vec['Uy'])
-        ok = ok and out == v2b(vec['Ux'], cr.fw) + v2b(vec['Uy'], cr.fw)
-        ok = ok and cr.state == SUCCESS
-        chk('KAT', f'{cname}: Point_Mul d*G = U (RFC 6979 Ux,Uy) and Output -> Success', ok)
-
-        pub = v2b(vec['Ux'], cr.fw) + v2b(vec['Uy'], cr.fw)
-        for msg, hname, k, r_exp, s_exp in vec['sigs']:
-            digest = hashlib.new(hname, msg.encode()).digest()
-            e = ecdsa_e(c, digest)
-            # --- Sign_Generate
-            cr = fresh(c)
-            load_field(cr, SET_SCALAR, v2b(d, cr.fw))
-            (r, s, _), sig = drive_sign(cr, e, [k])
-            ok = (r == r_exp and s == s_exp)
-            ok = ok and sig == v2b(r_exp, cr.fw) + v2b(s_exp, cr.fw)
-            ok = ok and cr.state == SUCCESS
-            chk('KAT', f'{cname}/{hname} "{msg}": Sign_Generate (r,s)', ok,
-                f'got r={r:x} s={s:x}')
-            # --- Sign_Verify of the freshly produced signature
-            cr = fresh(c)
-            load_field(cr, SET_SECONDPT, pub, chunk=16)
-            load_field(cr, SET_HASH, v2b(e, cr.hashlen))
-            load_field(cr, SET_SIG, sig, chunk=16)
-            cr.setst(SIGN_VER)
-            good = cr.exec_run()
-            chk('KAT', f'{cname}/{hname} "{msg}": Sign_Verify -> Success',
-                good and cr.state == SUCCESS)
-            # --- corrupted signature
-            bad = bytearray(sig)
-            bad[0] ^= 1
-            cr = fresh(c)
-            load_field(cr, SET_SECONDPT, pub)
-            load_field(cr, SET_HASH, v2b(e, cr.hashlen))
-            load_field(cr, SET_SIG, bytes(bad))
-            cr.setst(SIGN_VER)
-            chk('KAT', f'{cname}/{hname} "{msg}": corrupted signature -> Failure',
-                not cr.exec_run() and cr.state == FAILURE)
-        # --- out-of-range r and s
-        for label, rr, ss in (('r = 0', 0, 1), ('s = 0', 1, 0),
-                              ('r = n', c.n, 1), ('s = n', 1, c.n)):
-            cr = fresh(c)
-            load_field(cr, SET_SECONDPT, pub)
-            load_field(cr, SET_HASH, v2b(1, cr.hashlen))
-            load_field(cr, SET_SIG, v2b(rr, cr.fw) + v2b(ss, cr.fw))
-            cr.setst(SIGN_VER)
-            chk('MODEL', f'{cname}: out-of-range signature ({label}) -> Failure',
-                not cr.exec_run() and cr.state == FAILURE)
-
-
-def test_p521_representation():
-    head('secp521r1: the 576-bit representation with 55 zero most significant bits')
-    c = EC.P521
-    cr = fresh(c)
-    chk('MODEL', 'default Generator: both coordinates have 55 zero msbs',
-        cr.repr_ok(cr.gen) and len(cr.gen) == 144)
-    # a scalar whose bit 521 is set violates the rule
-    bad_scalar = v2b(1 << 521, cr.fw)
-    try:
-        load_field(cr, SET_SCALAR, bad_scalar)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Scalar with a non-zero bit above bit 520 -> Invalid', ok)
-    cr = fresh(c)
-    good = v2b(EC.P521.G[0], cr.fw)
-    bad_pt = v2b(EC.P521.G[0] | (1 << 575), cr.fw) + v2b(EC.P521.G[1], cr.fw)
-    try:
-        load_field(cr, SET_SECONDPT, bad_pt)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'SecondPt coordinate with a non-zero bit above bit 520 -> Invalid', ok)
-    # the all-ones sentinel is explicitly exempt
-    cr = fresh(c)
-    try:
-        load_field(cr, SET_SECONDPT, b'\xff' * (2 * cr.fw))
-        ok = cr.has_sec and cr._dec_point(cr.sec)[0] == 'inf'
-    except KLEEInvalid:
-        ok = False
-    chk('MODEL', 'point-at-infinity sentinel is exempt from the 55-zero-msb rule', ok)
-    chk('MODEL', 'the sentinel is not a valid field element (all-ones > p)',
-        b2v(b'\xff' * cr.fw) > c.p and len(good) == 72)
-    note('the spec states the 55-zero-msb rule but never says *where* it is enforced;'
-         ' this model rejects at field-load time (transition to Invalid).')
-
-
-def test_point_mul_validation():
-    head('Point_Mul: scalar range, curve validation, infinity sentinel')
-    c = EC.P256
-    # scalar = n must be rejected by 1 <= int(Scalar) < n
-    for label, k in (('Scalar = 0', 0), ('Scalar = n', c.n), ('Scalar = n+1', c.n + 1)):
-        cr = fresh(c)
-        cr.setst(SET_SCALAR)
-        cr.exec_in(v2b(k, cr.fw))
-        cr.setst(POINT_MUL)
-        try:
-            cr.exec_run()
-            ok = False
-        except KLEEInvalid:
-            ok = True
-        chk('MODEL', f'secp256r1: Point_Mul with {label} -> Invalid', ok)
-    chk('MODEL', 'secp256r1: Point_Mul with Scalar = n-1 is accepted',
-        _point_mul_ok(c, c.n - 1))
-    # off-curve SecondPt
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(2, cr.fw))
-    off = v2b(EC.P256.G[0], cr.fw) + v2b((EC.P256.G[1] + 1) % c.p, cr.fw)
-    load_field(cr, SET_SECONDPT, off)
-    cr.setst(POINT_MUL)
-    try:
-        cr.exec_run()
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'secp256r1: off-curve SecondPt -> Invalid (curve validation)', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, off)
-    load_field(cr, SET_HASH, v2b(1, cr.hashlen))
-    load_field(cr, SET_SIG, v2b(1, cr.fw) + v2b(1, cr.fw))
+def verify(c, pub, e, sig, chunk=None):
+    cr = locker(c)
+    load(cr, SET_SECONDPT, pub, chunk)
+    load(cr, SET_HASH, v2b(e, PARAMS[c.name][1] // 8))
+    load(cr, SET_SIG, sig, chunk)
     cr.setst(SIGN_VER)
-    chk('MODEL', 'secp256r1: Sign_Verify with an off-curve public key -> Failure, not '
-        'Invalid ("the validity of the public key as a curve point")',
-        not cr.exec_run() and cr.state == FAILURE)
-    # known small multiples of G
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(2, cr.fw))
-    cr.setst(POINT_MUL)
-    P2 = cr.exec_run()
-    chk('MODEL', 'secp256r1: 2G matches the doubling of G computed independently',
-        P2 == c.add(c.G, c.G) and c.is_on_curve(P2))
-    # (n-1)*G then one more addition gives infinity -> sentinel
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(c.n - 1, cr.fw))
-    cr.setst(POINT_MUL)
-    Pm1 = cr.exec_run()
-    chk('MODEL', 'secp256r1: (n-1)G = -G', Pm1 == (c.G[0], (c.p - c.G[1]) % c.p))
-    cr2 = fresh(c)
-    cr2.sec = cr2._enc_point(None)
-    chk('MODEL', 'point at infinity is encoded by the all-ones sentinel',
-        cr2.sec == b'\xff' * (2 * cr2.fw) and cr2._dec_point(cr2.sec)[0] == 'inf')
-    note('Point_Mul requires the base point to be "a point of the curve", but the text'
-         ' does not say whether the point-at-infinity *sentinel* is an acceptable input'
-         ' in SecondPt. This model treats it as acceptable and returns the sentinel;'
-         ' an explicit rejection would be the safer prescription.')
-
-
-def _point_mul_ok(c, k):
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(k, cr.fw))
-    cr.setst(POINT_MUL)
-    try:
-        cr.exec_run()
-        return cr.state == OUTPUT
-    except KLEEInvalid:
-        return False
-
-
-def test_progress_mgr8():
-    head('Interrupted long-running operations: `Progress` and Rule '
-         '<<KLEE-MGR-progress-discard>> (MGR8)')
-    c = EC.P256
-    vec = RFC6979['secp256r1']
-    msg, hname, k, r_exp, s_exp = vec['sigs'][0]
-    e = ecdsa_e(c, hashlib.new(hname, msg.encode()).digest())
-
-    def armed():
-        """A Locker in _Sign_Generate_ with the private key and Hash of the RFC vector."""
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
-        load_field(cr, SET_HASH, v2b(e, cr.hashlen))
-        cr.setst(SIGN_GEN)
-        return cr
-
-    cr = armed()
-    chk('MODEL', 'Progress is zero while no operation is interrupted, and it is '
-        'bits [15:1] of _MachineUse_ above OutputType (bit 0)',
-        cr.progress == 0 and cr.machine_use == 0)
-    cr.halt(progress=0x1234, k=k)
-    chk('MODEL', 'a precise halt of _Sign_Generate_ records a non-zero Progress, '
-        'keeps RndNum and leaves the State alone',
-        cr.progress == 0x1234 and cr.has_rnd and b2v(cr.rnd) == k
-        and cr.state == SIGN_GEN)
-    chk('MODEL', 'Progress sits in _MachineUse_[15:1] (OutputType unaffected)',
-        cr.machine_use == 0x1234 << 1)
-    (r, s, att), _ = cr.exec_run(rbg=[]), None
-    chk('KAT', 'resuming with Progress non-zero consumes no RBG value and uses the '
-        'held RndNum: the RFC 6979 signature results',
-        r == r_exp and s == s_exp and att == 0)
-    chk('MODEL', 'on completion Progress is zeroed and RndNum destroyed',
-        cr.progress == 0 and cr.rnd is None and cr.has_rnd is False)
-
-    # Every transition of _State_ discards P and the material kept with it.
-    for label, go in (('to _Ready_ (SGR8)', lambda x: x.setst(READY)),
-                      ('to _Output_', lambda x: x.setst(OUTPUT))):
-        cr = armed()
-        cr.halt(progress=7, k=k)
-        go(cr)
-        chk('MODEL', f'a kl.setst {label} zeroes Progress, destroys RndNum and '
-            'clears HasRndNum', cr.progress == 0 and cr.rnd is None
-            and cr.has_rnd is False)
-
-    # ... and the operation then restarts, drawing a fresh value.
-    cr = armed()
-    cr.halt(progress=9, k=0xDEAD)                 # a k that is not the RFC one
-    cr.setst(READY)                               # Form A retains Scalar and Hash
-    cr.setst(SIGN_GEN)
-    r2, s2, _ = cr.exec_run(rbg=[k])
-    chk('KAT', 'after the discard the operation restarts and draws afresh (the '
-        'abandoned RndNum does not reappear)', (r2, s2) == (r_exp, s_exp))
-
-    # Point_Mul carries no random material, but its Progress behaves the same way.
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
-    cr.setst(POINT_MUL)
-    cr.halt(progress=0x7FFF)
-    held = cr.progress
-    R = cr.exec_run()
-    chk('MODEL', 'a halted _Point_Mul_ resumes to the same point and ends with '
-        'Progress zero', held == 0x7FFF and R == c.mul_g(vec['x'])
-        and cr.progress == 0)
-
-    ok = True
-    for bad in (0, 0x8000):
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
-        cr.setst(POINT_MUL)
-        try:
-            cr.halt(progress=bad)
-            ok = False
-        except KLEEInvalid:
-            pass
-    chk('MODEL', 'the value recorded at a halt is never zero and fits bits [15:1]', ok)
-    try:
-        cr = fresh(c)
-        cr.setst(SET_HASH)
-        cr.halt()
-        ok = False
-    except KLEEInvalid:
-        pass
-    chk('MODEL', 'only the States that run a long-running kl.exec can be interrupted',
-        ok)
-    info('`Progress` is implementation-defined, so the model only records that it is '
-         'non-zero from the first halt until completion and zero otherwise; the '
-         'precomputed multiples an implementation would export with it live in the '
-         'ADS, which <<KLEE-ECC>> leaves implementation-specific.')
-
-
-def test_retry_rules():
-    head('Signature-generation retry rules')
-    n = EC.P256.n
-    chk('MODEL', 'FIPS 186-5 6.4.1: retry iff r = 0 or s = 0',
-        retry_required('ecdsa', 0, 5, 7, n) and retry_required('ecdsa', 5, 0, 7, n)
-        and not retry_required('ecdsa', 5, 5, 7, n)
-        and not retry_required('ecdsa', 5, 5, (n - 5) % n, n))
-    chk('MODEL', 'SM2: retry iff r = 0, r + k = n, or s = 0',
-        retry_required('sm2', 0, 5, 7, n) and retry_required('sm2', 5, 0, 7, n)
-        and retry_required('sm2', 5, 5, n - 5, n)
-        and not retry_required('sm2', 5, 5, 7, n))
-    # end-to-end: force the first draw degenerate, the second must be used
-    c = EC.P256
-    vec = RFC6979['secp256r1']
-    msg, hname, k, r_exp, s_exp = vec['sigs'][0]
-    e = ecdsa_e(c, hashlib.new(hname, msg.encode()).digest())
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
-    (r, s, attempts), _ = drive_sign(cr, e, [0x1234, k], hook=lambda a: a == 0)
-    chk('MODEL', 'a degenerate first draw is discarded and a fresh k drawn (RFC 6979 answer)',
-        attempts == 1 and r == r_exp and s == s_exp)
-    chk('MODEL', 'RndNum is destroyed and HasRndNum cleared after signing',
-        cr.rnd is None and cr.has_rnd is False)
-
-
-def test_state_machine():
-    head('State machine: transitions, entry conditions, Ready-return Xs bits')
-    c = EC.P256
-    # Sign_Generate entry needs HasHash and a configured private key
-    cr = fresh(c)
-    try:
-        cr.setst(SIGN_GEN)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'fresh CC (Scalar = 0, no Hash): Sign_Generate -> Invalid', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(RFC6979['secp256r1']['x'], cr.fw))
-    try:
-        cr.setst(SIGN_GEN)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'private key set but HasHash clear: Sign_Generate -> Invalid', ok)
-    cr = fresh(c)
-    load_field(cr, SET_HASH, v2b(1, cr.hashlen))
-    try:
-        cr.setst(SIGN_GEN)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'HasHash set but Scalar = 0: Sign_Generate -> Invalid', ok)
-    # Sign_Verify entry needs HasSecondPt, HasHash, HasSignature
-    for missing in ('SecondPt', 'Hash', 'Signature'):
-        cr = fresh(c)
-        if missing != 'SecondPt':
-            load_field(cr, SET_SECONDPT, cr.default_gen)
-        if missing != 'Hash':
-            load_field(cr, SET_HASH, v2b(1, cr.hashlen))
-        if missing != 'Signature':
-            load_field(cr, SET_SIG, bytes(cr.siglen))
-        try:
-            cr.setst(SIGN_VER)
-            ok = False
-        except KLEEInvalid:
-            ok = True
-        chk('MODEL', f'Sign_Verify without Has{missing} -> Invalid', ok)
-    # MachinePolicy
-    cr = fresh(c, policy_sign=False)
-    load_field(cr, SET_SCALAR, v2b(3, cr.fw))
-    load_field(cr, SET_HASH, v2b(1, cr.hashlen))
-    try:
-        cr.setst(SIGN_GEN)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'MachinePolicy[0] clear: Sign_Generate -> Invalid', ok)
-    # block_base tracking
-    cr = fresh(c)
-    cr.setst(SET_SECONDPT)
-    cr.exec_in(cr.default_gen[:20])
-    part = (cr.block_base == 20 and not cr.has_sec)
-    cr.exec_in(cr.default_gen[20:] + b'\xaa' * 9)         # excess must be ignored
-    chk('MODEL', 'block_base tracks partial loads; excess in the last kl.exec ignored',
-        part and cr.block_base == cr.ptlen and cr.has_sec and cr.sec == cr.default_gen)
-    try:
-        cr.exec_in(b'\x00' * 4)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'kl.exec after block_base has reached the field length -> Invalid', ok)
-    # output in pieces, with zero fill past the end
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(2, cr.fw))
-    cr.setst(POINT_MUL)
     cr.exec_run()
-    pieces = [cr.exec_out(24), cr.exec_out(24), cr.exec_out(24)]
-    chk('MODEL', 'Output: block_base-tracked export, zero fill, then -> Success',
-        b''.join(pieces)[:cr.ptlen] == cr.sec and pieces[2][16:] == bytes(8)
-        and cr.state == SUCCESS)
-    note('_Output_ follows Rule <<KLEE-MGR-load-long-field>>, under which "an emitting '
-         'kl.exec that would carry W past the field size invalidates the locker", yet '
-         'says "Data beyond the length of the output is replaced with zeros in the last '
-         'exported part"; the model follows <<KLEE-ECC>>.')
-    for imm in (SUCCESS, FAILURE):
-        cr = fresh(c)
-        try:
-            cr.setst(imm)
-            ok = False
-        except IllegalInstruction:
-            ok = cr.state == READY
-        chk('MODEL', f'kl.setst #{imm} is a reserved encoding: illegal-instruction '
-            'exception, State unchanged (SGR7)', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(2, cr.fw))
-    cr.setst(POINT_MUL)
-    cr.halt(progress=3)
-    cr.setst(POINT_MUL)
-    chk('MODEL', 'a same-State kl.setst is admitted (SGR4) and zeroes Progress (MGR8)',
-        cr.state == POINT_MUL and cr.progress == 0)
-    cr = fresh(EC.ED25519)
-    load_field(cr, SET_SCALAR, bytes(range(1, 33)))
-    try:
-        cr.setst(POINT_MUL)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'ed25519: _Point_Mul_, which <<KLEE-EdDSA>> removes, -> Invalid', ok)
-    note('<<KLEE-EdDSA>> removes _Point_Mul_, and _Output_ emits only `SecondPt` after '
-         '_Point_Mul_ or `Signature`: the public key A of a seed held in the locker, e.g. '
-         'one drawn by a Form B kl.setst into _Set_Scalar_, can never be obtained.')
-    stale = [n for n, v in ECC_LIST_GLOBAL.items()
-             if v != {'Success': SUCCESS, 'Failure': FAILURE}[n]]
-    if stale:
-        note('the State list of <<KLEE-ECC>> still gives '
-             + ', '.join(f'_{n}_ ({ECC_LIST_GLOBAL[n]})' for n in stale)
-             + f'; <<KLEE-states-valid>> defines {SUCCESS} and {FAILURE}.  The model '
-             'follows the Instructions chapter.')
-    # illegal transitions
-    cr = fresh(c)
-    try:
-        cr.setst(OUTPUT)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Ready -> Output is not allowed (MGR1) -> Invalid', ok)
-
-    # ---- Ready-return Xs bits
-    def loaded():
-        cc = fresh(c)
-        cc.gen = cc._enc_point(c.add(c.G, c.G))           # non-default generator
-        load_field(cc, SET_SECONDPT, cc.default_gen)
-        load_field(cc, SET_SCALAR, v2b(7, cc.fw))
-        cc.sig = bytes(cc.siglen)
-        cc.has_sig = True
-        return cc
-    cc = loaded()
-    cc.setst(READY, form='A')
-    chk('MODEL', 'Xs: Form A kl.setst leaves Generator/Scalar/SecondPt untouched',
-        cc.gen != cc.default_gen and cc.has_sec and b2v(cc.scalar) == 7)
-    chk('MODEL', 'Form A: Signature and HasSignature retained on return to Ready',
-        cc.sig is not None and cc.has_sig)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=1)
-    chk('MODEL', 'Xs bit 0: Generator reset to the default value',
-        cc.gen == cc.default_gen and cc.has_sec)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=2)
-    chk('MODEL', 'Xs bit 1: SecondPt erased and HasSecondPt unset',
-        cc.sec is None and not cc.has_sec)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=4)
-    chk('MODEL', 'Xs bit 2: Scalar erased', b2v(cc.scalar) == 0 and cc.has_sec)
-    cc = loaded()
-    cc.hash = bytes(cc.hashlen)
-    cc.has_hash = True
-    cc.setst(READY, form='B', xs=8)
-    chk('MODEL', 'Xs bit 3: Hash erased and HasHash unset, SecondPt kept',
-        cc.hash is None and not cc.has_hash and cc.has_sec)
-    cc = loaded()
-    cc.hash = bytes(cc.hashlen)
-    cc.has_hash = True
-    cc.setst(READY, form='B', xs=0)
-    chk('MODEL', 'Xs bit 3 clear: Hash and HasHash retained',
-        cc.hash is not None and cc.has_hash)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=1 << 6)
-    chk('MODEL', 'Xs bit 6: Signature erased and HasSignature unset',
-        cc.sig is None and not cc.has_sig)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=0)
-    chk('MODEL', 'Xs bit 6 clear: Signature and HasSignature retained',
-        cc.sig is not None and cc.has_sig)
-    cc = loaded()
-    cc.hash = bytes(cc.hashlen)
-    cc.has_hash = True
-    cc.setst(READY, form='B', xs=0)
-    chk('MODEL', 'uniform polarity: Xs = 0 retains every field',
-        cc.gen != cc.default_gen and cc.has_sec and b2v(cc.scalar) == 7
-        and cc.has_hash and cc.has_sig)
-    cc = loaded()
-    g = cc.gen
-    cc.setst(READY, form='B', xs=1 << 4)
-    chk('MODEL', 'Xs bit 4: Generator copied onto SecondPt',
-        cc.sec == g and cc.has_sec and cc.gen == g)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=(1 << 4) | 1)
-    chk('MODEL', 'Xs bits 4+0: copy, then Generator reset to default',
-        cc.sec == g and cc.gen == cc.default_gen)
-    cc = loaded()
-    sec0 = cc.sec
-    cc.setst(READY, form='B', xs=1 << 5)
-    chk('MODEL', 'Xs bit 5: SecondPt copied onto Generator',
-        cc.gen == sec0 and cc.sec == sec0 and cc.has_sec)
-    cc = loaded()
-    cc.setst(READY, form='B', xs=(1 << 5) | 2)
-    chk('MODEL', 'Xs bits 5+1: copy, then SecondPt erased and HasSecondPt False',
-        cc.gen == sec0 and cc.sec is None and not cc.has_sec)
+    return cr.state
 
 
-# an arbitrary valid per-signature secret; this flow checks reachability, not a KAT
-K_FIXED = 0xA6E3C57DD01ABE90086538398355DD4C3B17AA873382B0F24D6129493D8AAD60
+def ed_sign(c, seed, msg, ctx=b'', chunk=None, be=False):
+    cr = load(Locker(c), SET_SCALAR, seed, chunk)
+    load(cr, SET_CTX, ctx, xs=len(ctx))
+    cr.setst(MSG_ABSORB, 0)
+    cr.exec_in(msg)
+    cr.setst(MSG_ABSORB, 1)
+    p1 = cr.msg_pass
+    cr.exec_in(msg)
+    cr.setst(SIGN_GEN)
+    cr.exec_run(be=be)
+    return cr.output_all(c.nbytes), p1, cr
 
 
-def test_sign_then_verify_one_cc():
-    head('Sign AND verify within a single CC (fields survive the return to Ready)')
-    c = EC.P256
-    d = 0x519b423d715f8b581f4fa8ee59f4771a5b44c8130b4e3eacca54a56dda72b464
-    cr = fresh(c)
-    cr.policy_sign = cr.policy_verify = True
-
-    # 1. private key -> Point_Mul -> Output -> Success, leaving the public key in SecondPt
-    load_field(cr, SET_SCALAR, v2b(d, cr.fw))
-    cr.setst(POINT_MUL)
+def ed_verify(c, pk, sig, msg, ctx=b''):
+    cr = locker(c, (SET_SECONDPT, pk), (SET_SIG, sig))
+    load(cr, SET_CTX, ctx, xs=len(ctx))
+    cr.setst(MSG_ABSORB, 2)
+    cr.exec_in(msg)
+    cr.setst(SIGN_VER)
     cr.exec_run()
-    cr.output_all(chunk=16)
-    chk('MODEL', 'step 1: Point_Mul leaves the public key in SecondPt, state Success',
-        cr.state == SUCCESS and cr.has_sec)
-    pub = cr.sec
-
-    # 2. Success -> Ready with Xs = 0 keeps Generator, SecondPt, Scalar
-    cr.setst(READY, form='B', xs=0)
-    chk('MODEL', 'step 2: Success -> Ready (Xs=0) retains SecondPt and Scalar',
-        cr.has_sec and cr.sec == pub and b2v(cr.scalar) == d)
-
-    # 3. load the message value, sign
-    e = 0xa41a41a12a799548211c410c65d8133afde34d28bdd542e4b680cf2899c8a8c4
-    load_field(cr, SET_HASH, v2b(e, cr.hashlen))
-    cr.setst(SIGN_GEN)
-    cr.exec_run(rbg=[K_FIXED, K_FIXED + 1, K_FIXED + 2])
-    cr.output_all(chunk=16)
-    chk('MODEL', 'step 3: Sign_Generate -> Output -> Success with HasSignature set',
-        cr.state == SUCCESS and cr.has_sig)
-    sig = cr.sig
-
-    # 4. Success -> Ready: with no bit set, every field survives
-    cr.setst(READY, form='B', xs=0)
-    chk('MODEL', 'step 4: Signature, Hash and SecondPt survive the return to Ready',
-        cr.has_sig and cr.sig == sig and cr.has_hash and cr.has_sec)
-
-    # 5. Ready -> Sign_Verify: all three preconditions now hold
-    cr.setst(SIGN_VER)
-    good = cr.exec_run()
-    chk('MODEL', 'step 5: the CC verifies its own signature -> Success',
-        good and cr.state == SUCCESS)
-
-    # Bit 6 is the way to drop a stale signature, and then verification is refused
-    cr2 = fresh(c)
-    cr2.policy_sign = cr2.policy_verify = True
-    load_field(cr2, SET_SCALAR, v2b(d, cr2.fw))
-    load_field(cr2, SET_SECONDPT, pub)
-    load_field(cr2, SET_HASH, v2b(e, cr2.hashlen))
-    cr2.setst(SIGN_GEN)
-    cr2.exec_run(rbg=[K_FIXED, K_FIXED + 1, K_FIXED + 2])
-    cr2.output_all(chunk=16)
-    cr2.setst(READY, form='B', xs=1 << 6)
-    try:
-        cr2.setst(SIGN_VER)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'with Bit 6 the signature is discarded and Sign_Verify is refused', ok)
+    return cr.state
 
 
-def test_m10_dead_end():
-    head('Regression check: review finding M10 (Set_Signature dead end), now FIXED')
-    # breadth-first search over the transition relation, pre-fix and current
-    for literal, label in ((True, 'pre-fix'), (False, 'current text')):
-        seen = {SET_SIG}
-        frontier = [SET_SIG]
-        while frontier:
-            nxt = []
-            for st in frontier:
-                for t in transition_targets(st, eddsa=False, literal=literal):
-                    if t not in seen:
-                        seen.add(t)
-                        nxt.append(t)
-            frontier = nxt
-        reachable = SIGN_VER in seen
-        if literal:
-            info(f'transition list {label}: states reachable from Set_Signature = '
-                 f'{sorted(SNAME[s] for s in seen - {SET_SIG}) or "(none)"}')
-            chk('MODEL', 'pre-fix relation had no legal path Set_Signature ->'
-                ' Sign_Verify (this PASS records what the defect was)', not reachable)
-        else:
-            chk('MODEL', f'transition list {label}: Set_Signature -> Sign_Verify is reachable',
-                reachable)
-    info('M10 (no exit from _Set_Signature_) is resolved: the _Set_ states now'
-         ' transition freely and all reach _Sign_Verify_; the pre-fix relation is kept'
-         ' as a regression check.')
-    # the strictness of the rest of the list is still enforced
-    cr = fresh(EC.P256, literal=True)
-    load_field(cr, SET_SIG, bytes(cr.siglen))
-    try:
-        cr.setst(SIGN_VER)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'literal model: Set_Signature -> Sign_Verify raises Invalid', ok)
+def invalid(fn, *a, **kw):
+    return raises(fn, *a, exc=Invalid, **kw)
 
 
-def test_ed25519():
-    head('Ed25519 / Ed25519ph against RFC 8032 7.1 and 7.3 (KLEE two-pass model)')
-    c = EC.ED25519
-    for name, seed_h, pk_h, msg_h, sig_h in RFC8032_ED25519:
-        seed, pk, msg = bytes.fromhex(seed_h), bytes.fromhex(pk_h), bytes.fromhex(msg_h)
-        # public key derivation from the seed
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, seed)
-        _, _, A = cr._keys()
-        chk('KAT', f'ed25519 {name}: public key A derived from the seed', A == pk)
-        # --- pure-mode signing, two Msg_Absorb passes
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, seed, chunk=16)
-        cr.setst(MSG_ABSORB, form='B', xs=0)
-        cr.exec_in(msg)
-        cr.setst(MSG_ABSORB, form='B', xs=1)
-        r_pass1 = cr.msg_pass                             # must be 1 after pass 0
-        cr.exec_in(msg)
-        cr.setst(SIGN_GEN)
-        cr.exec_run()
-        sig = cr.output_all(chunk=32)
-        chk('KAT', f'ed25519 {name}: pure-mode signature', sig.hex() == sig_h,
-            f'got {sig.hex()}')
-        chk('MODEL', f'ed25519 {name}: msg_pass 1 after pass 0, 0 after Sign_Generate,'
-            ' Output -> Success',
-            r_pass1 == 1 and cr.msg_pass == 0 and cr.state == SUCCESS)
-        # --- verification through the KLEE model
-        cr = fresh(c)
-        load_field(cr, SET_SECONDPT, pk)
-        load_field(cr, SET_SIG, bytes.fromhex(sig_h), chunk=32)
-        cr.setst(MSG_ABSORB, form='B', xs=2)
-        cr.exec_in(msg)
-        cr.setst(SIGN_VER)
-        chk('KAT', f'ed25519 {name}: Sign_Verify -> Success',
-            cr.exec_run() and cr.state == SUCCESS)
-        # --- corrupted signature
-        bad = bytearray(bytes.fromhex(sig_h))
-        bad[0] ^= 0x40
-        cr = fresh(c)
-        load_field(cr, SET_SECONDPT, pk)
-        load_field(cr, SET_SIG, bytes(bad))
-        cr.setst(MSG_ABSORB, form='B', xs=2)
-        cr.exec_in(msg)
-        cr.setst(SIGN_VER)
-        chk('KAT', f'ed25519 {name}: corrupted R -> Failure',
-            not cr.exec_run() and cr.state == FAILURE)
-    # --- Ed25519ph (pre-hash), RFC 8032 7.3
-    name, seed_h, pk_h, msg_h, sig_h = RFC8032_ED25519PH
-    seed, pk, msg = bytes.fromhex(seed_h), bytes.fromhex(pk_h), bytes.fromhex(msg_h)
-    ph = hashlib.sha512(msg).digest()
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    load_field(cr, SET_HASH, ph, chunk=32)
-    cr.setst(SIGN_GEN)
-    cr.exec_run()
-    sig = cr.output_all()
-    chk('KAT', f'ed25519ph {name}: pre-hash signature over PH(M) in Hash',
-        sig.hex() == sig_h, f'got {sig.hex()}')
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pk)
-    load_field(cr, SET_SIG, bytes.fromhex(sig_h))
-    load_field(cr, SET_HASH, ph)
-    cr.setst(SIGN_VER)
-    chk('KAT', f'ed25519ph {name}: Sign_Verify (msg_pass = 0, HasHash) -> Success',
-        cr.exec_run() and cr.state == SUCCESS)
-    chk('MODEL', 'ed25519: h = 512 matches the 64-byte PH(M) placed in Hash',
-        CURVE_PARAMS['ed25519']['h'] // 8 == len(ph))
-    # --- EdDSA-specific entry conditions
-    cr = fresh(c)
-    try:
-        cr.setst(MSG_ABSORB, form='B', xs=0)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Msg_Absorb Xs = 0 without a configured seed -> Invalid', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    try:
-        cr.setst(MSG_ABSORB, form='B', xs=1)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Msg_Absorb Xs = 1 with msg_pass != 1 -> Invalid', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    try:
-        cr.setst(MSG_ABSORB, form='B', xs=3)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Msg_Absorb with an out-of-range Xs -> Invalid', ok)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    cr.setst(MSG_ABSORB, form='B', xs=0)
-    cr.exec_in(msg)
-    try:
-        cr.setst(SIGN_GEN)                                # msg_pass = 1, no Hash
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Sign_Generate after only one pass (msg_pass = 1) -> Invalid', ok)
-    chk('MODEL', 'HasRndNum is never set on the EdDSA path',
-        cr.has_rnd is False and CURVE_PARAMS['ed25519']['j'] == 0)
-    # C1: differing messages in the two signing passes are bound-checked; pass 2
-    # recomputes r and, on mismatch, invalidates the locker, so no signature is produced
-    # and the shared-R key-recovery attack cannot be mounted.
-    seed, msg = (bytes.fromhex(RFC8032_ED25519[2][1]),
-                 bytes.fromhex(RFC8032_ED25519[2][3]))
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    cr.setst(MSG_ABSORB, form='B', xs=0)
-    cr.exec_in(msg)
-    cr.setst(MSG_ABSORB, form='B', xs=1)
-    cr.exec_in(msg + b'\x00')                             # different message!
-    try:
-        cr.setst(SIGN_GEN)                               # pass-2 finalize rebinds r
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'C1: different messages in the two signing passes -> Invalid at pass 2 '
-        '(no signature emitted)', ok and cr.msg_pass == 1)
-    note('<<KLEE-EdDSA>> invalidates the locker on a pass-2 mismatch "with `msg_pass` left'
-         ' at 1", but `msg_pass` is Content, which SGR10 clears on entering an Error'
-         ' State; the clause is unobservable.')
-    # identical messages in both passes still sign correctly (the r-rebinding matches)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    cr.setst(MSG_ABSORB, form='B', xs=0)
-    cr.exec_in(msg)
-    cr.setst(MSG_ABSORB, form='B', xs=1)
-    cr.exec_in(msg)                                      # same message
-    cr.setst(SIGN_GEN)
-    sig = cr.exec_run()
-    chk('MODEL', 'C1: identical messages in both passes still sign',
-        sig is not None and cr.state == OUTPUT and cr.msg_pass == 0)
+# ---------------------------------------------------------------- tests
 
+P256, V256 = EC.P256, RFC6979['secp256r1']
+D256 = v2b(V256['x'], 32)
+PUB256 = pt(P256, (V256['Ux'], V256['Uy']))
+MSG0, HN0, K0, R0, S0 = V256['sigs'][0]
+E0 = ecdsa_e(P256, hashlib.new(HN0, MSG0.encode()).digest())
 
-def test_ed448():
-    head('Ed448 against RFC 8032 7.4 (dom4, mandatory ctx, 57-byte encodings)')
-    c = EC.ED448
-    chk('MODEL', 'ed448: b = 456, so a point and each signature half are 57 bytes',
-        CURVE_PARAMS['ed448']['b'] == 456 and 456 // 8 == 57)
-    for name, seed_h, pk_h, msg_h, ctx_h, sig_h in RFC8032_ED448:
-        seed, pk = bytes.fromhex(seed_h), bytes.fromhex(pk_h)
-        msg, ctx = bytes.fromhex(msg_h), bytes.fromhex(ctx_h)
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, seed, chunk=19)
-        _, _, A = cr._keys()
-        chk('KAT', f'ed448 {name}: public key A derived from the seed', A == pk)
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, seed)
-        cr.setst(SET_CTX, form='B', xs=len(ctx))
-        if ctx:
-            cr.exec_in(ctx)
-        cr.setst(MSG_ABSORB, form='B', xs=0)
-        cr.exec_in(msg)
-        cr.setst(MSG_ABSORB, form='B', xs=1)
-        cr.exec_in(msg)
-        cr.setst(SIGN_GEN)
-        cr.exec_run()
-        sig = cr.output_all(chunk=57)
-        chk('KAT', f'ed448 {name}: pure-mode signature (dom4)', sig.hex() == sig_h,
-            f'got {sig.hex()}')
-        cr = fresh(c)
-        load_field(cr, SET_SECONDPT, pk)
-        load_field(cr, SET_SIG, bytes.fromhex(sig_h))
-        cr.setst(SET_CTX, form='B', xs=len(ctx))
-        if ctx:
-            cr.exec_in(ctx)
-        cr.setst(MSG_ABSORB, form='B', xs=2)
-        cr.exec_in(msg)
-        cr.setst(SIGN_VER)
-        chk('KAT', f'ed448 {name}: Sign_Verify -> Success',
-            cr.exec_run() and cr.state == SUCCESS)
-    # a signature made with ctx = "foo" must not verify with the empty context
-    name, seed_h, pk_h, msg_h, ctx_h, sig_h = RFC8032_ED448[2]
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, bytes.fromhex(pk_h))
-    load_field(cr, SET_SIG, bytes.fromhex(sig_h))
-    cr.setst(MSG_ABSORB, form='B', xs=2)                  # ctx left empty
-    cr.exec_in(bytes.fromhex(msg_h))
-    cr.setst(SIGN_VER)
-    chk('KAT', 'ed448: context-bound signature does not verify under a different ctx',
-        not cr.exec_run() and cr.state == FAILURE)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, bytes.fromhex(seed_h))
-    try:
-        cr.setst(SET_CTX, form='B', xs=256)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'Set_Ctx with ctxlen > 255 -> Invalid', ok)
+section('Domain parameters and the b / h / j / u / v table')
+for name, c in EC.WEIERSTRASS_CURVES.items():
+    b = PARAMS[name][0]
+    check(f'{name}: G on curve, n*G = O, h = 1', c.is_on_curve(c.G) and c.mul(c.n, c.G) is None and c.h == 1)
+    check(f'{name}: b = {b} holds the field, whole bytes', b >= c.p.bit_length() and b % 8 == 0)
+for name, c in EC.EDWARDS_CURVES.items():
+    check(f'{name}: B on curve, L*B = identity', c.is_on_curve(c.B) and c.mul(c.L, c.B) == (0, 1))
+    check(f'{name}: b = {c.bbits}, u = 1, v = 2', (PARAMS[name][0], *PARAMS[name][3:]) == (c.bbits, 1, 2))
+check('secp521r1: b = 576 with 55 zero msbs covers the 521-bit field',
+      PARAMS['secp521r1'][0] - MSB_ZERO['secp521r1'] == EC.P521.p.bit_length())
+spec_note('<<KLEE-ECC>> calls `RndNum` "Position viii"; its Serialized Content table puts it at vii'
+          ' (viii is `ctxlen` of <<KLEE-EdDSA>>).')
 
-
-def test_sm2():
-    head('SM2 against the GM/T 0003.5 worked example')
-    c = EC.SM2C
-    v = SM2_VEC
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(v['d'], 32))
+section('ECDSA: RFC 6979 A.2.5-A.2.7')
+for name, vec in RFC6979.items():
+    c = EC.WEIERSTRASS_CURVES[name]
+    fw = PARAMS[name][0] // 8
+    pub = pt(c, (vec['Ux'], vec['Uy']))
+    cr = load(Locker(c), SET_SCALAR, v2b(vec['x'], fw), 8)
     cr.setst(POINT_MUL)
     Q = cr.exec_run()
-    chk('KAT', 'sm2: Point_Mul d*G matches the example public key (Px, Py)',
-        Q == (v['Px'], v['Py']))
-    # Z_A and e are the caller's job; re-derive them when SM3 is available
-    try:
-        def be(x):
-            return x.to_bytes(32, 'big')
-        entl = (len(v['ida']) * 8).to_bytes(2, 'big')
-        za = hashlib.new('sm3', entl + v['ida']
-                         + be(c.a) + be(c.b) + be(c.G[0]) + be(c.G[1])
-                         + be(v['Px']) + be(v['Py'])).digest()
-        e = hashlib.new('sm3', za + v['msg']).digest()
-        chk('KAT', 'sm2: Z_A = SM3(ENTL||ID||a||b||xG||yG||xA||yA) matches the example',
-            int.from_bytes(za, 'big') == v['ZA'])
-        chk('KAT', 'sm2: e = SM3(Z_A || M) matches the example',
-            int.from_bytes(e, 'big') == v['e'])
-    except ValueError:
-        info('SM3 not available from hashlib on this platform; Z_A / e taken from the'
-             ' embedded example values (the KLEE unit computes neither).')
-    pub = v2b(v['Px'], 32) + v2b(v['Py'], 32)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(v['d'], 32))
-    (r, s, _), sig = drive_sign(cr, v['e'], [v['k']])
-    chk('KAT', 'sm2: Sign_Generate (r, s) matches the example',
-        r == v['r'] and s == v['s'] and sig == v2b(v['r'], 32) + v2b(v['s'], 32),
-        f'got r={r:x} s={s:x}')
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pub)
-    load_field(cr, SET_HASH, v2b(v['e'], 32))
-    load_field(cr, SET_SIG, sig)
-    cr.setst(SIGN_VER)
-    chk('KAT', 'sm2: Sign_Verify (t = (r+s) mod n) -> Success',
-        cr.exec_run() and cr.state == SUCCESS)
-    bad = bytearray(sig)
-    bad[35] ^= 0x10
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pub)
-    load_field(cr, SET_HASH, v2b(v['e'], 32))
-    load_field(cr, SET_SIG, bytes(bad))
-    cr.setst(SIGN_VER)
-    chk('KAT', 'sm2: corrupted s -> Failure', not cr.exec_run() and cr.state == FAILURE)
-    # t = 0 must be rejected: r + s = n
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pub)
-    load_field(cr, SET_HASH, v2b(v['e'], 32))
-    load_field(cr, SET_SIG, v2b(v['r'], 32) + v2b((c.n - v['r']) % c.n, 32))
-    cr.setst(SIGN_VER)
-    chk('MODEL', 'sm2: t = (r+s) mod n = 0 -> Failure',
-        not cr.exec_run() and cr.state == FAILURE)
+    check(f'{name}: Point_Mul d*G = U, Output, Success',
+          (Q, cr.output_all(16), cr.state) == ((vec['Ux'], vec['Uy']), pub, SUCCESS))
+    for msg, hn, k, r, s in vec['sigs']:
+        e = ecdsa_e(c, hashlib.new(hn, msg.encode()).digest())
+        rs, sig, _, cr = sign(c, vec['x'], e, [k])
+        want = v2b(r, fw) + v2b(s, fw)
+        check(f'{name}/{hn} "{msg}": Sign_Generate', None, (rs, sig, cr.state), ((r, s), want, SUCCESS))
+        check(f'{name}/{hn} "{msg}": Sign_Verify -> Success', verify(c, pub, e, sig, 16) == SUCCESS)
+        check(f'{name}/{hn} "{msg}": corrupted signature -> Failure',
+              verify(c, pub, e, bytes([sig[0] ^ 1]) + sig[1:]) == FAILURE)
+    for label, r, s in (('r = 0', 0, 1), ('s = 0', 1, 0), ('r = n', c.n, 1), ('s = n', 1, c.n)):
+        check(f'{name}: {label} -> Failure', verify(c, pub, 1, v2b(r, fw) + v2b(s, fw)) == FAILURE)
+
+section('secp521r1: 576-bit fields with 55 zero msbs')
+c = EC.P521
+cr = Locker(c)
+check('default Generator: 144 bytes, 55 zero msbs per coordinate', cr.repr_ok(cr.gen) and len(cr.gen) == 144)
+check('Scalar with bit 521 set -> Invalid', invalid(load, Locker(c), SET_SCALAR, v2b(1 << 521, 72)))
+check('SecondPt with bit 575 set -> Invalid',
+      invalid(load, Locker(c), SET_SECONDPT, v2b(c.G[0] | 1 << 575, 72) + v2b(c.G[1], 72)))
+cr = load(Locker(c), SET_SECONDPT, b'\xff' * 144)
+check('infinity sentinel exempt from the rule', 'sec' in cr.has and cr.dec(cr.sec)[0] == 'inf')
+check('sentinel is no field element (all-ones > p)', b2v(b'\xff' * 72) > c.p)
+spec_note('the 55-zero-msb rule says nowhere where it is enforced; the model invalidates at field load.')
+
+section('Point_Mul: scalar range, curve validation, infinity')
+for label, k in (('0', 0), ('n', P256.n), ('n+1', P256.n + 1)):
+    cr = load(Locker(P256), SET_SCALAR, v2b(k, 32))
+    cr.setst(POINT_MUL)
+    check(f'Scalar = {label} -> Invalid', invalid(cr.exec_run))
+spec_note('<<KLEE-ECC>> _Point_Mul_ step 1 invalidates the locker if `Scalar` "does satisfy"'
+          ' 1 <= int(Scalar) < n; read as "does not".')
+for k, want in ((P256.n - 1, (P256.G[0], P256.p - P256.G[1])), (2, P256.add(P256.G, P256.G))):
+    cr = load(Locker(P256), SET_SCALAR, v2b(k, 32))
+    cr.setst(POINT_MUL)
+    check(f'Scalar = {"n-1" if k > 2 else 2}: accepted, result {"-G" if k > 2 else "G+G"}',
+          (cr.exec_run(), cr.state) == (want, OUTPUT))
+off = v2b(P256.G[0], 32) + v2b(P256.G[1] + 1, 32)
+cr = locker(P256, (SET_SCALAR, v2b(2, 32)), (SET_SECONDPT, off))
+cr.setst(POINT_MUL)
+check('off-curve SecondPt -> Invalid', invalid(cr.exec_run))
+check('Sign_Verify with an off-curve public key -> Failure', verify(P256, off, 1, v2b(1, 32) * 2) == FAILURE)
+check('infinity encodes as the all-ones sentinel', Locker(P256).enc(None) == b'\xff' * 64)
+spec_note('whether the infinity sentinel is an acceptable _Point_Mul_ base point is unstated;'
+          ' the model accepts it and returns the sentinel.')
+
+section('Signature retry rules')
+n = P256.n
+check('ECDSA: retry iff r = 0 or s = 0',
+      [retry_required('ecdsa', *a, n) for a in ((0, 5, 7), (5, 0, 7), (5, 5, 7), (5, 5, n - 5))]
+      == [True, True, False, False])
+check('SM2: retry iff r = 0, r + k = n or s = 0',
+      [retry_required('sm2', *a, n) for a in ((0, 5, 7), (5, 0, 7), (5, 5, n - 5), (5, 5, 7))]
+      == [True, True, True, False])
+rs, _, att, cr = sign(P256, V256['x'], E0, [0x1234, K0], bad=lambda a: a == 0)
+check('degenerate first draw: a fresh k is drawn (RFC 6979 answer)', (att, rs) == (1, (R0, S0)))
+check('RndNum destroyed, HasRndNum clear after signing', cr.rnd is None and 'rnd' not in cr.has)
 
 
-def test_brainpool():
-    head('Brainpool: RFC 5639 parameter validation + k-injected sign -> verify')
-    for name in ('brainpoolP256r1', 'brainpoolP384r1', 'brainpoolP512r1'):
-        c = EC.WEIERSTRASS_CURVES[name]
-        chk('PARAM', f'{name}: RFC 5639 parameters -- G satisfies the curve equation,'
-            ' n*G = O, h = 1',
-            c.is_on_curve(c.G) and c.mul(c.n, c.G) is None and c.h == 1)
-        d = 0x0123456789ABCDEF % (c.n - 1) + 1
-        d = (d * 0x9E3779B97F4A7C15) % (c.n - 1) + 1      # a fixed, arbitrary key
-        k = (d * 7 + 12345) % (c.n - 1) + 1
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(d, cr.fw))
-        cr.setst(POINT_MUL)
-        Q = cr.exec_run()
-        pub = cr.output_all()
-        chk('PARAM', f'{name}: Point_Mul d*G is a curve point of the right order',
-            c.is_on_curve(Q) and c.mul(c.n, Q) is None)
-        e = ecdsa_e(c, hashlib.sha512(name.encode()).digest())
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(d, cr.fw))
-        (r, s, _), sig = drive_sign(cr, e, [k])
-        # cross-check the signature equation independently of the model
-        indep = (c.mul_g(k)[0] % c.n == r
-                 and (pow(k, -1, c.n) * (e + r * d)) % c.n == s)
-        chk('PARAM', f'{name}: Sign_Generate reproduces the FIPS 186-5 equations', indep)
-        cr = fresh(c)
-        load_field(cr, SET_SECONDPT, pub)
-        load_field(cr, SET_HASH, v2b(e, cr.hashlen))
-        load_field(cr, SET_SIG, sig)
-        cr.setst(SIGN_VER)
-        chk('PARAM', f'{name}: sign -> verify round-trip -> Success',
-            cr.exec_run() and cr.state == SUCCESS)
-        cr = fresh(c)
-        load_field(cr, SET_SECONDPT, pub)
-        load_field(cr, SET_HASH, v2b(e ^ 1, cr.hashlen))
-        load_field(cr, SET_SIG, sig)
-        cr.setst(SIGN_VER)
-        chk('PARAM', f'{name}: verify under a modified hash -> Failure',
-            not cr.exec_run() and cr.state == FAILURE)
-    info('Brainpool anchor level is PARAM, not KAT: RFC 5639 / RFC 8734 publish domain'
-         ' parameters but no ECDSA test vectors, so these cases prove parameter'
-         ' correctness and self-consistency, not interoperability.')
+def armed():
+    cr = locker(P256, (SET_SCALAR, D256), (SET_HASH, v2b(E0, 32)))
+    cr.setst(SIGN_GEN)
+    return cr
 
 
-class HashLocker:
-    """A locker holding SHA-256 (<<KLEE-hash-functions-MACs-XOFs>>); only its State and the
-    bytes absorbed in _Hash_Absorb_ are modelled."""
+section('Progress and <<KLEE-MGR-progress-discard>>')
+cr = armed()
+check('Progress zero when nothing is interrupted', cr.machine_use == 0)
+cr.halt(0x1234, K0)
+check('halt: Progress non-zero in MachineUse[15:1], RndNum kept, State unchanged',
+      (cr.machine_use, b2v(cr.rnd), 'rnd' in cr.has, cr.state) == (0x1234 << 1, K0, True, SIGN_GEN))
+check('resume uses the held RndNum, draws nothing', None, cr.exec_run([])[:3], (R0, S0, 0))
+check('completion zeroes Progress, destroys RndNum', (cr.progress, cr.rnd, 'rnd' in cr.has) == (0, None, False))
+for t in (READY, OUTPUT, SIGN_GEN):
+    cr = armed()
+    cr.halt(7, K0)
+    cr.setst(t)
+    check(f'kl.setst #{t} from a halted Sign_Generate discards Progress and RndNum',
+          (cr.progress, cr.rnd, 'rnd' in cr.has) == (0, None, False))
+cr = armed()
+cr.halt(9, 0xDEAD)
+cr.setst(READY)
+cr.setst(SIGN_GEN)
+check('after the discard the operation draws afresh', cr.exec_run([K0])[:2] == (R0, S0))
+cr = load(Locker(P256), SET_SCALAR, D256)
+cr.setst(POINT_MUL)
+cr.halt(0x7FFF)
+check('halted Point_Mul resumes to d*G, Progress zero after',
+      (cr.exec_run(), cr.progress) == (P256.mul_g(V256['x']), 0))
+cr = load(Locker(P256), SET_SCALAR, D256)
+cr.setst(POINT_MUL)
+check('Progress at a halt is non-zero and fits [15:1]', invalid(cr.halt, 0) and invalid(cr.halt, 0x8000))
+check('only long-running States can halt', invalid(load(Locker(P256), SET_HASH, b'').halt))
+info('Progress encoding is implementation-defined: the model only tracks zero / non-zero.')
+spec_note('<<KLEE-ECC-MachineUse>> puts Progress in bits [15:1] of _MachineUse_, which is 14 bits wide')
 
-    def __init__(self, state=HASH_ABSORB):
-        self.state = state
-        self.absorbed = b''
+section('State machine: entry conditions, transfers, Output')
+SIG0 = bytes(64)
+for label, kw, loads, t in (
+        ('fresh CC: Sign_Generate', {}, [], SIGN_GEN),
+        ('no HasHash: Sign_Generate', {}, [(SET_SCALAR, D256)], SIGN_GEN),
+        ('Scalar = 0: Sign_Generate', {}, [(SET_HASH, v2b(1, 32))], SIGN_GEN),
+        ('MachinePolicy[0] clear: Sign_Generate', dict(sign=False),
+         [(SET_SCALAR, v2b(3, 32)), (SET_HASH, v2b(1, 32))], SIGN_GEN),
+        ('no HasSecondPt: Sign_Verify', {}, [(SET_HASH, v2b(1, 32)), (SET_SIG, SIG0)], SIGN_VER),
+        ('no HasHash: Sign_Verify', {}, [(SET_SECONDPT, PUB256), (SET_SIG, SIG0)], SIGN_VER),
+        ('no HasSignature: Sign_Verify', {}, [(SET_SECONDPT, PUB256), (SET_HASH, v2b(1, 32))], SIGN_VER),
+        ('MachinePolicy[1] clear: Sign_Verify', dict(verify=False),
+         [(SET_SECONDPT, PUB256), (SET_HASH, v2b(1, 32)), (SET_SIG, SIG0)], SIGN_VER),
+        ('Ready -> Output (MGR1)', {}, [], OUTPUT)):
+    check(f'{label} -> Invalid', invalid(locker(P256, *loads, **kw).setst, t))
+cr = locker(P256)
+cr.setst(SET_SECONDPT)
+cr.exec_in(cr.default_gen[:20])
+part = (cr.bb, 'sec' in cr.has)
+cr.exec_in(cr.default_gen[20:] + b'\xaa' * 9)
+check('block_base tracks a partial load; excess of the last kl.exec ignored',
+      part == (20, False) and cr.sec == cr.default_gen and 'sec' in cr.has)
+check('kl.exec after the field completes -> Invalid', invalid(cr.exec_in, b'\0' * 4))
+cr = Locker(P256)
+cr.setst(SET_SCALAR, xs=1, rand=V256['x'])
+check('Form B Set_Scalar: random private key set, no kl.exec expected',
+      b2v(cr.scalar) == V256['x'] and invalid(cr.exec_in, D256))
+cr = load(Locker(P256), SET_SCALAR, v2b(2, 32))
+cr.setst(POINT_MUL)
+cr.exec_run()
+pieces = [cr.exec_out(24) for _ in range(3)]
+check('Output: block_base-tracked, zero fill, then Success',
+      b''.join(pieces)[:64] == cr.sec and pieces[2][16:] == bytes(8) and cr.state == SUCCESS)
+spec_note('_Output_ zero-fills the last part, yet MGR7 invalidates an emitting kl.exec that carries'
+          ' W past the field size; the model follows <<KLEE-ECC>>.')
+for t in (SUCCESS, FAILURE):
+    cr = Locker(P256)
+    check(f'kl.setst #{t}: illegal instruction, State unchanged (SGR7)',
+          raises(cr.setst, t) and cr.state == READY)
+cr = load(Locker(P256), SET_SCALAR, v2b(2, 32))
+cr.setst(POINT_MUL)
+cr.halt(3)
+cr.setst(POINT_MUL)
+check('same-State kl.setst admitted (SGR4), zeroes Progress (MGR8)', (cr.state, cr.progress) == (POINT_MUL, 0))
+cr = load(Locker(EC.ED25519), SET_SCALAR, bytes(range(1, 33)))
+check('ed25519: _Point_Mul_ -> Invalid', invalid(cr.setst, POINT_MUL))
+spec_note('<<KLEE-EdDSA>> removes _Point_Mul_, so the public key A of a seed held in the locker'
+          ' can never be output.')
+spec_note('the <<KLEE-ECC>> State list names both 46 and 47 _Success_; 47 is _Failure_.')
+
+
+def reach(eddsa, sig_exit=True):
+    """Whether Sign_Verify is reachable by kl.setst from every Set state."""
+    ok = True
+    for st in set(SET_FIELD) | ({SET_CTX} if eddsa else set()):
+        seen, todo = {st}, [st]
+        while todo:
+            new = targets(todo.pop(), eddsa, sig_exit) - seen
+            seen |= new
+            todo += new
+        ok &= SIGN_VER in seen
+    return ok
+
+
+check('Sign_Verify reachable from every Set state (ECC, EdDSA)', reach(False) and reach(True))
+cr = load(Locker(P256, sig_exit=False), SET_SIG, SIG0)
+control('Set_Signature without exits: Sign_Verify unreachable, kl.setst -> Invalid',
+        not reach(False, False) and invalid(cr.setst, SIGN_VER))
+
+section('Ready-return Xs bits')
+G1, G2 = pt(P256, P256.G), pt(P256, P256.add(P256.G, P256.G))
+
+
+def snap(cr):
+    return dict(gen=cr.gen, scalar=b2v(cr.scalar),
+                **{f: getattr(cr, f) if f in cr.has else None for f in ('sec', 'hash', 'sig')})
+
+
+BASE = dict(gen=G2, scalar=7, sec=G1, hash=bytes(32), sig=SIG0)
+for xs, change, label in (
+        (0, {}, 'Form A / Xs = 0: every field retained'),
+        (1, dict(gen=G1), 'bit 0: Generator reset to default'),
+        (2, dict(sec=None), 'bit 1: SecondPt erased, HasSecondPt clear'),
+        (4, dict(scalar=0), 'bit 2: Scalar erased'),
+        (8, dict(hash=None), 'bit 3: Hash erased, HasHash clear'),
+        (64, dict(sig=None), 'bit 6: Signature erased, HasSignature clear'),
+        (16, dict(sec=G2), 'bit 4: Generator copied onto SecondPt'),
+        (17, dict(sec=G2, gen=G1), 'bits 4+0: copy, then Generator reset'),
+        (32, dict(gen=G1), 'bit 5: SecondPt copied onto Generator'),
+        (34, dict(gen=G1, sec=None), 'bits 5+1: copy, then SecondPt erased')):
+    cr = locker(P256, (SET_GEN, G2), (SET_SECONDPT, G1), (SET_SCALAR, v2b(7, 32)),
+                (SET_HASH, bytes(32)), (SET_SIG, SIG0))
+    cr.setst(READY, xs)
+    check(label, None, snap(cr), {**BASE, **change})
+
+section('Sign and verify within one CC')
+d = 0x519b423d715f8b581f4fa8ee59f4771a5b44c8130b4e3eacca54a56dda72b464
+e = 0xa41a41a12a799548211c410c65d8133afde34d28bdd542e4b680cf2899c8a8c4
+cr = load(Locker(P256), SET_SCALAR, v2b(d, 32))
+cr.setst(POINT_MUL)
+cr.exec_run()
+cr.output_all(16)
+pub = cr.sec
+cr.setst(READY)
+check('Point_Mul -> Success -> Ready keeps SecondPt = d*G and Scalar',
+      cr.sec == pt(P256, P256.mul_g(d)) and 'sec' in cr.has and b2v(cr.scalar) == d)
+load(cr, SET_HASH, v2b(e, 32))
+cr.setst(SIGN_GEN)
+cr.exec_run([K0])
+cr.output_all(16)
+sig = cr.sig
+cr.setst(READY)
+check('Sign_Generate -> Success -> Ready keeps Signature, Hash, SecondPt',
+      {'sig', 'hash', 'sec'} <= cr.has and cr.sig == sig and cr.sec == pub)
+cr.setst(SIGN_VER)
+cr.exec_run()
+check('the CC verifies its own signature -> Success', cr.state == SUCCESS)
+cr.setst(READY, 64)
+check('Xs bit 6 drops the signature: Sign_Verify -> Invalid', invalid(cr.setst, SIGN_VER))
+
+section('Ed25519 / Ed25519ph: RFC 8032 7.1, 7.3')
+c = EC.ED25519
+for name, seed, pk, msg, sig in RFC8032_ED25519:
+    seed, pk, msg, sig = map(bytes.fromhex, (seed, pk, msg, sig))
+    check(f'{name}: A from the seed', load(Locker(c), SET_SCALAR, seed).keys()[2] == pk)
+    got, p1, cr = ed_sign(c, seed, msg, chunk=16)
+    check(f'{name}: pure-mode signature', None, got.hex(), sig.hex())
+    check(f'{name}: msg_pass 1 after pass 1, 0 after Sign_Generate; Success',
+          (p1, cr.msg_pass, cr.state) == (1, 0, SUCCESS))
+    check(f'{name}: Sign_Verify -> Success', ed_verify(c, pk, sig, msg) == SUCCESS)
+    check(f'{name}: corrupted R -> Failure',
+          ed_verify(c, pk, bytes([sig[0] ^ 0x40]) + sig[1:], msg) == FAILURE)
+name, seed, pk, msg, sig = RFC8032_ED25519PH
+seed, pk, sig = bytes.fromhex(seed), bytes.fromhex(pk), bytes.fromhex(sig)
+ph = hashlib.sha512(bytes.fromhex(msg)).digest()
+check('h = 512 holds the 64-byte PH(M)', PARAMS['ed25519'][1] // 8 == len(ph))
+cr = locker(c, (SET_SCALAR, seed))
+load(cr, SET_HASH, ph, 32)
+cr.setst(SIGN_GEN)
+cr.exec_run()
+check(f'{name}: pre-hash signature over PH(M) in Hash', None, cr.output_all().hex(), sig.hex())
+cr = locker(c, (SET_SECONDPT, pk), (SET_SIG, sig), (SET_HASH, ph))
+cr.setst(SIGN_VER)
+cr.exec_run()
+check(f'{name}: Sign_Verify (msg_pass = 0, HasHash) -> Success', cr.state == SUCCESS)
+seed, msg = bytes.fromhex(RFC8032_ED25519[2][1]), bytes.fromhex(RFC8032_ED25519[2][3])
+cr = load(Locker(c), SET_SCALAR, seed)
+cr.setst(MSG_ABSORB, 0)
+cr.exec_in(msg)
+for label, cr_, t, xs in (
+        ('Msg_Absorb Xs = 0 without a seed', Locker(c), MSG_ABSORB, 0),
+        ('Msg_Absorb Xs = 1 with msg_pass != 1', load(Locker(c), SET_SCALAR, seed), MSG_ABSORB, 1),
+        ('Msg_Absorb Xs = 3', load(Locker(c), SET_SCALAR, seed), MSG_ABSORB, 3),
+        ('Sign_Generate after one pass', cr, SIGN_GEN, 0)):
+    check(f'{label} -> Invalid', invalid(cr_.setst, t, xs))
+check('HasRndNum never set on the EdDSA path, j = 0', 'rnd' not in cr.has and PARAMS['ed25519'][2] == 0)
+cr = load(Locker(c), SET_SCALAR, seed)
+cr.setst(MSG_ABSORB, 0)
+cr.exec_in(msg)
+cr.setst(MSG_ABSORB, 1)
+cr.exec_in(msg + b'\0')
+check('different messages in the two signing passes -> Invalid at pass 2', invalid(cr.setst, SIGN_GEN))
+spec_note('<<KLEE-EdDSA>> leaves `msg_pass` "at 1" on a pass-2 mismatch, but SGR10 clears Content'
+          ' on entering _Invalid_; the clause is unobservable.')
+_, p1, cr = ed_sign(c, seed, msg)
+check('identical messages in both passes sign', (p1, cr.state, 'sig' in cr.has) == (1, SUCCESS, True))
+
+section('Ed448: RFC 8032 7.4 (dom4, ctx, 57-byte encodings)')
+c = EC.ED448
+check('b = 456: point and signature halves are 57 bytes', PARAMS['ed448'][0] // 8 == c.nbytes == 57)
+for name, seed, pk, msg, ctx, sig in RFC8032_ED448:
+    seed, pk, msg, ctx, sig = map(bytes.fromhex, (seed, pk, msg, ctx, sig))
+    check(f'{name}: A from the seed', load(Locker(c), SET_SCALAR, seed, 19).keys()[2] == pk)
+    check(f'{name}: pure-mode signature', None, ed_sign(c, seed, msg, ctx)[0].hex(), sig.hex())
+    check(f'{name}: Sign_Verify -> Success', ed_verify(c, pk, sig, msg, ctx) == SUCCESS)
+check('ctx-bound signature under the empty ctx -> Failure', ed_verify(c, pk, sig, msg) == FAILURE)
+check('Set_Ctx with ctxlen > 255 -> Invalid', invalid(load(Locker(c), SET_SCALAR, seed).setst, SET_CTX, 256))
+
+section('SM2: GM/T 0003.5 Appendix A')
+c, v = EC.SM2C, SM2_VEC
+cr = load(Locker(c), SET_SCALAR, v2b(v['d'], 32))
+cr.setst(POINT_MUL)
+check('Point_Mul d*G = (Px, Py)', cr.exec_run() == (v['Px'], v['Py']))
+try:
+    be = b''.join(x.to_bytes(32, 'big') for x in (c.a, c.b, *c.G, v['Px'], v['Py']))
+    za = hashlib.new('sm3', (len(v['ida']) * 8).to_bytes(2, 'big') + v['ida'] + be).digest()
+    check('Z_A = SM3(ENTL || ID || a || b || G || P)', int.from_bytes(za, 'big') == v['ZA'])
+    check('e = SM3(Z_A || M)', int.from_bytes(hashlib.new('sm3', za + v['msg']).digest(), 'big') == v['e'])
+except ValueError:
+    info('hashlib lacks SM3: Z_A and e taken from the example.')
+pub = pt(c, (v['Px'], v['Py']))
+rs, sig, _, _ = sign(c, v['d'], v['e'], [v['k']])
+check('Sign_Generate (r, s)', None, (rs, sig), ((v['r'], v['s']), v2b(v['r'], 32) + v2b(v['s'], 32)))
+check('Sign_Verify -> Success', verify(c, pub, v['e'], sig) == SUCCESS)
+check('corrupted s -> Failure',
+      verify(c, pub, v['e'], sig[:35] + bytes([sig[35] ^ 0x10]) + sig[36:]) == FAILURE)
+check('t = (r + s) mod n = 0 -> Failure',
+      verify(c, pub, v['e'], v2b(v['r'], 32) + v2b(c.n - v['r'], 32)) == FAILURE)
+
+section('Brainpool: RFC 5639 parameters, k-injected sign / verify')
+for name in ('brainpoolP256r1', 'brainpoolP384r1', 'brainpoolP512r1'):
+    c = EC.WEIERSTRASS_CURVES[name]
+    fw = PARAMS[name][0] // 8
+    d = (0x0123456789ABCDEF % (c.n - 1) + 1) * 0x9E3779B97F4A7C15 % (c.n - 1) + 1
+    k = (d * 7 + 12345) % (c.n - 1) + 1
+    cr = load(Locker(c), SET_SCALAR, v2b(d, fw))
+    cr.setst(POINT_MUL)
+    Q = cr.exec_run()
+    pub = cr.output_all()
+    check(f'{name}: Point_Mul d*G on curve, order n', c.is_on_curve(Q) and c.mul(c.n, Q) is None)
+    e = ecdsa_e(c, hashlib.sha512(name.encode()).digest())
+    (r, s), sig, _, _ = sign(c, d, e, [k])
+    check(f'{name}: Sign_Generate meets the FIPS 186-5 equations',
+          r == c.mul_g(k)[0] % c.n and s == pow(k, -1, c.n) * (e + r * d) % c.n)
+    check(f'{name}: sign -> verify -> Success', verify(c, pub, e, sig) == SUCCESS)
+    check(f'{name}: modified hash -> Failure', verify(c, pub, e ^ 1, sig) == FAILURE)
+info('Brainpool is anchored on published parameters only: RFC 5639 / 8734 give no ECDSA vectors.')
+
+
+class Dest:
+    """A destination of <<KLEE-derive-endpoints>>: a `key` in _Ready_ or a hash in _Hash_Absorb_."""
+    def __init__(self, kind, state=None, size=32, **mdh):
+        self.kind, self.size, self.data = kind, size, b''
+        self.state = state or (READY if kind == 'key' else HASH_ABSORB)
+        self.mdh = dict(dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0, KeyType=0), **mdh)
 
 
 def kl_derive(dest, src, length):
-    """`kl.derive` with an ECC source.  <<KLEE-derive-endpoints>> lists no ECC
-    endpoint, but Rule <<KLEE-DER-exec-implies-unrestricted>> always allows what
-    `kl.exec` emits in _Output_ to go into a hash, as an unrestricted transfer.
-    Anything else is no listed pair."""
-    if not isinstance(dest, HashLocker):
-        raise KLEEInvalid('no listed pair', who='both')
-    if src.state != OUTPUT:
-        raise KLEEInvalid('the source State emits nothing', who='source')
-    if dest.state != HASH_ABSORB:
-        raise KLEEInvalid('the destination State absorbs nothing', who='destination')
-    # "Each endpoint advances as the kl.exec operations producing or consuming these
-    #  blocks would advance it" (<<KLEE-derive-rule-both-fixed-size>>).
-    dest.absorbed += src.exec_out(length)
+    """ECC `SecondPt` source (any State with HasSecondPt) into a listed destination."""
+    if not isinstance(dest, Dest) or dest.kind == 'key' and dest.mdh['KeyType'] == 1:
+        raise Invalid(who='both')                                   # unlisted pair, DER4
+    if 'sec' not in src.has:                                        # DER1: source first
+        raise Invalid(who='source')
+    if dest.state != (READY if dest.kind == 'key' else HASH_ABSORB):
+        raise Invalid(who='destination')
+    if dest.kind == 'hash':                                         # DER6, DER3
+        dest.data += src.sec[:length].ljust(length, b'\0')          # DER8
+        return
+    s, d = src.mdh, dest.mdh                                        # DER5, DER2
+    if length < dest.size or len(src.sec) < dest.size or d['SCProtection'] < s['SCProtection']:
+        raise Invalid(who='destination')
+    d['UsagePolicy'] = (s['UsagePolicy'] | d['UsagePolicy']) & 0xF | s['UsagePolicy'] & d['UsagePolicy'] & 0x10
+    d['ExpirationDate'] = min([x for x in (s['ExpirationDate'], d['ExpirationDate']) if x] or [0])
+    dest.data = src.sec[:dest.size]
 
 
-def test_derive():
-    head('kl.derive: an ECDH result into a hash (Rule DER6)')
-    c = EC.P256
-    da, db = RFC6979['secp256r1']['x'], 0x1D5A0B2C3E4F
-    qb = v2b(c.mul_g(db)[0], 32) + v2b(c.mul_g(db)[1], 32)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, v2b(da, 32))
-    load_field(cr, SET_SECONDPT, qb)
+section('kl.derive: ECC `SecondPt` as source (<<KLEE-derive-endpoints>>)')
+db = 0x1D5A0B2C3E4F
+
+
+def ecdh(**mdh):
+    cr = locker(P256, (SET_SCALAR, D256), (SET_SECONDPT, pt(P256, P256.mul_g(db))))
+    cr.mdh = dict(dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0), **mdh)
     cr.setst(POINT_MUL)
-    Z = cr.exec_run()
-    h = HashLocker()
-    kl_derive(h, cr, 40)
-    mid = cr.block_base
-    kl_derive(h, cr, 24)
-    chk('MODEL', 'Point_Mul by a peer point, then two kl.derive into SHA-256 in'
-        ' _Hash_Absorb_: the hash absorbs the shared point, block_base advancing as'
-        ' Form C kl.exec would, and _Output_ ends in _Success_',
-        Z == c.mul(db, c.mul_g(da)) and h.absorbed == v2b(Z[0], 32) + v2b(Z[1], 32)
-        and mid == 40 and cr.state == SUCCESS)
-    for label, dest, st, who in (
-            ('a source not in _Output_', HashLocker(), SET_HASH, 'source'),
-            ('a hash destination in _Ready_', HashLocker(state=READY), OUTPUT,
-             'destination'),
-            ('an ECDH result into a symmetric key', object(), OUTPUT, 'both')):
-        cr = fresh(c)
-        load_field(cr, SET_SCALAR, v2b(da, 32))
-        cr.setst(POINT_MUL)
-        cr.exec_run()
-        if st != OUTPUT:
-            cr.setst(READY)
-            cr.setst(st)
-        try:
-            kl_derive(dest, cr, 64)
-            got = None
-        except KLEEInvalid as e:
-            got = e.who
-        chk('MODEL', f'{label} -> _Invalid_ ({who})', got == who)
-    info('Rule DER5 lists a transfer of "a computed shared secret" only from a Machine'
-         ' that "must contain an explicit shared secret"; <<KLEE-ECC>> holds a point, so'
-         ' the model lists no ECC -> key pair, and the ECDH result reaches a key only'
-         ' through a hash (DER6).')
-    note('Rule DER6 always allows the _Output_ of an ECC Machine into a hash, and such'
-         ' transfers "are listed for every pair of Machines", but the table of'
-         ' <<KLEE-derive-endpoints>> gives <<KLEE-ECC>> no exportable endpoint.')
+    return cr, cr.exec_run()
 
 
-def test_negative_controls():
-    head('Negative controls (declared to run-kats.py as KAT-EXPECT-FAIL)')
-    # 1. Ed25519 with the scalar S encoded big-endian instead of little-endian
-    c = EC.ED25519
-    name, seed_h, pk_h, msg_h, sig_h = RFC8032_ED25519[1]
-    seed, msg = bytes.fromhex(seed_h), bytes.fromhex(msg_h)
-    cr = fresh(c)
-    load_field(cr, SET_SCALAR, seed)
-    cr.setst(MSG_ABSORB, form='B', xs=0)
-    cr.exec_in(msg)
-    cr.setst(MSG_ABSORB, form='B', xs=1)
-    cr.exec_in(msg)
-    cr.setst(SIGN_GEN)
-    cr._eddsa_sign(be_scalar=True)                        # deliberately wrong
-    sig = cr.output_all()
-    negative('NEG[ed25519-be-scalar]', sig.hex() != sig_h,
-             'ed25519 with S encoded big-endian does not match RFC 8032 7.1 TEST 2')
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, bytes.fromhex(pk_h))
-    load_field(cr, SET_SIG, sig)
-    cr.setst(MSG_ABSORB, form='B', xs=2)
-    cr.exec_in(msg)
-    cr.setst(SIGN_VER)
-    negative('NEG[ed25519-be-scalar-verify]', not cr.exec_run(),
-             'ed25519 big-endian-S signature is rejected by Sign_Verify')
-    # 2. ECDSA verification with r and s swapped
-    c = EC.P256
-    vec = RFC6979['secp256r1']
-    msg, hname, k, r_exp, s_exp = vec['sigs'][0]
-    e = ecdsa_e(c, hashlib.new(hname, msg.encode()).digest())
-    pub = v2b(vec['Ux'], 32) + v2b(vec['Uy'], 32)
-    cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pub)
-    load_field(cr, SET_HASH, v2b(e, 32))
-    load_field(cr, SET_SIG, v2b(s_exp, 32) + v2b(r_exp, 32))   # swapped
-    cr.setst(SIGN_VER)
-    negative('NEG[ecdsa-swapped-rs]', not cr.exec_run() and cr.state == FAILURE,
-             'secp256r1 verification with r and s swapped')
+def derive_who(dest, src, length):
+    try:
+        kl_derive(dest, src, length)
+    except Invalid as x:
+        return x.who
 
 
-# ==================================================================== main
+cr, Z = ecdh()
+check('ECDH: SecondPt = d_A * Q_B', Z == P256.mul(db, P256.mul_g(V256['x'])))
+h = Dest('hash')
+kl_derive(h, cr, 64)
+check('in _Output_: SecondPt into a hash in _Hash_Absorb_, source untouched',
+      (h.data, cr.state, cr.bb) == (cr.sec, OUTPUT, 0))
+cr.output_all()
+h = Dest('hash', UsagePolicy=5)
+kl_derive(h, cr, 0)
+check('length = 0 transfers nothing (DER8)', h.data == b'' and cr.state == SUCCESS)
+kl_derive(h, cr, 80)
+check('in _Success_ with HasSecondPt: 80 bytes into a hash, zero-padded (DER8), not narrowed (DER3)',
+      (h.data, h.mdh['UsagePolicy'], cr.state) == (cr.sec + bytes(16), 5, SUCCESS))
+cr, _ = ecdh(UsagePolicy=0b10011, ExpirationDate=900, SCProtection=1)
+k = Dest('key', UsagePolicy=0b10100, ExpirationDate=1200, SCProtection=2)
+kl_derive(k, cr, 64)
+check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH narrowed (DER5, DER2)',
+      (k.data, k.mdh['UsagePolicy'], k.mdh['ExpirationDate']) == (cr.sec[:32], 0b10111, 900))
+for label, dest, src, n, who in (
+        ('source without HasSecondPt', Dest('hash'), load(Locker(P256), SET_HASH, b''), 64, 'source'),
+        ('hash destination in _Ready_', Dest('hash', READY), ecdh()[0], 64, 'destination'),
+        ('key destination outside _Ready_', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
+        ('key with length < key size (DER1)', Dest('key'), ecdh()[0], 16, 'destination'),
+        ('key with lower SCProtection (DER2)', Dest('key'), ecdh(SCProtection=1)[0], 64, 'destination'),
+        ('key of KeyType 1 (DER4)', Dest('key', KeyType=1), ecdh()[0], 64, 'both'),
+        ('unlisted destination (an ECC locker)', Locker(P256), ecdh()[0], 64, 'both')):
+    check(f'{label} -> Invalid ({who}), nothing transferred',
+          derive_who(dest, src, n) == who and getattr(dest, 'data', b'') == b'')
+info('reading: SecondPt is a field source (DER8 truncation / zero-pad, source State unchanged); into a'
+     ' hash it is unrestricted (DER6), into a key it is the DER5 shared secret (restricted).')
+info('reading: a KeyType-1 key destination (DER4) makes the pair unlisted, so both lockers become _Invalid_.')
 
-def main():
-    t0 = time.time()
-    print(__doc__.split('\n\n')[0])
-    print()
-    print('Model built from modules/ROOT/pages/Zkl-ISA-machines.adoc, sections [[KLEE-ECC]] and'
-          ' [[KLEE-EdDSA]].')
-    print('Levels: [KAT] published vector | [PARAM] published parameters +'
-          ' self-consistency | [MODEL] spec property.')
-    print()
-    for lab in ('NEG[ed25519-be-scalar]', 'NEG[ed25519-be-scalar-verify]',
-                'NEG[ecdsa-swapped-rs]'):
-        declare_negative(lab)
+section('Negative controls')
+seed, pk, msg, sig = map(bytes.fromhex, RFC8032_ED25519[1][1:])
+bad = ed_sign(EC.ED25519, seed, msg, be=True)[0]
+control('ed25519 S encoded big-endian differs from RFC 8032 7.1 TEST 2', bad != sig)
+control('ed25519 big-endian S rejected by Sign_Verify', ed_verify(EC.ED25519, pk, bad, msg) == FAILURE)
+control('secp256r1 (s, r) swapped -> Failure', verify(P256, PUB256, E0, v2b(S0, 32) + v2b(R0, 32)) == FAILURE)
 
-    test_parameters()
-    test_ecdsa_kats()
-    test_p521_representation()
-    test_point_mul_validation()
-    test_retry_rules()
-    test_progress_mgr8()
-    test_state_machine()
-    test_sign_then_verify_one_cc()
-    test_m10_dead_end()
-    test_ed25519()
-    test_ed448()
-    test_sm2()
-    test_brainpool()
-    test_derive()
-    test_negative_controls()
-
-    head('Summary')
-    missed = _NEG_PENDING - _NEG_FIRED
-    for m in sorted(missed):
-        print(f'  negative control {m} did not fire')
-        _FAILURES.append(m)
-    print(f'  runtime {time.time() - t0:.1f} s, {len(_FAILURES)} failing checks')
-    ok = not _FAILURES
-    if not ok:
-        for f in _FAILURES:
-            print(f'  failed: {f}')
-    print()
-    print('KAT-RESULT:', 'PASS' if ok else 'FAIL')
-    return 0 if ok else 1
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+done()

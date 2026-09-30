@@ -215,10 +215,6 @@ Group B — open design questions owned by this task group.:::
 
 ////
 
-Two modelling choices for you to check:
-- MachineUse counts bytes in ML-DSA. The spec names no unit.
-- ML-DSA AuxInfo is checked as 14 bits wide. The text calls it 16 bits, including two "Reserved" bits that are actually MachineExtension.
-
 Other spec issues:
 - Derive endpoints table: it is missing the kl.exec-output sources for ML-KEM, ML-DSA and ECC, and the ECC scalar as a destination. The new rule says these transfers are listed for every pair of Machines.
 - ML-KEM derive:
@@ -251,5 +247,35 @@ Other spec issues:
   - the derive-endpoints table disagreeing with DER6, and missing endpoints for ML-KEM, ML-DSA and ECC;
   - kl.setst #53 still able to put a locker in Expired without Zklexpire;
   - AuxDataLen = 1 missing from the Metadata-validity list.
+
+  Spec issues from these four (not edited):
+  - K0 still unusable: HMAC NIK K0 is a derive destination in Ready, but moving to Set_Key zeroes it, so a derived key is never used. The table row also still carries a dangling "(1)".
+  - Set_Key: it still has no State number; the harness uses 15.
+  - HMAC-SHA-3: cumul_len isn't in SHA-3's Serialized Content, so a completed key load doesn't survive export and import.
+  - Generic Serialized Content:
+    - It now includes input_base/output_base (Position v), which every kl.exec resets; the SHA-3 section says input_base isn't serialized.
+    - Its table calls an unused cumul_len "absent", while the NOTE below it says it becomes padding.
+  - SHA-2: it states neither how message words map onto state nor the layout of state.
+
+  Every hex vector from the old files is still present byte for byte, and the sealing regression vectors still match, so the model's output hasn't changed.
+
+  Derive follows your new table:
+  - ECB: key in Ready. A shared secret into key narrows the destination's policies; a DRBG source doesn't.
+  - CTR: key in Ready. The keystream into a SHA-256 absorb is new coverage, allowed by DER6.
+
+  Spec issues from these three (not edited):
+  - Endpoints table vs DER6: the table lists no source for kl.exec-output Machines such as CTR and XCTR, although DER6 admits their keystream into a hash or MAC.
+  - DER4 with a KeyType-1 destination: KeyType isn't part of the endpoint descriptor, so it's unclear whether only the destination or both lockers go to Invalid. The ECB harness invalidates only the destination; the ECC harness invalidates both.
+  - DER2 narrowing: "the stricter entry in each HW Binding chain" defines no ordering. The harness takes the higher encoding.
+  - Error-State transfer: the import steps in <<KLEE-error-state-transfer>> leave out the zeroing of AuxDataLen and ADSDropped that <<KLEE-locker-management>> states.
+  - kl.store: it defines image_size and image_end "as defined" in kl.load, which doesn't define them.
+  - Still present from earlier:
+    - The SCC-AEAD section lists only three differences from AES-GCM-SIV.
+    - AuxDataLen = 1 is missing from the Metadata-validity list.
+    - MachinePolicy = 0 counts as both unsupported and invalid.
+    - The garbled Expired/"PSCC" sentence.
+    - DIEL item 4 contradicts step 5 of the SCC import.
+
+  The agent also questioned my ML-DSA edit, asking whether {vvert} conflicts with the chapter's @ notation. It doesn't: the chapter's opening paragraph says @ puts its left operand in the more significant bits, "opposite to the {vvert} used by referenced standards". FIPS 204's byte strings are exactly that case, and HMAC and EdDSA already use {vvert} the same way.
 
 ////

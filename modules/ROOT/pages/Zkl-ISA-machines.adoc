@@ -2582,7 +2582,8 @@ where `mode` is `assign` because `K0` is *loaded* into its field, not absorbed i
 
 ** Upon entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
-  . `K0 xor ipad` is computed and absorbed in the underlying hash function.
+  . `block`, `block_base` and `cumul_len` are set to zero, discarding any value left by the loading of `K0` in _Set_Key_.
+  . `K0 xor ipad` is computed and absorbed in the underlying hash function; this absorption is not counted in `cumul_len`.
   . Then the semantics of the underlying hash function are executed, absorbing the message.
 ** When entering state _Hash_Output_:
 +
@@ -2628,13 +2629,13 @@ Parameters:::
 .Parameters of the SHA-3 family
 [%autowidth,float="center",align="center",cols="<,^,^,^,^,<",options="header"]
 |===
-| Function | `c` | `b` = 1600 - `c` | `t` | XOF? | Suffix `D`
-| SHA3-224 |  448 | 1152 |  224 | no  | `01`
-| SHA3-256 |  512 | 1088 |  256 | no  | `01`
-| SHA3-384 |  768 |  832 |  384 | no  | `01`
-| SHA3-512 | 1024 |  576 |  512 | no  | `01`
-| SHAKE128 |  256 | 1344 | 1344 | yes | `1111`
-| SHAKE256 |  512 | 1088 | 1088 | yes | `1111`
+| Function |  `c` | `b` = 1600 - `c` | v`t` | XOF? | Suffix `D`
+| SHA3-224 |  448 |       1152       |  224 |   no |   `01`
+| SHA3-256 |  512 |       1088       |  256 |   no |   `01`
+| SHA3-384 |  768 |        832       |  384 |   no |   `01`
+| SHA3-512 | 1024 |        576       |  512 |   no |   `01`
+| SHAKE128 |  256 |       1344       | 1344 |  yes | `1111`
+| SHAKE256 |  512 |       1088       | 1088 |  yes | `1111`
 |===
 
 For the four fixed-output functions, `t` is the digest length, which is `c`/2, and a
@@ -3690,7 +3691,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 ** {empty}
 +
 --
-`Progress`, bits [15:1] of _MachineUse_, is the field used following rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>> for Point Multiplication,
+`Progress`, bits [13:1] of _MachineUse_, is the field used following rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>> for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
 Rule <<KLEE-MGR-progress-discard>> applies: any state transition out of these States zeroes `Progress`, destroys `RndNum` and clears `HasRndNum`, and the operation restarts.
@@ -3962,17 +3963,6 @@ _encapsk_Output_ and _ciphertext_Output_ states. This is similar to what is done
 hashing and Elliptic Curve Machines.
 
 The size of the internal state of the three variants is 3232, 4704, and 6336 bytes, excluding metadata
-////
-The _AuxInfo_ field records the policies that a CC receiving the `sharedkey` through `kl.derive`
-is required to carry: the format is the same as bits [79:64] of the MDH, that is the _UsagePolicy_
-and _Locality_ fields together with the two Reserved bits that follow them. The destination CC is
-provisioned independently, so the _UsagePolicy_ and _Locality_ of the destination will be set
-to the union of its current policies, the policies of the source locker, and the ones encoded in
-_AuxInfo_ value.
-Alternatively: these bits are a *requirement on it*, not a value copied into it: if
-bits [79:64] of the destination CC's MDH are not at least as restrictive as _AuxInfo_, the
-destination locker transitions to Error State _Invalid_ and no key material is transferred.
-////
 --
 
 * *Serialized Content*:
@@ -4128,8 +4118,8 @@ The KLEE ML-DSA Machines execute the core lattice operations of signing and veri
 
 Message hashing and domain formatting (cite:[nist-fips-204] {sect}5) are structured as follows:
 
-* *Pure ML-DSA:* The caller formats the domain-separated message string `M' = 0x00 @ bin(|ctx|, 8) @ ctx @ M` and computes the 64-byte message representative `mu = SHAKE256(tr @ M', 64)`, which is supplied to the KLEE unit via State _mu_Input_.
-* *HashML-DSA (Pre-Hash):* The caller pre-hashes message `M` with the hash function `PH` specified in the _AuxInfo_ field of the MDH, constructs `M' = 0x01 @ bin(|ctx|, 8) @ ctx @ OID(PH) @ PH(M)`, and computes `mu = SHAKE256(tr @ M', 64)` to be loaded into State _mu_Input_.
+* *Pure ML-DSA:* The caller formats the domain-separated message string `M' = 0x00 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} M` and computes the 64-byte message representative `mu = SHAKE256(tr {vvert} M', 64)`, which is supplied to the KLEE unit via State _mu_Input_.
+* *HashML-DSA (Pre-Hash):* The caller pre-hashes message `M` with the hash function `PH` specified in the _AuxInfo_ field of the MDH, constructs `M' = 0x01 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} OID(PH) {vvert} PH(M)`, and computes `mu = SHAKE256(tr {vvert} M', 64)` to be loaded into State _mu_Input_.
 For FIPS conformance, cite:[nist-fips-204] requires `PH(M)` to be computed within a FIPS-140-validated cryptographic module, which may be the KLEE unit itself if it is required to be FIPS-140-validated.
 * *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)` is computed inside the KLEE unit upon key generation (`_GenerateKeyPair_`) or public key derivation (`_compute_pubKey_`), or loaded via State _tr_Input_ when configuring a CC for verification only.
 * *Context String (`ctx`):* The context string `ctx` (up to 255 bytes) and its length `ctxlen` are maintained in the CC to bind the context of the protocol to the hardware session. In implementations supporting internal message absorption, `ctx` and `tr` are used internally to derive `mu`; when `mu` is supplied directly by the caller, `ctx` and `ctxlen` attest that bound in the serialized SCC.
@@ -4328,22 +4318,22 @@ For the Machines defined in this Chapter, the architected `kl.derive` endpoints 
 
 | ECB mode (<<KLEE-ECB-mode>>), Keystream generation (<<KLEE-keystream-modes>>), GCM mode (<<KLEE-GCM-mode>>), GCM-SIV mode (<<KLEE-GCM-SIV-mode>>), CMAC mode (<<KLEE-CMAC-mode>>), OCB mode (<<KLEE-OCB-mode>>), Ascon AEAD128 mode (<<KLEE-Ascon-AEAD128>>) | `key` | destination | _Ready_
 
-| GCM mode (<<KLEE-GCM-mode>>) | IV/`J0` | destination | _Set_Aux_Value_
+| XEX/XTS modes (<<KLEE-tweakable>>) | `key1 {vvert} key2`    | destination | _Ready_
 
-| OCB mode (<<KLEE-OCB-mode>>) | `nonce` | destination | _Set_Aux_Value_
+| GCM mode (<<KLEE-GCM-mode>>)       | IV                     | destination | _Set_Aux_Value_
 
-| Tweakable mode (<<KLEE-tweakable>>) | `key1` {vvert}  `key2` | destination | _Ready_
+| OCB mode (<<KLEE-OCB-mode>>)       | `nonce`                | destination | _Set_Aux_Value_
 
-| HMAC, NIK variant (<<KLEE-HMAC>>) | `K0` (1)  | destination | _Ready_
+| HMAC, NIK variant (<<KLEE-HMAC>>)  | `K0`                   | destination | _Ready_
 
 .2+| Hash functions, MACs, XOFs (<<KLEE-hash-functions-MACs-XOFs>>), such as SHA-2, SHA-3, SM3, SHAKE,
 as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XOF128>>), and Ascon-CXOF128 (<<KLEE-Ascon-CXOF128>>)
-| `kl.exec` output  | source | _Hash_Output_
-| `kl.exec` input | destination | _Hash_Absorb_
+| `kl.exec` output                                            | source      | _Hash_Output_
+| `kl.exec` input                                             | destination | _Hash_Absorb_
 
-| Elliptic Curve (<<KLEE-ECC>>) | `SecondPt` | source | if `HasSecondPt` is true
+| Elliptic Curve (<<KLEE-ECC>>)      | `SecondPt`             | source      | if `HasSecondPt` is true
 
-| ML-KEM (<<KLEE-PQC-ML-KEM>>) | `sharedkey`  | source | any
+| ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | any
 |===
 
 Any combination of source and destination is admissible as long as the Rules in <<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>> are satisfied.

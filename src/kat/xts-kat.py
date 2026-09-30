@@ -1,483 +1,211 @@
 #!/usr/bin/env python3
-"""XEX/XTS (<<KLEE-XEX-XTS-modes>> and <<KLEE-XTS-from-XEX>> in
-modules/ROOT/pages/Zkl-ISA-machines.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
-
-Models
-------
-REF   Plain byte-string XTS with ciphertext stealing, written from the standard,
-      including IEEE 1619-2007 5.2's byte-wise multiplication by `{alpha}` over the
-      16-byte tweak array.  It shares no doubling code with the KLEE side.
-
-KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexLocker): the PI is
-      provisioned (the MDH first, then `key1` and `key2`, or one SKID that retrieves
-      both, MGR10), the locker moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
-      processed with the (multi-block) Form A kl.exec:
-
-          on entering _Encrypt_/_Decrypt_ (Form C kl.setst):
-                                   mask <- INPUT, then mask <- enc_blk(key2, mask)
-          each block of a kl.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
-                                    mask  <- update_mask(mask)
-
-      The block loop is rule MGR3 of <<KLEE-Machines-other-rules>>: for
-      i = 0, b, ..., KLLEN - b, *in that order*, the per-block operation consumes
-      INPUT[i+b-1:i] and produces OUTPUT[i+b-1:i].  Since the mask advances with
-      every block, the order is observable here, unlike in ECB.  `update_mask` is
-      transcribed literally from <<KLEE-XEX-XTS-modes>> and cross-checked against
-      common.py's.  The tweak is `bin(i, b)`, the little-endian encoding of the data
-      unit sequence number (<<KLEE-XTS-from-XEX>>, "The tweak").
-
-CTS   The <<KLEE-XTS-from-XEX>> "Ciphertext stealing" procedure implemented step by
-      step.  Encryption needs no reordering (mask indices m-1 then m, the ciphertext
-      emitted as C_{m-1}, C_m); decryption uses one kl.clone, one *discarded*
-      kl.exec on the clone to advance it from mask index m-1 to m, C_{m-1} decrypted
-      on the clone at index m, CP @ C_m decrypted on the original at index m-1, and a
-      kl.clear of the clone.  The clone is a real copy of the locker, so an accidental
-      aliasing of the two masks would show up as a failure.
-
-NEG   Two negative controls, each of which must fail the vectors: OCB3's big-endian
-      `double` substituted for `update_mask` (the two differ, one doubling the value
-      and the other its byte-reversal), and a multi-block kl.exec that consumes the
-      blocks from the most significant position down, which assigns the mask indices
-      in reverse address order.
-
-RULES The behaviour the Machine text leaves to the general rules, and the parts of
-      the state machine a vector can pin down: a kl.exec in _Ready_ invalidates the
-      locker (Rules <<KLEE-SGR-no-exec-in-ready>> and
-      <<KLEE-MGR-not-allowed-instructions>>); _Encrypt_ -> _Decrypt_ is *not* an
-      allowed transition here (unlike <<KLEE-ECB-mode>> and <<KLEE-tweakable>>);
-      _MachinePolicy_ gates the two transitions from _Ready_ (<<KLEE-Machine-field>>);
-      returning to _Ready_ zeroes the mask, so the CC can be reused with a new tweak;
-      a same-State kl.setst (SGR4 of <<KLEE-State-management>>) re-tweaks; a KLLEN
-      that is not a multiple of b performs no operation and invalidates the locker
-      (MGR2), the output window being zeroed (Rule
-      <<KLEE-SGR-usage-locker-error-state>>) and the Content cleared (Rule
-      <<KLEE-SGR-clear-locker-content-error-state>>); KLLEN > b truncates the tweak
-      (MGR5); the KLIOBUF substitution of <<KLEE-usage-input-output>>; the
-      interruption points and resumption of a multi-block kl.exec
-      (<<KLEE-CSR-klstart>>, Rule <<KLEE-IRR-block-iterated-instructions>>).
-
-DATA  The Provisioning Input and the Serialized Content as "Definition of a Machine
-      in KLEE" now describes them: the PI begins with the 128-bit MDH, which the
-      Machine tables no longer list, and `key1` and `key2` follow at positions ii and
-      iii; the MDH is not part of the Serialized Content, where `key1`, `key2` and
-      `mask` are at positions i, ii and iii, zero-padded to a multiple of 128 bits.
-      With a SKID, position iii of the PI is empty and `mask` starts at byte 8 of
-      Content1.  Sizes are checked against kl.size (<<KLEE-instruction-size>>).
-
-DERIVE The destination endpoints `key1` (1) and `key2` (2) of
-      <<KLEE-derive-endpoints>> (marked work in progress), with DER1 check 4
-      (<<KLEE-DER-checks>>: `length` >= dest_length, exactly dest_length bytes, no
-      zero-filling), DER4 and DER8 (<<KLEE-derive-rule-both-fixed-size>>).  kl.derive
-      carries no field selector, so which of the two keys is written is a parameter
-      of this model (SPEC-NOTE).
-
-Vectors and provenance
-----------------------
-All vectors are the IEEE 1619-2007 XTS-AES vectors, which SP 800-38E adopts, as
-reproduced in the Botan test data file src/tests/data/modes/xts.vec, sections
-[AES-128/XTS] and [AES-256/XTS], entries commented "IEEE 1619-2007 VECTOR n"
-(raw.githubusercontent.com/randombit/botan, master, fetched 2026-08-26).  Botan's
-"Nonce" field is the 16-byte little-endian encoding of the data unit sequence
-number, i.e. exactly the specification's `bin(i, 128)`.
-
-  multiple of 16 B : vectors 1, 2, 3, 15 (32 B), 4 and 19 (512 B, XTS-AES-128),
-                     10 (512 B, XTS-AES-256)
-  ciphertext steal : vectors 15 (17 B), 16 (18 B), 17 (19 B), 18 (20 B),
-                     19 (520 B --- 32 full blocks plus 8 bytes)
-
-The 512/520-byte plaintexts are the byte pattern 00..ff repeated twice (plus an
-8-byte tail for the 520-byte case), so only their ciphertexts are embedded.
-
-Anchor level: standard-vector for every data-path check in this file, in both
-directions.  The RULES, DATA and DERIVE checks are anchored on the same vectors
-wherever a vector can express the rule, and otherwise on byte layouts and sizes
-worked out by hand from the specification's tables.
-
-Not covered: <<KLEE-tweakable>>.  No tweakable block cipher is instantiated by
-<<KLEE-exec-encodings>>, so there is no Machine, and no published vector, to test.
-"""
-import os
-import random
-import sys
-
+"""XEX/XTS KAT: the Machine of <<KLEE-XEX-XTS-modes>> and the <<KLEE-XTS-from-XEX>> procedure
+against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
+import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
+                    MASK128, MDH_FIELD, mdh_pack,
+                    KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
+                    KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
+                    KL_STATE_INVALID as INVALID, ERROR_STATES,
+                    section, check, control, info, spec_note, done)
 
-from common import (aes_decrypt, aes_encrypt, b2v, bin_, bswap, bxor, cat,
-                    double_ocb, sl, update_mask, v2b)
-
-MASK128 = (1 << 128) - 1
-B = 128                         # the block size b
-
-# ---------------------------------------------------------------- constants
-# <<KLEE-metadata-header>>: (hi, lo) of the MDH fields this file uses
-F_MACHINE, F_MACHINEPOLICY = (11, 0), (13, 12)
-F_STATE, F_KEYTYPE = (24, 19), (30, 29)
-
-# <<KLEE-state-off>>, <<KLEE-states-valid>>, <<KLEE-states-error>>
-ST_UNCONFIGURED, ST_READY, ST_INVALID = 0, 1, 49
-# <<KLEE-state-constants-symmetric>>
-ST_OPERATE, ST_ENCRYPT, ST_DECRYPT, ST_SET_AUX_VALUE = 2, 7, 8, 13
-
-# <<KLEE-Machine-field>>: lower bit of _MachinePolicy_ = encryption, upper = decryption
-POL_ENC, POL_DEC = 0b01, 0b10
-POL_BOTH = POL_ENC | POL_DEC
-
-ONES64 = (1 << 64) - 1          # the all-ones SKID (<<KLEE-KeyType-field>>)
-
-CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}   # name -> k
-
-
-def machine(typ, mode):
-    """<<KLEE-exec-encodings>>: _Machine_ = Type in bits [11:4], Mode in bits [3:0]."""
-    return (typ << 4) | mode
-
-
-# <<KLEE-exec-encodings>>: XEX is Mode 3 of Types 0-2 (AES) and of Type 3 (SM4, not
-# instantiated here: no SM4-XTS vector is used)
-XEX_MACHINES = {machine(t, 3): c for t, c in enumerate(CIPHERS)}
+B, ONES64 = 128, (1 << 64) - 1
+POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLEE-Machine-field>>
+CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
+XEX_MACHINES = {(t << 4) | 3: c for t, c in enumerate(CIPHERS)}   # <<KLEE-exec-encodings>> Mode 3
 XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
-
-# <<KLEE-derive-endpoints>> (work in progress), row of <<KLEE-XEX-XTS-modes>>
-XEX_EXPORTABLE = {}                        # a key is never an exportable source
-XEX_IMPORTABLE = {1: 'key1', 2: 'key2'}
-
-
-def fget(v, f):
-    return sl(v, f[0], f[1])
-
+fget = lambda v, f: sl(v, *MDH_FIELD[f])
+padded = lambda bits: -(-bits // 128) * 16
 
 def fset(v, f, x):
-    hi, lo = f
-    m = ((1 << (hi - lo + 1)) - 1) << lo
-    return (v & ~m) | ((x << lo) & m)
+    hi, lo = MDH_FIELD[f]
+    return (v & ~(((1 << (hi - lo + 1)) - 1) << lo)) | (x << lo)
 
+def kl_size(mdh, c1_size, pi_size):
+    """<<KLEE-instruction-size>> from an MDH, AuxDataLen = 0."""
+    st = fget(mdh, 'State')
+    return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
-def make_mdh(mach, policy, keytype=0, state=ST_UNCONFIGURED):
-    mdh = fset(0, F_MACHINE, mach)
-    mdh = fset(mdh, F_MACHINEPOLICY, policy)
-    mdh = fset(mdh, F_KEYTYPE, keytype)
-    return fset(mdh, F_STATE, state)
-
-
-def kl_getst(mdh):
-    """kl.getst on RV64 (<<KLEE-instruction-getst>>): kl.getmdl, srli 19, andi 0x3F."""
-    return ((mdh & ONES64) >> 19) & 0x3F
-
-
-def padded_bytes(bits):
-    """Length in bytes of `bits` once implicitly zero-padded to a multiple of 128 bits."""
-    return -(-bits // 128) * 16
-
-
-def kl_size(mdh, content1_size, pi_content_size):
-    """<<KLEE-instruction-size>> for a supplied MDH (Forms B/C) with _AuxDataLen_ = 0."""
-    st = kl_getst(mdh)
-    if 48 <= st <= 55:
-        return 16
-    if st == ST_UNCONFIGURED:            # the MDH of a PI
-        return 16 + pi_content_size
-    return 32 + content1_size
-
-
-def build_pi(mach, keytype, key1, key2=0, policy=POL_BOTH):
-    """A PI: the MDH (i), then `key1` or the SKID (ii) and `key2` (iii, empty for a SKID)."""
+def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: MGR10)."""
     k = CIPHERS[XEX_MACHINES[mach]]
-    if keytype == 1:
-        content, width = key1, 64        # one SKID retrieves both keys (MGR9, MGR10)
-    else:
-        content, width = cat((key2, k), (key1, k)), 2 * k
-    return v2b(make_mdh(mach, policy, keytype), 16) + v2b(content, padded_bytes(width))
+    content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
+    return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
 
-
-# ---------------------------------------------------------------- update_mask
 def kl_update_mask(V):
-    """update_mask of <<KLEE-XEX-XTS-modes>>, transcribed for b = 128:
-
-        update_mask(V) = V << 1                                    if V[127] = 0
-        update_mask(V) = (V << 1) xor (zeros(120) @ 0b10000111)     otherwise
-    """
+    """<<KLEE-XEX-XTS-modes>> update_mask, b = 128, transcribed."""
     if sl(V, 127, 127) == 0:
         return (V << 1) & MASK128
     return ((V << 1) & MASK128) ^ cat((0, 120), (0b10000111, 8))
 
-
-# ---------------------------------------------------------------- REF
+# ---------------------------------------------------------------- REF (IEEE 1619-2007, byte strings)
 def ref_mul_alpha(t):
-    """IEEE 1619-2007 5.2: multiplication of the 16-byte tweak array by `alpha`."""
-    t = bytearray(t)
-    cin = cout = 0
+    """IEEE 1619-2007 5.2: multiplication of the tweak byte array by alpha."""
+    t, cin = bytearray(t), 0
     for j in range(16):
-        cout = (t[j] >> 7) & 1
-        t[j] = ((t[j] << 1) + cin) & 0xFF
-        cin = cout
-    if cout:
-        t[0] ^= 0x87
+        t[j], cin = ((t[j] << 1) + cin) & 0xFF, t[j] >> 7
+    t[0] ^= 0x87 * cin
     return bytes(t)
 
-
 def ref_xts(key1, key2, seq, data, encrypt=True):
-    """XTS-AES with ciphertext stealing, on byte strings, per IEEE 1619 / SP 800-38E."""
     f = aes_encrypt if encrypt else aes_decrypt
     m, s = divmod(len(data), 16)
     tw = [aes_encrypt(key2, seq.to_bytes(16, 'little'))]
     for _ in range(m):
-        tw.append(ref_mul_alpha(tw[-1]))          # tw[q] = T (x) alpha^q
-
-    def tbc(x, t):                                # one XEX block operation under tweak t
-        return bxor(f(key1, bxor(x, t)), t)
-
-    def blk(q):
-        return data[16 * q:16 * q + 16]
-
+        tw.append(ref_mul_alpha(tw[-1]))
+    tbc = lambda x, t: bxor(f(key1, bxor(x, t)), t)
+    blk = lambda q: data[16 * q:16 * q + 16]
     if s == 0:
         return b''.join(tbc(blk(q), tw[q]) for q in range(m))
     out = b''.join(tbc(blk(q), tw[q]) for q in range(m - 1))
-    if encrypt:
-        cc = tbc(blk(m - 1), tw[m - 1])
-        c_last, cp = cc[:s], cc[s:]
-        out += tbc(data[16 * m:] + cp, tw[m]) + c_last
-    else:
-        pp = tbc(blk(m - 1), tw[m])
-        p_last, cp = pp[:s], pp[s:]
-        out += tbc(data[16 * m:] + cp, tw[m - 1]) + p_last
-    return out
+    a, b = (m - 1, m) if encrypt else (m, m - 1)      # decryption swaps the last two tweaks
+    cc = tbc(blk(m - 1), tw[a])
+    return out + tbc(data[16 * m:] + cc[s:], tw[b]) + cc[:s]
 
-
-# ---------------------------------------------------------------- the KLEE model
+# ---------------------------------------------------------------- KLEE model
 class XexLocker:
-    """A locker holding an XEX CC, per <<KLEE-XEX-XTS-modes>> and the general rules."""
-
-    def __init__(self, sks=None, doubling=None, rng=None, order='spec'):
-        self.mdh = 0                     # _Unconfigured_: every MDH field reads zero
-        self.key1 = self.key2 = self.skid = self.mask = None
-        self.sks = sks or {}
-        self.doubling = doubling or kl_update_mask
-        self.rng = rng or random.Random(2026)
-        self.order = order
-
-    # ------------------------------------------------------------ helpers
-    @property
-    def state(self):
-        return kl_getst(self.mdh)
-
-    @property
-    def keytype(self):
-        return fget(self.mdh, F_KEYTYPE)
-
-    def k(self):
-        return CIPHERS[XEX_MACHINES[fget(self.mdh, F_MACHINE)]]
-
-    def content_widths(self):
-        """(width of position i, width of position ii) of the Serialized Content."""
-        return (64, 0) if self.keytype == 1 else (self.k(), self.k())
-
-    def in_error(self):
-        return 48 <= self.state <= 55
-
-    def invalidate(self):
-        self.mdh = fset(self.mdh, F_STATE, ST_INVALID)
-        self.key1 = self.key2 = self.skid = self.mask = None
-
-    def _install(self, field, key2, importing):
-        if self.keytype == 0:
-            self.key1, self.key2 = field, key2
-        elif field == ONES64 and not importing:
-            # random key material for every key of the Machine at once; _KeyType_ -> 0
-            k = self.k()
-            self.key1, self.key2 = self.rng.getrandbits(k), self.rng.getrandbits(k)
-            self.mdh = fset(self.mdh, F_KEYTYPE, 0)
-        elif field != ONES64 and field in self.sks:
-            self.skid = field
-            self.key1, self.key2 = self.sks[field]      # one SKID, two keys (MGR10)
+    def __init__(s, sks=None, doubling=kl_update_mask, rng=None, msb_first=False):
+        s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
+        s.sks, s.doubling, s.rng, s.msb_first = sks or {}, doubling, rng or random.Random(2026), msb_first
+    state = property(lambda s: fget(s.mdh, 'State'))
+    keytype = property(lambda s: fget(s.mdh, 'KeyType'))
+    k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
+    widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
+    def invalidate(s):                            # SGR10
+        s.mdh = fset(s.mdh, 'State', INVALID)
+        s.key1 = s.key2 = s.skid = s.mask = None
+    def _install(s, field, key2, importing):
+        if s.keytype == 0:
+            s.key1, s.key2 = field, key2
+        elif field == ONES64 and not importing:   # <<KLEE-KeyType-field>>: random keys, KeyType 0
+            s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
+            s.mdh = fset(s.mdh, 'KeyType', 0)
+        elif field != ONES64 and field in s.sks:
+            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (MGR10)
         else:
-            self.invalidate()            # unresolved SKID (<<KLEE-MVR-open>>)
+            s.invalidate()                        # <<KLEE-MVR-open>>
+    def provision(s, pi):
+        s.mdh = b2v(pi[:16])
+        w1, w2 = s.widths
+        c = b2v(pi[16:])
+        s._install(sl(c, w1 - 1, 0), sl(c, w1 + w2 - 1, w1) if w2 else 0, False)
+        if s.state not in ERROR_STATES:
+            s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
+    def content1(s):
+        """key1 or SKID (i), key2 (ii, empty with a SKID), mask (iii)."""
+        w1, w2 = s.widths
+        first = s.skid if s.keytype == 1 else s.key1
+        return v2b(cat((s.mask, B), (s.key2 if w2 else 0, w2), (first, w1)), padded(w1 + w2 + B))
+    def import_scc(s, mdh, c1):
+        s.mdh, v = mdh, b2v(c1)
+        w1, w2 = s.widths
+        s.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
+        s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
 
-    # ------------------------------------------------------------ configuration
-    def provision(self, pi):
-        self.mdh = b2v(pi[:16])          # position i of the PI: the MDH
-        w1, w2 = self.content_widths()
-        content = b2v(pi[16:])
-        self._install(sl(content, w1 - 1, 0),
-                      sl(content, w1 + w2 - 1, w1) if w2 else 0, False)
-        if not self.in_error():
-            self.mdh = fset(self.mdh, F_STATE, ST_READY)
-            self.mask = 0                # in State _Ready_ the mask field is zero
-
-    def content1(self):
-        """Serialized Content: key1 or SKID (i), key2 (ii, empty for a SKID), mask (iii)."""
-        w1, w2 = self.content_widths()
-        first = self.skid if self.keytype == 1 else self.key1
-        return v2b(cat((self.mask, B), (self.key2 if w2 else 0, w2), (first, w1)),
-                   padded_bytes(w1 + w2 + B))
-
-    def import_scc(self, mdh, content1):
-        self.mdh = mdh
-        w1, w2 = self.content_widths()
-        v = b2v(content1)
-        self.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
-        self._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
-
-    # ------------------------------------------------------------ usage
-    def setst(self, immed, form='C', operand=0, KLLEN=128):
-        """kl.setst.  `form` is 'A' (no operand), 'A/iobuf' (the KLIOBUF substitution of
-        Form C, `operand` = the bytes [0, kliobuftop)) or 'C' (a KLLEN-bit vector)."""
-        if self.in_error():
-            return                       # no operation, _State_ unchanged
-        pol = fget(self.mdh, F_MACHINEPOLICY)
-        st = self.state
-        allowed = {ST_ENCRYPT: pol & POL_ENC, ST_DECRYPT: pol & POL_DEC}
-        if immed == ST_READY and form == 'A':
-            self.mdh = fset(self.mdh, F_STATE, ST_READY)     # _Encrypt_/_Decrypt_ -> _Ready_
-            self.mask = 0
-        elif (immed in (ST_ENCRYPT, ST_DECRYPT) and form in ('C', 'A/iobuf')
-              # _Ready_ -> _Encrypt_/_Decrypt_ if allowed, or the same State again (SGR4)
-              and ((st == ST_READY and allowed[immed]) or st == immed)):
+    def setst(s, immed, form='C', operand=0, KLLEN=128):
+        """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
+        if s.state in ERROR_STATES:               # SGR16
+            return
+        pol = fget(s.mdh, 'MachinePolicy')
+        if immed == READY and form == 'A':
+            s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
+        elif (immed in (ENCRYPT, DECRYPT) and form in ('C', 'A/iobuf')
+              and (s.state == READY and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)
+                   or s.state == immed)):         # SGR4: same State re-tweaks
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
-            self.mask = sl(value, B - 1, 0)                  # mask <- INPUT, b lsbs
-            self.mask = b2v(aes_encrypt(v2b(self.key2, self.k() // 8),
-                                        v2b(self.mask, B // 8)))  # mask <- enc_blk(key2, mask)
-            self.mdh = fset(self.mdh, F_STATE, immed)
+            s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MGR5)
+            s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
+            s.mdh = fset(s.mdh, 'State', immed)
         else:
-            self.invalidate()            # a transition the Machine does not allow
+            s.invalidate()                        # MGR1
 
-    def exec(self, inp, KLLEN, klstart=0, out=None, halt_after=None):
-        """(Multi-block) Form A kl.exec, or its Form D substitution (in place).
-
-        `inp` and `out` are the KLLEN-bit operands (`out` defaults to `inp`, i.e.
-        Vd = Vs2, which is how a substituted Form A behaves); `klstart` is in bytes.
-        Returns (new value of the output operand, klstart).
-        """
+    def exec(s, inp, KLLEN, klstart=0, out=None, halt_after=None):
+        """Form A kl.exec (or its Form D substitution, Vd = Vs2); returns (output operand, klstart)."""
         out = inp if out is None else out
         lo = 8 * klstart
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
-        if self.in_error():
-            return out & ~window, 0
-        if lo % B:                       # an input klstart that is no interruption point
-            self.invalidate()
+        if s.state in ERROR_STATES:
+            return out & ~window, 0               # SGR16
+        if lo % B:                                # input klstart not an interruption point
+            s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
-            return out, klstart          # empty window: no operation
-        if (self.state not in (ST_ENCRYPT, ST_DECRYPT)     # e.g. kl.exec in _Ready_
-                or KLLEN % B):                             # MGR2: granularity b
-            self.invalidate()
+            return out, klstart                   # empty window
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # SGR2, MGR1, MGR2
+            s.invalidate()
             return out & ~window, 0
-        f = aes_encrypt if self.state == ST_ENCRYPT else aes_decrypt
-        key1 = v2b(self.key1, self.k() // 8)
-        positions = list(range(lo, KLLEN, B))              # MGR3: i = 0, b, ..., in order
-        if self.order != 'spec':
-            positions.reverse()                            # NEG: most significant first
-        for q, i in enumerate(positions):
-            if halt_after is not None and q == halt_after:
-                return out, i // 8       # precise halt, prefix-complete klstart
-            x = sl(inp, i + B - 1, i)
-            res = self.mask ^ b2v(f(key1, v2b((x ^ self.mask) & MASK128, B // 8)))
-            self.mask = self.doubling(self.mask)           # mask <- update_mask(mask)
-            out = (out & ~(MASK128 << i)) | ((res & MASK128) << i)
+        f, key1 = aes_encrypt if s.state == ENCRYPT else aes_decrypt, v2b(s.key1, s.k // 8)
+        pos = list(range(lo, KLLEN, B))           # MGR3
+        for q, i in enumerate(reversed(pos) if s.msb_first else pos):
+            if q == halt_after:
+                return out, i // 8                # precise halt
+            res = s.mask ^ b2v(f(key1, v2b(sl(inp, i + B - 1, i) ^ s.mask, 16)))
+            s.mask = s.doubling(s.mask)
+            out = (out & ~(MASK128 << i)) | (res << i)
         return out, 0
-
-    def exec1(self, value):
-        """One single-block Form A kl.exec (KLLEN = b)."""
-        return self.exec(value, B)[0]
-
-    def clone(self):
-        """kl.clone: the destination locker becomes a perfect copy of the source locker."""
-        c = XexLocker(self.sks, self.doubling, self.rng, self.order)
-        c.mdh, c.key1, c.key2, c.skid, c.mask = (self.mdh, self.key1, self.key2,
-                                                 self.skid, self.mask)
+    def exec1(s, value):
+        return s.exec(value, B)[0]
+    def clone(s):
+        c = XexLocker(s.sks, s.doubling, s.rng, s.msb_first)
+        c.mdh, c.key1, c.key2, c.skid, c.mask = s.mdh, s.key1, s.key2, s.skid, s.mask
         return c
+    def clear(s):
+        s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
 
-    def clear(self):
-        """kl.clear: the locker becomes _Unconfigured_ and its Content is released."""
-        self.mdh = 0
-        self.key1 = self.key2 = self.skid = self.mask = None
-
-    # ------------------------------------------------------------ kl.derive
-    def derive_dest(self, j, src, length):
-        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>)."""
-        if self.in_error():
+    def derive_dest(s, src, length):
+        """kl.derive into `key1 || key2` (<<KLEE-derive-endpoints>>), in Ready."""
+        if s.state in ERROR_STATES:
             return False
-        dest_length = self.k() // 8
-        if (j not in XEX_IMPORTABLE              # `j` is a model parameter (SPEC-NOTE)
-                or self.state != ST_READY        # a key is filled in State _Ready_
-                or self.keytype == 1             # DER4: never importable
-                or length < dest_length          # DER1 check 4 (length = 0 included)
-                or len(src) < dest_length):      # DER1 check 4: the source is too short
-            self.invalidate()
+        n = s.k // 4                              # dest_length: both keys
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # DER1 check 4, DER4
+            s.invalidate()
             return False
-        value = b2v(src[:dest_length])           # exactly dest_length bytes (DER8)
-        if j == 1:
-            self.key1 = value
-        else:
-            self.key2 = value
+        s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
+def derive(src, dst, length):
+    """kl.derive into an XEX locker; XEX lists no source endpoint."""
+    if isinstance(src, XexLocker):
+        src.invalidate()
+        return dst.invalidate() or False
+    return dst.derive_dest(src, length)
 
-def new_xex(key1, key2, **kw):
-    """Provision a locker by value with the given AES keys."""
-    cl = XexLocker(**{k: v for k, v in kw.items() if k in ('sks', 'doubling', 'rng', 'order')})
-    cl.provision(build_pi(XEX_OF[f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2),
-                          kw.get('policy', POL_BOTH)))
+def new_xex(key1, key2, policy=POL_ENC | POL_DEC, **kw):
+    cl = XexLocker(**kw)
+    cl.provision(build_pi(XEX_OF[f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2), policy))
     return cl
 
-
 def cl_run(cl, data, per_block=False, klstart=0, halt_after=None):
-    """Process whole blocks: one multi-block kl.exec, or one kl.exec per block."""
     if not data:
-        return b'', 0                    # no instruction is issued
+        return b'', 0
     if per_block:
-        return b''.join(v2b(cl.exec1(b2v(data[i:i + 16])), 16)
-                        for i in range(0, len(data), 16)), 0
+        return b''.join(v2b(cl.exec1(b2v(data[i:i + 16])), 16) for i in range(0, len(data), 16)), 0
     out, ks = cl.exec(b2v(data), 8 * len(data), klstart, halt_after=halt_after)
     return v2b(out, len(data)), ks
 
-
-def kl_xex(key1, key2, seq, data, encrypt=True, per_block=False, **kw):
-    """The plain XEX sequence; defined only when the data unit is a multiple of b."""
-    assert len(data) % 16 == 0
-    cl = new_xex(key1, key2, **kw)
-    cl.setst(ST_ENCRYPT if encrypt else ST_DECRYPT, 'C', bin_(seq, B), 128)  # tweak bin(i,b)
-    return cl_run(cl, data, per_block)[0]
-
-
 def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw):
-    """<<KLEE-XTS-from-XEX>> implemented step by step, stealing included."""
-    m, s_bytes = divmod(len(data), 16)
-    if s_bytes == 0:                     # s = 0: the plain XEX sequence over m blocks
-        return kl_xex(key1, key2, seq, data, encrypt, per_block, **kw)
-    s = 8 * s_bytes                      # the spec measures the partial block in bits
+    """<<KLEE-XTS-from-XEX>>, step by step; s = 0 is the plain XEX sequence."""
+    m, sb = divmod(len(data), 16)
+    s = 8 * sb
     cl = new_xex(key1, key2, **kw)
-    cl.setst(ST_ENCRYPT if encrypt else ST_DECRYPT, 'C', bin_(seq, B), 128)
-    # 1. kl.exec for the blocks up to P_{m-2} / C_{m-2}; the mask is then at index m-1
-    out = cl_run(cl, data[:16 * (m - 1)], per_block)[0]
-    last_full = b2v(data[16 * (m - 1):16 * m])
-    tail = b2v(data[16 * m:])            # the s-bit partial block
+    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)   # the tweak is bin(i, b)
+    if s == 0:
+        return cl_run(cl, data, per_block)[0]
+    out = cl_run(cl, data[:16 * (m - 1)], per_block)[0]      # mask now at index m-1
+    last, tail = b2v(data[16 * (m - 1):16 * m]), b2v(data[16 * m:])
     if encrypt:
-        # 2. P_{m-1} at mask index m-1, giving CC
-        cc = cl.exec1(last_full)
-        # 3. C_m <- CC[s-1:0] and CP <- CC[b-1:s]
-        c_last, cp = sl(cc, s - 1, 0), sl(cc, 127, s)
-        # 4. CP @ P_m at mask index m, giving C_{m-1}
-        c_m1 = cl.exec1(cat((cp, B - s), (tail, s)))
-        # 5. ... C_{m-1}, C_m, with C_m the final s bits
-        out += v2b(c_m1, 16) + v2b(c_last, s_bytes)
-    else:
-        # 2. kl.clone the locker; both are at mask index m-1
-        clone = cl.clone()
-        # 3. one kl.exec on the clone whose output is discarded: index m-1 consumed
-        clone.exec1(discard)
-        # 4. C_{m-1} on the clone at mask index m, giving PP
-        pp = clone.exec1(last_full)
-        # 5. P_m <- PP[s-1:0] and CP <- PP[b-1:s]
-        p_last, cp = sl(pp, s - 1, 0), sl(pp, 127, s)
-        # 6. CP @ C_m on the original locker, still at mask index m-1
-        p_m1 = cl.exec1(cat((cp, B - s), (tail, s)))
-        out += v2b(p_m1, 16) + v2b(p_last, s_bytes)
-        # 7. clear the clone
-        clone.clear()
-    return out
+        cc = cl.exec1(last)                                  # index m-1
+        c_m1 = cl.exec1(cat((sl(cc, 127, s), B - s), (tail, s)))   # CP @ P_m at index m
+        return out + v2b(c_m1, 16) + v2b(sl(cc, s - 1, 0), sb)
+    clone = cl.clone()
+    clone.exec1(discard)                                     # discarded: index m-1 consumed
+    pp = clone.exec1(last)                                   # C_{m-1} at index m
+    p_m1 = cl.exec1(cat((sl(pp, 127, s), B - s), (tail, s)))  # CP @ C_m at index m-1
+    clone.clear()
+    return out + v2b(p_m1, 16) + v2b(sl(pp, s - 1, 0), sb)
 
-
-# ---------------------------------------------------------------- vectors
+# IEEE 1619-2007 XTS-AES vectors (Botan src/tests/data/modes/xts.vec)
 _PATTERN = (bytes(range(256)) * 2).hex()
 
 # (label, key1||key2, sequence-number encoding (little-endian, 16 B), plaintext, ciphertext)
@@ -607,341 +335,179 @@ IEEE1619_CTS = [
      "8a6b18e86de60290"),
 ]
 
-
 def split_keys(k):
     kb = bytes.fromhex(k)
-    h = len(kb) // 2
-    return kb[:h], kb[h:]
+    return kb[:len(kb) // 2], kb[len(kb) // 2:]
 
+VEC = [(name, *split_keys(k), int.from_bytes(bytes.fromhex(nonce), 'little'), bytes.fromhex(p),
+        bytes.fromhex(c)) for name, k, nonce, p, c in IEEE1619 + IEEE1619_CTS]
+FULL, CTS = VEC[:len(IEEE1619)], VEC[len(IEEE1619):]
 
-def seq_of(nonce_hex):
-    """Botan's Nonce is bin(i, 128): the little-endian encoding of the sequence number."""
-    return int.from_bytes(bytes.fromhex(nonce_hex), 'little')
-
-
-# ---------------------------------------------------------------- run
-ok = True
-neg_fired = {'double': False, 'order': False}
-W = 60
-
-
-def chk(label, got, want):
-    global ok
-    good = got == want
-    ok = ok and good
-    print(f"  {label:<{W}} {'PASS' if good else 'FAIL'}")
-    if not good:
-        print(f"      got  {str(got)[:72]}{'...' if len(str(got)) > 72 else ''}")
-        print(f"      want {str(want)[:72]}{'...' if len(str(want)) > 72 else ''}")
-    return good
-
-
-def info(text):
-    print(f"INFO  {text}")
-
-
-def spec_note(text):
-    print(f"SPEC-NOTE  {text}")
-
-
-print("== (a) REF: byte-string XTS against IEEE 1619-2007 / SP 800-38E")
-print("   (the tweak is advanced with IEEE 1619-2007 5.2's byte-wise multiplication")
-print("    by alpha, which shares no code with the KLEE side's update_mask)")
-for name, k, nonce, p, c in IEEE1619 + IEEE1619_CTS:
-    k1, k2 = split_keys(k)
-    i = seq_of(nonce)
-    chk(name + " encrypt", ref_xts(k1, k2, i, bytes.fromhex(p)).hex(), c)
-    chk(name + " decrypt", ref_xts(k1, k2, i, bytes.fromhex(c), False).hex(), p)
+section("REF against IEEE 1619-2007 / SP 800-38E")
+for name, k1, k2, i, p, c in VEC:
+    check(f"{name} encrypt, decrypt", True, (ref_xts(k1, k2, i, p), ref_xts(k1, k2, i, c, False)), (c, p))
 rnd = random.Random(7)
-same = all(kl_update_mask(v) == update_mask(v)
-           for v in [0, 1, 1 << 127, MASK128] + [rnd.getrandbits(128) for _ in range(64)])
-chk("update_mask transcribed from <<KLEE-XEX-XTS-modes>> == common.update_mask",
-    same, True)
-chk("update_mask(V) on the value view == IEEE 1619 5.2 on the byte-string view",
-    [v2b(kl_update_mask(b2v(bytes([q]) + bytes(15))), 16) for q in (1, 0x80, 0xff)],
-    [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
+check("update_mask transcribed from <<KLEE-XEX-XTS-modes>> == common.update_mask",
+      all(kl_update_mask(v) == update_mask(v)
+          for v in [0, 1, 1 << 127, MASK128] + [rnd.getrandbits(128) for _ in range(64)]))
+check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
+      [v2b(kl_update_mask(b2v(bytes([q]) + bytes(15))), 16) for q in (1, 0x80, 0xff)],
+      [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
 
-print("\n== (b) KLEE XEX locker, full-block path (tweak = bin(i, 128))")
-print("   one multi-block Form A kl.exec per data unit (MGR3), and the same data")
-print("   unit as one Form A kl.exec per block")
-for name, k, nonce, p, c in IEEE1619:
-    k1, k2 = split_keys(k)
-    i = seq_of(nonce)
-    chk(name + " encrypt", kl_xex(k1, k2, i, bytes.fromhex(p)).hex(), c)
-    chk(name + " decrypt", kl_xex(k1, k2, i, bytes.fromhex(c), False).hex(), p)
-    chk(name + " encrypt, one kl.exec per block",
-        kl_xex(k1, k2, i, bytes.fromhex(p), per_block=True).hex(), c)
+section("KLEE XEX locker, full blocks (tweak = bin(i, 128))")
+for name, k1, k2, i, p, c in FULL:
+    check(f"{name}: encrypt (one multi-block kl.exec, MGR3), decrypt, one kl.exec per block", True,
+          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
+          (c, p, c))
 
-print("\n== (c) <<KLEE-XTS-from-XEX>> ciphertext stealing, taken step by step")
-print("   encryption: mask indices m-1 then m, output C_{m-1} then C_m")
-print("   decryption: kl.clone + one discarded kl.exec; C_{m-1} at index m on")
-print("               the clone, CP @ C_m at index m-1 on the original")
-for name, k, nonce, p, c in IEEE1619_CTS:
-    k1, k2 = split_keys(k)
-    i = seq_of(nonce)
-    chk(name + " encrypt", kl_xts(k1, k2, i, bytes.fromhex(p)).hex(), c)
-    chk(name + " decrypt", kl_xts(k1, k2, i, bytes.fromhex(c), False).hex(), p)
-    chk(name + " decrypt, the discarded kl.exec fed all-ones instead of zeros",
-        kl_xts(k1, k2, i, bytes.fromhex(c), False, discard=MASK128).hex(), p)
+section("<<KLEE-XTS-from-XEX>> ciphertext stealing")
+for name, k1, k2, i, p, c in CTS:
+    check(f"{name}: encrypt, decrypt (kl.clone + discarded kl.exec, fed zeros or ones)", True,
+          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, c, False, discard=MASK128)),
+          (c, p, p))
+spec_note("<<KLEE-XTS-from-XEX>>: \"the `j`-th `kl.exec` ... operates at mask index `j`\" holds only "
+          "for single-block kl.exec (MGR3); read as the `j`-th block.")
+spec_note("<<KLEE-XTS-from-XEX>>: \"the first `s` bytes of the string\" should be the first `s`/8 "
+          "bytes, `s` being in bits; the harness uses the latter.")
 
-fallback = all(kl_xts(*split_keys(k), seq_of(nonce), bytes.fromhex(p)).hex() == c
-               for name, k, nonce, p, c in IEEE1619)
-chk("s = 0: the procedure falls back to the plain XEX sequence (7 vectors)",
-    fallback, True)
-
-print("\n== (d) Negative controls")
-print("KAT-EXPECT-FAIL: NEG OCB doubling")
-print("KAT-EXPECT-FAIL: NEG MS-first order")
-print(f"\n   {'vector':<34} {'update_mask':<13} {'NEG OCB doubling':<20}"
-      f"{'NEG MS-first order'}")
-for name, k, nonce, p, c in IEEE1619[:4] + IEEE1619_CTS[:4]:
-    k1, k2 = split_keys(k)
-    i = seq_of(nonce)
-    data = bytes.fromhex(p)
-    good = kl_xts(k1, k2, i, data).hex() == c
-    neg1 = kl_xts(k1, k2, i, data, doubling=double_ocb).hex() != c
-    neg2 = kl_xts(k1, k2, i, data, order='neg').hex() != c
-    ok = ok and good
-    neg_fired['double'] |= neg1
-    neg_fired['order'] |= neg2
-    print(f"   {name:<34} {'PASS' if good else 'FAIL':<13} "
-          f"{'FAIL' if neg1 else 'PASS (does not discriminate)':<20}"
-          f"{'FAIL' if neg2 else 'PASS (does not discriminate)'}")
-print()
-# The MS-first control is vacuous on a data unit with a single full block, so
-# make sure the vectors expected to discriminate really have two of them; the
-# ciphertext-stealing vectors (17 to 20 bytes) have one full block and a partial
-# one, and are reported as not discriminating in the table above.
-chk("the MS-first control runs on multi-block data units",
-    min(len(bytes.fromhex(p)) // 16 for _, _, _, p, _ in IEEE1619[:4]),
-    2)
-
-print("\n== (e) kl.clone: independence of the two lockers")
-k1, k2 = split_keys(IEEE1619_CTS[0][1])
+section("kl.clone")
+k1, k2, i = CTS[0][1:4]
 cl = new_xex(k1, k2)
-cl.setst(ST_DECRYPT, 'C', bin_(seq_of(IEEE1619_CTS[0][2]), B), 128)
-before = cl.mask
-clone = cl.clone()
+cl.setst(DECRYPT, 'C', bin_(i, B), 128)
+before, clone = cl.mask, cl.clone()
 clone.exec1(0)
 clone.exec1(0)
-chk("two kl.exec on the clone leave the original mask unchanged", cl.mask, before)
-chk("the clone's mask advanced by exactly two update_mask steps",
-    clone.mask, kl_update_mask(kl_update_mask(before)))
-chk("the clone is a perfect copy: same MDH, keys and _State_",
-    (clone.mdh, clone.key1, clone.key2), (cl.mdh, cl.key1, cl.key2))
+check("two kl.exec on the clone: original mask unchanged, clone advanced twice", True,
+      (cl.mask, clone.mask), (before, kl_update_mask(kl_update_mask(before))))
+check("the clone is a perfect copy (MDH, keys)", True, (clone.mdh, clone.key1, clone.key2),
+      (cl.mdh, cl.key1, cl.key2))
 clone.clear()
-chk("kl.clear on the clone: _Unconfigured_, no key material left",
-    (clone.state, clone.key1, clone.key2, clone.mask), (ST_UNCONFIGURED, None, None, None))
+check("kl.clear: Unconfigured, no key material", True,
+      (clone.state, clone.key1, clone.key2, clone.mask), (UNCONFIGURED, None, None, None))
 
-print("\n== (f) RULES: States, transitions and the general rules (vector 2)")
-name, k, nonce, p, c = IEEE1619[1]
-k1, k2 = split_keys(k)
-i = seq_of(nonce)
-data, ct = bytes.fromhex(p), bytes.fromhex(c)
-chk("state constants: Ready 1, Encrypt 7, Decrypt 8, Invalid 49",
-    (ST_READY, ST_ENCRYPT, ST_DECRYPT, ST_INVALID), (1, 7, 8, 49))
+section("States, transitions and general rules (vector 2)")
+name, k1, k2, i, data, c = FULL[1]
+tw = lambda cl, st=ENCRYPT, t=i: cl.setst(st, 'C', bin_(t, B), 128) or cl
+check("state constants: Ready 1, Encrypt 7, Decrypt 8, Invalid 49", True,
+      (READY, ENCRYPT, DECRYPT, INVALID), (1, 7, 8, 49))
 cl = new_xex(k1, k2)
-chk("provisioning completes in _Ready_ with mask = 0", (cl.state, cl.mask), (ST_READY, 0))
-res, _ = cl.exec(b2v(data), 256)
-chk("kl.exec in _Ready_: _Invalid_, window zeroed, Content cleared",
-    (cl.state, res, cl.key1, cl.mask), (ST_INVALID, 0, None, None))
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-chk("kl.setst #kl_state_encrypt: kl.getst = 7, mask = enc_blk(key2, bin(i,b))",
-    (cl.state, cl.mask), (ST_ENCRYPT, b2v(aes_encrypt(k2, v2b(bin_(i, B), 16)))))
-cl.setst(ST_DECRYPT, 'C', bin_(i, B), 128)
-chk("_Encrypt_ -> _Decrypt_ is not an allowed transition -> _Invalid_",
-    cl.state, ST_INVALID)
-cl = new_xex(k1, k2, policy=POL_DEC)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-chk("_MachinePolicy_ = decrypt only: -> _Encrypt_ gives _Invalid_", cl.state, ST_INVALID)
-cl = new_xex(k1, k2, policy=POL_DEC)
-cl.setst(ST_DECRYPT, 'C', bin_(i, B), 128)
-chk("_MachinePolicy_ = decrypt only: -> _Decrypt_ decrypts vector 2",
-    cl_run(cl, ct)[0].hex(), p)
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-cl_run(cl, data)                             # the mask is now at index 2
-cl.setst(ST_READY, 'A')
+check("provisioning completes in Ready with mask = 0", True, (cl.state, cl.mask), (READY, 0))
+res = cl.exec(b2v(data), 256)[0]
+check("kl.exec in Ready: Invalid, window zeroed, Content cleared", True,
+      (cl.state, res, cl.key1, cl.mask), (INVALID, 0, None, None))
+cl = tw(new_xex(k1, k2))
+check("kl.setst #kl_state_encrypt: State 7, mask = enc_blk(key2, bin(i, b))", True,
+      (cl.state, cl.mask), (ENCRYPT, b2v(aes_encrypt(k2, v2b(bin_(i, B), 16)))))
+check("Encrypt -> Decrypt is not an allowed transition -> Invalid", True, tw(cl, DECRYPT).state, INVALID)
+check("MachinePolicy decrypt-only: -> Encrypt gives Invalid", True,
+      tw(new_xex(k1, k2, POL_DEC)).state, INVALID)
+check("MachinePolicy decrypt-only: -> Decrypt decrypts", True,
+      cl_run(tw(new_xex(k1, k2, POL_DEC), DECRYPT), c)[0], data)
+cl = tw(new_xex(k1, k2))
+cl_run(cl, data)
+cl.setst(READY, 'A')
 zeroed = (cl.state, cl.mask)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)   # reuse with a (new) tweak
-chk("_Encrypt_ -> _Ready_ zeroes the mask; the CC is reusable with a new tweak",
-    (zeroed, cl_run(cl, data)[0].hex()), ((ST_READY, 0), c))
+check("Encrypt -> Ready zeroes the mask; the CC is reusable with a new tweak", True,
+      (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
+cl = tw(new_xex(k1, k2), t=0xdead)
+cl_run(cl, data)
+check("same-State kl.setst (SGR4) re-tweaks: mask index back to 0", True,
+      (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
+info("a same-State kl.setst is read as the Form C transition into that State: it sets the tweak afresh.")
 cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(0xdead, B), 128)
-cl_run(cl, data)                             # two blocks under the wrong tweak
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)   # same-State kl.setst (SGR4): re-tweak
-chk("same-State kl.setst (SGR4) re-tweaks: mask index back to 0, vector 2",
-    (cl.state, cl_run(cl, data)[0].hex()), (ST_ENCRYPT, c))
-info("a same-State kl.setst is read as the Form C transition into that State: it sets "
-     "the tweak afresh, so the mask restarts at index 0.")
+cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
+check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MGR5)", True, cl_run(cl, data)[0], c)
 cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
-chk("KLLEN = 256 > b: only the b least significant bits of INPUT are the tweak",
-    cl_run(cl, data)[0].hex(), c)
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'A/iobuf', v2b(bin_(i, B), 16))     # KLIOBUF, kliobuftop = 16
-res, _ = cl.exec(b2v(data), 8 * len(data))               # Form D replacing Form A
-chk("Form A kl.setst and Form D kl.exec through the KLIOBUF: vector 2",
-    v2b(res, len(data)).hex(), c)
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-res, _ = cl.exec(b2v(data[:17]), 136)
-chk("MGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed, Content cleared",
-    (cl.state, res, cl.key1), (ST_INVALID, 0, None))
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-res, _ = cl.exec(b2v(data), 256, klstart=8)
-chk("klstart = 8, not an interruption point (input) -> _Invalid_",
-    (cl.state, res), (ST_INVALID, b2v(data[:8])))
-cl = new_xex(k1, k2)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-res, ks = cl.exec(b2v(data), 256, klstart=32)
-chk("klstart = 32 = KLLEN/8: empty window, no operation",
-    (cl.state, v2b(res, 32)), (ST_ENCRYPT, data))
-name4, k4, nonce4, p4, c4 = IEEE1619[4]      # vector 4: 512 B = 32 blocks
-k41, k42 = split_keys(k4)
-data4 = bytes.fromhex(p4)
+cl.setst(ENCRYPT, 'A/iobuf', v2b(bin_(i, B), 16))
+check("Form A kl.setst and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
+for kl_, ks, want, what in ((136, 0, (INVALID, 0), "KLLEN = 136 (MGR2): Invalid, window zeroed"),
+                            (256, 8, (INVALID, b2v(data[:8])), "klstart = 8, no interruption point: Invalid"),
+                            (256, 32, (ENCRYPT, b2v(data)), "klstart = KLLEN/8: empty window, no operation")):
+    cl = tw(new_xex(k1, k2))
+    res = cl.exec(b2v(data[:kl_ // 8]), kl_, ks)[0]
+    check(what, True, (cl.state, res), want)
+_, k41, k42, i4, p4, c4 = FULL[4]                 # vector 4: 32 blocks
 for q in (1, 7, 31):
-    cl = new_xex(k41, k42)
-    cl.setst(ST_ENCRYPT, 'C', bin_(seq_of(nonce4), B), 128)
-    part, ks = cl_run(cl, data4, halt_after=q)
-    whole, ks2 = cl.exec(b2v(part), 8 * len(data4), klstart=ks)
-    chk(f"vector 4: kl.exec halted after {q} block(s) (klstart = {16 * q}), resumed",
-        (ks, v2b(whole, len(data4)).hex(), ks2), (16 * q, c4, 0))
-
-print("\n== (g) The two-key construction is the only one architected")
-# <<KLEE-XEX-XTS-modes>>: provisioning key2 = key1 gives E(K, P xor M) xor M with
-# M = enc_blk(K, T), i.e. the single-key XEX *without* the multiplication by alpha
-# that cite:[DBLP-conf-asiacrypt-Rogaway04] requires.  The architecture inserts none.
-cl = new_xex(k1, k1)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
+    cl = tw(new_xex(k41, k42), t=i4)
+    part, ks = cl_run(cl, p4, halt_after=q)
+    whole, ks2 = cl.exec(b2v(part), 8 * len(p4), klstart=ks)
+    check(f"vector 4: kl.exec halted after {q} block(s), resumed at klstart {16 * q}", True,
+          (ks, v2b(whole, len(p4)), ks2), (16 * q, c4, 0))
 m0 = b2v(aes_encrypt(k1, v2b(bin_(i, B), 16)))
-plain = b2v(aes_encrypt(k1, v2b((b2v(data[:16]) ^ m0) & MASK128, 16))) ^ m0
-alpha_masked = kl_update_mask(m0)
-alpha_out = b2v(aes_encrypt(k1, v2b((b2v(data[:16]) ^ alpha_masked) & MASK128, 16))) \
-    ^ alpha_masked
-chk("key2 = key1: the mask is the raw enc_blk(key1, T), no alpha applied",
-    (cl.exec1(b2v(data[:16])), plain != alpha_out), (plain, True))
+m1 = kl_update_mask(m0)
+enc1 = lambda m: b2v(aes_encrypt(k1, v2b(b2v(data[:16]) ^ m, 16))) ^ m
+check("key2 = key1: the mask is the raw enc_blk(key1, T), no alpha applied", True,
+      (tw(new_xex(k1, k1)).exec1(b2v(data[:16])), enc1(m0) != enc1(m1)), (enc1(m0), True))
 
-print("\n== (h) DATA: Provisioning Input and Serialized Content")
-print("   (sizes in bytes, worked out by hand from the tables; SCC with _AuxDataLen_ = 0)")
+section("Provisioning Input and Serialized Content")
 SKID = 0x0123456789abcdef
-SKS = {SKID: (b2v(k1), b2v(k2))}             # one SKID, two independent keys (MGR10)
-for cipher, kt, pi_size, c1_size in (('AES-128', 0, 48, 48), ('AES-256', 0, 80, 80),
-                                     ('AES-128', 1, 32, 32)):
+SKS = {SKID: (b2v(k1), b2v(k2))}
+for cipher, kt, size in (('AES-128', 0, 48), ('AES-256', 0, 80), ('AES-128', 1, 32)):
     kk = CIPHERS[cipher]
-    field = SKID if kt else (1 << kk) - 1
-    pi = build_pi(XEX_OF[cipher], kt, field, 0 if kt else (1 << kk) - 1)
+    pi = build_pi(XEX_OF[cipher], kt, SKID if kt else (1 << kk) - 1, 0 if kt else (1 << kk) - 1)
     cl = XexLocker(sks=SKS)
     cl.provision(pi)
-    chk(f"{cipher} {'SKID' if kt else 'by value'}: PI {pi_size}, Content1 {c1_size}, "
-        f"kl.size {pi_size} / {32 + c1_size}",
-        (len(pi), kl_size(make_mdh(XEX_OF[cipher], POL_BOTH, kt), 0, len(pi) - 16),
-         len(cl.content1()), kl_size(cl.mdh, len(cl.content1()), 0)),
-        (pi_size, pi_size, c1_size, 32 + c1_size))
-# Content1 by hand: key1 | key2 | mask (by value), SKID | mask | padding (by SKID)
-tweak_mask = aes_encrypt(k2, v2b(bin_(i, B), 16))            # mask at index 0
-mask2 = ref_mul_alpha(ref_mul_alpha(tweak_mask))             # after two blocks
-for label, kt, want_c1 in (
-        ("by value", 0, k1.hex() + k2.hex() + mask2.hex()),
-        ("by SKID", 1, "efcdab8967452301" + mask2.hex() + "00" * 8)):
+    check(f"{cipher} {'SKID' if kt else 'by value'}: PI {size} B, Content1 {size} B, kl.size", True,
+          (len(pi), kl_size(b2v(pi[:16]), 0, len(pi) - 16), len(cl.content1()),
+           kl_size(cl.mdh, len(cl.content1()), 0)), (size, size, size, 32 + size))
+mask2 = ref_mul_alpha(ref_mul_alpha(aes_encrypt(k2, v2b(bin_(i, B), 16))))
+for label, kt, want in (("by value", 0, k1 + k2 + mask2), ("by SKID", 1, v2b(SKID, 8) + mask2 + bytes(8))):
     cl = XexLocker(sks=SKS)
-    cl.provision(build_pi(XEX_OF['AES-128'], kt, SKID if kt else b2v(k1),
-                          0 if kt else b2v(k2)))
-    cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-    head = cl_run(cl, data)[0]                              # the whole 32-byte unit
-    chk(f"{label}: Content1 after 2 blocks = {len(want_c1) // 2} B, key(s) | mask",
-        cl.content1().hex(), want_c1)
+    cl.provision(build_pi(XEX_OF['AES-128'], kt, SKID if kt else b2v(k1), 0 if kt else b2v(k2)))
+    head = cl_run(tw(cl), data)[0]
     cl2 = XexLocker(sks=SKS)
-    cl2.import_scc(cl.mdh, cl.content1())                   # _State_ travels in the MDH
-    chk(f"{label}: import it and encrypt two more blocks at mask indices 2, 3",
-        (cl2.state, cl_run(cl2, data)[0].hex()),
-        (ST_ENCRYPT, ref_xts(k1, k2, i, data + data)[32:].hex()))
-    chk(f"{label}: the first two blocks were vector 2", head.hex(), c)
+    cl2.import_scc(cl.mdh, cl.content1())
+    check(f"{label}: vector 2, Content1 = key(s) | mask after 2 blocks; import, 2 more blocks", True,
+          (head, cl.content1(), cl2.state, cl_run(cl2, data)[0]),
+          (c, want, ENCRYPT, ref_xts(k1, k2, i, data + data)[32:]))
 cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID + 1))
-chk("unresolved SKID at provisioning -> _Invalid_", cl.state, ST_INVALID)
+check("unresolved SKID at provisioning -> Invalid", True, cl.state, INVALID)
 cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, ONES64))
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-rand_ct = cl_run(cl, data)[0]
-chk("all-ones SKID: two independent random keys, _KeyType_ 0, Content1 48 B",
-    (cl.keytype, cl.key1 != cl.key2, len(cl.content1()),
-     rand_ct == ref_xts(v2b(cl.key1, 16), v2b(cl.key2, 16), i, data)),
-    (0, True, 48, True))
+rand_ct = cl_run(tw(cl), data)[0]
+check("all-ones SKID: two independent random keys, KeyType 0, Content1 48 B", True,
+      (cl.keytype, cl.key1 != cl.key2, len(cl.content1()),
+       rand_ct == ref_xts(v2b(cl.key1, 16), v2b(cl.key2, 16), i, data)), (0, True, 48, True))
 
-print("\n== (i) DERIVE: <<KLEE-derive-endpoints>>, `key1` (1) and `key2` (2), in _Ready_")
-source1 = k1 + bytes.fromhex("5a" * 16)
-source2 = k2 + bytes.fromhex("a5" * 16)
-cl = new_xex(bytes(16), bytes(16))
-d1 = cl.derive_dest(1, source1, 32)
-d2 = cl.derive_dest(2, source2, 32)
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-chk("derive `key1` and `key2` (32 bytes each, truncated to 16), then vector 2",
-    (d1, d2, cl_run(cl, data)[0].hex()), (True, True, c))
-for length in (8, 0):
+section("kl.derive: `key1 || key2` in Ready")
+src = k1 + k2 + bytes.fromhex("5a" * 16)
+for length in (32, 48):
     cl = new_xex(bytes(16), bytes(16))
-    chk(f"length {length} < 16 into `key1`: _Invalid_, no zero-filled key (DER1)",
-        (cl.derive_dest(1, source1, length), cl.state, cl.key1), (False, ST_INVALID, None))
-cl = new_xex(bytes(16), bytes(16))
-chk("source field of 8 bytes < 16 into `key2`: _Invalid_ (DER1)",
-    (cl.derive_dest(2, k2[:8], 16), cl.state), (False, ST_INVALID))
-cl = new_xex(bytes(16), bytes(16))
-chk("destination index 3 (`mask` is not importable) -> _Invalid_",
-    (cl.derive_dest(3, source1, 16), cl.state), (False, ST_INVALID))
-cl = new_xex(bytes(16), bytes(16))
-cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
-chk("destination in _Encrypt_ -> _Invalid_",
-    (cl.derive_dest(1, source1, 16), cl.state), (False, ST_INVALID))
-cl = XexLocker(sks=SKS)
-cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
-chk("keys of a _KeyType_ 1 locker are never importable (DER4) -> _Invalid_",
-    (cl.derive_dest(2, source2, 16), cl.state), (False, ST_INVALID))
-src = new_xex(k1, k2)
-dst = new_xex(bytes(16), bytes(16))
-src.invalidate()
-dst.invalidate()                             # no exportable field: the pair is not allowed
-chk("an XEX locker as a source (a key is never exportable) -> both _Invalid_",
-    (XEX_EXPORTABLE, src.state, dst.state), ({}, ST_INVALID, ST_INVALID))
+    ok = derive(src, cl, length)
+    check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
+          (ok, cl_run(tw(cl), data)[0]), (True, c))
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1)", None, src, 16),
+                        ("length 0 (DER1)", None, src, 0),
+                        ("24-byte source (DER1)", None, src[:24], 32),
+                        ("destination in Encrypt", tw, src, 32),
+                        ("KeyType 1 destination (DER4)", 'skid', src, 32)):
+    if mk == 'skid':
+        cl = XexLocker(sks=SKS)
+        cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
+    else:
+        cl = new_xex(bytes(16), bytes(16))
+        mk and mk(cl)
+    check(f"{what} -> Invalid", True, (derive(s_, cl, n), cl.state, cl.key1), (False, INVALID, None))
+src_l, dst = new_xex(k1, k2), new_xex(bytes(16), bytes(16))
+check("an XEX locker as a kl.derive source (none listed) -> both Invalid", True,
+      (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, INVALID))
+spec_note("<<KLEE-defined-derivation-endpoints>> gives `key1 || key2` to Tweakable mode "
+          "(<<KLEE-tweakable>>), whose key is `key`; the harness reads the row as XEX (<<KLEE-XEX-XTS-modes>>).")
 
-print("\n== (j) Round-trip over many lengths, including every partial-block size")
-k41, k42 = split_keys(IEEE1619[4][1])
+section("round trip over many lengths")
 rt = True
 for length in list(range(16, 80)) + [128, 129, 255, 256]:
     payload = bytes((7 * n + 1) & 0xFF for n in range(length))
     for seq in (0, 1, 0x123456789A):
         ref = ref_xts(k41, k42, seq, payload)
-        rt = rt and kl_xts(k41, k42, seq, payload) == ref
-        rt = rt and kl_xts(k41, k42, seq, payload, per_block=True) == ref
-        rt = rt and kl_xts(k41, k42, seq, ref, False) == payload
-        rt = rt and ref_xts(k41, k42, seq, ref, False) == payload
-chk("KLEE == REF and round-trips, lengths 16..79, 128, 129, 255, 256", rt, True)
+        rt &= (kl_xts(k41, k42, seq, payload) == ref == kl_xts(k41, k42, seq, payload, per_block=True)
+               and kl_xts(k41, k42, seq, ref, False) == payload == ref_xts(k41, k42, seq, ref, False))
+check("KLEE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
 
-print()
-spec_note("<<KLEE-XTS-from-XEX>> says \"the `j`-th `kl.exec` issued after the tweak was "
-          "set is the one that operates at mask index `j`\", true only for single-block "
-          "kl.exec: by MGR3 one kl.exec processes KLLEN/b blocks, each advancing the mask, "
-          "and step 1 may be one multi-block kl.exec.  Suggest \"the `j`-th block\".  It "
-          "also places the partial block \"where the first `s` bytes of the string live\", "
-          "but `s` is in bits: the first `s`/8 bytes.  The harness models both corrected "
-          "readings.")
-spec_note("<<KLEE-derive-endpoints>> lists two importable fields for XEX, `key1` (1) and "
-          "`key2` (2), both written in State _Ready_, but kl.derive carries only `length` "
-          "(\"No parameter is passed to kl.derive to select the source and destination "
-          "data\", <<KLEE-instruction-derive>>), so nothing selects which key is written.  "
-          "The harness takes the index as a model parameter.")
-info("<<KLEE-tweakable>> is not exercised: <<KLEE-exec-encodings>> instantiates no "
-     "tweakable block cipher, so there is no Machine, and no published vector, for it.")
-info("\"(multi-block) kl.exec instructions are expected to be of Form A\" is read with "
-     "the substitutions of <<KLEE-usage-input-output>> available (Form D through the "
-     "KLIOBUF), as 'expected' there prescribes.")
-
-for label, fired in (("OCB doubling", neg_fired['double']),
-                     ("MS-first order", neg_fired['order'])):
-    if not fired:
-        print(f"\nnegative control '{label}' did not fire: the test is not discriminating")
-        ok = False
-
-print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
-sys.exit(0 if ok else 1)
+section("negative controls")
+control("OCB3 big-endian `double` for update_mask",
+        all(kl_xts(*v[1:5], doubling=double_ocb) != v[5] for v in FULL[:4] + CTS[:4]))
+control("multi-block kl.exec, most significant block first (2-block units)",
+        all(kl_xts(*v[1:5], msb_first=True) != v[5] for v in FULL[:4]))
+done()

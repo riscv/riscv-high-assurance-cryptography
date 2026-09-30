@@ -1,26 +1,6 @@
-"""FIPS 204 (ML-DSA) -- complete reference implementation, stdlib only.
-
-NTT over Z_8380417, ExpandA / ExpandS / ExpandMask, SampleInBall,
-Power2Round / Decompose / HighBits / LowBits / MakeHint / UseHint, the
-SimpleBitPack / BitPack / HintBitPack encodings and pkEncode / skEncode /
-sigEncode / w1Encode, and Algorithms 6, 7 and 8 (KeyGen_internal,
-Sign_internal, Verify_internal) for ML-DSA-44/65/87.
-
-Because the KLEE unit signs over an *externally* computed message representative
-mu = SHAKE256(tr || M', 64), the signing and verification entry points are
-offered in both flavours: `sign_internal(sk, Mp, rnd)` / `verify_internal(pk,
-Mp, sig)` take the formatted message M', while `sign_internal_mu(sk, mu, rnd)` /
-`verify_internal_mu(pk, mu, sig)` take mu directly, which is what
-<<KLEE-PQC-ML-DSA>> specifies.  `sign_internal_mu_resumable` runs the rejection
-loop of Algorithm 7 in bounded slices, so that a model of the unit can halt and
-resume a signing operation at a loop boundary.
-
-Throughout this module `||` and Python's `+` on bytes are FIPS 204's byte-string
-concatenation (first operand first), not the `@` of the KLEE notation.
-
-Anchored by kat/mldsa-kat.py against official NIST ACVP vectors; this module
-holds no vectors of its own.
-"""
+"""FIPS 204 (ML-DSA) reference implementation, stdlib only: Algorithms 6-8 and subroutines, M' of Algorithms
+2 and 4, sign/verify also on an external mu (as <<KLEE-PQC-ML-DSA>>), and a resumable signing loop.  `+` on
+bytes is FIPS 204's || (first operand first).  Anchored by mldsa-kat.py against NIST ACVP vectors."""
 
 import hashlib
 
@@ -190,8 +170,7 @@ def hint_bit_pack(h, omega, k):
     return bytes(y)
 
 def hint_bit_unpack(y, omega, k):
-    """Algorithm 21.  Returns None for a malformed hint (this is the check that
-    bounds the hint weight by omega and enforces strictly increasing indices)."""
+    """Algorithm 21; None for a malformed hint."""
     h = [[0] * 256 for _ in range(k)]
     index = 0
     for i in range(k):
@@ -251,9 +230,7 @@ def sk_decode(sk, ps):
     return rho, Kk, tr, s1, s2, t0
 
 def sk_well_formed(sk, ps):
-    """False for a *malformed* private key in the sense of FIPS 204 7.2: skDecode
-    (Algorithm 25) may return coefficients of s1 or s2 outside [-eta, eta] (t0 is
-    always in range).  The length is fixed by the caller."""
+    """False if skDecode (Algorithm 25) yields s1 or s2 coefficients outside [-eta, eta]."""
     eta = PARAMS[ps]['eta']
     _, _, _, s1, s2, _ = sk_decode(sk, ps)
     return all(abs(mod_pm(c, Q)) <= eta for poly in s1 + s2 for c in poly)
@@ -397,14 +374,7 @@ def keygen_internal(xi, ps):
     return pk, sk
 
 def compute_pubkey(sk, ps):
-    """Re-derive pk from sk, and re-derive tr: skDecode (Algorithm 25), then lines 3-9
-    of ML-DSA.KeyGen_internal (Algorithm 6), which compute t = A*s1 + s2, t1 and
-    pk = pkEncode(rho, t1), tr = H(pk, 64).  (<<KLEE-PQC-ML-DSA>> cites FIPS 204
-    section 3.6 for this; that section holds the additional requirements, not the
-    derivation.)
-
-    Returns (pk, tr_from_pk, tr_in_sk); the KLEE _compute_pubKey_ State requires
-    tr_from_pk == tr_in_sk (see <<KLEE-PQC-ML-DSA>>)."""
+    """skDecode, then Algorithm 6 lines 3-9; returns (pk, H(pk, 64), the tr in sk)."""
     rho, Kk, tr_sk, s1, s2, t0 = sk_decode(sk, ps)
     A = expand_A(rho, ps)
     t = vadd([intt(x) for x in matvec(A, [ntt(x) for x in s1])], s2)
@@ -412,27 +382,13 @@ def compute_pubkey(sk, ps):
     pk = pk_encode(rho, t1, ps)
     return pk, H(pk, 64), tr_sk
 
-# FIPS 204 Appendix C: an implementation that bounds the rejection loop of
-# ML-DSA.Sign_internal shall not use a limit below 814 iterations.
+# FIPS 204 Appendix C: a bound on the signing loop must be at least 814 iterations.
 SIGN_LOOP_BOUND = 1000
 
 def sign_internal_mu_resumable(sk, mu, rnd, ps, kappa=0, budget=None,
                                max_iters=SIGN_LOOP_BOUND):
-    """ML-DSA.Sign_internal (Algorithm 7) with mu supplied externally, run from the
-    loop counter `kappa` for at most `budget` iterations of the rejection loop
-    (without limit if budget is None).
-
-    At the top of the loop (line 10) the whole state of the computation is sk, mu,
-    rnd and kappa: everything else is recomputed from them, so an operation halted
-    there resumes from kappa, and one restarted from kappa = 0 with the same rnd
-    produces the same signature.
-
-    Returns (status, sig, kappa, iters), where iters counts the iterations this call
-    executed and
-      'done'   -- sig is the signature;
-      'halted' -- the budget ran out before a signature was found; resume with kappa;
-      'bound'  -- max_iters iterations have been spent in total; sig is None.
-    """
+    """Algorithm 7 with external mu, from loop counter kappa for at most `budget` iterations.
+    Returns (status, sig, kappa, iters), status 'done', 'halted' (resume from kappa) or 'bound'."""
     p = PARAMS[ps]
     k, l = p['k'], p['l']
     g1, g2, beta, omega = p['gamma1'], p['gamma2'], p['beta'], p['omega']
@@ -471,8 +427,7 @@ def sign_internal_mu_resumable(sk, mu, rnd, ps, kappa=0, budget=None,
         return 'done', sig_encode(c_tilde, zc, h, ps), kappa, iters
 
 def sign_internal_mu(sk, mu, rnd, ps, max_iters=SIGN_LOOP_BOUND):
-    """ML-DSA.Sign_internal (Algorithm 7) with mu supplied externally, which is
-    what the KLEE _Sign_Generate_ State does.  None if the loop bound is reached."""
+    """Algorithm 7 with external mu; None if the loop bound is reached."""
     status, sig, _, _ = sign_internal_mu_resumable(sk, mu, rnd, ps,
                                                    max_iters=max_iters)
     return sig if status == 'done' else None
@@ -482,7 +437,7 @@ def sign_internal(sk, Mp, rnd, ps):
     return sign_internal_mu(sk, H(tr + Mp, 64), rnd, ps)
 
 def verify_internal_mu(pk, mu, sig, ps):
-    """ML-DSA.Verify_internal (Algorithm 8) with mu supplied externally."""
+    """Algorithm 8 with external mu."""
     p = PARAMS[ps]
     g1, g2, beta, k = p['gamma1'], p['gamma2'], p['beta'], p['k']
     if len(sig) != sizes(ps)[2] or len(pk) != sizes(ps)[1]:
@@ -506,20 +461,15 @@ def verify_internal(pk, Mp, sig, ps):
     return verify_internal_mu(pk, H(tr + Mp, 64), sig, ps)
 
 def mu_external(tr, Mp):
-    """The message representative of Algorithm 7, line 6, computed outside the
-    signing module: mu = H(tr || M', 64), tr first."""
+    """mu = H(tr || M', 64) (Algorithm 7, line 6)."""
     return H(tr + Mp, 64)
 
 def format_Mp(ctx, M, prehash=False, oid=b''):
-    """M' = 0x00 || |ctx| || ctx || M for pure ML-DSA (Algorithm 2, line 10), or
-    0x01 || |ctx| || ctx || OID || PH(M) for HashML-DSA (Algorithm 4, line 23), with
-    M already replaced by PH(M) by the caller."""
+    """M' of Algorithm 2 line 10, or of Algorithm 4 line 23 (prehash, M = PH(M))."""
     assert len(ctx) <= 255
     return bytes([1 if prehash else 0, len(ctx)]) + ctx + oid + M
 
 # HashML-DSA pre-hash functions: DER-encoded OID and PH (Algorithm 4, lines 10-22).
-# The OIDs of SHA-256, SHA-512 and SHAKE128 are those printed in Algorithm 4; the
-# arc 2.16.840.1.101.3.4.2.2 of SHA-384 is anchored by the ACVP vector that uses it.
 _NIST_HASHALGS = bytes.fromhex('06096086480165030402')     # 2.16.840.1.101.3.4.2
 PREHASH = {
     'SHA2-256':  (_NIST_HASHALGS + b'\x01', lambda m: hashlib.sha256(m).digest()),

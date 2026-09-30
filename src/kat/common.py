@@ -1,20 +1,9 @@
 """Shared utilities for the KLEE KAT suite.
 
-Conventions follow the KLEE specification's Notation chapter (modules/ROOT/pages/Zkl-notation.adoc):
-a *value* is a little-endian bit string held in a Python int; byte i of a byte
-string occupies bits [8i+7:8i] (`b2v`/`v2b`); `cat` implements the `@` operator,
-whose LEFT operand occupies the MORE significant bits; `bswap` reverses the byte
-string of a value of known byte length; `bin_(n, m)` is the spec's `bin(n,m)`.
-
-The module also provides self-contained AES-128/192/256 (S-box generated
-algorithmically, so no table-transcription risk), the GHASH field multiplication
-of SP 800-38D 6.3 in both the byte-string view (`gmul_ghash`) and the KLEE value
-view (`kl_galoismul`), POLYVAL's `montmul`/`mulx_polyval` per RFC 8452, and the
-XTS/OCB doublings (`update_mask`, `double_ocb`).
-
-Run this file directly to execute its self-tests (FIPS 197 C.1-C.3, RFC 8452
-Appendix A).  Every consumer harness re-anchors these primitives through its own
-standard vectors, so an error here cannot pass silently.
+Values are little-endian bit strings in Python ints (Zkl-notation.adoc): byte i of a
+string is bits [8i+7:8i]; `cat` is `@` (left operand most significant).  Also: AES,
+GHASH/POLYVAL arithmetic, XTS/OCB doublings, the MDH layout, the State constants and
+the reporting helpers every harness uses.  Run directly for the self-tests.
 """
 
 import sys
@@ -218,6 +207,94 @@ def update_mask(v: int) -> int:
 def double_ocb(v: int) -> int:
     """OCB3/CMAC doubling over the big-endian string view: bswap(update_mask(bswap(S)))."""
     return bswap(update_mask(bswap(v, 16)), 16)
+
+# ---------------------------------------------------------------- MDH and States
+
+# <<KLEE-metadata-header>>: (name, hi, lo); None marks a Reserved field.
+MDH_FIELDS = [
+    ('Machine', 11, 0), ('MachinePolicy', 13, 12), ('MachineExtension', 15, 14),
+    ('SCProtection', 18, 16), ('State', 24, 19), ('StateExtension', 28, 25),
+    ('KeyType', 30, 29), (None, 31, 31), ('AuxDataLen', 45, 32), (None, 46, 46),
+    ('ADSDropped', 47, 47), ('MachineUse', 61, 48), ('Version', 63, 62),
+    ('UsagePolicy', 68, 64), ('Locality', 77, 69), (None, 79, 78),
+    ('AuxInfo', 95, 80), ('ExpirationDate', 115, 96), (None, 127, 116),
+]
+MDH_FIELD = {n: (hi, lo) for n, hi, lo in MDH_FIELDS if n}
+
+def mdh_pack(**f) -> int:
+    v = 0
+    for n, x in f.items():
+        hi, lo = MDH_FIELD[n]
+        assert 0 <= x < 1 << (hi - lo + 1), (n, x)
+        v |= x << lo
+    return v
+
+def mdh_unpack(v: int) -> dict:
+    return {n: sl(v, hi, lo) for n, (hi, lo) in MDH_FIELD.items()}
+
+def mdh_reserved(v: int) -> int:
+    """The Reserved bits of an MDH, OR-ed together (0 if all clear)."""
+    return any(sl(v, hi, lo) for n, hi, lo in MDH_FIELDS if n is None)
+
+# <<KLEE-State-field>>, <<KLEE-state-constants-symmetric>>
+KL_STATE_UNCONFIGURED, KL_STATE_READY = 0, 1
+KL_STATE_OPERATE = KL_STATE_HASH_ABSORB = 2
+(KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_FINALIZE, KL_STATE_HASH_VERIFY,
+ KL_STATE_HASH_OUTPUT, KL_STATE_ENCRYPT, KL_STATE_DECRYPT, KL_STATE_ENC_LAST_BLOCK,
+ KL_STATE_DEC_LAST_BLOCK, KL_STATE_ENC_TAG_FINALIZE, KL_STATE_DEC_TAG_FINALIZE,
+ KL_STATE_SET_AUX_VALUE, KL_STATE_SET_AUX_VALUE_2) = range(3, 15)
+KL_STATE_SUCCESS, KL_STATE_FAILURE = 46, 47
+(KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_OUT_OF_MEMORY, KL_STATE_MGMT_AUTH,
+ KL_STATE_PRIV_VIOLATION, KL_STATE_EXPIRED) = range(48, 54)
+ERROR_STATES = range(48, 56)
+(KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
+ KL_CFG_PPI_IMPORTING) = range(56, 61)
+KL_CFG_MANAGEMENT_END = 63
+
+class IllegalInstruction(Exception):
+    pass
+
+# ---------------------------------------------------------------- reporting
+
+_counts = {'pass': 0, 'fail': 0}
+
+def section(title: str):
+    print(f'\n== {title}')
+
+def check(name: str, ok, got=None, want=None) -> bool:
+    """Record one check.  With `got`/`want`, ok is taken as got == want."""
+    if got is not None or want is not None:
+        ok = got == want
+    ok = bool(ok)
+    _counts['pass' if ok else 'fail'] += 1
+    print(f"{'PASS' if ok else 'FAIL'}  {name}")
+    if not ok and (got is not None or want is not None):
+        print(f'        got  {got}\n        want {want}')
+    return ok
+
+def control(name: str, fired) -> bool:
+    """Negative control: a deliberately wrong formulation must be caught."""
+    return check(f'negative control fired: {name}', fired)
+
+def info(text: str):
+    print(f'INFO  {text}')
+
+def spec_note(text: str):
+    print(f'SPEC-NOTE  {text}')
+
+def raises(fn, *a, exc=IllegalInstruction, **kw) -> bool:
+    try:
+        fn(*a, **kw)
+    except exc:
+        return True
+    return False
+
+def done():
+    """Print the verdict line read by run-kats.py and exit accordingly."""
+    ok = _counts['fail'] == 0
+    print(f"\n{_counts['pass']} passed, {_counts['fail']} failed")
+    print(f"KAT-RESULT: {'PASS' if ok else 'FAIL'}")
+    sys.exit(0 if ok else 1)
 
 # ---------------------------------------------------------------- self-tests
 
