@@ -378,7 +378,7 @@ def note(text):
 def info(text):
     print(f"  INFO       {text}")
 
-# ===================================================================== KLEE model: the CL
+# ===================================================================== KLEE model: the locker
 #
 # _State_ values: <<KLEE-state-off>>, <<KLEE-states-valid>>, <<KLEE-states-error>>, and the
 # Machine-defined values of <<KLEE-state-constants-symmetric>> that the Ascon Machines use.
@@ -392,7 +392,7 @@ STATE = {
 STATE_NAME = {v: k for k, v in STATE.items()}
 
 class Invalid(Exception):
-    """Raised by the *drivers* (never by the model) when a CL has entered an Error State."""
+    """Raised by the *drivers* (never by the model) when a locker has entered an Error State."""
 
 class SpecGap(Exception):
     """The specification gives the model no value to use (see the SPEC-NOTE lines)."""
@@ -417,7 +417,7 @@ def unpack(image, widths):
         off += w
     return out
 
-class KleeCL:
+class KleeLocker:
     """What every Ascon Machine shares: the MDH fields the harness needs, the Error-State
     rules of <<KLEE-State-management>>, the `klstart` rules of <<KLEE-CSR-klstart>>, and the
     dispatch of `kl.setst`/`kl.exec` to the clauses of the Machine's current State."""
@@ -537,21 +537,21 @@ class KleeCL:
         pass
 
     def export(self):
-        """The MDH fields and the Serialized Content.  <<KLEE-SGR-error-state-CL-is-only-MDH>>:
-        a CL in an Error State is its MDH and nothing else."""
+        """The MDH fields and the Serialized Content.  <<KLEE-SGR-error-state-locker-is-only-MDH>>:
+        a locker in an Error State is its MDH and nothing else."""
         content = b'' if self.in_error() else pack(
             [(self._get(n), w) for n, w in self._layout()])[0]
         return dict(mode=self.MODE, key_type=self.key_type, policy=self.policy,
                     state=STATE[self.st], machine_use=self.machine_use, content1=content)
 
     @classmethod
-    def import_(cls, scc, sks=None, **flags):
+    def import_(lockers, scc, sks=None, **flags):
         """Complete an import: "Completing an import may result in any admissible value of the
         _State_ and _StateExtension_ fields, since these are restored to the values at export"
         (<<KLEE-State-management>>)."""
-        assert scc['mode'] == cls.MODE
-        obj = cls.__new__(cls)
-        KleeCL.__init__(obj)
+        assert scc['mode'] == lockers.MODE
+        obj = lockers.__new__(lockers)
+        KleeLocker.__init__(obj)
         for k, v in flags.items():
             setattr(obj, k, v)
         obj.policy, obj.key_type = scc['policy'], scc['key_type']
@@ -571,7 +571,7 @@ def kl_pad(x, n, r=128):
 
 # ===================================================================== KLEE model: Ascon-AEAD128
 
-class KleeAsconAEAD128(KleeCL):
+class KleeAsconAEAD128(KleeLocker):
     """<<KLEE-Ascon-AEAD128>>.  Every clause is transcribed in the method that implements it;
     `dsep_wrong_word` is a negative control."""
 
@@ -582,7 +582,7 @@ class KleeAsconAEAD128(KleeCL):
     IMPORTABLE = {1: (('Ready',), 16)}           # <<KLEE-derive-endpoints>>: `key` (1)
 
     def __init__(self, key, policy=0b11, skid=None, dsep_wrong_word=False):
-        KleeCL.__init__(self)
+        KleeLocker.__init__(self)
         self._provision(key, policy, skid)       # PI: MDH (Pos. i), `key` or SKID (Pos. ii)
         self.dsep_wrong_word = dsep_wrong_word
         self._enter_ready()                      # "Completing a provisioning ... leads only to State _Ready_"
@@ -659,7 +659,7 @@ class KleeAsconAEAD128(KleeCL):
 
     # ---- "In State _Ready_, a Form B kl.setst Kn|K(Xn), #kl_state_set_aux_value, Xs sets
     #      tag_len <- Xs.  Admissible values satisfy 64 <= Xs <= 128; any other value causes
-    #      the CL to transition to Error State _Invalid_ ... The _State_ field is unchanged"
+    #      the locker to transition to Error State _Invalid_ ... The _State_ field is unchanged"
     def _c_tag_len(self, Xs, **_):
         if not (64 <= Xs <= 128):
             return self.invalidate()
@@ -803,7 +803,7 @@ class KleeAsconAEAD128(KleeCL):
         self.st = 'Success' if ok else 'Failure'
         return out
 
-    # ---- kl.derive destination `key` (1), "filled with the destination CL in State _Ready_"
+    # ---- kl.derive destination `key` (1), "filled with the destination locker in State _Ready_"
     def derive_dest(self, j, data, dest_len):
         # <<KLEE-derive-rule-both-fixed-size>>: eff_length bytes, zero-filled beyond them
         self.key = b2v(data.ljust(dest_len, b'\0'))
@@ -817,7 +817,7 @@ class KleeAsconAEAD128Nonce(KleeAsconAEAD128):
     IMPORTABLE = {}              # not listed in <<KLEE-derive-endpoints>>
 
     def __init__(self, key, nonce, policy=0b11, skid=None):
-        KleeCL.__init__(self)
+        KleeLocker.__init__(self)
         self._provision(key, policy, skid)       # PI Pos. ii: `key` or SKID
         # PI Pos. iii: `nonce`.  SPEC-NOTE: the Internal State ("Same as for Ascon-AEAD128")
         # has no such field; the model keeps it to perform the _Ready_ initialization below.
@@ -852,7 +852,7 @@ class KleeAsconAEAD128NonceMask(KleeAsconAEAD128):
     legacy_layout = False        # NEGATIVE CONTROL: the Serialized Content before last_blk_len
 
     def __init__(self, K1, K2, policy=0b11, skid=None):
-        KleeCL.__init__(self)
+        KleeLocker.__init__(self)
         self._provision(K1, policy, skid)        # PI Pos. ii: `K1` or SKID
         self.K2 = K2 & M128                      # PI Pos. iii: `K2`, or nothing with a SKID
         self._enter_ready()
@@ -877,7 +877,7 @@ class KleeAsconAEAD128NonceMask(KleeAsconAEAD128):
 
 # ===================================================================== KLEE model: the sponges
 
-class KleeAsconHash256(KleeCL):
+class KleeAsconHash256(KleeLocker):
     """<<KLEE-Ascon-Hash256>>."""
 
     MODE = 3
@@ -887,7 +887,7 @@ class KleeAsconHash256(KleeCL):
     COUNTDOWN_ON_ENTRY = 3
 
     def __init__(self):
-        KleeCL.__init__(self)                    # "The Provisioning Input contains only the MDH."
+        KleeLocker.__init__(self)                    # "The Provisioning Input contains only the MDH."
         self._enter_ready()
 
     def _clear_content(self):
@@ -1005,12 +1005,12 @@ def kl_derive(dst, j, src, i, length):
     <<KLEE-derive-endpoints>> gives the Ascon Machines; `i`, `j` are the endpoint indices."""
     if src.in_error() or dst.in_error():         # <<KLEE-SGR-gate-order>>: a no-op
         return
-    # "If the transfer is not allowed, then both CLs transition to Error State _Invalid_."
+    # "If the transfer is not allowed, then both lockers transition to Error State _Invalid_."
     if i not in src.EXPORTABLE or j not in dst.IMPORTABLE:
         src.invalidate()
         dst.invalidate()
         return
-    # Check 1, the source first: "The _State_ ... of each CL must admit its endpoint, and a
+    # Check 1, the source first: "The _State_ ... of each locker must admit its endpoint, and a
     # destination whose key is written must be in State _Ready_"
     dst_states, dest_len = dst.IMPORTABLE[j]
     bad_src, bad_dst = src.st not in src.EXPORTABLE[i], dst.st not in dst_states
@@ -1050,7 +1050,7 @@ def kl_restrictl(cc, machine_policy):
     return None
 
 def kl_restricth(cc, machine_use):
-    """`kl.restricth` requesting only _MachineUse_: "the CL transitions to _Invalid_ where the
+    """`kl.restricth` requesting only _MachineUse_: "the locker transitions to _Invalid_ where the
     Machine uses the field to hold state, such as ... the squeeze counter of
     <<KLEE-Ascon-Hash256>> ..., and wherever the Machine does not define the field as writable
     by kl.restrict*".  No Ascon Machine defines it as writable."""
@@ -1109,13 +1109,13 @@ def _step(cc, after):
 
 def aead_run(cc, decrypt, nonce, ad, data, tag=0, tag_len=128, ad_chunk=1, pt_chunk=1,
              last_block_128=False, after=None):
-    """Issue on the provisioned CL `cc` the instruction sequence of <<KLEE-Ascon-AEAD128>>:
+    """Issue on the provisioned locker `cc` the instruction sequence of <<KLEE-Ascon-AEAD128>>:
     tag_len (if not 128); the nonce (Form C, or Form A when `nonce` is None); the padded AD
     (Form B, KLLEN = 128 * `ad_chunk`); _Encrypt_/_Decrypt_; the full blocks (Form A, KLLEN
     = 128 * `pt_chunk`); the last-block kl.setst; the final block (KLLEN = 8 * its length,
     or a whole 128-bit INPUT with junk beyond last_blk_len); the tag (KLLEN = 128; for
     decryption `tag` is a value zero-extended to 128 bits).  `after(cc)` runs after every
-    instruction and may replace the CL.  Returns (cc, data out, tag bytes or verdict)."""
+    instruction and may replace the locker.  Returns (cc, data out, tag bytes or verdict)."""
     if tag_len != 128:
         cc.setst('Set_Aux_Value', 'B', Xs=tag_len)
         cc = _step(cc, after)
@@ -1193,7 +1193,7 @@ C166 = bytes.fromhex("e8c3deee24")           # ... its ciphertext
 T166 = bytes.fromhex("21812a398a8ff074c8b7da46c82a94a7")    # ... and its tag
 
 def aead_to(target, policy=0b11):
-    """A fresh Ascon-AEAD128 CL (KAT key and nonce, empty AD, Count=166's 5-byte block)
+    """A fresh Ascon-AEAD128 locker (KAT key and nonce, empty AD, Count=166's 5-byte block)
     driven up to State `target`."""
     dec = target in ('Decrypt', 'Dec_Last_Block', 'Hash_Verify')
     stage = {'Ready': 0, 'Hash_Absorb': 1, 'Encrypt': 2, 'Decrypt': 2, 'Enc_Last_Block': 3,
@@ -1216,7 +1216,7 @@ def sponge_run(cc, msg, outlen, prefix=b'', absorb_chunk=1, squeeze=(64,), after
     """The <<KLEE-Ascon-Hash256>> sequence: Form A into _Hash_Absorb_, the caller-padded
     message in Form B (KLLEN = 64 * `absorb_chunk`), Form A into _Hash_Finalize_, then
     Form C with the a `kls in `squeeze` (the last one repeated) until `outlen` bytes are
-    collected or the CL leaves _Hash_Finalize_.  Each output operand starts all ones."""
+    collected or the locker leaves _Hash_Finalize_.  Each output operand starts all ones."""
     cc.setst('Hash_Absorb', 'A')
     cc = _step(cc, after)
     m = prefix + msg + b'\x01' + bytes((-len(msg) - 1) % 8)
@@ -1239,21 +1239,21 @@ def kl_hash256(msg, **kw):
     cc, md = sponge_run(KleeAsconHash256(), msg, 32, **kw)
     return md, cc
 
-def kl_xof(cls, msg, outlen, **kw):
-    cc, out = sponge_run(cls(), msg, outlen, **kw)
+def kl_xof(lockers, msg, outlen, **kw):
+    cc, out = sponge_run(lockers(), msg, outlen, **kw)
     return out, cc
 
-def sponge_at_finalize(cls, msg, prefix=b''):
-    cc = cls()
+def sponge_at_finalize(lockers, msg, prefix=b''):
+    cc = lockers()
     cc.setst('Hash_Absorb', 'A')
     m = prefix + msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     cc.exec('B', b2v(m), 8 * len(m))
     cc.setst('Hash_Finalize', 'A')
     return cc
 
-def migrate(cls, sks=None, **flags):
-    """An `after` hook: export the CL and complete an import of the image into a fresh CL."""
-    return lambda cc: cls.import_(cc.export(), sks=sks, **flags)
+def migrate(lockers, sks=None, **flags):
+    """An `after` hook: export the locker and complete an import of the image into a fresh locker."""
+    return lambda cc: lockers.import_(cc.export(), sks=sks, **flags)
 
 # ===================================================================== vectors
 #
@@ -1529,7 +1529,7 @@ def main():
         (0, [0] * 5, 0, b''))
     o = cc.exec('A', 1, 128, out=M128)
     cc.setst('Ready')
-    chk("<<KLEE-SGR-usage-cr-error-state>>: kl.exec on the Invalid CL is a no-op with its output "
+    chk("<<KLEE-SGR-usage-cr-error-state>>: kl.exec on the Invalid locker is a no-op with its output "
         "window zeroed; kl.setst #kl_state_ready does nothing", (cc.st, o), ('Invalid', 0))
     cc = KleeAsconAEAD128(K)
     cc.exec('B', 0, 128)
@@ -1633,19 +1633,19 @@ def main():
     print("  _MachinePolicy_: \"if encryption [decryption] is allowed\"; kl.restrictl / kl.restricth")
     cc = aead_to('Hash_Absorb', policy=0b10)
     cc.setst('Encrypt', 'A')
-    chk("decryption-only CL: _Hash_Absorb_ -> _Encrypt_ -> Invalid", cc.st, 'Invalid')
+    chk("decryption-only locker: _Hash_Absorb_ -> _Encrypt_ -> Invalid", cc.st, 'Invalid')
     cc = KleeAsconAEAD128(K, policy=0b10)
     cc, rec, ok = aead_run(cc, True, KAT_NONCE, ad579, blob579[:-16], tag=b2v(blob579[-16:]))
-    chk("decryption-only CL still decrypts Count=579", (rec, ok), (pt579, True))
+    chk("decryption-only locker still decrypts Count=579", (rec, ok), (pt579, True))
     cc = aead_to('Hash_Absorb', policy=0b01)
     cc.setst('Decrypt', 'A')
-    chk("encryption-only CL: _Hash_Absorb_ -> _Decrypt_ -> Invalid", cc.st, 'Invalid')
+    chk("encryption-only locker: _Hash_Absorb_ -> _Decrypt_ -> Invalid", cc.st, 'Invalid')
     cc = KleeAsconAEAD128(K)
     kl_restrictl(cc, 0b10)
     st0, pol0 = cc.st, cc.policy
     cc.setst('Hash_Absorb', 'C', INPUT=NN, KLLEN=128)
     cc.setst('Encrypt', 'A')
-    chk("kl.restrictl in _Ready_ narrows the CL to decryption; _Encrypt_ is then refused",
+    chk("kl.restrictl in _Ready_ narrows the locker to decryption; _Encrypt_ is then refused",
         (st0, pol0, cc.st), ('Ready', 0b10, 'Invalid'))
     cc = aead_to('Encrypt')
     kl_restrictl(cc, 0b10)
@@ -1725,7 +1725,7 @@ def main():
                                             sl(c1, 127, 64), sl(c1, 191, 128)),
         (32, 64, SKID_A, 0, IV_AEAD))
     cc, ct, tag = aead_run(cc, False, KAT_NONCE, ad579, pt579, after=migrate(KleeAsconAEAD128, SKS))
-    chk("SKID-keyed CL migrated after every instruction (the SKS resolves the SKID): Count=579",
+    chk("SKID-keyed locker migrated after every instruction (the SKS resolves the SKID): Count=579",
         ct + tag, blob579)
     bad = KleeAsconAEAD128.import_(img, sks={})
     chk("import of a SKID the SKS does not resolve -> Invalid (<<KLEE-MVR-open>>)",
@@ -1778,7 +1778,7 @@ def main():
         got = 'State _Ready_ re-entered'
     except SpecGap:
         got = 'no nonce to reinstall'
-    chk("demonstration: an imported set-nonce CL in _Success_ cannot re-enter _Ready_",
+    chk("demonstration: an imported set-nonce locker in _Success_ cannot re-enter _Ready_",
         got, 'no nonce to reinstall')
 
     # ------------------------------------------------------------------ nonce masking
@@ -2035,7 +2035,7 @@ def main():
         ('Invalid', 'Hash_Finalize'))
     src, dst = KleeAsconAEAD128(K), KleeAsconAEAD128(0)
     kl_derive(dst, 1, src, 1, 16)
-    chk("Ascon-AEAD128 as a source (nothing exportable) -> both CLs Invalid",
+    chk("Ascon-AEAD128 as a source (nothing exportable) -> both lockers Invalid",
         (src.st, dst.st), ('Invalid', 'Invalid'))
     src = sponge_at_finalize(KleeAsconXOF128, msg)
     dst = KleeAsconXOF128()

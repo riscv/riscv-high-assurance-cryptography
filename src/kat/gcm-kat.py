@@ -43,7 +43,7 @@ byte (INPUT[last_blk_len-1:0], enc_blk(...)[last_blk_len-1:0]), whereas
 SP 800-38D's bit strings use its HIGH bits (MSB_len, and IV || 0^s), and the
 GHASH length block is the byte count times 8 (<<KLEE-truncation-vs-length>>)
 rather than the true bit length.  No placement of a partial byte reproduces
-SP 800-38D, so such lengths send the CL to _Invalid_; the checks below cover
+SP 800-38D, so such lengths send the locker to _Invalid_; the checks below cover
 both the conformance of every admissible length and that rejection.
 """
 
@@ -289,8 +289,8 @@ def process_VLI(M, INPUT, KLLEN, *, max_len, block, b, state, n, input_base,
     return "done"
 
 
-class GcmCL:
-    """A CL holding a CC of <<KLEE-GCM-mode>> (set_iv False) or of
+class GcmLocker:
+    """A locker holding a CC of <<KLEE-GCM-mode>> (set_iv False) or of
     <<KLEE-GCM-with-IV-mode>> (set_iv True).
 
     The MDH is reduced to _State_, _MachinePolicy_ (bit 0 encryption, bit 1
@@ -350,15 +350,15 @@ class GcmCL:
         return self
 
     @classmethod
-    def provisioned(cls, key, J0=None, skid=None, **kw):
-        cl = cls(set_iv=J0 is not None, **kw)
+    def provisioned(lockers, key, J0=None, skid=None, **kw):
+        cl = lockers(set_iv=J0 is not None, **kw)
         k = 8 * len(SKS[skid] if skid is not None else key)
-        v, _ = cls.pi_content(key, J0, skid)
+        v, _ = lockers.pi_content(key, J0, skid)
         return cl.provision(v, k, 1 if skid is not None else 0)
 
     def export_content(self):
         """The Serialized Content (Content1 plaintext), as (value, bits).
-        A CL in an Error State is its MDH alone (SGR11)."""
+        A locker in an Error State is its MDH alone (SGR11)."""
         if self.state in ERROR_STATES:
             return 0, 0
         kbits = 64 if self.key_type == 1 else self.k
@@ -375,9 +375,9 @@ class GcmCL:
         return v, pad128(kbits + 128 + 128 + 32 + 16)
 
     @classmethod
-    def imported(cls, state, content, k, key_type=0, set_iv=False, policy=0b11, **kw):
+    def imported(lockers, state, content, k, key_type=0, set_iv=False, policy=0b11, **kw):
         """kl.mgmt completing an import (kl_cfg_management_end)."""
-        cl = cls(set_iv, policy, **kw)
+        cl = lockers(set_iv, policy, **kw)
         cl.k, cl.key_type = k, key_type
         kbits = 64 if key_type == 1 else k
         kf = sl(content, kbits - 1, 0)
@@ -439,7 +439,7 @@ class GcmCL:
 
     def _next_ctr(self):
         """ctr <- int(bswap(J0[127:96])); ctr <- (ctr + 1) mod 2^32; None when
-        ctr = (start_ctr - 1) mod 2^32, i.e. when the CL goes to _Invalid_."""
+        ctr = (start_ctr - 1) mod 2^32, i.e. when the locker goes to _Invalid_."""
         ctr = (self._ctr_of(sl(self.J0, 127, 96)) + 1) % 2 ** 32
         return None if ctr == (self.start_ctr - 1) % 2 ** 32 else ctr
 
@@ -476,7 +476,7 @@ class GcmCL:
         return t
 
     def setst(self, immed7, form="A", aux=0):
-        """kl.setst <CL>, #immed7 [, aux]: Form A (no input), B (Xs), C (INPUT)."""
+        """kl.setst <locker>, #immed7 [, aux]: Form A (no input), B (Xs), C (INPUT)."""
         st = self.state
         if st in ERROR_STATES:
             # SGR15: only the Error State may be changed; any other use is a no-op (SGR16)
@@ -618,7 +618,7 @@ class GcmCL:
     def exec(self, form, INPUT=0, KLLEN=128, resume=False, interrupt_after=None):
         """kl.exec: Form A (in, out), B (in), C (out).  Returns OUTPUT (KLLEN bits)
         for Forms A and C.  An instruction that performs no operation, or that
-        invalidates the CL, leaves zeros in the part of the window it did not write."""
+        invalidates the locker, leaves zeros in the part of the window it did not write."""
         self.halted = False
         st = self.state
         if st in ERROR_STATES:
@@ -783,7 +783,7 @@ def run_crypt(cl, text, nblk_per_exec, last_state):
 
 def kl_encrypt(key, iv, ad, pt, iv_chunk=16, pt_chunk=1, interrupt_iv=False,
                swap_len_block=False, cl=None, **kw):
-    cl = cl or GcmCL.provisioned(key, **kw)
+    cl = cl or GcmLocker.provisioned(key, **kw)
     cl.setst(KL_STATE_SET_AUX_VALUE, "B", 8 * len(iv))
     feed_iv(cl, iv, iv_chunk, interrupt_iv)
     absorb_ad(cl, ad)
@@ -795,7 +795,7 @@ def kl_encrypt(key, iv, ad, pt, iv_chunk=16, pt_chunk=1, interrupt_iv=False,
 
 
 def kl_decrypt(key, iv, ad, ct, tag_bytes, cl=None, **kw):
-    cl = cl or GcmCL.provisioned(key, **kw)
+    cl = cl or GcmLocker.provisioned(key, **kw)
     cl.setst(KL_STATE_SET_AUX_VALUE, "B", 8 * len(iv))
     feed_iv(cl, iv)
     absorb_ad(cl, ad)
@@ -807,7 +807,7 @@ def kl_decrypt(key, iv, ad, ct, tag_bytes, cl=None, **kw):
 
 
 def kl_encrypt_setiv(ad, pt, cl):
-    """GCM with Set IV on a provisioned CL in _Ready_: J0 came with the PI."""
+    """GCM with Set IV on a provisioned locker in _Ready_: J0 came with the PI."""
     cl.setst(KL_STATE_HASH_ABSORB)                  # Form A kl.setst
     absorb_ad(cl, ad)
     cl.setst(KL_STATE_ENCRYPT)
@@ -917,7 +917,7 @@ def section(title):
 
 
 def fired(fn):
-    """Run fn; report whether the CL it returns ended in _Invalid_."""
+    """Run fn; report whether the locker it returns ended in _Invalid_."""
     cl = fn()
     return cl.state == KL_STATE_INVALID
 
@@ -964,7 +964,7 @@ for label, k, iv, a, p, c, t in VECTORS:
     C, T, cl = kl_encrypt(K, IV, A, P)
     check(f"KLEE encrypt {label} -> _Success_",
           C == bytes.fromhex(c) and T == bytes.fromhex(t) and cl.state == KL_STATE_SUCCESS)
-cl = GcmCL.provisioned(None, skid=0x0123456789ABCDEF)
+cl = GcmLocker.provisioned(None, skid=0x0123456789ABCDEF)
 C, T, _ = kl_encrypt(None, bytes.fromhex(IV12), bytes.fromhex(AAD), bytes.fromhex(P60), cl=cl)
 check("KLEE encrypt tc4 with the key given by a SKID (KeyType 1, MGR8)",
       (C, T) == ref_gcm(bytes.fromhex(K128), bytes.fromhex(IV12),
@@ -987,7 +987,7 @@ for ivlen in (1, 13, 20, 16, 32, 64, 1024):
     ac, at, _ = kl_encrypt(K, IV, A, P, iv_chunk=16)
     check(f"KLEE {ivlen}-byte IV ({8 * ivlen} bits) matches REF", (ac, at) == ref_gcm(K, IV, A, P))
 IV = bytes.fromhex(IV12)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 96)
 check("entering _Set_Aux_Value_ sets len <- Xs, clears tag and the process_VLI counters",
       (cl.len, cl.tag, cl.input_base, cl.block_base, cl.cumul_len) == (96, 0, 0, 0, 0))
@@ -996,39 +996,39 @@ check("a 128-bit transfer for a 96-bit IV: the excess 32 bits are ignored and "
       "finalize() enters _Hash_Absorb_ with J0 = IV || 0^31 || 1, tag = 0, start_ctr = 1",
       cl.state == KL_STATE_HASH_ABSORB and v2b(cl.J0, 16) == IV + b"\x00\x00\x00\x01"
       and cl.tag == 0 and cl.start_ctr == 1)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.exec("B", b2v(bytes(range(16))), 128)
 check("the IV is absorbed into tag (J0 untouched until finalize())",
       cl.J0 == 0 and cl.tag == kl_galoismul(b2v(bytes(range(16))), cl.auth_key)
       and (cl.block_base, cl.cumul_len) == (0, 128))
 for bad_iv in (0, 4, 7, 8193):
-    cl = GcmCL.provisioned(K)
+    cl = GcmLocker.provisioned(K)
     cl.setst(KL_STATE_SET_AUX_VALUE, "B", bad_iv)
     check(f"IV length Xs = {bad_iv} -> _Invalid_", cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 check("process_VLI: kl.setst to _Set_Aux_Value_ while in it -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.exec("B", b2v(bytes(12)), 96)
 check("MGR2: a 96-bit transfer that does not complete a 480-bit IV -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.klstart = 5
 cl.exec("B", b2v(bytes(32)), 256, resume=True)
 check("resuming with klstart = 5 (not an interruption point) -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 96)
 cl.exec("A", b2v(IV), 96)
 check("MGR1: a Form A kl.exec in _Set_Aux_Value_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 # Leaving _Set_Aux_Value_ by kl.setst: process_VLI performs finalize() first.
 IV20 = bytes(range(20))
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 160)
 cl.exec("B", b2v(IV20[:16]), 128)
 cl.setst(KL_STATE_HASH_ABSORB)
@@ -1037,7 +1037,7 @@ check("kl.setst _Hash_Absorb_ part-way through the IV runs finalize() on what wa
       "absorbed (J0 = GHASH(IV[0..15] || 0^64 || [160]_64)) and enters _Hash_Absorb_",
       cl.state == KL_STATE_HASH_ABSORB
       and v2b(cl.J0, 16) == ghash(H, IV20[:16] + bytes(8) + _be64(160)))
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.exec("B", b2v(bytes.fromhex(IV60)[:16]), 128)
 cl.setst(KL_STATE_READY)
@@ -1063,7 +1063,7 @@ def prologue(cl, iv=IV, ad=A):
 
 
 PT3 = P[:48]
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 out1 = cl.exec("A", b2v(PT3), 384, interrupt_after=1)
 h1, k1 = cl.halted, cl.klstart
@@ -1072,13 +1072,13 @@ joined = v2b(sl(out1, 127, 0) | (out2 & ~MASK128), 48)
 check("IRR7: a 3-block _Encrypt_ halted after one block (klstart = 16) and "
       "resumed gives the uninterrupted ciphertext",
       h1 and k1 == 16 and cl.klstart == 0 and joined == rc[:48])
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.klstart = 8
 cl.exec("A", b2v(PT3), 384, resume=True)
 check("_Encrypt_ resumed at klstart = 8 (not an interruption point) -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 96)
 cl.exec("B", b2v(IV), 96)
 cl.exec("B", b2v(A[:16]), 128, interrupt_after=0)
@@ -1099,7 +1099,7 @@ for label, k, iv, a, p, c, t in VECTORS:
     _, verdict, _ = kl_decrypt(Kx, IVx, Ax, Cx, bytes(bad))
     check(f"KLEE decrypt {label} with corrupted tag -> _Failure_", verdict == "Failure")
 C4, T4 = rc, rt
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_DECRYPT)
 run_crypt(cl, C4, 3, KL_STATE_DEC_LAST_BLOCK)
 cl.setst(KL_STATE_DEC_TAG_FINALIZE, "C", len_block(8 * len(C4), 8 * len(A)))
@@ -1107,7 +1107,7 @@ leak = cl.exec("C", KLLEN=128)
 check("no kl.exec in _Dec_Tag_Finalize_: a Form C kl.exec -> _Invalid_ and "
       "writes zeros, never the recomputed tag",
       cl.state == KL_STATE_INVALID and leak == 0)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_DECRYPT)
 run_crypt(cl, C4, 3, KL_STATE_DEC_LAST_BLOCK)
 cl.setst(KL_STATE_DEC_TAG_FINALIZE, "C", len_block(8 * len(C4), 8 * len(A)))
@@ -1120,14 +1120,14 @@ section("KLEE _Enc_Last_Block_ / _Dec_Last_Block_")
 PT_FULL = bytes(range(32))                       # two whole blocks
 for nbits in (8, 16, 56, 96, 120):
     pt_val = b2v(bytes(range(16))) & mask(nbits)
-    cl = prologue(GcmCL.provisioned(K))
+    cl = prologue(GcmLocker.provisioned(K))
     cl.setst(KL_STATE_ENCRYPT)
     ct_full = cl.exec("A", b2v(PT_FULL), 8 * len(PT_FULL))
     cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", nbits)
     ct_tail = cl.exec("A", pt_val, 128)
     cl.setst(KL_STATE_ENC_TAG_FINALIZE, "C", len_block(8 * len(PT_FULL) + nbits, 8 * len(A)))
     tag_e = cl.exec("C", KLLEN=128)
-    dd = prologue(GcmCL.provisioned(K))
+    dd = prologue(GcmLocker.provisioned(K))
     dd.setst(KL_STATE_DECRYPT)
     pt_back = dd.exec("A", ct_full, 8 * len(PT_FULL))
     dd.setst(KL_STATE_DEC_LAST_BLOCK, "B", nbits)
@@ -1140,13 +1140,13 @@ for nbits in (8, 16, 56, 96, 120):
           f"(no keystream leak, MGR6)", ct_tail >> nbits == 0)
 for immed, name in ((KL_STATE_ENC_LAST_BLOCK, "Enc"), (KL_STATE_DEC_LAST_BLOCK, "Dec")):
     for bad_len in (0, 128, 200, 1, 7, 100, 127):
-        cl = prologue(GcmCL.provisioned(K))
+        cl = prologue(GcmLocker.provisioned(K))
         cl.setst(KL_STATE_ENCRYPT if name == "Enc" else KL_STATE_DECRYPT)
         cl.setst(immed, "B", bad_len)
         why = "not a multiple of 8" if bad_len % 8 else "out of range"
         check(f"_{name}_Last_Block_ with last_blk_len = {bad_len} ({why}) -> _Invalid_",
               cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 96)
 first = cl.exec("A", b2v(P[:12]), 96)
@@ -1155,20 +1155,20 @@ again = cl.exec("A", b2v(P[:12]), 96)
 check("a second kl.exec in _Enc_Last_Block_ (last_blk_len = 0) performs no "
       "operation and writes zeros", first != 0 and again == 0 and (cl.tag, cl.J0) == snap
       and cl.state == KL_STATE_ENC_LAST_BLOCK)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 96)
 wide = cl.exec("A", b2v(P[:12] + bytes(range(1, 21))), 256)
 check("_Enc_Last_Block_ with KLLEN = 256 processes one block, ignores the excess "
       "input and clears OUTPUT above bit 95 (MGR3, MGR6)", wide == first)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 104)
 cl.exec("A", b2v(P[:12]), 96)
 check("_Enc_Last_Block_ with KLLEN (96) < last_blk_len (104) -> _Invalid_",
       cl.state == KL_STATE_INVALID)
 ac, at, _ = kl_encrypt(K, IV, A, P)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 run_crypt(cl, P, 3, KL_STATE_ENC_LAST_BLOCK)
 cl.setst(KL_STATE_ENC_TAG_FINALIZE, "C", len_block(8 * len(P), 8 * len(A)) | (0x5A << 128))
@@ -1206,7 +1206,7 @@ def unplace(b: bytes, n, how):
 def klee_bits_message(Pbits, how, ivb=IV):
     """Encrypt the bit string Pbits with the KLEE model; full blocks via _Encrypt_,
     the rest via _Enc_Last_Block_ with last_blk_len = its bit length."""
-    cl = prologue(GcmCL.provisioned(K), iv=ivb)
+    cl = prologue(GcmLocker.provisioned(K), iv=ivb)
     cl.setst(KL_STATE_ENCRYPT)
     body = placements(Pbits)[how]
     nfull = Pbits[1] // 128
@@ -1235,7 +1235,7 @@ for ivbits in (96, 64, 480):
     want = ref_bits_gcm(K, IVb, bits_of(A), bits_of(P))
     hits = []
     for how, ivbytes in placements(IVb).items():
-        cl = GcmCL.provisioned(K)
+        cl = GcmLocker.provisioned(K)
         cl.setst(KL_STATE_SET_AUX_VALUE, "B", ivbits)
         cl.exec("B", b2v(ivbytes), 8 * len(ivbytes))
         absorb_ad(cl, A)
@@ -1253,13 +1253,13 @@ for ivbits in (96, 64, 480):
 # <<KLEE-OCB-mode>>.  Were they not, the keystream and the tag would diverge
 # from SP 800-38D whichever end of the final byte the bits were taken from.
 for nbits in (60, 100, 127, 263):
-    cl = prologue(GcmCL.provisioned(K))
+    cl = prologue(GcmLocker.provisioned(K))
     cl.setst(KL_STATE_ENCRYPT)
     cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", nbits % 128 or 128)
     check(f"plaintext of {nbits} bits: last_blk_len = {nbits % 128 or 128} is not a "
           f"multiple of 8 -> _Invalid_", cl.state == KL_STATE_INVALID)
 for ivbits in (100, 60, 8193, 0):
-    cl = GcmCL.provisioned(K)
+    cl = GcmLocker.provisioned(K)
     cl.setst(KL_STATE_SET_AUX_VALUE, "B", ivbits)
     check(f"IV of {ivbits} bits is not an admissible len -> _Invalid_",
           cl.state == KL_STATE_INVALID)
@@ -1269,8 +1269,8 @@ section("counter wrap: _Invalid_ exactly when ctr = (start_ctr - 1) mod 2^32")
 
 
 def fresh(ivbytes, **kw):
-    """A CL that has just left _Set_Aux_Value_ with the given IV."""
-    c = GcmCL.provisioned(K, **kw)
+    """A locker that has just left _Set_Aux_Value_ with the given IV."""
+    c = GcmLocker.provisioned(K, **kw)
     c.setst(KL_STATE_SET_AUX_VALUE, "B", 8 * len(ivbytes))
     feed_iv(c, ivbytes)
     return c
@@ -1321,7 +1321,7 @@ got = cl.exec("A", b2v(P[:48] + bytes(16)), 512)
 check("IRR6/SGR16: a 4-block kl.exec that hits the limit at its third block keeps "
       "the two completed blocks and zeroes the rest of its window",
       got == want2 and cl.state == KL_STATE_INVALID)
-check("SGR10/SGR11: the invalidated CL retains only its MDH (Content cleared)",
+check("SGR10/SGR11: the invalidated locker retains only its MDH (Content cleared)",
       cl.export_content() == (0, 0) and cl.key == b"" and cl.tag == 0 and cl.J0 == 0)
 
 # ---- 8. GCM with Set IV -------------------------------------------------------
@@ -1329,34 +1329,34 @@ section("GCM with Set IV: PI = key || J0, no _Set_Aux_Value_, no budget")
 for label, k, iv, a, p, c, t in VECTORS:
     Kx, IVx, Ax, Px = (bytes.fromhex(x) for x in (k, iv, a, p))
     J0 = b2v(ref_j0(Kx, IVx))              # as the provisioning software computes it
-    cl = GcmCL.provisioned(Kx, J0=J0)
+    cl = GcmLocker.provisioned(Kx, J0=J0)
     Cx, Tx = kl_encrypt_setiv(Ax, Px, cl)
     check(f"Set-IV {label}: same ciphertext/tag as GCM, -> _Success_",
           Cx == bytes.fromhex(c) and Tx == bytes.fromhex(t) and cl.state == KL_STATE_SUCCESS)
 J0b = ref_j0(K, IV)
-pi, pibits = GcmCL.pi_content(K, J0=b2v(J0b))
+pi, pibits = GcmLocker.pi_content(K, J0=b2v(J0b))
 check("Set-IV PI Content: key at Pos. ii, J0 at Pos. iii, 256 bits for k = 128 "
       "(no budget field)", pibits == 256 and v2b(pi, 32) == K + J0b)
-pi, pibits = GcmCL.pi_content(None, J0=b2v(J0b), skid=0x0123456789ABCDEF)
+pi, pibits = GcmLocker.pi_content(None, J0=b2v(J0b), skid=0x0123456789ABCDEF)
 check("Set-IV PI Content with a SKID: 64 + 128 bits, padded to 256",
       pibits == 256 and sl(pi, 191, 64) == b2v(J0b))
-cl = GcmCL.provisioned(K, J0=b2v(ref_j0(K, bytes.fromhex(IV8))))
+cl = GcmLocker.provisioned(K, J0=b2v(ref_j0(K, bytes.fromhex(IV8))))
 check("provisioning sets start_ctr <- int(bswap(J0[127:96]))",
       cl.start_ctr == int.from_bytes(ref_j0(K, bytes.fromhex(IV8))[12:], "big"))
-cl = GcmCL.provisioned(K, J0=b2v(J0b))
+cl = GcmLocker.provisioned(K, J0=b2v(J0b))
 cl.setst(KL_STATE_HASH_ABSORB, "C", 0)
 check("Set-IV: the kl.setst to _Hash_Absorb_ must be of Form A (Form C -> _Invalid_)",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K, J0=b2v(J0b))
+cl = GcmLocker.provisioned(K, J0=b2v(J0b))
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 96)
 check("Set-IV: there is no _Set_Aux_Value_ (kl.setst naming it -> _Invalid_)",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_HASH_ABSORB)
 check("GCM (Mode 4): _Ready_ -> _Hash_Absorb_ is not a listed transition -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-# No budget: a Set-IV CL keeps processing blocks across many kl.exec.
-cl = GcmCL.provisioned(K, J0=b2v(J0b))
+# No budget: a Set-IV locker keeps processing blocks across many kl.exec.
+cl = GcmLocker.provisioned(K, J0=b2v(J0b))
 cl.setst(KL_STATE_HASH_ABSORB)
 cl.setst(KL_STATE_ENCRYPT)
 for _ in range(40):
@@ -1364,7 +1364,7 @@ for _ in range(40):
 check("Set-IV: 320 blocks in 40 kl.exec, no budget and no _Invalid_",
       cl.state == KL_STATE_ENCRYPT and cl._ctr_of(sl(cl.J0, 127, 96)) == 321)
 # The prohibition of a transition back to _Ready_ is withdrawn (SGR8 applies).
-cl = GcmCL.provisioned(K, J0=b2v(J0b))
+cl = GcmLocker.provisioned(K, J0=b2v(J0b))
 C1, T1 = kl_encrypt_setiv(A, P, cl)
 cl.setst(KL_STATE_READY)
 back = cl.state == KL_STATE_READY and cl.tag == 0
@@ -1378,7 +1378,7 @@ check("Set-IV: the second message continues the counter (J0 is not re-initialise
       (C2, T2) == (rc2, rt2) and C2 != C1)
 states = []
 for s_ in (2 ** 32 - 2, 2 ** 32 - 1):
-    cl = GcmCL.provisioned(K, J0=b2v(J0b))
+    cl = GcmLocker.provisioned(K, J0=b2v(J0b))
     seed(cl, s_)
     cl.setst(KL_STATE_HASH_ABSORB)
     cl.setst(KL_STATE_ENCRYPT)
@@ -1390,7 +1390,7 @@ check("Set-IV: the counter rule still bounds the blocks (start_ctr = 1: ctr = 2^
 
 # ---- 9. general rules ---------------------------------------------------------
 section("general rules: MGR1, MGR2, SGR2, SGR4-SGR8, SGR15, SGR16, _MachinePolicy_")
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 check("SGR2: kl.exec in _Ready_ -> _Invalid_ and zero output",
       cl.exec("A", b2v(P[:16]), 128) == 0 and cl.state == KL_STATE_INVALID)
 _, _, cl = kl_encrypt(K, IV, A, P)
@@ -1403,21 +1403,21 @@ check("SGR5/SGR6: kl.setst other than _Ready_/Error in _Success_ -> _Invalid_",
 _, _, cl = kl_encrypt(K, IV, A, P)
 cl.setst(KL_STATE_READY)
 C3, T3, _ = kl_encrypt(K, bytes.fromhex(IV8), A, P, cl=cl)
-check("SGR6/SGR8: back to _Ready_ from _Success_, the same CL reproduces tc5",
+check("SGR6/SGR8: back to _Ready_ from _Success_, the same locker reproduces tc5",
       (C3.hex(), T3.hex()) == (VECTORS[4][5], VECTORS[4][6]))
 _, verdict, cl = kl_decrypt(K, IV, A, C4, bytes(16))
 cl.setst(KL_STATE_READY)
 pt, verdict2, _ = kl_decrypt(K, IV, A, C4, T4, cl=cl)
-check("from _Failure_ back to _Ready_, the same CL decrypts and verifies",
+check("from _Failure_ back to _Ready_, the same locker decrypts and verifies",
       verdict == "Failure" and verdict2 == "Success" and pt == P)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.exec("A", b2v(P[:16]), 128)
 cl.setst(KL_STATE_READY)
 C5, T5, _ = kl_encrypt(K, IV, A, P, cl=cl)
 check("SGR8: _Encrypt_ -> _Ready_ mid-message; the next message is unaffected",
       (C5, T5) == (rc, rt))
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_HASH_ABSORB)
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENCRYPT)
@@ -1426,47 +1426,47 @@ check("SGR4: same-State kl.setst in _Hash_Absorb_ and _Encrypt_ change nothing",
 for form, st, name in (("A", KL_STATE_HASH_ABSORB, "Form A kl.exec in _Hash_Absorb_"),
                        ("B", KL_STATE_ENCRYPT, "Form B kl.exec in _Encrypt_"),
                        ("B", KL_STATE_DECRYPT, "Form B kl.exec in _Decrypt_")):
-    cl = prologue(GcmCL.provisioned(K))
+    cl = prologue(GcmLocker.provisioned(K))
     if st != KL_STATE_HASH_ABSORB:
         cl.setst(st)
     cl.exec(form, b2v(P[:16]), 128)
     check(f"MGR1: {name} -> _Invalid_", cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT, "B", 5)
 check("MGR1: a Form B kl.setst to _Encrypt_ -> _Invalid_", cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_TAG_FINALIZE, "B", 5)
 check("MGR1: a Form B kl.setst to _Enc_Tag_Finalize_ -> _Invalid_", cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_HASH_VERIFY, "C", 0)
 check("MGR1: _Encrypt_ -> _Hash_Verify_ is not a listed transition -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_DECRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 8)
 check("MGR1: _Decrypt_ -> _Enc_Last_Block_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 for st, name in ((KL_STATE_HASH_ABSORB, "_Hash_Absorb_"), (KL_STATE_ENCRYPT, "_Encrypt_"),
                  (KL_STATE_DECRYPT, "_Decrypt_")):
-    cl = prologue(GcmCL.provisioned(K))
+    cl = prologue(GcmLocker.provisioned(K))
     if st != KL_STATE_HASH_ABSORB:
         cl.setst(st)
     out = cl.exec("B" if st == KL_STATE_HASH_ABSORB else "A", b2v(P[:15]), 120)
     check(f"MGR2: KLLEN = 120 in {name} -> no operation, zero output, _Invalid_",
           cl.state == KL_STATE_INVALID and not out)
-cl = prologue(GcmCL.provisioned(K, policy=0b10))
+cl = prologue(GcmLocker.provisioned(K, policy=0b10))
 cl.setst(KL_STATE_ENCRYPT)
 check("_MachinePolicy_ = decrypt only: _Hash_Absorb_ -> _Encrypt_ -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(K, policy=0b10)
+cl = GcmLocker.provisioned(K, policy=0b10)
 pt, verdict, _ = kl_decrypt(K, IV, A, C4, T4, cl=cl)
 check("_MachinePolicy_ = decrypt only: the decryption path works", verdict == "Success")
-cl = prologue(GcmCL.provisioned(K, policy=0b01))
+cl = prologue(GcmLocker.provisioned(K, policy=0b01))
 cl.setst(KL_STATE_DECRYPT)
 check("_MachinePolicy_ = encrypt only: _Hash_Absorb_ -> _Decrypt_ -> _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_PRIV_VIOLATION)
 st1 = cl.state
@@ -1481,13 +1481,13 @@ check("an Error State immediate is accepted; in an Error State kl.exec and a "
 # ---- 10. Serialized Content, export and import ------------------------------
 section("Serialized Content: layout, export/import, MGR4")
 for k_, kt, blocks in ((128, 0, 4), (192, 0, 4), (256, 0, 5), (128, 1, 3)):
-    cl = GcmCL.provisioned(bytes(k_ // 8) if kt == 0 else None,
+    cl = GcmLocker.provisioned(bytes(k_ // 8) if kt == 0 else None,
                            skid=0x0123456789ABCDEF if kt else None)
     _, nb = cl.export_content()
     kb = 64 if kt else k_
     check(f"Content of {'a SKID' if kt else f'k = {k_}'}: {kb} + 128 + 128 + 32 + 16 bits, "
           f"{blocks} blocks of 128", nb == 128 * blocks == pad128(kb + 304))
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.exec("A", b2v(P[:16]), 128)
 v, nb = cl.export_content()
@@ -1495,15 +1495,15 @@ check("positions: key [127:0], J0 [255:128], tag [383:256], bin(start_ctr,32) "
       "[415:384], last_blk_len [431:416]",
       sl(v, 127, 0) == b2v(K) and sl(v, 255, 128) == cl.J0 and sl(v, 383, 256) == cl.tag
       and sl(v, 415, 384) == cl.start_ctr == 1 and sl(v, 431, 416) == 0 and v >> 432 == 0)
-cl2 = GcmCL.imported(KL_STATE_ENCRYPT, v, 128)
+cl2 = GcmLocker.imported(KL_STATE_ENCRYPT, v, 128)
 ct = v2b(cl2.exec("A", b2v(P[16:48]), 256), 32)
 cl2.setst(KL_STATE_ENC_LAST_BLOCK, "B", 96)
 ct += v2b(cl2.exec("A", b2v(P[48:]), 96), 12)
 cl2.setst(KL_STATE_ENC_TAG_FINALIZE, "C", len_block(8 * len(P), 8 * len(A)))
-check("export in _Encrypt_ and import into a fresh CL: auth_key recomputed (MGR4), "
+check("export in _Encrypt_ and import into a fresh locker: auth_key recomputed (MGR4), "
       "the message completes as tc4",
       ct == rc[16:] and v2b(cl2.exec("C", KLLEN=128), 16) == rt)
-cl = GcmCL.provisioned(K)
+cl = GcmLocker.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.exec("B", b2v(bytes.fromhex(IV60)[:32]), 256)
 v, nb = cl.export_content()
@@ -1513,11 +1513,11 @@ check("_Set_Aux_Value_ overlay in J0's slot: len [143:128], input_base [159:144]
       == (480, 256, 0, 256) and sl(v, 383, 256) == cl.tag and nb == 512)
 for mid in (16, 32, 48):
     for ctl in (False, True):
-        cl = GcmCL.provisioned(K, iv_into_J0=ctl)
+        cl = GcmLocker.provisioned(K, iv_into_J0=ctl)
         cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
         feed_iv(cl, bytes.fromhex(IV60)[:mid])
         v, _ = cl.export_content()
-        cl2 = GcmCL.imported(KL_STATE_SET_AUX_VALUE, v, 128, iv_into_J0=ctl)
+        cl2 = GcmLocker.imported(KL_STATE_SET_AUX_VALUE, v, 128, iv_into_J0=ctl)
         feed_iv(cl2, bytes.fromhex(IV60)[mid:])
         absorb_ad(cl2, A)
         cl2.setst(KL_STATE_ENCRYPT)
@@ -1536,7 +1536,7 @@ section("<<KLEE-derive-endpoints>>: `key` (1) importable, filled in _Ready_")
 SRC32 = bytes.fromhex(K256)
 for k_, length in ((128, 16), (128, 32), (256, 32)):
     for ctl in (False, True):
-        cl = GcmCL.provisioned(bytes(range(k_ // 8)), stale_auth_key=ctl)
+        cl = GcmLocker.provisioned(bytes(range(k_ // 8)), stale_auth_key=ctl)
         cl.derive_into_key(SRC32, length)
         keyx = SRC32[:k_ // 8]
         C, T, _ = kl_encrypt(None, IV, A, P, cl=cl)
@@ -1547,17 +1547,17 @@ for k_, length in ((128, 16), (128, 32), (256, 32)):
         else:
             check(f"k = {k_}: kl.derive of {length} bytes into `key` in _Ready_, "
                   f"auth_key re-derived (MGR4), then a message matches REF", good)
-cl = prologue(GcmCL.provisioned(K))
+cl = prologue(GcmLocker.provisioned(K))
 cl.derive_into_key(SRC32, 16)
-check("kl.derive into `key` of a CL not in _Ready_ -> destination _Invalid_",
+check("kl.derive into `key` of a locker not in _Ready_ -> destination _Invalid_",
       cl.state == KL_STATE_INVALID)
-cl = GcmCL.provisioned(None, skid=0x0123456789ABCDEF)
+cl = GcmLocker.provisioned(None, skid=0x0123456789ABCDEF)
 cl.derive_into_key(SRC32, 16)
 check("kl.derive into a `key` configured by a SKID -> destination _Invalid_",
       cl.state == KL_STATE_INVALID)
 _, _, cl = kl_encrypt(K, IV, A, P)
 cl.derive_into_key(SRC32, 16)
-check("a CL in _Success_ may not be a kl.derive destination -> _Invalid_ (SGR5)",
+check("a locker in _Success_ may not be a kl.derive destination -> _Invalid_ (SGR5)",
       cl.state == KL_STATE_INVALID)
 
 # ---- 12. negative controls -----------------------------------------------------
@@ -1601,7 +1601,7 @@ print("  the true bit length, not the byte count times 8 as <<KLEE-truncation-vs
 print("  prescribes.  No placement of a partial byte therefore reproduces SP 800-38D,")
 print("  which is why last_blk_len and Xs are restricted to multiples of 8, as in")
 print("  <<KLEE-GCM-SIV-mode>> and <<KLEE-OCB-mode>>; the checks above confirm that")
-print("  every other value sends the CL to _Invalid_.")
+print("  every other value sends the locker to _Invalid_.")
 print()
 print("INFO 1: interruption.  The model halts _Set_Aux_Value_ only at step 4.i of")
 print("  process_VLI and the block-iterated states between blocks (IRR7); klstart must")

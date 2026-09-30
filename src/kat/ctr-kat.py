@@ -22,7 +22,7 @@ REF-CTR   SP 800-38A written directly on byte strings: counter block =
 REF-XCTR  The HCTR2 paper's XCTR on byte strings: E_K(IV xor LE(i, 128)), the
           counter little-endian and full width, numbered from 1.
 KLEE      A model of a Cryptographic Locker holding a CTR/XCTR CC (class
-          KeystreamCL).  It covers provisioning from a PI (the MDH first, then the key
+          KeystreamLocker).  It covers provisioning from a PI (the MDH first, then the key
           or SKID) and the States _Ready_ and _Operate_ with the values of
           <<KLEE-state-constants-symmetric>>.  It also covers the Form C kl.setst that
           sets `IV` (keeping its n least significant bits), the Form B
@@ -48,7 +48,7 @@ What changed in the specification, and how this file follows it
   the integer value of the trailing j/8 bytes.  This anchors the nonce/counter splits
   on the standard vectors; the old file could only compare them with REF.
 * The allowed transitions are now _Ready_ -> _Operate_ and _Operate_ -> _Ready_
-  (formerly "any"), so any other target State invalidates the CL.
+  (formerly "any"), so any other target State invalidates the locker.
 * The multi-block loop is rule MGR3 and the granularity rule is MGR2.  A kl.exec in
   _Ready_ falls under Rules <<KLEE-SGR-no-exec-in-ready>> and
   <<KLEE-MGR-not-allowed-instructions>>.
@@ -185,8 +185,8 @@ def ref_xctr(key, iv, ctr0, msg):
 
 
 # ---------------------------------------------------------------- the KLEE model
-class KeystreamCL:
-    """A CL holding a CTR or XCTR CC (<<KLEE-keystream-modes>>).
+class KeystreamLocker:
+    """A locker holding a CTR or XCTR CC (<<KLEE-keystream-modes>>).
 
     For CTR, `n` and `j` are parameters of the implementation: no field of the MDH,
     of the PI or of the SCC selects them (see the SPEC-NOTE printed by this file).
@@ -353,7 +353,7 @@ def keystream(cl, nbytes, per_block=False):
 
 
 def ctr_cl(cipher, key, n, j, keytype=0, sks=None, **kw):
-    cl = KeystreamCL(n, j, sks=sks, **kw)
+    cl = KeystreamLocker(n, j, sks=sks, **kw)
     cl.provision(build_pi(KS_OF[(cipher, 'CTR')], keytype, key))
     return cl
 
@@ -376,7 +376,7 @@ def kl_ctr(key, iv_value, n, j, msg, ctr0=0, per_block=False, **kw):
 
 def kl_xctr(key, iv_value, msg, ctr0=0, form_b=True):
     cipher = f"AES-{len(key) * 8}"
-    cl = KeystreamCL()
+    cl = KeystreamLocker()
     cl.provision(build_pi(KS_OF[(cipher, 'XCTR')], 0, b2v(key)))
     cl.setst(ST_OPERATE, 'C', iv_value, 128)
     if form_b:
@@ -478,7 +478,7 @@ for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
     chk(name + " REF", ref_ctr(key, b'', 128, icb, SP38A_PT).hex(), c)
 
-print("\n== KLEE: F.5 through a CL, one Form C kl.exec with KLLEN = 4b (MGR3)")
+print("\n== KLEE: F.5 through a locker, one Form C kl.exec with KLLEN = 4b (MGR3)")
 print("   Form C kl.setst #kl_state_operate with INPUT = T1 (KLLEN = 128 > n: the")
 print("   n least significant bits, the first n/8 bytes, become IV); Form B")
 print("   #kl_state_set_aux_value with Xs = the trailing j/8 bytes read big-endian")
@@ -651,7 +651,7 @@ res, _ = cl.exec(136, out=prior, iobuf=True)  # KLIOBUF with kliobuftop = 17
 chk("KLIOBUF output only, kliobuftop = 17 -> no operation, no state change",
     (cl.state, cl.ctr, res), (ST_OPERATE, f5_ctr0(64), prior))
 info("an output-only KLIOBUF operand of invalid length performs no operation "
-     "(<<KLEE-usage-input-output>>), while MGR2 invalidates the CL for the same KLLEN "
+     "(<<KLEE-usage-input-output>>), while MGR2 invalidates the locker for the same KLLEN "
      "in a vector Form C; the specific rule is applied to the KLIOBUF case, per "
      "'except when explicitly stated otherwise'.")
 cl = ctr_cl('AES-128', b2v(key), 64, 64)
@@ -671,7 +671,7 @@ for q in (1, 2, 3):
 cl = ctr_cl('AES-128', b2v(key), 120, 8)
 enter_operate(cl, T1, 0xff)
 cl.exec(B)
-chk("no block limit: ctr wraps from 2^j - 1 to 0 and the CL stays in _Operate_",
+chk("no block limit: ctr wraps from 2^j - 1 to 0 and the locker stays in _Operate_",
     (cl.ctr, cl.state), (0, ST_OPERATE))
 
 print("\n== DATA: Provisioning Input and Serialized Content")
@@ -682,7 +682,7 @@ for cipher, kt, pi_size, c1_size in (('AES-128', 0, 32, 32), ('AES-192', 0, 48, 
                                      ('AES-256', 0, 48, 48), ('AES-128', 1, 32, 32)):
     field = SKID if kt else (1 << CIPHERS[cipher]) - 1
     pi = build_pi(KS_OF[(cipher, 'CTR')], kt, field)
-    cl = KeystreamCL(64, 64, sks=SKS)
+    cl = KeystreamLocker(64, 64, sks=SKS)
     cl.provision(pi)
     chk(f"{cipher} {'SKID' if kt else 'by value'}: PI {pi_size}, Content1 {c1_size}, "
         f"kl.size {pi_size} / {32 + c1_size}",
@@ -698,7 +698,7 @@ for label, kt, field, want_c1 in (("by value", 0, b2v(key), C1_VALUE),
     enter_operate(cl, T1, f5_ctr0(64))
     head = keystream(cl, 32)
     c1 = cl.content1()
-    cl2 = KeystreamCL(64, 64, sks=SKS)
+    cl2 = KeystreamLocker(64, 64, sks=SKS)
     cl2.import_scc(cl.mdh, c1)
     tail = keystream(cl2, 32)
     chk(f"{label}: Content1 after 2 blocks = {len(want_c1) // 2} B, key|IV|ctr",
@@ -708,7 +708,7 @@ for label, kt, field, want_c1 in (("by value", 0, b2v(key), C1_VALUE),
 cl = ctr_cl('AES-128', b2v(key), 64, 64)
 enter_operate(cl, T1, f5_ctr0(64))
 head = keystream(cl, 32)
-other = KeystreamCL(96, 32)
+other = KeystreamLocker(96, 32)
 other.import_scc(cl.mdh, cl.content1())
 chk("the same SCC imported with (n, j) = (96, 32) continues a different stream",
     bxor(head + keystream(other, 32), SP38A_PT).hex() != c, True)
@@ -722,7 +722,7 @@ spec_note("the counter size j (hence n = b - j) of a CTR Machine is fixed by no 
 info("the CTR/XCTR text gates no transition on _MachinePolicy_; the PIs of this file "
      "set both bits.")
 
-print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), CL in _Ready_")
+print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
 source = key + bytes.fromhex("5a" * 16)      # a 32-byte source field
 cl = ctr_cl('AES-128', 0, 64, 64)
 done = cl.derive_dest(1, source, 32)

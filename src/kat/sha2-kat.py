@@ -20,7 +20,7 @@ WHAT IS MODELED, transcribed from the current text of modules/ROOT/pages/Zkl-ISA
     kl.exec runs process_VLI(max_len, block, b, state, n, input_base, block_base, 0,
     cumul_len, process_block(), None, mode=assign), transcribed step by step
     (steps 1 to 4.i), with max_len = 0 ("zero if none is enforced") except in the
-    max_len checks, which give the CL a small system-defined value.  The only
+    max_len checks, which give the locker a small system-defined value.  The only
     interruption point is step 4.i, with klstart <- input_base / 8; resumption sets
     input_base <- 8 * klstart (step 3).  This byte/bit conversion, once review
     finding M4, is now explicit in the text; the pre-fix unit clash is kept as a
@@ -29,7 +29,7 @@ WHAT IS MODELED, transcribed from the current text of modules/ROOT/pages/Zkl-ISA
     0, else _Invalid_; the entry step block[t-1:0] <- finalize() is not performed;
     block_base <- 0.  In _Hash_Output_ each Form C kl.exec runs the output loop of
     <<KLEE-hash-functions>> reading state[...] in place of block[...]; at
-    block_base = t the bits of OUTPUT beyond output_base are cleared and the CL goes
+    block_base = t the bits of OUTPUT beyond output_base are cleared and the locker goes
     to _Success_.
   * Error handling: <<KLEE-MGR-not-allowed-instructions>> (a State, transition or
     Form the Machine does not allow), <<KLEE-SGR-no-exec-in-ready>>,
@@ -46,7 +46,7 @@ WHAT IS MODELED, transcribed from the current text of modules/ROOT/pages/Zkl-ISA
   * kl.derive between the kl.exec endpoints (index 0) that <<KLEE-derive-endpoints>>
     gives the hash functions (<<KLEE-instruction-derive>>,
     <<KLEE-derive-rule-both-fixed-size>>): a digest is moved into the _Hash_Absorb_
-    State of another CL, which the caller then pads and finishes with kl.exec.
+    State of another locker, which the caller then pads and finishes with kl.exec.
   MGR10 (<<KLEE-MGR-progress-discard>>) does not apply: no SHA-2 State performs a
   long-running operation without data.
 
@@ -294,8 +294,8 @@ def process_VLI(max_len, block, b, state, n, block_base, state_offset, cumul_len
 
 # ------------------------------------------------------- the KLEE model
 
-class KleeSha2CL:
-    """One CL holding a SHA-2 CC per <<KLEE-SHA-2>>; all quantities are KLEE values."""
+class KleeSha2Locker:
+    """One locker holding a SHA-2 CC per <<KLEE-SHA-2>>; all quantities are KLEE values."""
 
     def __init__(self, name, hart, max_len=0, be_words=True, klstart_in_bits=False):
         self.name, self.hart = name, hart
@@ -492,19 +492,19 @@ def fips_pad(nbytes, w, b):
             + (8 * nbytes).to_bytes(lb, 'big'))
 
 def fresh(name='SHA-256', **kw):
-    return KleeSha2CL(name, HART, **kw).provision()
+    return KleeSha2Locker(name, HART, **kw).provision()
 
 def kl_digest(name, msg, plan, be_words=True, klstart_in_bits=False):
-    """Run one message through a CL.
+    """Run one message through a locker.
 
     'multi':     the padded message in three transfers cut inside blocks (4-byte
                  multiples: granularity 32); the digest read by two Form C kl.exec.
     'interrupt': a 4-byte transfer, then the rest in one kl.exec halted at every
                  process_VLI interruption point and resumed from klstart.
     'export':    stop with a partial block pending, export Content1, import it into
-                 a fresh CL and finish there.
+                 a fresh locker and finish there.
     """
-    cl = KleeSha2CL(name, HART, be_words=be_words,
+    cl = KleeSha2Locker(name, HART, be_words=be_words,
                     klstart_in_bits=klstart_in_bits).provision()
     w, b, t = cl.w, cl.b, cl.t
     mp = msg + fips_pad(len(msg), w, b)
@@ -523,7 +523,7 @@ def kl_digest(name, msg, plan, be_words=True, klstart_in_bits=False):
         cut = len(mp) - 28                  # leaves b/8 - 28 bytes of a block pending
         assert cl.kl_exec('B', mp[:cut])[0] == 'retired' and cl.block_base != 0
         c1 = cl.export_content1()
-        cl = KleeSha2CL(name, HART).import_content1(KL_STATE_HASH_ABSORB, c1)
+        cl = KleeSha2Locker(name, HART).import_content1(KL_STATE_HASH_ABSORB, c1)
         assert cl.kl_exec('B', mp[cut:])[0] == 'retired'
     cl.kl_setst(KL_STATE_HASH_OUTPUT)
     if plan == 'multi':
@@ -695,7 +695,7 @@ check('kl.exec in _Success_ of a hash function -> _Invalid_, output window zeroe
       '(<<KLEE-SGR-success-failure>>)',
       cl.mdh_state == KL_STATE_INVALID and out == bytes(28))
 st, out = cl.kl_exec('C', nbytes=28, prior=b'\xa5' * 28)
-check('kl.exec on a CL in _Invalid_: no operation, State kept, output zeroed '
+check('kl.exec on a locker in _Invalid_: no operation, State kept, output zeroed '
       '(<<KLEE-SGR-usage-cr-error-state>>)',
       st == 'noop' and cl.mdh_state == KL_STATE_INVALID and out == bytes(28))
 
@@ -836,11 +836,11 @@ print('  Serialized Content omits it, so the limit restarts after an export/impo
 print('INFO: _Hash_Absorb_ -> _Hash_Output_ is modeled as a Form A kl.setst; the text')
 print('  names no auxiliary parameter for it.')
 print('INFO: granularity 32 is honored by the transfer plans; the only violation a SHA-2')
-print('  CL can detect is a non-zero block_base on entering _Hash_Output_.')
+print('  locker can detect is a non-zero block_base on entering _Hash_Output_.')
 print('INFO: kl.derive is exercised with length = t/8 only.  For a shorter length the')
 print('  text allows two readings of the source side ("the unused part of the last block')
 print('  is discarded" vs "advances as the kl.exec operations ... would").  A refused')
-print('  transfer invalidates only the offending CL (Checks, item 1), not "both CLs".')
+print('  transfer invalidates only the offending locker (Checks, item 1), not "both lockers".')
 
 print(f'\nruntime: {time.time() - T0:.2f} s')
 print(f'KAT-RESULT: {"PASS" if ok else "FAIL"}')

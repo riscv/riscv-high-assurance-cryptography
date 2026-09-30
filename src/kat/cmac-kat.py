@@ -10,7 +10,7 @@ Two independent implementations are checked against the published vectors:
         implemented formula-by-formula in the KLEE value model of
         modules/ROOT/pages/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant).  gen_subkeys uses
-        `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
+        `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a locker
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
         General Rules for Machines (<<KLEE-Machines-other-rules>>: MGR1-MGR6)
         and the State rules of the Instructions chapter (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
@@ -45,8 +45,8 @@ Checks performed
     `kl.setst #kl_state_hash_verify` comparison (Success on the right tag,
     Failure on a tampered one and on a truncated one).
   * The `Xs` validity rules of the Form B setst: Xs > b, Xs not a multiple
-    of 8, and block_base != 0 must drive the CL to Error State _Invalid_.
-  * The Serialized Content: the CL is exported and re-imported after every
+    of 8, and block_base != 0 must drive the locker to Error State _Invalid_.
+  * The Serialized Content: the locker is exported and re-imported after every
     instruction of every example; every admissible field value fits its row;
     the sizes are reported.
   * State machine: instructions and Forms not allowed in the current State
@@ -56,7 +56,7 @@ Checks performed
     (MGR2), one block whatever KLLEN in the last-block and output States
     (MGR3) with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
   * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
-    is written with the CL in State Ready; CMAC has no exportable field.
+    is written with the locker in State Ready; CMAC has no exportable field.
   * Negative controls (must NOT reproduce the standard):
       NC-K2full     : take the K2 path for a full final block instead of K1.
       NC-lemask     : derive the subkeys with the little-endian update_mask
@@ -129,7 +129,7 @@ def ref_cmac(K, M):
 # The Machine of <<KLEE-CMAC-mode>>, transcribed step by step.
 
 class Invalid(Exception):
-    """The CL transitioned to Error State _Invalid_.  `output` is the OUTPUT
+    """The locker transitioned to Error State _Invalid_.  `output` is the OUTPUT
     operand as the instruction leaves it (<<KLEE-SGR-usage-cr-error-state>>)."""
     def __init__(self, why, output=0):
         super().__init__(why)
@@ -171,7 +171,7 @@ def unpack(data, layout):
 
 
 class KleeCmac:
-    """A CL holding a CMAC CC.  kl.setst and kl.exec are issued through
+    """A locker holding a CMAC CC.  kl.setst and kl.exec are issued through
     setst(immed, form, aux) and exec(form, INPUT, klen), with KLLEN = klen
     bits; exec returns OUTPUT as a klen-bit value (0 for Forms B and D)."""
 
@@ -291,7 +291,7 @@ class KleeCmac:
 
     # -- <<KLEE-derive-endpoints>> -----------------------------------------
     def derive_into(self, j, src, length):
-        """This CL as the destination of a kl.derive (<<KLEE-instruction-derive>>)."""
+        """This locker as the destination of a kl.derive (<<KLEE-instruction-derive>>)."""
         if self.state == S_INVALID:
             return
         if j != 1:
@@ -305,7 +305,7 @@ class KleeCmac:
         self.keyb = src[:eff] + bytes(k - eff)
 
     def derive_from(self, i):
-        """This CL as the source of a kl.derive: CMAC has no exportable field."""
+        """This locker as the source of a kl.derive: CMAC has no exportable field."""
         self._invalid(f'i = {i} is not an exportable field of CMAC')
 
     # -- Serialized Content --------------------------------------------------
@@ -320,8 +320,8 @@ class KleeCmac:
         return pack([(vals[f], w) for f, w in layout])
 
     def imported(self, content1, layout=None):
-        """A fresh CL of the same implementation, loaded with `content1` and the
-        MDH of this CL (_State_, _KeyType_)."""
+        """A fresh locker of the same implementation, loaded with `content1` and the
+        MDH of this locker (_State_, _KeyType_)."""
         layout = layout or cmac_layout(self.key_bits())
         f = unpack(content1, layout)
         key = SKS[f['key']] if self.skid is not None else v2b(f['key'], len(self.keyb))
@@ -343,9 +343,9 @@ def _chunks(data, per_exec):
 
 def kl_cmac(K, M, per_exec=1, junk=False, hop=False, layout=None, subst=False,
             dummy_empty_input=0, cl=None, skid=None, **model):
-    """Drive the Machine as <<KLEE-pseudocode-CMAC>> does, leaving the CL in
-    State _Hash_Output_.  hop: export and re-import the CL after every
-    instruction; cl: an existing CL in State Ready to use instead of a new one."""
+    """Drive the Machine as <<KLEE-pseudocode-CMAC>> does, leaving the locker in
+    State _Hash_Output_.  hop: export and re-import the locker after every
+    instruction; cl: an existing locker in State Ready to use instead of a new one."""
     fB = 'D' if subst else 'B'
     cl = cl or KleeCmac(K, skid=skid, **model)
     nxt = (lambda c: c.imported(c.export(layout), layout)) if hop else (lambda c: c)
@@ -574,7 +574,7 @@ def main():
          "restriction on a last block without stating the consequence; the "
          "harness applies MGR2 (no operation, Error State _Invalid_).")
     cl = kl_cmac(K128, MSG[:40])                  # in _Hash_Output_ after one exec
-    line("the kl.exec of Hash_Absorb_Last_Block moves the CL to Hash_Output, so "
+    line("the kl.exec of Hash_Absorb_Last_Block moves the locker to Hash_Output, so "
          "a second one -> Invalid", cl.state == S_HASH_OUTPUT
          and invalid(lambda: cl.exec('B', 0, 64)))
     cl = kl_cmac(K128, MSG[:40])
@@ -610,7 +610,7 @@ def main():
             cl.exec('B', b2v(MSG[:16]))
         got = cl.state == state
         cl.setst(S_READY)                         # SGR8 / "From any valid state"
-        line(f"kl.setst #ready from {text}, then ex4 on the same CL (SGR8)",
+        line(f"kl.setst #ready from {text}, then ex4 on the same locker (SGR8)",
              got and v2b(kl_cmac(None, MSG[:40], cl=cl).exec('C'), 16) == W4)
     for st, text in ((S_SUCCESS, 'Success'), (S_FAILURE, 'Failure')):
         cl = kl_cmac(K128, MSG[:40])
@@ -639,7 +639,7 @@ def main():
         cl.derive_into(1, src, length)
         line(f"key derived in Ready (length = {length} bytes), then ex4",
              v2b(kl_cmac(None, MSG[:40], cl=cl).exec('C'), 16) == W4)
-    line("kl.derive into `key` of a CL in Hash_Absorb -> Invalid",
+    line("kl.derive into `key` of a locker in Hash_Absorb -> Invalid",
          invalid(lambda: at_absorb().derive_into(1, src, 16)))
     line("kl.derive into a key configured by a SKID -> Invalid",
          invalid(lambda: KleeCmac(K128, skid=7).derive_into(1, src, 16)))

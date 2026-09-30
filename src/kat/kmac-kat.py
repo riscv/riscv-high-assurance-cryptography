@@ -47,7 +47,7 @@ Layered anchoring:
      outputs.
   3. The KLEE model (state machine from the spec text) checked against the same
      official outputs and against the reference on the derived cases.
-  hashlib is used only as a LABELED REFERENCE ORACLE for the plain SHA-3/SHAKE
+  hashlib is used only as a LABELED REFERENCE ORAlockerE for the plain SHA-3/SHAKE
   anchors; it has no KMAC and takes no part in the KMAC checks.
 
 Embedded vector provenance:
@@ -360,9 +360,9 @@ class Hart:
         self.klstart = 0
 
 
-# ----------------------------------------------------------------- KLEE CL model
-class KleeKmacCL:
-    """A CL holding a KLEE KMAC CC, implemented literally from [[KLEE-KMAC]] on
+# ----------------------------------------------------------------- KLEE locker model
+class KleeKmacLocker:
+    """A locker holding a KLEE KMAC CC, implemented literally from [[KLEE-KMAC]] on
     top of [[KLEE-SHA-3]] / [[KLEE-hash-functions]] / [[KLEE-process-VLI]].
 
     block is `state` for the whole SHA-3 family, so absorbed data is XORed
@@ -447,7 +447,7 @@ class KleeKmacCL:
         if self.block_base >= b:
             # An image whose `block_base` is not a position within a block is
             # inconsistent Content; the specification defines no behaviour for
-            # it, and the harness invalidates the CL (only the negative control
+            # it, and the harness invalidates the locker (only the negative control
             # below produces such an image).
             self._invalidate()
 
@@ -698,8 +698,8 @@ class KleeKmacCL:
 
 
 def kl_derive_kmac(hart, dst, src, length):
-    """kl.derive with KMAC CLs as endpoints: [[KLEE-derive-endpoints]] lists no
-    exportable and no importable field for [[KLEE-KMAC]], so neither CL admits
+    """kl.derive with KMAC lockers as endpoints: [[KLEE-derive-endpoints]] lists no
+    exportable and no importable field for [[KLEE-KMAC]], so neither locker admits
     an endpoint in any State (Check 1 of [[KLEE-instruction-derive]])."""
     if dst is src:
         raise IllegalInstruction('source and destination must differ')
@@ -774,7 +774,7 @@ def spec_note(*lines):
 
 # ------------------------------------------------------------------ test drive
 def new_cl(sec, K, S, xof=False, hart=None, **hooks):
-    cl = KleeKmacCL(hart if hart is not None else Hart())
+    cl = KleeKmacLocker(hart if hart is not None else Hart())
     for k, v in hooks.items():
         setattr(cl, k, v)
     cl.provision(make_pi(sec, xof, K, S))
@@ -920,14 +920,14 @@ def main():
     cl.exec_('C', out=out)
     check('KMAC128 sample #3 after interrupt/resume', bytes(out),
           bytes.fromhex(SAMPLES[2][7]))
-    # halt, export, clear, import into another CL, resume
+    # halt, export, clear, import into another locker, resume
     hart = Hart()
     cl = absorbing_cl(256, KEY, TAG, DATA200[:40], hart=hart)
     st = cl.exec_('B', inp=DATA200[40:], interrupt_at=1)        # 136 - 40 = 96
     saved = (cl.mdh(), cl.export_content(), hart.klstart)
     cl.setst(KL_STATE_UNCONFIGURED)
     hart.klstart = 0
-    cl2 = KleeKmacCL(hart)
+    cl2 = KleeKmacLocker(hart)
     cl2.import_scc(saved[0], saved[1])
     hart.klstart = saved[2]
     cl2.exec_('B', inp=DATA200[40:])
@@ -948,7 +948,7 @@ def main():
                st == 'invalid' and cl.st == KL_STATE_INVALID and cl.state == 0
                and cl.key_block == bytes(168) and hart.klstart == 0,
                (st, cl.st, hart.klstart))
-    info('interruption points: a CL can only test what its own state implies -- 0, '
+    info('interruption points: a locker can only test what its own state implies -- 0, '
          'the end of the window, or,',
          'with block_base = 0, an interior value.  The harness exercises only values '
          'that fail that test.')
@@ -1230,7 +1230,7 @@ def main():
             o = bytearray(n_out)
             cl.exec_('C', out=o)
             head = bytes(o)
-        cl2 = KleeKmacCL(Hart())
+        cl2 = KleeKmacLocker(Hart())
         cl2.import_scc(cl.mdh(), cl.export_content())
         if n_abs is None:
             cl2.setst(KL_STATE_HASH_ABSORB)
@@ -1245,14 +1245,14 @@ def main():
     cl = squeezing_cl(256, KEY, TAG, DATA200, 4096)
     o1 = bytearray(300)
     cl.exec_('C', out=o1)
-    cl2 = KleeKmacCL(Hart())
+    cl2 = KleeKmacLocker(Hart())
     cl2.import_scc(cl.mdh(), cl.export_content(), out_bits=cl.out_bits)
     o2 = bytearray(212)
     st = cl2.exec_('C', out=o2)
     check('export/import round trip, KMAC256 L = 4096 after 2 update()s (output '
           'counter carried out of band)', bytes(o1) + bytes(o2),
           ref_kmac(256, KEY, DATA200, 4096, TAG))
-    check_true('... and the imported CL reaches _Success_ at bit 4096',
+    check_true('... and the imported locker reaches _Success_ at bit 4096',
                st == 'success' and cl2.st == KL_STATE_SUCCESS, (st, cl2.st))
 
     print()
@@ -1261,7 +1261,7 @@ def main():
     src = squeezing_cl(128, KEY, TAG, DATA4, 0, xof=True, hart=hart)
     dst = absorbing_cl(128, KEY, TAG, DATA4, hart=hart)
     st = kl_derive_kmac(hart, dst, src, 32)
-    check_true('kl.derive KMACXOF128 output -> KMAC128 absorb: both CLs transition to '
+    check_true('kl.derive KMACXOF128 output -> KMAC128 absorb: both lockers transition to '
                '_Invalid_, klstart = 0', st == 'invalid'
                and src.st == dst.st == KL_STATE_INVALID and hart.klstart == 0,
                (st, src.st, dst.st))
@@ -1301,7 +1301,7 @@ def main():
     negative_control('unpadded last byte (ceil(L/8) raw bytes for L = 250, 1001)',
                      mism)
     cl = absorbing_cl(128, KEY, TAG, DATA200[:100])
-    cl2 = KleeKmacCL(Hart())
+    cl2 = KleeKmacLocker(Hart())
     cl2.import_scc(cl.mdh(), cl.export_content(order_by_at=True))
     cl2.exec_('B', inp=DATA200[100:])
     to_output(cl2, 256)

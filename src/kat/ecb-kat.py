@@ -9,7 +9,7 @@ REF    A plain byte-string ECB reference: split the message into b-bit blocks in
        published vectors.
 
 KLEE   The ECB Machine as the specification now states it, driven through a small
-       model of a Cryptographic Locker (class EcbCL): a PI is provisioned, the CL is
+       model of a Cryptographic Locker (class EcbLocker): a PI is provisioned, the locker is
        moved between _Ready_, _Encrypt_ and _Decrypt_ with kl.setst, and data is
        processed with the (multi-block) Form A kl.exec, whose per-block operation
        <<KLEE-ECB-mode>> gives as
@@ -29,9 +29,9 @@ NEG    A negative control mapping the most significant block of the value to the
        first block of the string.  It must disagree with the vectors.
 
 RULES  Behaviour the ECB text now leaves to the general rules: a kl.exec in _Ready_
-       invalidates the CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
+       invalidates the locker (Rules <<KLEE-SGR-no-exec-in-ready>> and
        <<KLEE-MGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
-       performs no operation and invalidates the CL (MGR2), the output window is
+       performs no operation and invalidates the locker (MGR2), the output window is
        zeroed (Rule <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared
        (Rule <<KLEE-SGR-clear-cr-content-error-state>>); the _MachinePolicy_ gate on
        the transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8 of
@@ -258,8 +258,8 @@ def ref_ecb(enc, key, data, bsz=16):
 
 
 # ---------------------------------------------------------------- the KLEE model
-class EcbCL:
-    """A CL holding an ECB CC, per <<KLEE-ECB-mode>> and the general rules."""
+class EcbLocker:
+    """A locker holding an ECB CC, per <<KLEE-ECB-mode>> and the general rules."""
 
     def __init__(self, sks=None, rng=None, order='spec'):
         self.mdh = 0                     # _Unconfigured_: every MDH field reads zero
@@ -375,14 +375,14 @@ class EcbCL:
 
     # ------------------------------------------------------------ kl.derive
     def derive_dest(self, j, src, length):
-        """This CL as the destination of kl.derive (<<KLEE-derive-endpoints>>).
+        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>).
 
         `src` stands for the bytes the source endpoint supplies.
         """
         if self.in_error():
             return False
         if (j not in ECB_IMPORTABLE
-                or self.state != ST_READY        # "filled with the destination CL in State _Ready_"
+                or self.state != ST_READY        # "filled with the destination locker in State _Ready_"
                 or self.keytype == 1):           # "A field configured by a SKID is never importable"
             self.invalidate()
             return False
@@ -395,8 +395,8 @@ class EcbCL:
 
 
 def kl_derive_from_ecb(src_cl, i, dst_cl, j, length):
-    """kl.derive with an ECB CL as the source.  ECB has no exportable field, so the
-    endpoint descriptor is never allowed and both CLs are invalidated."""
+    """kl.derive with an ECB locker as the source.  ECB has no exportable field, so the
+    endpoint descriptor is never allowed and both lockers are invalidated."""
     assert i not in ECB_EXPORTABLE
     src_cl.invalidate()
     dst_cl.invalidate()
@@ -404,7 +404,7 @@ def kl_derive_from_ecb(src_cl, i, dst_cl, j, length):
 
 
 def new_cl(cipher, key_hex, policy=POL_BOTH, **kw):
-    cl = EcbCL(**kw)
+    cl = EcbLocker(**kw)
     cl.provision(build_pi(ECB_OF[cipher], policy, 0, b2v(bytes.fromhex(key_hex))))
     return cl
 
@@ -504,7 +504,7 @@ def spec_note(text):
 
 pt = bytes.fromhex(SP38A_PT)
 
-print("== FIPS 197 Appendix C: single-block AES (REF, and a KLEE CL with KLLEN = b)")
+print("== FIPS 197 Appendix C: single-block AES (REF, and a KLEE locker with KLLEN = b)")
 for name, k, p, c in FIPS197:
     key, ptb, ct = bytes.fromhex(k), bytes.fromhex(p), bytes.fromhex(c)
     chk(name + " encrypt", aes_encrypt(key, ptb).hex(), c)
@@ -512,9 +512,9 @@ for name, k, p, c in FIPS197:
     cipher = f"AES-{len(key) * 8}"
     cl = new_cl(cipher, k)
     cl.setst(ST_ENCRYPT)
-    chk(name + " KLEE CL, KLLEN = b", cl_run(cl, ptb)[0].hex(), c)
+    chk(name + " KLEE locker, KLLEN = b", cl_run(cl, ptb)[0].hex(), c)
     cl.setst(ST_DECRYPT)
-    chk(name + " KLEE CL decrypt, KLLEN = b", cl_run(cl, ct)[0].hex(), p)
+    chk(name + " KLEE locker decrypt, KLLEN = b", cl_run(cl, ct)[0].hex(), p)
 
 print("\n== SP 800-38A F.1: four-block ECB, REF (byte string)")
 for name, _, k, c in SP38A_F1:
@@ -564,9 +564,9 @@ for name, k, p, c in SM4_MULTI:
     chk(name + " REF decrypt", ref_ecb(sm4_decrypt, key, bytes.fromhex(c)).hex(), p)
     cl = new_cl('SM4', k)                    # SM4_ECB: Type 3, Mode 0
     cl.setst(ST_ENCRYPT)
-    chk(name + " KLEE CL (SM4_ECB), one kl.exec", cl_run(cl, bytes.fromhex(p))[0].hex(), c)
+    chk(name + " KLEE locker (SM4_ECB), one kl.exec", cl_run(cl, bytes.fromhex(p))[0].hex(), c)
     cl.setst(ST_DECRYPT)
-    chk(name + " KLEE CL decrypt, one kl.exec", cl_run(cl, bytes.fromhex(c))[0].hex(), p)
+    chk(name + " KLEE locker decrypt, one kl.exec", cl_run(cl, bytes.fromhex(c))[0].hex(), p)
 
 print("\n== RULES: States, transitions and the general rules (F.1.1 key and data)")
 name, cipher, k, c = SP38A_F1[0]
@@ -582,17 +582,17 @@ cl.setst(ST_DECRYPT)                         # "From any valid state": no stop i
 chk("_Encrypt_ -> _Decrypt_ directly, then decrypt F.1.1",
     (cl.state, cl_run(cl, out)[0].hex()), (ST_DECRYPT, SP38A_PT))
 cl.setst(ST_DECRYPT)                         # same-State kl.setst (SGR4)
-chk("_Decrypt_ -> _Decrypt_ (SGR4) leaves the CL usable",
+chk("_Decrypt_ -> _Decrypt_ (SGR4) leaves the locker usable",
     (cl.state, cl_run(cl, ct)[0].hex()), (ST_DECRYPT, SP38A_PT))
 cl.setst(ST_READY)
 chk("back to _Ready_ (SGR8): kl.getst = 1", cl.state, ST_READY)
 res, _ = cl.exec(blocks_value(pt), 512)
 chk("kl.exec in _Ready_: _Invalid_ and output window zeroed", (cl.state, res),
     (ST_INVALID, 0))
-chk("_Invalid_ CL: Content cleared (only the MDH remains)", (cl.key, cl.skid), (None, None))
+chk("_Invalid_ locker: Content cleared (only the MDH remains)", (cl.key, cl.skid), (None, None))
 cl.setst(ST_READY)
 res, _ = cl.exec(blocks_value(pt), 512)
-chk("_Invalid_ CL: kl.setst and kl.exec perform no operation", (cl.state, res),
+chk("_Invalid_ locker: kl.setst and kl.exec perform no operation", (cl.state, res),
     (ST_INVALID, 0))
 
 cl = new_cl(cipher, k, policy=POL_DEC)
@@ -661,7 +661,7 @@ rows = [
 for label, (_, cipher, _, want), kt, field, pi_size, c1 in rows:
     mach = ECB_OF[cipher]
     pi = build_pi(mach, POL_BOTH, kt, field)
-    cl = EcbCL(sks=SKS)
+    cl = EcbLocker(sks=SKS)
     cl.provision(pi)
     mdh = cl.mdh
     chk(f"{label}: PI = {pi_size}, kl.size(PI MDH) = {pi_size}",
@@ -672,32 +672,32 @@ for label, (_, cipher, _, want), kt, field, pi_size, c1 in rows:
         (c1, 32 + len(c1) // 2))
     cl.setst(ST_ENCRYPT)
     half, _ = cl_run(cl, pt[:32])
-    cl2 = EcbCL(sks=SKS)
+    cl2 = EcbLocker(sks=SKS)
     cl2.import_scc(cl.mdh, cl.content1())    # _State_ _Encrypt_ travels in the MDH
     rest, _ = cl_run(cl2, pt[32:])
     chk(f"{label}: export after 2 blocks, import, finish F.1", (half + rest).hex(), want)
-cl = EcbCL(sks=SKS)
+cl = EcbLocker(sks=SKS)
 cl.provision(build_pi(ECB_OF['AES-192'], POL_BOTH, 1, SKID + 1))
 chk("unresolved SKID at provisioning -> _Invalid_", cl.state, ST_INVALID)
-cl = EcbCL(sks=SKS)
+cl = EcbLocker(sks=SKS)
 cl.provision(build_pi(ECB_OF['AES-192'], POL_BOTH, 1, ONES64))
 chk("all-ones SKID: random key, _KeyType_ 0, Content1 = 32 B (key by value)",
     (cl.state, cl.keytype, len(cl.content1()), kl_size(cl.mdh, len(cl.content1()), 0)),
     (ST_READY, 0, 32, 64))
-cl2 = EcbCL(sks=SKS)
+cl2 = EcbLocker(sks=SKS)
 cl2.import_scc(make_mdh(ECB_OF['AES-192'], POL_BOTH, 1, ST_READY),
                v2b(ONES64, 16))
 chk("SCC carrying the all-ones SKID in a Complete State -> _Invalid_",
     cl2.state, ST_INVALID)
 
-print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), CL in _Ready_")
+print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
 name, cipher, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 source = bytes.fromhex(k) + bytes.fromhex("a5" * 8)  # a 32-byte source field
 zero_key = "00" * 24
 
 
 def derived(length, j=1, state=None, keytype=0):
-    cl = EcbCL(sks=SKS)
+    cl = EcbLocker(sks=SKS)
     field = SKID if keytype else 0
     cl.provision(build_pi(ECB_OF[cipher], POL_BOTH, keytype, field))
     if state is not None:
@@ -732,12 +732,12 @@ chk("key configured by a SKID is never importable -> _Invalid_", (done, cl.state
 src_cl = new_cl(cipher, k)
 dst_cl = new_cl(cipher, "00" * 24)
 done = kl_derive_from_ecb(src_cl, 1, dst_cl, 1, 24)
-chk("ECB CL as a source (a key is never exportable) -> both _Invalid_",
+chk("ECB locker as a source (a key is never exportable) -> both _Invalid_",
     (done, src_cl.state, dst_cl.state), (False, ST_INVALID, ST_INVALID))
 info("kl.derive into `key`: byte t of the transfer is taken as byte t of the key "
      "(<<KLEE-Notation>>); the endpoint table is marked work in progress.")
-info("a derive whose source endpoint does not exist invalidates both CLs, per "
-     "'If the transfer is not allowed, then both CLs transition to Error State "
+info("a derive whose source endpoint does not exist invalidates both lockers, per "
+     "'If the transfer is not allowed, then both lockers transition to Error State "
      "_Invalid_' (<<KLEE-instruction-derive>>).")
 
 print("\n== BOOK 4: <<KLEE-pseudocode-ECB-encryption>> [informative]")

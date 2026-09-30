@@ -131,7 +131,7 @@ def set_slice(v, hi, lo, x):
     return (v & ~mask) | ((x << lo) & mask)
 
 class Invalid(Exception):
-    """CL transition to Error State _Invalid_."""
+    """locker transition to Error State _Invalid_."""
 
 class Sha2Core:
     """The underlying SHA-2 hash CC (<<KLEE-SHA-2>>) as driven by <<KLEE-HMAC>>.

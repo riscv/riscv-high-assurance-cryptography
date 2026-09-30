@@ -105,7 +105,7 @@ SE_HASPRIVKEY, SE_HASPUBKEY, SE_HEDGED = 1, 2, 4
 
 
 class Invalidated(Exception):
-    """The CL transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
+    """The locker transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
 
 
 class MLDSAContext:
@@ -115,7 +115,7 @@ class MLDSAContext:
         self.ps = ps
         self.sk_len, self.pk_len, self.sig_len = D.sizes(ps)
         if algpolicy == 0:
-            # "An MachinePolicy of 0 is not valid, and it causes the CL to
+            # "An MachinePolicy of 0 is not valid, and it causes the locker to
             #  transition to Error State Invalid."
             raise Invalidated('MachinePolicy == 0 at provisioning')
         self.mdh = mdh_set(0, F_ALGPOLICY, algpolicy)
@@ -244,7 +244,7 @@ class MLDSAContext:
         """Form C `kl.exec` in _pubkey_Output_ / _Sign_Output_.
 
         NOTE the asymmetry in the spec text: on *input* "the bits in excess are
-        ignored", but on *output* an over-long transfer sends the CL to Error
+        ignored", but on *output* an over-long transfer sends the locker to Error
         State _Invalid_.  Modelled literally.
         """
         name = OUT_STATES[self.state]

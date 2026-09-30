@@ -122,7 +122,7 @@ SNAME = {READY: 'Ready', SET_GEN: 'Set_Generator', SET_SCALAR: 'Set_Scalar',
 
 
 class KLEEInvalid(Exception):
-    """The CL transitioned to Error State _Invalid_."""
+    """The locker transitioned to Error State _Invalid_."""
 
 
 # -- the transition relation, transcribed from "Allowed State Transitions" ----
@@ -186,7 +186,7 @@ def retry_required(mode, r, s, k, n):
     return r == 0 or s == 0
 
 
-class CL:
+class Locker:
     """A model of a KLEE control register holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
@@ -297,7 +297,7 @@ class CL:
                 setattr(self, fld, None)
                 setattr(self, 'has_' + fld, False)
             if target == SET_SCALAR and form == 'B' and xs != 0:
-                # random private key generated inside the CL, never disclosed
+                # random private key generated inside the Locker, never disclosed
                 if rand_scalar is None:
                     raise KLEEInvalid('model needs an injected RBG value')
                 self.scalar = self._enc_field(rand_scalar)
@@ -628,7 +628,7 @@ class CL:
         elif self._pass_xs == 1:
             # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
             # message and must match the value stored in pass 1, binding the two passes;
-            # otherwise the CL is invalidated and msg_pass stays at 1.
+            # otherwise the Locker is invalidated and msg_pass stays at 1.
             dom = self._dom(0)
             msg = self._absorb[len(dom) + 2 * self.fw:]       # dom @ R @ A @ M
             _, prefix, _ = self._keys()
@@ -691,7 +691,7 @@ class CL:
         return lhs == rhs
 
 
-# ------------------------------------------------------------ CL constructors
+# ------------------------------------------------------------ Locker constructors
 # The b / h / j / u / v values are those tabulated in <<KLEE-ECC>> "Parameters".
 
 CURVE_PARAMS = {
@@ -707,10 +707,10 @@ CURVE_PARAMS = {
 }
 
 
-def make_cr(curve, **kw):
+def make_locker(curve, **kw):
     p = dict(CURVE_PARAMS[curve.name])
     p.update(kw)
-    return CL(curve, **p)
+    return Locker(curve, **p)
 
 
 # ==================================================================== vectors
@@ -871,7 +871,7 @@ def load_field(cr, state, data, chunk=None):
 
 
 def fresh(curve, **kw):
-    return make_cr(curve, **kw)
+    return make_locker(curve, **kw)
 
 
 # ==================================================================== the tests
@@ -1066,7 +1066,7 @@ def test_progress_agr10():
     e = ecdsa_e(c, hashlib.new(hname, msg.encode()).digest())
 
     def armed():
-        """A CL in _Sign_Generate_ with the private key and Hash of the RFC vector."""
+        """A Locker in _Sign_Generate_ with the private key and Hash of the RFC vector."""
         cr = fresh(c)
         load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
         load_field(cr, SET_HASH, v2b(e, cr.hashlen))
@@ -1427,7 +1427,7 @@ def test_m10_dead_end():
          ' transition freely, and admits all of them as sources for _Point_Mul_,'
          ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
          ' also completed. Previously _Set_Signature_ appeared in neither exit rule, so'
-         ' by Generic Rule 2 a CL that had just loaded a signature could make no legal'
+         ' by Generic Rule 2 a Locker that had just loaded a signature could make no legal'
          ' move and verification was unreachable. The pre-fix relation is retained above'
          ' as a regression check.')
     # the strictness of the rest of the list is still enforced
@@ -1545,7 +1545,7 @@ def test_ed25519():
     chk('MODEL', 'HasRndNum is never set on the EdDSA path',
         cr.has_rnd is False and CURVE_PARAMS['ed25519']['j'] == 0)
     # C1: differing messages in the two signing passes are bound-checked; pass 2
-    # recomputes r and, on mismatch, invalidates the CL, so no signature is produced
+    # recomputes r and, on mismatch, invalidates the locker, so no signature is produced
     # and the shared-R key-recovery attack cannot be mounted.
     seed, msg = (bytes.fromhex(RFC8032_ED25519[2][1]),
                  bytes.fromhex(RFC8032_ED25519[2][3]))

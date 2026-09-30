@@ -36,7 +36,7 @@ Anchors (embedded, offline):
 
 Negative controls (KAT-EXPECT-FAIL): assembling the length block with
 big-endian (GCM-style, bswap) length encodings instead of the spec's
-little-endian bin() must change the tag; and a CL imported part-way through a
+little-endian bin() must change the tag; and a locker imported part-way through a
 message without re-deriving enc_key and auth_key (MGR4) must not complete it.
 
 Resolved since the previous revision of this harness: RFC8452_KeyDeriv is now
@@ -213,8 +213,8 @@ def SCC_KeyDeriv(key: bytes, nonce: int):
             cat((sl(A[1], 63, 0), 64), (sl(A[0], 63, 0), 64)))
 
 
-class GcmSivCL:
-    """A CL holding a CC of <<KLEE-GCM-SIV-mode>>, driven instruction by instruction.
+class GcmSivLocker:
+    """A locker holding a CC of <<KLEE-GCM-SIV-mode>>, driven instruction by instruction.
 
     The MDH is reduced to _State_, _MachinePolicy_ (bit 0 encryption, bit 1
     decryption) and _KeyType_; `klstart` stands for the hart CSR.
@@ -237,8 +237,8 @@ class GcmSivCL:
 
     # -- provisioning, derived fields, export, import ------------------
     @classmethod
-    def provisioned(cls, key=None, skid=None, **kw):
-        cl = cls(**kw)
+    def provisioned(lockers, key=None, skid=None, **kw):
+        cl = lockers(**kw)
         cl.key_type = 1 if skid is not None else 0
         cl.skid = skid or 0
         cl.key = SKS[skid] if skid is not None else key
@@ -268,8 +268,8 @@ class GcmSivCL:
         return v, pad128(kbits + 96 + 32 + 128 + 128 + 16)
 
     @classmethod
-    def imported(cls, state, content, k, key_type=0, **kw):
-        cl = cls(**kw)
+    def imported(lockers, state, content, k, key_type=0, **kw):
+        cl = lockers(**kw)
         cl.k, cl.key_type = k, key_type
         kb = 64 if key_type == 1 else k
         kf = sl(content, kb - 1, 0)
@@ -357,7 +357,7 @@ class GcmSivCL:
             return
         if immed7 == KL_STATE_ENCRYPT:
             # "State _Encrypt_ is *not* entered by kl.setst ... an kl.setst naming
-            # _Encrypt_ is a not-allowed transition and invalidates the CL"
+            # _Encrypt_ is a not-allowed transition and invalidates the locker"
             self._invalid('kl.setst naming _Encrypt_')
             return
         entry = self._setst_table().get((st, immed7))
@@ -545,7 +545,7 @@ def _crypt_body(m, text, KLLEN, last_state):
     return bytes(out)
 
 def kl_encrypt(key, nonce, aad, pt, KLLEN=128, length_block=None, m=None):
-    m = m or GcmSivCL.provisioned(key)
+    m = m or GcmSivLocker.provisioned(key)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
     m.setst(KL_STATE_HASH_ABSORB)
     _absorb_string(m, aad, KLLEN)
@@ -559,7 +559,7 @@ def kl_encrypt(key, nonce, aad, pt, KLLEN=128, length_block=None, m=None):
 def kl_decrypt(key, nonce, aad, ctag, KLLEN=128, length_block=None, m=None,
                set_siv=True):
     ct, tag = ctag[:-16], ctag[-16:]
-    m = m or GcmSivCL.provisioned(key)
+    m = m or GcmSivLocker.provisioned(key)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
     if set_siv:
         m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', b2v(tag))
@@ -833,7 +833,7 @@ def main():
     k5, n5, a5, p5, w5 = unhex(v5, 'key', 'nonce', 'aad', 'pt', 'ct_tag')
 
     def at_hash_absorb(**kw):
-        m = GcmSivCL.provisioned(key, **kw)
+        m = GcmSivLocker.provisioned(key, **kw)
         m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
         m.setst(KL_STATE_HASH_ABSORB)
         return m
@@ -868,17 +868,17 @@ def main():
     m = at_hash_absorb()
     m.setst(KL_STATE_DECRYPT, 'C', 0)
     chk(m.state == KL_STATE_INVALID, "the transition to Decrypt is a Form A kl.setst")
-    m = GcmSivCL.provisioned(key)
+    m = GcmSivLocker.provisioned(key)
     m.setst(KL_STATE_SET_AUX_VALUE)
     chk(m.state == KL_STATE_INVALID,
         "the transition to Set_Aux_Value is a Form C kl.setst (Form A -> Invalid)")
-    m = GcmSivCL.provisioned(key)
+    m = GcmSivLocker.provisioned(key)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
     m.exec('B', 0, 128)
     chk(m.state == KL_STATE_INVALID, "no kl.exec is defined in Set_Aux_Value (-> Invalid)")
 
     victim_tag = bytes.fromhex(VECTORS[1]['ct_tag'])[-16:]
-    m = GcmSivCL.provisioned(key)
+    m = GcmSivLocker.provisioned(key)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
     m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', b2v(victim_tag))     # inject a chosen SIV
     m.setst(KL_STATE_HASH_ABSORB)
@@ -894,7 +894,7 @@ def main():
                        (at_decrypt, 'Decrypt')):
         pass
     def _sav2():
-        m = GcmSivCL.provisioned(key)
+        m = GcmSivLocker.provisioned(key)
         m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(nonce))
         m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', b2v(victim_tag))
         return m
@@ -907,21 +907,21 @@ def main():
         m = pre()
         m.setst(KL_STATE_ENCRYPT)
         chk(m.state == KL_STATE_INVALID,
-            f"M2: a kl.setst naming Encrypt in {label} invalidates the CL")
+            f"M2: a kl.setst naming Encrypt in {label} invalidates the locker")
     m = at_encrypt()
     m.setst(KL_STATE_ENCRYPT)
     chk(m.state == KL_STATE_INVALID,
-        "a kl.setst naming Encrypt issued in Encrypt itself also invalidates the CL "
+        "a kl.setst naming Encrypt issued in Encrypt itself also invalidates the locker "
         "(reading of SPEC-NOTE 1)")
 
     # -- Set_Aux_Value / Set_Aux_Value_2 -------------------------------------
     print()
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(bytes(range(12))))
     got, _ = kl_encrypt(k5, n5, a5, p5, m=m)       # issues Set_Aux_Value again
     chk(got == w5, "Set_Aux_Value repeated: nonce overwritten, enc_key/auth_key "
                    "recomputed (C.1 #15 reproduced)")
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5) | (0xDEADBEEF << 96))
     m.setst(KL_STATE_HASH_ABSORB)
     _absorb_string(m, a5, 128)
@@ -929,7 +929,7 @@ def main():
     m.setst(KL_STATE_ENC_TAG_FINALIZE)
     chk(v2b(m.exec('A', _length_block(a5, p5), 128), 16) == w5[-16:],
         "nonce <- INPUT[95:0]: bits above 95 of a 128-bit INPUT are ignored (MGR5)")
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', 0x1234)
     m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', b2v(w5[-16:]) | (0x77 << 200))
@@ -937,7 +937,7 @@ def main():
     st, ptd = kl_decrypt(k5, n5, a5, w5, m=_fresh_ready(m))
     chk(siv_ok and st == 'Success' and ptd == p5,
         "Set_Aux_Value_2 repeated overwrites SIV; a 256-bit INPUT keeps its 128 LSBs")
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', 0)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
@@ -950,7 +950,7 @@ def main():
 
     # -- end of the encryption path, return to Ready ------------------------
     print()
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     got1, _ = kl_encrypt(k5, n5, a5, p5, m=m)
     end_state = m.state
     m.setst(KL_STATE_READY)
@@ -962,12 +962,12 @@ def main():
     chk(end_state == KL_STATE_ENC_LAST_BLOCK and reset and got1 == w5 and got2 == w6
         and st == 'Success' and ptd == p5,
         "the encryption path ends in Enc_Last_Block (no Success); kl.setst Ready "
-        "clears nonce, ctr, tmp, SIV and the same CL encrypts C.1 #14, then decrypts #15")
-    m = GcmSivCL.provisioned(k5)
+        "clears nonce, ctr, tmp, SIV and the same locker encrypts C.1 #14, then decrypts #15")
+    m = GcmSivLocker.provisioned(k5)
     kl_decrypt(k5, n5, a5, w5, m=m)
     m.exec('B', 0, 128)
     chk(m.state == KL_STATE_INVALID, "SGR5: kl.exec in Success -> Invalid")
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.exec('A', 0, 128)
     chk(m.state == KL_STATE_INVALID, "SGR2: kl.exec in Ready -> Invalid")
 
@@ -980,14 +980,14 @@ def main():
         st1 = m.state
         m.exec('A', 0, 128)
         chk(st1 != KL_STATE_INVALID and m.state == KL_STATE_INVALID,
-            f"{label}: ctr = 2^32-2 is processed, ctr = 2^32-1 puts the CL in Invalid")
+            f"{label}: ctr = 2^32-2 is processed, ctr = 2^32-1 puts the locker in Invalid")
     for path, last, label in ((at_encrypt, KL_STATE_ENC_LAST_BLOCK, 'Enc_Last_Block'),
                               (at_decrypt, KL_STATE_DEC_LAST_BLOCK, 'Dec_Last_Block')):
         m = path()
         m.ctr = M32
         m.setst(last, 'B', 8)
         m.exec('A', 0x5A, 8)
-        chk(m.state == KL_STATE_INVALID, f"{label}: ctr = 2^32-1 puts the CL in Invalid")
+        chk(m.state == KL_STATE_INVALID, f"{label}: ctr = 2^32-1 puts the locker in Invalid")
     m = at_encrypt(4)
     ref = at_encrypt(4)
     ref.ctr = M32 - 2
@@ -996,7 +996,7 @@ def main():
     got = m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512)
     chk(got == want2 and m.state == KL_STATE_INVALID and m.export_content() == (0, 0),
         "IRR6/SGR16/SGR10: a 4-block kl.exec hitting ctr = 2^32-1 at its third block "
-        "keeps two blocks, zeroes the rest, and the CL keeps only its MDH")
+        "keeps two blocks, zeroes the rest, and the locker keeps only its MDH")
 
     # -- last blocks ------------------------------------------------------------
     print()
@@ -1008,7 +1008,7 @@ def main():
                 m.exec('A', 0, 0)
             m.setst(last, 'B', bad_lbl)
             chk(m.state == KL_STATE_INVALID,
-                f"{label}_Last_Block: last_blk_len = {bad_lbl} puts the CL in Invalid")
+                f"{label}_Last_Block: last_blk_len = {bad_lbl} puts the locker in Invalid")
         for good in (8, 120):
             m = path()
             m.setst(last, 'B', good)
@@ -1047,7 +1047,7 @@ def main():
     m.setst(KL_STATE_DECRYPT)
     chk(m.state == KL_STATE_INVALID,
         "_MachinePolicy_ = encrypt only: Hash_Absorb -> Decrypt -> Invalid")
-    st, ptd = kl_decrypt(k5, n5, a5, w5, m=GcmSivCL.provisioned(k5, policy=0b10))
+    st, ptd = kl_decrypt(k5, n5, a5, w5, m=GcmSivLocker.provisioned(k5, policy=0b10))
     chk(st == 'Success', "_MachinePolicy_ = decrypt only: the decryption path works")
     m = at_encrypt()
     m.setst(KL_STATE_EXPIRED)
@@ -1075,7 +1075,7 @@ def main():
     print()
     v10 = VECTORS[9]
     k10, n10, a10, p10, w10 = unhex(v10, 'key', 'nonce', 'aad', 'pt', 'ct_tag')
-    m = GcmSivCL.provisioned(k10)
+    m = GcmSivLocker.provisioned(k10)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n10))
     m.setst(KL_STATE_HASH_ABSORB)
     m.exec('B', b2v(p10), 384, interrupt_after=2)
@@ -1098,15 +1098,15 @@ def main():
     # -- Serialized Content, export/import, MGR4 -------------------------------------
     print()
     for kk, skid, blocks in ((key, None, 5), (k256, None, 6), (None, 0x00C0FFEE00C0FFEE, 4)):
-        m = GcmSivCL.provisioned(kk, skid=skid)
+        m = GcmSivLocker.provisioned(kk, skid=skid)
         _, nb = m.export_content()
         kb = 64 if skid else 8 * len(kk)
         chk(nb == 128 * blocks == pad128(kb + 400),
             f"Content for {'a SKID' if skid else f'k = {8 * len(kk)}'}: {kb} + 96 + 32 + "
             f"128 + 128 + 16 bits, {blocks} blocks")
-    got, _ = kl_encrypt(None, n5, a5, p5, m=GcmSivCL.provisioned(skid=0x00C0FFEE00C0FFEE))
+    got, _ = kl_encrypt(None, n5, a5, p5, m=GcmSivLocker.provisioned(skid=0x00C0FFEE00C0FFEE))
     chk(got == w5, "a key given by a SKID (MGR8): C.1 #15 reproduced")
-    m = GcmSivCL.provisioned(k5)
+    m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_HASH_ABSORB)
     _absorb_string(m, a5, 128)
@@ -1121,7 +1121,7 @@ def main():
         "tmp [511:384], last_blk_len [527:512]")
     for where in ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block'):
         for ctl in (False, True):
-            m = GcmSivCL.provisioned(k5)
+            m = GcmSivLocker.provisioned(k5)
             if where == 'Dec_Last_Block':
                 m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
                 m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', b2v(w5[-16:]))
@@ -1131,7 +1131,7 @@ def main():
                 pt = v2b(m.exec('A', b2v(w5[:16]), 128), 16)
                 m.setst(KL_STATE_DEC_LAST_BLOCK, 'B', 32)
                 v_, _ = m.export_content()
-                m2 = GcmSivCL.imported(m.state, v_, 128, stale_derived=ctl)
+                m2 = GcmSivLocker.imported(m.state, v_, 128, stale_derived=ctl)
                 pt += v2b(m2.exec('A', b2v(w5[16:20]), 32), 4)
                 m2.setst(KL_STATE_DEC_TAG_FINALIZE)
                 m2.exec('B', _length_block(a5, pt), 128)
@@ -1146,7 +1146,7 @@ def main():
                     tag = m.exec('A', _length_block(a5, p5), 128)
                     ct = v2b(m.exec('A', b2v(p5[:16]), 128), 16)
                 v_, _ = m.export_content()
-                m2 = GcmSivCL.imported(m.state, v_, 128, stale_derived=ctl)
+                m2 = GcmSivLocker.imported(m.state, v_, 128, stale_derived=ctl)
                 if where == 'Hash_Absorb':
                     _absorb_string(m2, p5, 128)
                     m2.setst(KL_STATE_ENC_TAG_FINALIZE)
@@ -1169,7 +1169,7 @@ def main():
     src = bytes.fromhex(VECTORS[11]['key'])
     for vv, length in ((VECTORS[6], 16), (VECTORS[6], 32), (VECTORS[11], 32)):
         kx, nx, ax, px, wx = unhex(vv, 'key', 'nonce', 'aad', 'pt', 'ct_tag')
-        m = GcmSivCL.provisioned(bytes(len(kx)))
+        m = GcmSivLocker.provisioned(bytes(len(kx)))
         source = kx + src[len(kx):] if length > len(kx) else kx
         m.derive_into_key(source, length)
         got, _ = kl_encrypt(None, nx, ax, px, m=m)
@@ -1178,7 +1178,7 @@ def main():
     m = at_hash_absorb()
     m.derive_into_key(src, 16)
     chk(m.state == KL_STATE_INVALID, "kl.derive into `key` outside Ready -> Invalid")
-    m = GcmSivCL.provisioned(skid=0x00C0FFEE00C0FFEE)
+    m = GcmSivLocker.provisioned(skid=0x00C0FFEE00C0FFEE)
     m.derive_into_key(src, 16)
     chk(m.state == KL_STATE_INVALID, "kl.derive into a `key` configured by a SKID -> Invalid")
 
@@ -1197,12 +1197,12 @@ def main():
     chk(fired, "negative control fired: BE length block changes the tag")
 
     print("\nSPEC-NOTE 1: <<KLEE-GCM-SIV-mode>> says an kl.setst naming Encrypt \"is a "
-          "not-allowed transition and invalidates the CL\", while SGR4 lets kl.setst "
+          "not-allowed transition and invalidates the locker\", while SGR4 lets kl.setst "
           "name the current State in any Valid State, and the Pseudocode chapter's "
           "<<KLEE-pseudocode-GCM-SIV-encryption>> issues `kl.setst K0, "
           "#kl_state_encrypt` right after the Enc_Tag_Finalize kl.exec, i.e. in "
           "Encrypt.  The model follows the Machine text (Invalid), under which the "
-          "the Pseudocode chapter sequence invalidates the CL; either drop that line from the Pseudocode chapter or "
+          "the Pseudocode chapter sequence invalidates the locker; either drop that line from the Pseudocode chapter or "
           "restrict the rule to kl.setst issued in a State other than Encrypt.")
     print("INFO 1: the counter rule (ctr = 2^32-1 -> Invalid) admits at most "
           "2^32 - 1 blocks per message, one fewer than RFC 8452's P_MAX = 2^36 "
@@ -1229,7 +1229,7 @@ def main():
 
 
 def _fresh_ready(m):
-    """Return m after a kl.setst to Ready (a CL reused for the next message)."""
+    """Return m after a kl.setst to Ready (a locker reused for the next message)."""
     m.setst(KL_STATE_READY)
     return m
 

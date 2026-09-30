@@ -12,7 +12,7 @@ What this harness validates
     all three parameter sets.
 
 2.  *The KLEE specification text as it now stands*, transcribed into a model of a
-    CL holding an ML-KEM CC (class MLKEMCL):
+    locker holding an ML-KEM CC (class MLKEMLocker):
 
     - the sizes of <<KLEE-ML-KEM-sizes>>, of the Internal State and of the
       Serialized Content, and the `kl.size` values they imply
@@ -284,8 +284,8 @@ def kl_size(mdh, content1_size, pi_content_size=0, content2_size=0):
     return 64 + content1_size + content2_size
 
 
-class CL:
-    """What every CL shares: the MDH, and the conditions Rule <<KLEE-SGR-gate-order>>
+class Locker:
+    """What every locker shares: the MDH, and the conditions Rule <<KLEE-SGR-gate-order>>
     evaluates before a Machine's own rules."""
 
     mdh = 0
@@ -322,9 +322,9 @@ class CL:
 
     def gate(self):
         """Rule <<KLEE-SGR-gate-order>> for a usage-controlled instruction naming this
-        CL alone.  True when the Machine's own rules are reached."""
+        locker alone.  True when the Machine's own rules are reached."""
         if self.state == S_UNCONFIGURED:
-            raise IllegalInstruction('usage of an Unconfigured CL (SGR12)')
+            raise IllegalInstruction('usage of an Unconfigured locker (SGR12)')
         if self.in_error():
             return False                           # SGR16: no operation, _State_ kept
         if self.usage_excludes_mode():
@@ -335,8 +335,8 @@ class CL:
         return True
 
 
-class SymmetricCL(CL):
-    """A CL provisioned with a symmetric Machine, used as a `kl.derive` destination.
+class SymmetricCL(Locker):
+    """A locker provisioned with a symmetric Machine, used as a `kl.derive` destination.
     Only its key fields are modelled."""
 
     def __init__(self, machine, state=S_READY, keytype=0, skid=0, usage=0,
@@ -368,8 +368,8 @@ class SymmetricCL(CL):
         return False                               # no exportable field
 
 
-class MLKEMCL(CL):
-    """A CL holding an ML-KEM CC ([[KLEE-PQC-ML-KEM]]).
+class MLKEMLocker(Locker):
+    """A locker holding an ML-KEM CC ([[KLEE-PQC-ML-KEM]]).
 
     Only architecturally visible behaviour is modelled: the MDH, the four state
     fields, the state machine, and the ADS an interrupted operation needs.  The
@@ -494,7 +494,7 @@ class MLKEMCL(CL):
             self.transition(immed)
             return
         # "Any other `#immed7` that the architecture or the current Machine does not
-        #  support transitions the CL to Error State _Invalid_."
+        #  support transitions the locker to Error State _Invalid_."
         self.enter_error(S_INVALID)
 
     def exec_B(self, data):
@@ -551,7 +551,7 @@ class MLKEMCL(CL):
         size, w = self.size[name], self.use
         if w >= size or w + nbytes > size:
             # Nothing left to emit, or "an emitting `kl.exec` that would carry _W_ past
-            # the field size invalidates the CL" (MGR7).
+            # the field size invalidates the locker" (MGR7).
             self.enter_error(S_INVALID)
             return bytes(nbytes)
         self.use = w + nbytes
@@ -634,7 +634,7 @@ class MLKEMCL(CL):
             self.transition(S_SUCCESS)
 
     def export_import(self, keep_ads=True):
-        """An export as an SCC and the import of that image into a CL
+        """An export as an SCC and the import of that image into a locker
         (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule MGR10
         needs: `Content1` is the *Serialized Content* table -- `decapsk`, `ciphertext`,
         `sharedkey`, in that order -- the MDH is restored with its _State_ and
@@ -678,7 +678,7 @@ def kl_derive(dest, src, length):
     """`kl.derive Kd|K(Xd), Ks1|K(Xs1), Xs2`, the auxiliary GPR carrying `length`
     alone (<<KLEE-instruction-derive>>).  Returns 'retired' or 'noop'."""
     if dest is src:
-        raise IllegalInstruction('kl.derive with equal CL indices')
+        raise IllegalInstruction('kl.derive with equal locker indices')
     ends = (src, dest)
     # Rule <<KLEE-SGR-gate-order>>: "each condition is evaluated for both endpoints,
     # the source first, before the next".
@@ -699,7 +699,7 @@ def kl_derive(dest, src, length):
     offending = [cl for cl, ok in ((src, src.admits_source()),
                                    (dest, dest.admits_key_destination())) if not ok]
     if offending:
-        for cl in offending:                       # "the offending CL, or both"
+        for cl in offending:                       # "the offending locker, or both"
             cl.enter_error(S_INVALID)
         return 'retired'
     if not src.accepts_destination(dest):
@@ -782,9 +782,9 @@ def t_sizes():
             '= MDH + Content1', total == 16 + c1 and 16 * blocks == total)
         chk(f'ML-KEM-{ps}: the internal state of {SPEC_IS_BYTES[ps]} B is encapsk + '
             'decapsk + ciphertext + sharedkey', SPEC_IS_BYTES[ps] == ek + dk + ct + ss)
-        cc = MLKEMCL(ps)
+        cc = MLKEMLocker(ps)
         chk(f'ML-KEM-{ps}: kl.size gives 16 B for the PI (the MDH alone) and 32 + '
-            'Content1 for a CL in a Valid State without ADS',
+            'Content1 for a locker in a Valid State without ADS',
             kl_size(cc.pi, c1) == 16 and kl_size(cc.mdh, c1) == 32 + c1,
             f'{kl_size(cc.mdh, c1)} B')
         e, d = K.keygen_internal(bytes(32), bytes(32), ps)
@@ -801,7 +801,7 @@ def t_sizes():
          'ciphertext and sharedkey.  The model keeps encapsk as a field of its own, as '
          'the State Machine text requires: it is set by _encapsk_Input_ or '
          '_GenerateKeyPair_ only.')
-    back = load(MLKEMCL(768), S_EK_IN, bytes.fromhex(vector('encaps', 768)['ek'])) \
+    back = load(MLKEMLocker(768), S_EK_IN, bytes.fromhex(vector('encaps', 768)['ek'])) \
         .export_import()
     spec_note('the Serialized Content carries encapsk only inside decapsk, yet encapsk '
               'is a field of its own: a peer\'s encapsk loaded for _Encapsulate_ into a '
@@ -828,13 +828,13 @@ def t_mdh():
         [MLKEM_MACHINE[p] for p in (512, 768, 1024)] == [0x0B0, 0x0B1, 0x0B2],
         '0x0B0, 0x0B1, 0x0B2')
     chk('the parameter set follows from the provisioned _Machine_ field',
-        all(MLKEMCL(p).pset_from_mdh == p for p in (512, 768, 1024)))
+        all(MLKEMLocker(p).pset_from_mdh == p for p in (512, 768, 1024)))
     ids = sorted(MLKEM_STATES)
     chk('the ML-KEM States 2-9 are distinct and lie in the Machine-defined range 2-45 '
         'of <<KLEE-states-valid>>',
         len(set(ids)) == len(ids) and all(2 <= s <= 45 for s in ids), str(ids))
     junk = mdh_set(mdh_set(0, F_STATEEXT, 0b1010), F_MACHINEUSE, 0x1234)
-    cc = MLKEMCL(768, pi_extra=junk)
+    cc = MLKEMLocker(768, pi_extra=junk)
     chk('provisioning: the PI\'s _State_ is _Unconfigured_, and the completing kl.mgmt '
         'sets _Ready_ and zeroes _StateExtension_ and _MachineUse_',
         mdh_get(cc.pi, F_STATE) == S_UNCONFIGURED and cc.state == S_READY
@@ -919,7 +919,7 @@ def t_input_validation():
 
     # The state machine: "Upon completion of State _encapsk_Input_ ..."
     for v in VECTORS['ekCheck']:
-        cc = load(MLKEMCL(v['pset']), S_EK_IN, bytes.fromhex(v['ek']))
+        cc = load(MLKEMLocker(v['pset']), S_EK_IN, bytes.fromhex(v['ek']))
         if v['pass']:
             ok = (cc.state == S_EK_IN and cc.use == cc.size['encapsk']
                   and cc.encapsk.hex() == v['ek'])
@@ -929,12 +929,12 @@ def t_input_validation():
             want = 'Error State _Invalid_ (49), the Content cleared'
         chk(f"_encapsk_Input_ of {v['src']} ({v['reason']}): {want}", ok)
     for v in VECTORS['dkCheck']:
-        cc = load(MLKEMCL(v['pset']), S_DK_IN, bytes.fromhex(v['dk']))
+        cc = load(MLKEMLocker(v['pset']), S_DK_IN, bytes.fromhex(v['dk']))
         chk(f"_decapsk_Input_ of {v['src']} ({v['reason']}): "
             + ('the State is kept' if v['pass'] else 'Error State _Invalid_ (49)'),
             cc.state == (S_DK_IN if v['pass'] else S_INVALID))
 
-    cc = MLKEMCL(ps)
+    cc = MLKEMLocker(ps)
     cc.setst(S_EK_IN)
     cc.exec_B(bad[:384])
     cc.exec_B(bad[384:784])
@@ -947,7 +947,7 @@ def t_input_validation():
     ok = True
     for ps2 in (512, 768, 1024):
         e2, d2 = K.keygen_internal(bytes(32), bytes(32), ps2)
-        cc = MLKEMCL(ps2)
+        cc = MLKEMLocker(ps2)
         load(cc, S_EK_IN, e2)
         ok &= cc.state == S_EK_IN and len(cc.encapsk) == SPEC_SIZES[ps2][0]
         load(cc, S_DK_IN, d2)
@@ -962,7 +962,7 @@ def t_input_validation():
          'way; the next check forces the failure to exercise the branch as written.')
 
     dv = vector('decaps', ps, 'valid')
-    cc = MLKEMCL(ps, ct_type_check=lambda c: False)
+    cc = MLKEMLocker(ps, ct_type_check=lambda c: False)
     load(cc, S_DK_IN, bytes.fromhex(dv['dk']))
     load(cc, S_CT_IN, bytes.fromhex(dv['c']))
     chk('(forced) a ciphertext type check failure gives State _Failure_ (47), a Valid '
@@ -975,7 +975,7 @@ def t_input_validation():
     chk('... and "the caller may supply another ciphertext": from _Failure_, reload and '
         'decapsulate', cc.state == S_SUCCESS and cc.sharedkey.hex() == dv['k'], dv['src'])
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(bytes(32)))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(bytes(32)))
     load(cc, S_EK_IN, bad[:-16])                   # the last 16 bytes never arrive
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
@@ -996,7 +996,7 @@ def t_state_machine():
     ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
     size = SPEC_SIZES[ps][0]
 
-    cc = MLKEMCL(ps)
+    cc = MLKEMLocker(ps)
     cc.setst(S_DK_IN)
     cc.exec_B(b'\x11' * 160)
     was = cc.use
@@ -1015,7 +1015,7 @@ def t_state_machine():
     chk('a further kl.exec once the field is complete gives Error State _Invalid_',
         cc.state == S_INVALID)
 
-    cc = MLKEMCL(ps)
+    cc = MLKEMLocker(ps)
     cc.setst(S_EK_IN)
     cc.exec_B(ek[:1024])
     cc.exec_B(ek[1024:] + b'\xAA' * 64)            # 224 B offered, 160 B needed
@@ -1028,12 +1028,12 @@ def t_state_machine():
     chk('reloading replaces the field rather than combining it with the old contents',
         cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
 
-    cc = MLKEMCL(ps)
+    cc = MLKEMLocker(ps)
     cc.exec_D()
     chk('no kl.exec is allowed in State _Ready_ (SGR2): Error State _Invalid_',
         cc.state == S_INVALID)
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(m))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
@@ -1048,17 +1048,17 @@ def t_state_machine():
     chk('a further emitting kl.exec gives _Invalid_ and a zeroed OUTPUT',
         cc.state == S_INVALID and got == bytes(16))
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(m))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
     part = emit(cc, (512, 512))
     over = cc.exec_C(128)                          # 1024 + 128 > 1088
     chk('an emitting kl.exec that would carry _MachineUse_ past the field size '
-        'invalidates the CL and writes zeros',
+        'invalidates the locker and writes zeros',
         part.hex() == v['c'][:2048] and cc.state == S_INVALID and over == bytes(128))
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(m))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(m))
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
@@ -1071,7 +1071,7 @@ def t_state_machine():
 
     kv = vector('keyGen', ps)
     d, z = bytes.fromhex(kv['d']), bytes.fromhex(kv['z'])
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(d, z))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z))
     cc.setst(S_GENKEYPAIR)
     cc.exec_D()
     chk('GenerateKeyPair succeeds into State _Success_ (46) with the ACVP key pair and '
@@ -1083,7 +1083,7 @@ def t_state_machine():
         'output) gives _Invalid_, an empty OUTPUT and a cleared Content',
         cc.state == S_INVALID and got == bytes(16) and all_zero(*cc.fields()))
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(d, z, m))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z, m))
     cc.setst(S_GENKEYPAIR)
     cc.exec_D()
     cc.setst(S_EK_OUT)
@@ -1107,7 +1107,7 @@ def t_state_machine():
 
     states = set()
     for x in [y for y in VECTORS['decaps'] if y['pset'] == ps]:
-        cc = MLKEMCL(ps)
+        cc = MLKEMLocker(ps)
         load(cc, S_DK_IN, bytes.fromhex(x['dk']))
         load(cc, S_CT_IN, bytes.fromhex(x['c']))
         cc.setst(S_DECAPSULATE)
@@ -1119,14 +1119,14 @@ def t_state_machine():
         'reach _Success_, indistinguishably', states == {S_SUCCESS},
         f'States seen: {sorted(states)}')
 
-    cc = load(MLKEMCL(ps), S_EK_IN, ek)
+    cc = load(MLKEMLocker(ps), S_EK_IN, ek)
     for imm in (S_SUCCESS, S_FAILURE):
         chk(f'kl.setst #{imm} is a reserved encoding: illegal-instruction exception, '
             'nothing changed (SGR7)',
             _raises(IllegalInstruction, lambda: cc.setst(imm))
             and cc.state == S_EK_IN and cc.encapsk == ek)
     for imm in (10, 45, 65):
-        c2 = MLKEMCL(ps)
+        c2 = MLKEMLocker(ps)
         c2.setst(imm)
         chk(f'kl.setst #{imm}, an immediate ML-KEM does not define, gives _Invalid_',
             c2.state == S_INVALID)
@@ -1140,12 +1140,12 @@ def t_state_machine():
     cc.exec_B(ek)
     got = cc.exec_C(16)
     cc.exec_D()
-    chk('using a CL in an Error State: no operation, the _State_ unchanged, the OUTPUT '
+    chk('using a locker in an Error State: no operation, the _State_ unchanged, the OUTPUT '
         'zeroed (SGR16)',
         cc.state == S_INVALID and got == bytes(16) and all_zero(*cc.fields()))
 
     for st in LONG_RUNNING:
-        c2 = MLKEMCL(ps)
+        c2 = MLKEMLocker(ps)
         c2.setst(st)
         c2.exec_B(bytes(16))
         chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (MGR10: besides '
@@ -1162,13 +1162,13 @@ def t_long_running():
     d2, z2, m2 = bytes(range(32)), bytes(range(32, 64)), bytes(range(64, 96))
     ek2, _ = K.keygen_internal(d2, z2, ps)
 
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(d, None))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, None))
     cc.setst(S_GENKEYPAIR)
     cc.exec_D()
     chk('an RBG failure in GenerateKeyPair (KeyGen returns bottom) gives State '
         '_Failure_ (47), P zeroed',
         cc.state == S_FAILURE and cc.use == 0 and all_zero(cc.encapsk, cc.decapsk))
-    cc = MLKEMCL(ps, rbg=ScriptedRBG(None))
+    cc = MLKEMLocker(ps, rbg=ScriptedRBG(None))
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
@@ -1176,7 +1176,7 @@ def t_long_running():
         'shared key', cc.state == S_FAILURE and all_zero(cc.ciphertext, cc.sharedkey))
 
     rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     cc.setst(S_GENKEYPAIR)
     r = cc.exec_D(halt_after=1)
     chk('a halted GenerateKeyPair: P is non-zero, the _State_ and the Content are '
@@ -1195,7 +1195,7 @@ def t_long_running():
         and cc.decapsk.hex() == kv['dk'], kv['src'])
 
     rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     cc.setst(S_GENKEYPAIR)
     cc.exec_D(halt_after=1)
     cc.setst(S_GENKEYPAIR)
@@ -1206,7 +1206,7 @@ def t_long_running():
         and (cc.encapsk, cc.decapsk) == K.keygen_internal(d2, z2, ps))
 
     for target in (S_READY, S_INVALID):
-        cc = MLKEMCL(ps, rbg=ScriptedRBG(d, z))
+        cc = MLKEMLocker(ps, rbg=ScriptedRBG(d, z))
         cc.setst(S_GENKEYPAIR)
         cc.exec_D(halt_after=1)
         cc.setst(target)
@@ -1215,7 +1215,7 @@ def t_long_running():
             cc.use == 0 and cc.ads is None and cc.state == target)
 
     rbg = ScriptedRBG(m, m2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     cc.exec_D(halt_after=1)
@@ -1228,7 +1228,7 @@ def t_long_running():
         and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(ek2, m2, ps))
 
     rbg = ScriptedRBG(m, m2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     load(cc, S_EK_IN, ek)
     cc.setst(S_ENCAPSULATE)
     halts = 0
@@ -1239,7 +1239,7 @@ def t_long_running():
         and cc.sharedkey.hex() == ev['k'] and cc.ciphertext.hex() == ev['c'], ev['src'])
 
     for x in [y for y in VECTORS['decaps'] if y['pset'] == ps]:
-        cc = MLKEMCL(ps)
+        cc = MLKEMLocker(ps)
         load(cc, S_DK_IN, bytes.fromhex(x['dk']))
         load(cc, S_CT_IN, bytes.fromhex(x['c']))
         cc.setst(S_DECAPSULATE)
@@ -1253,7 +1253,7 @@ def t_long_running():
             and cc.sharedkey.hex() == x['k'])
 
     rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     cc.setst(S_GENKEYPAIR)
     cc.exec_D(halt_after=1)
     kept = cc.export_import(keep_ads=True)
@@ -1265,7 +1265,7 @@ def t_long_running():
         and kept.encapsk.hex() == kv['ek'], kv['src'])
 
     rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     cc.setst(S_GENKEYPAIR)
     cc.exec_D(halt_after=1)
     dropped = cc.export_import(keep_ads=False)
@@ -1276,7 +1276,7 @@ def t_long_running():
         and (dropped.encapsk, dropped.decapsk) == K.keygen_internal(d2, z2, ps))
 
     x = vector('decaps', ps)
-    cc = MLKEMCL(ps)
+    cc = MLKEMLocker(ps)
     load(cc, S_DK_IN, bytes.fromhex(x['dk']))
     load(cc, S_CT_IN, bytes.fromhex(x['c']))
     cc.setst(S_DECAPSULATE)
@@ -1288,7 +1288,7 @@ def t_long_running():
         x['src'])
 
     rbg = ScriptedRBG(d, z, d2, z2)
-    cc = MLKEMCL(ps, rbg=rbg)
+    cc = MLKEMLocker(ps, rbg=rbg)
     cc.setst(S_GENKEYPAIR)
     cc.exec_D(halt_after=1)
     cc.setst(KL_CFG_CLEAR_ADS)
@@ -1303,7 +1303,7 @@ def t_long_running():
 
 
 def t_derive():
-    print('\n-- kl.derive: sharedkey into the key field of a provisioned CL --')
+    print('\n-- kl.derive: sharedkey into the key field of a provisioned locker --')
     ps = 768
     v = vector('encaps', ps)
     ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
@@ -1311,7 +1311,7 @@ def t_derive():
     placeholder = bytes([KEY_FILL]) * 16
 
     def encapsulated(**kw):
-        cc = MLKEMCL(ps, rbg=ScriptedRBG(m), **kw)
+        cc = MLKEMLocker(ps, rbg=ScriptedRBG(m), **kw)
         load(cc, S_EK_IN, ek)
         cc.setst(S_ENCAPSULATE)
         cc.exec_D()
@@ -1356,7 +1356,7 @@ def t_derive():
         'source is untouched', dest.state == S_INVALID and src.state == S_CT_OUT)
     dest = SymmetricCL(machine_code(0, 4), state=S_SUCCESS)
     kl_derive(dest, src, 16)
-    chk('a CL in _Success_ may not be the destination of a kl.derive (SGR5): _Invalid_',
+    chk('a locker in _Success_ may not be the destination of a kl.derive (SGR5): _Invalid_',
         dest.state == S_INVALID)
     for code in (machine_code(0, 3), machine_code(6, 10), machine_code(10, 0)):
         dest = SymmetricCL(code)
@@ -1364,7 +1364,7 @@ def t_derive():
         chk(f'a {dest.name} destination (not a single-key Machine of at most 256 bits) '
             'becomes _Invalid_; the source is untouched',
             dest.state == S_INVALID and src.state == S_CT_OUT and src.sharedkey == ss)
-    other = MLKEMCL(ps)
+    other = MLKEMLocker(ps)
     kl_derive(other, src, 32)
     chk('an ML-KEM destination (nothing importable) becomes _Invalid_',
         other.state == S_INVALID and src.state == S_CT_OUT)
@@ -1380,7 +1380,7 @@ def t_derive():
         dest.get(F_KEYTYPE) == 0 and dest.keys[0] == ss[:16] and dest.state == S_READY)
 
     dv = vector('decaps', reason='valid')
-    cd = MLKEMCL(dv['pset'])
+    cd = MLKEMLocker(dv['pset'])
     load(cd, S_DK_IN, bytes.fromhex(dv['dk']))
     load(cd, S_CT_IN, bytes.fromhex(dv['c']))
     cd.setst(S_DECAPSULATE)
@@ -1406,7 +1406,7 @@ def t_derive():
          'long-running States admit only Form D kl.exec and kl.setst (MGR10), and no '
          'other State admits kl.derive (MGR1).  _Failure_ is not exercised.')
 
-    chk('kl.derive naming the same CL twice raises an illegal-instruction exception',
+    chk('kl.derive naming the same locker twice raises an illegal-instruction exception',
         _raises(IllegalInstruction, lambda: kl_derive(src, src, 32)))
     blank = SymmetricCL(machine_code(0, 0))
     blank.mdh = 0
@@ -1470,10 +1470,10 @@ def t_derive():
               'numbers the fields, but <<KLEE-instruction-derive>> no longer has a Form '
               'field (bits [29:28] are fixed at 0) and its auxiliary GPR carries length '
               'alone; the paragraph that defined i and j is commented out.  The model '
-              'takes the endpoints from the Machines and States of the two CLs.')
-    spec_note('<<KLEE-instruction-derive>> says that both CLs transition to _Invalid_ '
+              'takes the endpoints from the Machines and States of the two lockers.')
+    spec_note('<<KLEE-instruction-derive>> says that both lockers transition to _Invalid_ '
               'when the endpoint descriptor is not allowed, while its Checks invalidate '
-              'only the offending CL (item 1) or only the destination (items 2 and 3); '
+              'only the offending locker (item 1) or only the destination (items 2 and 3); '
               'the model follows the Checks, which are the more specific statement.')
 
 
@@ -1485,7 +1485,7 @@ def t_negative_controls():
     negative('implicit rejection disabled',
              f"{v['src']} must still yield K-bar = J(z || c)", ss.hex() == v['k'])
 
-    cc = load(MLKEMCL(768, check_keys=False), S_EK_IN, malformed_ek(768))
+    cc = load(MLKEMLocker(768, check_keys=False), S_EK_IN, malformed_ek(768))
     negative('key checks disabled',
              'a malformed encapsk must reach Error State _Invalid_',
              cc.state == S_INVALID)
@@ -1493,7 +1493,7 @@ def t_negative_controls():
     kv = vector('keyGen', 768)
     rbg = ScriptedRBG(bytes.fromhex(kv['d']), bytes.fromhex(kv['z']),
                       bytes(range(32)), bytes(range(32, 64)))
-    cc = MLKEMCL(768, rbg=rbg, resume_redraws=True)
+    cc = MLKEMLocker(768, rbg=rbg, resume_redraws=True)
     cc.setst(S_GENKEYPAIR)
     cc.exec_D(halt_after=1)
     cc.exec_D()

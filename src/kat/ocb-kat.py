@@ -10,7 +10,7 @@ Two independent implementations are checked against the published vectors:
         implemented formula-by-formula in the KLEE value model of
         modules/ROOT/pages/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
-        The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
+        The model is a locker driven by kl.setst / kl.exec Forms and KLLEN, so it
         also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,
         MGR1-MGR6) and the State rules of the Instructions chapter (<<KLEE-State-field>>: SGR2,
         SGR4-SGR6, SGR8, SGR10, SGR16) where OCB relies on them, and it
@@ -37,7 +37,7 @@ Checks performed
   * KLEE decryption: plaintext recovery + Hash_Verify Success on the good
     tag, Failure on a tampered tag; block-multiple messages exercise the
     last_blk_len = 0 Form D path on both sides.
-  * The Serialized Content: the CL is exported and re-imported after every
+  * The Serialized Content: the locker is exported and re-imported after every
     instruction of every sample (encryption and decryption), with the derived
     L$ and L[i] recomputed on import (<<KLEE-MGR-recomputed-fields>>); every
     admissible field value fits its row; the sizes are reported.
@@ -54,7 +54,7 @@ Checks performed
     behaviour (<<KLEE-SGR-clear-cr-content-error-state>>,
     <<KLEE-SGR-usage-cr-error-state>>).
   * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
-    is written with the CL in State Ready; OCB has no exportable field.
+    is written with the locker in State Ready; OCB has no exportable field.
   * Nonces of any bit length 6..120 (review finding m4, fixed in the spec):
     KLEE vs the bit-string REF, which also anchors nonce_be(N, n); the
     padding bits of byte q-1 are ignored; out-of-range N_len is rejected.
@@ -206,7 +206,7 @@ def ref_ocb_encrypt(K, N, A, P, taglen_bits, n_len=None):
 # are the specified behaviour.
 
 class Invalid(Exception):
-    """The CL transitioned to Error State _Invalid_.  `output` is the OUTPUT
+    """The locker transitioned to Error State _Invalid_.  `output` is the OUTPUT
     operand as the instruction leaves it: the blocks written before the
     transition, zeros elsewhere (<<KLEE-SGR-usage-cr-error-state>>)."""
     def __init__(self, why, output=0):
@@ -256,7 +256,7 @@ def unpack(data, layout):
 
 
 class KleeOcb:
-    """A CL holding an OCB CC.  kl.setst and kl.exec are issued through
+    """A locker holding an OCB CC.  kl.setst and kl.exec are issued through
     setst(immed, form, aux) and exec(form, INPUT, klen), with KLLEN = klen
     bits; exec returns OUTPUT as a klen-bit value (0 for Forms B and D)."""
 
@@ -495,7 +495,7 @@ class KleeOcb:
 
     # -- <<KLEE-derive-endpoints>> -----------------------------------------
     def derive_into(self, j, src, length):
-        """This CL as the destination of a kl.derive (<<KLEE-instruction-derive>>)."""
+        """This locker as the destination of a kl.derive (<<KLEE-instruction-derive>>)."""
         if self.state == S_INVALID:
             return
         if j != 1:
@@ -509,7 +509,7 @@ class KleeOcb:
         self.keyb = src[:eff] + bytes(k - eff)
 
     def derive_from(self, i):
-        """This CL as the source of a kl.derive: OCB has no exportable field."""
+        """This locker as the source of a kl.derive: OCB has no exportable field."""
         self._invalid(f'i = {i} is not an exportable field of OCB')
 
     # -- Serialized Content --------------------------------------------------
@@ -528,8 +528,8 @@ class KleeOcb:
         return pack([(vals[f], w) for f, w in layout])
 
     def imported(self, content1, layout=None):
-        """A fresh CL of the same implementation, loaded with `content1` and the
-        MDH of this CL (_State_, _MachinePolicy_, _KeyType_)."""
+        """A fresh locker of the same implementation, loaded with `content1` and the
+        MDH of this locker (_State_, _MachinePolicy_, _KeyType_)."""
         layout = layout or ocb_layout(self.key_bits())
         f = unpack(content1, layout)
         key = SKS[f['key']] if self.skid is not None else v2b(f['key'], len(self.keyb))
@@ -572,7 +572,7 @@ def kl_ocb_encrypt(K, N, A, P, taglen_bits, n_len=None, per_exec=1, junk=False,
     """Drive the Machine as <<KLEE-pseudocode-OCB-encryption>> does; return
     C || truncated tag.  N is a byte string; with n_len given, it carries an
     n_len-bit nonce left-aligned in its bytes.  hop: export and re-import
-    the CL after every instruction.  cl: an existing CL to use instead of a
+    the locker after every instruction.  cl: an existing locker to use instead of a
     new one, in State Ready, or in Set_Aux_Value with its nonce set if N is
     None; tag_out: receives the 128-bit OUTPUT of the tag."""
     fA, fB, fC, _ = _forms(subst)
@@ -843,7 +843,7 @@ def main():
         return cl
 
     def at_crypt(dec=False, A=S40, **kw):
-        """A CL that has absorbed A and entered Encrypt (or Decrypt)."""
+        """A locker that has absorbed A and entered Encrypt (or Decrypt)."""
         cl = at_hash_absorb(**kw)
         for INPUT, klen in _chunks(A, 0):
             cl.exec('B', INPUT, klen)
@@ -921,7 +921,7 @@ def main():
     for cl, text in ((at_end(), 'Success'), (at_end(True, bytes(16)), 'Failure'),
                      (at_crypt(), 'Encrypt')):
         cl.setst(S_READY)                         # SGR8; Ready re-initializes
-        line(f"kl.setst #ready from {text}, then vector 07 on the same CL (SGR8)",
+        line(f"kl.setst #ready from {text}, then vector 07 on the same locker (SGR8)",
              kl_ocb_encrypt(None, nonce(s7), S40[:la7], S40[:lp7], 128, cl=cl)
              == bytes.fromhex(ct7))
     # -- the KLIOBUF substitutions of <<KLEE-usage-input-output>>
@@ -1042,7 +1042,7 @@ def main():
     spec_note("<<KLEE-OCB-mode>> _Hash_Absorb_Last_Block_ admits a single kl.exec, "
               "but no transition follows it and neither the Internal State nor the "
               "Serialized Content records that it happened: after export/import a "
-              f"second kl.exec is {after} (above, the CL rejects it only through a "
+              f"second kl.exec is {after} (above, the locker rejects it only through a "
               "harness-private flag).  Suggested: `last_blk_len <- 0` after the "
               "absorption, so that the existing last_blk_len = 0 rule rejects a "
               "second kl.exec.")
@@ -1063,7 +1063,7 @@ def main():
         cl.derive_into(1, src, length)
         line(f"key derived in Ready (length = {length} bytes), then vector 0D",
              kl_ocb_encrypt(None, N13, S40, S40, 128, cl=cl, per_exec=0) == CT13)
-    line("kl.derive into `key` of a CL in Hash_Absorb -> Invalid",
+    line("kl.derive into `key` of a locker in Hash_Absorb -> Invalid",
          invalid(lambda: at_hash_absorb().derive_into(1, src, 16)))
     line("kl.derive into a key configured by a SKID -> Invalid",
          invalid(lambda: KleeOcb(K128, skid=7).derive_into(1, src, 16)))

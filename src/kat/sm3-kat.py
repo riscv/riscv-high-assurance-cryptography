@@ -31,7 +31,7 @@ kat/sha2-kat.py, transcribed from the current text, with the GB/T 32905-2016 cor
     the entry step block[t-1:0] <- finalize() is not performed; block_base <- 0.  In
     _Hash_Output_ each Form C kl.exec runs the output loop of
     <<KLEE-hash-functions>> reading state[...]; at block_base = t the bits of OUTPUT
-    beyond output_base are cleared and the CL goes to _Success_.
+    beyond output_base are cleared and the locker goes to _Success_.
   * Error handling: <<KLEE-MGR-not-allowed-instructions>>,
     <<KLEE-SGR-no-exec-in-ready>>, <<KLEE-SGR-success-failure>>,
     <<KLEE-SGR-usage-cr-error-state>>, and the process_VLI rules (same-State
@@ -228,8 +228,8 @@ def process_VLI(max_len, block, b, state, n, block_base, state_offset, cumul_len
 
 # ------------------------------------------------------- the KLEE model
 
-class KleeSm3CL:
-    """One CL holding an SM3 CC per <<KLEE-SM3>>; all quantities are KLEE values."""
+class KleeSm3Locker:
+    """One locker holding an SM3 CC per <<KLEE-SM3>>; all quantities are KLEE values."""
 
     w, b, n, t = W, B, N, T
     machine = MACHINE
@@ -420,10 +420,10 @@ def caller_pad(nbytes):
     return b'\x80' + bytes((-(nbytes + 9)) % 64) + (8 * nbytes).to_bytes(8, 'big')
 
 def fresh(**kw):
-    return KleeSm3CL(HART, **kw).provision()
+    return KleeSm3Locker(HART, **kw).provision()
 
 def kl_sm3(msg, plan='multi', be_words=True, klstart_in_bits=False):
-    """Run one message through a CL.
+    """Run one message through a locker.
 
     'multi':     the padded message in up to three transfers cut inside blocks
                  (4-byte multiples: granularity 32); the digest read by two Form C
@@ -431,9 +431,9 @@ def kl_sm3(msg, plan='multi', be_words=True, klstart_in_bits=False):
     'interrupt': a 4-byte transfer, then the rest in one kl.exec halted at every
                  process_VLI interruption point and resumed from klstart.
     'export':    stop with a partial block pending, export Content1, import it into a
-                 fresh CL and finish there.
+                 fresh locker and finish there.
     """
-    cl = KleeSm3CL(HART, be_words=be_words, klstart_in_bits=klstart_in_bits).provision()
+    cl = KleeSm3Locker(HART, be_words=be_words, klstart_in_bits=klstart_in_bits).provision()
     mp = msg + caller_pad(len(msg))
     cl.kl_setst(KL_STATE_HASH_ABSORB)
     if plan == 'multi':
@@ -452,7 +452,7 @@ def kl_sm3(msg, plan='multi', be_words=True, klstart_in_bits=False):
         cut = len(mp) - 28                  # leaves 36 bytes of a block pending
         assert cl.kl_exec('B', mp[:cut])[0] == 'retired' and cl.block_base != 0
         c1 = cl.export_content1()
-        cl = KleeSm3CL(HART).import_content1(KL_STATE_HASH_ABSORB, c1)
+        cl = KleeSm3Locker(HART).import_content1(KL_STATE_HASH_ABSORB, c1)
         assert cl.kl_exec('B', mp[cut:])[0] == 'retired'
     cl.kl_setst(KL_STATE_HASH_OUTPUT)
     if plan == 'multi':
@@ -585,7 +585,7 @@ check('kl.exec in _Success_ of a hash function -> _Invalid_, output window zeroe
       '(<<KLEE-SGR-success-failure>>)',
       cl.mdh_state == KL_STATE_INVALID and out == bytes(32))
 st, out = cl.kl_exec('C', nbytes=32, prior=b'\xa5' * 32)
-check('kl.exec on a CL in _Invalid_: no operation, State kept, output zeroed '
+check('kl.exec on a locker in _Invalid_: no operation, State kept, output zeroed '
       '(<<KLEE-SGR-usage-cr-error-state>>)',
       st == 'noop' and cl.mdh_state == KL_STATE_INVALID and out == bytes(32))
 
@@ -690,7 +690,7 @@ print('  names no auxiliary parameter for it.')
 print('INFO: kl.derive is exercised with length = t/8 only; for a shorter length the')
 print('  source side has two readings ("the unused part of the last block is discarded"')
 print('  vs "advances as the kl.exec operations ... would").  A refused transfer')
-print('  invalidates only the offending CL (Checks, item 1), not "both CLs".')
+print('  invalidates only the offending locker (Checks, item 1), not "both lockers".')
 print('INFO: <<KLEE-HMAC>> names SM3 as an underlying hash function, but')
 print('  <<KLEE-exec-encodings>> gives SM3 only Type 9 Mode 0, with no HMAC pair, so no')
 print('  HMAC-SM3 Machine can be encoded and none is exercised here.')

@@ -8,9 +8,9 @@ REF   Plain byte-string XTS with ciphertext stealing, written from the standard,
       including IEEE 1619-2007 5.2's byte-wise multiplication by `{alpha}` over the
       16-byte tweak array.  It shares no doubling code with the KLEE side.
 
-KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexCL): the PI is
+KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexLocker): the PI is
       provisioned (the MDH first, then `key1` and `key2`, or one SKID that retrieves
-      both, MGR9), the CL moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
+      both, MGR9), the locker moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
       processed with the (multi-block) Form A kl.exec:
 
           on entering _Encrypt_/_Decrypt_ (Form C kl.setst):
@@ -31,7 +31,7 @@ CTS   The <<KLEE-XTS-from-XEX>> "Ciphertext stealing" procedure implemented step
       emitted as C_{m-1}, C_m); decryption uses one kl.clone, one *discarded*
       kl.exec on the clone to advance it from mask index m-1 to m, C_{m-1} decrypted
       on the clone at index m, CP @ C_m decrypted on the original at index m-1, and a
-      kl.clear of the clone.  The clone is a real copy of the CL, so an accidental
+      kl.clear of the clone.  The clone is a real copy of the locker, so an accidental
       aliasing of the two masks would show up as a failure.
 
 NEG   Two negative controls, each of which must fail the vectors: OCB3's big-endian
@@ -42,13 +42,13 @@ NEG   Two negative controls, each of which must fail the vectors: OCB3's big-end
 
 RULES The behaviour the Machine text leaves to the general rules, and the parts of
       the state machine a vector can pin down: a kl.exec in _Ready_ invalidates the
-      CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
+      locker (Rules <<KLEE-SGR-no-exec-in-ready>> and
       <<KLEE-MGR-not-allowed-instructions>>); _Encrypt_ -> _Decrypt_ is *not* an
       allowed transition here (unlike <<KLEE-ECB-mode>> and <<KLEE-tweakable>>);
       _MachinePolicy_ gates the two transitions from _Ready_ (<<KLEE-Machine-field>>);
       returning to _Ready_ zeroes the mask, so the CC can be reused with a new tweak;
       a same-State kl.setst (SGR4 of <<KLEE-State-management>>) re-tweaks; a KLLEN
-      that is not a multiple of b performs no operation and invalidates the CL
+      that is not a multiple of b performs no operation and invalidates the locker
       (MGR2), the output window being zeroed (Rule
       <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared (Rule
       <<KLEE-SGR-clear-cr-content-error-state>>); KLLEN > b truncates the tweak
@@ -240,8 +240,8 @@ def ref_xts(key1, key2, seq, data, encrypt=True):
 
 
 # ---------------------------------------------------------------- the KLEE model
-class XexCL:
-    """A CL holding an XEX CC, per <<KLEE-XEX-XTS-modes>> and the general rules."""
+class XexLocker:
+    """A locker holding an XEX CC, per <<KLEE-XEX-XTS-modes>> and the general rules."""
 
     def __init__(self, sks=None, doubling=None, rng=None, order='spec'):
         self.mdh = 0                     # _Unconfigured_: every MDH field reads zero
@@ -376,20 +376,20 @@ class XexCL:
         return self.exec(value, B)[0]
 
     def clone(self):
-        """kl.clone: the destination CL becomes a perfect copy of the source CL."""
-        c = XexCL(self.sks, self.doubling, self.rng, self.order)
+        """kl.clone: the destination locker becomes a perfect copy of the source locker."""
+        c = XexLocker(self.sks, self.doubling, self.rng, self.order)
         c.mdh, c.key1, c.key2, c.skid, c.mask = (self.mdh, self.key1, self.key2,
                                                  self.skid, self.mask)
         return c
 
     def clear(self):
-        """kl.clear: the CL becomes _Unconfigured_ and its Content is released."""
+        """kl.clear: the locker becomes _Unconfigured_ and its Content is released."""
         self.mdh = 0
         self.key1 = self.key2 = self.skid = self.mask = None
 
     # ------------------------------------------------------------ kl.derive
     def derive_dest(self, j, src, length):
-        """This CL as the destination of kl.derive (<<KLEE-derive-endpoints>>)."""
+        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>)."""
         if self.in_error():
             return False
         if (j not in XEX_IMPORTABLE
@@ -409,8 +409,8 @@ class XexCL:
 
 
 def new_xex(key1, key2, **kw):
-    """Provision a CL by value with the given AES keys."""
-    cl = XexCL(**{k: v for k, v in kw.items() if k in ('sks', 'doubling', 'rng', 'order')})
+    """Provision a locker by value with the given AES keys."""
+    cl = XexLocker(**{k: v for k, v in kw.items() if k in ('sks', 'doubling', 'rng', 'order')})
     cl.provision(build_pi(XEX_OF[f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2),
                           kw.get('policy', POL_BOTH)))
     return cl
@@ -457,7 +457,7 @@ def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw
         # 5. ... C_{m-1}, C_m, with C_m the final s bits
         out += v2b(c_m1, 16) + v2b(c_last, s_bytes)
     else:
-        # 2. kl.clone the CL; both are at mask index m-1
+        # 2. kl.clone the locker; both are at mask index m-1
         clone = cl.clone()
         # 3. one kl.exec on the clone whose output is discarded: index m-1 consumed
         clone.exec1(discard)
@@ -465,7 +465,7 @@ def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw
         pp = clone.exec1(last_full)
         # 5. P_m <- PP[s-1:0] and CP <- PP[b-1:s]
         p_last, cp = sl(pp, s - 1, 0), sl(pp, 127, s)
-        # 6. CP @ C_m on the original CL, still at mask index m-1
+        # 6. CP @ C_m on the original locker, still at mask index m-1
         p_m1 = cl.exec1(cat((cp, B - s), (tail, s)))
         out += v2b(p_m1, 16) + v2b(p_last, s_bytes)
         # 7. clear the clone
@@ -657,7 +657,7 @@ chk("update_mask(V) on the value view == IEEE 1619 5.2 on the byte-string view",
     [v2b(kl_update_mask(b2v(bytes([q]) + bytes(15))), 16) for q in (1, 0x80, 0xff)],
     [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
 
-print("\n== (b) KLEE XEX CL, full-block path (tweak = bin(i, 128))")
+print("\n== (b) KLEE XEX locker, full-block path (tweak = bin(i, 128))")
 print("   one multi-block Form A kl.exec per data unit (MGR3), and the same data")
 print("   unit as one Form A kl.exec per block")
 for name, k, nonce, p, c in IEEE1619:
@@ -712,7 +712,7 @@ chk("the MS-first control runs on multi-block data units",
     min(len(bytes.fromhex(p)) // 16 for _, _, _, p, _ in IEEE1619[:4]),
     2)
 
-print("\n== (e) kl.clone: independence of the two CLs")
+print("\n== (e) kl.clone: independence of the two lockers")
 k1, k2 = split_keys(IEEE1619_CTS[0][1])
 cl = new_xex(k1, k2)
 cl.setst(ST_DECRYPT, 'C', bin_(seq_of(IEEE1619_CTS[0][2]), B), 128)
@@ -829,7 +829,7 @@ for cipher, kt, pi_size, c1_size in (('AES-128', 0, 48, 48), ('AES-256', 0, 80, 
     kk = CIPHERS[cipher]
     field = SKID if kt else (1 << kk) - 1
     pi = build_pi(XEX_OF[cipher], kt, field, 0 if kt else (1 << kk) - 1)
-    cl = XexCL(sks=SKS)
+    cl = XexLocker(sks=SKS)
     cl.provision(pi)
     chk(f"{cipher} {'SKID' if kt else 'by value'}: PI {pi_size}, Content1 {c1_size}, "
         f"kl.size {pi_size} / {32 + c1_size}",
@@ -842,23 +842,23 @@ mask2 = ref_mul_alpha(ref_mul_alpha(tweak_mask))             # after two blocks
 for label, kt, want_c1 in (
         ("by value", 0, k1.hex() + k2.hex() + mask2.hex()),
         ("by SKID", 1, "efcdab8967452301" + mask2.hex() + "00" * 8)):
-    cl = XexCL(sks=SKS)
+    cl = XexLocker(sks=SKS)
     cl.provision(build_pi(XEX_OF['AES-128'], kt, SKID if kt else b2v(k1),
                           0 if kt else b2v(k2)))
     cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
     head = cl_run(cl, data)[0]                              # the whole 32-byte unit
     chk(f"{label}: Content1 after 2 blocks = {len(want_c1) // 2} B, key(s) | mask",
         cl.content1().hex(), want_c1)
-    cl2 = XexCL(sks=SKS)
+    cl2 = XexLocker(sks=SKS)
     cl2.import_scc(cl.mdh, cl.content1())                   # _State_ travels in the MDH
     chk(f"{label}: import it and encrypt two more blocks at mask indices 2, 3",
         (cl2.state, cl_run(cl2, data)[0].hex()),
         (ST_ENCRYPT, ref_xts(k1, k2, i, data + data)[32:].hex()))
     chk(f"{label}: the first two blocks were vector 2", head.hex(), c)
-cl = XexCL(sks=SKS)
+cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID + 1))
 chk("unresolved SKID at provisioning -> _Invalid_", cl.state, ST_INVALID)
-cl = XexCL(sks=SKS)
+cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, ONES64))
 cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
 rand_ct = cl_run(cl, data)[0]
@@ -887,7 +887,7 @@ cl = new_xex(bytes(16), bytes(16))
 cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
 chk("destination in _Encrypt_ -> _Invalid_",
     (cl.derive_dest(1, source1, 16), cl.state), (False, ST_INVALID))
-cl = XexCL(sks=SKS)
+cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
 chk("keys configured by a SKID are never importable -> _Invalid_",
     (cl.derive_dest(2, source2, 16), cl.state), (False, ST_INVALID))
@@ -895,7 +895,7 @@ src = new_xex(k1, k2)
 dst = new_xex(bytes(16), bytes(16))
 src.invalidate()
 dst.invalidate()                             # no exportable field: the pair is not allowed
-chk("an XEX CL as a source (a key is never exportable) -> both _Invalid_",
+chk("an XEX locker as a source (a key is never exportable) -> both _Invalid_",
     (XEX_EXPORTABLE, src.state, dst.state), ({}, ST_INVALID, ST_INVALID))
 
 print("\n== (j) Round-trip over many lengths, including every partial-block size")

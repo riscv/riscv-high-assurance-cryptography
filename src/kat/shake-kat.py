@@ -335,9 +335,9 @@ class Hart:
         self.klstart = 0
 
 
-# ----------------------------------------------------------------- KLEE CL model
-class KleeSha3CL:
-    """A CL holding a KLEE SHA-3 CC, implemented literally from [[KLEE-SHA-3]] +
+# ----------------------------------------------------------------- KLEE locker model
+class KleeSha3Locker:
+    """A locker holding a KLEE SHA-3 CC, implemented literally from [[KLEE-SHA-3]] +
     [[KLEE-hash-functions]] + [[KLEE-process-VLI]] and the Instructions chapter rules.
 
     `state` is the 1600-bit KLEE value; for the SHA-3 family `block` is `state`
@@ -394,7 +394,7 @@ class KleeSha3CL:
         if self.block_base >= self.b:
             # An image whose `block_base` is not a position within a block is
             # inconsistent Content; the specification defines no behaviour for
-            # it, and the harness invalidates the CL (only the negative control
+            # it, and the harness invalidates the locker (only the negative control
             # below produces such an image).
             self._invalidate()
 
@@ -481,7 +481,7 @@ class KleeSha3CL:
         if immed == KL_STATE_HASH_ABSORB:
             # [[KLEE-process-VLI]]: max_len is set by the Machine, so the entering
             # kl.setst must be of Form A; transitioning to the same State
-            # _Current_State_ invalidates the CL.
+            # _Current_State_ invalidates the locker.
             if self.st == KL_STATE_READY and form == 'A':
                 self.st = KL_STATE_HASH_ABSORB
                 return 'ok'
@@ -544,7 +544,7 @@ class KleeSha3CL:
         return self._invalid_exec(out)
 
     # [[KLEE-CSR-klstart]]: "an interruption point ... is a klstart value that the
-    # Machine can itself produce on a precise halt in that State".  A CL can only
+    # Machine can itself produce on a precise halt in that State".  A locker can only
     # test what its own state implies: process_VLI yields after every iteration,
     # and an iteration that ends before the end of the window ends on a block
     # boundary, after process_block() and block_base <- 0.
@@ -653,7 +653,7 @@ class KleeSha3CL:
 
 # --------------------------------------------------------------------- kl.derive
 def kl_derive(hart, dst, src, length, interrupt_at=None):
-    """kl.derive Kd, Ks, Xs2 (Xs2 = length) between two SHA-3-family CLs, whose
+    """kl.derive Kd, Ks, Xs2 (Xs2 = length) between two SHA-3-family lockers, whose
     only endpoints are the `kl.exec` ones (index 0) of [[KLEE-derive-endpoints]]:
     the output of _Hash_Output_ and the input of _Hash_Absorb_."""
     if dst is src:
@@ -664,8 +664,8 @@ def kl_derive(hart, dst, src, length, interrupt_at=None):
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         hart.klstart = 0
         return 'noop'
-    # Check 1: the State of each CL must admit its endpoint.  A SHA3-n in
-    # _Success_ admits no kl.exec (SGR5); a CL in _Success_ or _Failure_ is never
+    # Check 1: the State of each locker must admit its endpoint.  A SHA3-n in
+    # _Success_ admits no kl.exec (SGR5); a locker in _Success_ or _Failure_ is never
     # a destination.
     src_ok = src.st == KL_STATE_HASH_OUTPUT
     dst_ok = dst.st == KL_STATE_HASH_ABSORB
@@ -776,7 +776,7 @@ def spec_note(*lines):
 
 # ------------------------------------------------------------------ test drive
 def new_cl(name, hart=None):
-    cl = KleeSha3CL(hart if hart is not None else Hart())
+    cl = KleeSha3Locker(hart if hart is not None else Hart())
     cl.provision(make_pi(name))
     return cl
 
@@ -909,7 +909,7 @@ def main():
     check('SHA3-256 a3_200 digest after interrupt/resume', bytes(out),
           bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')]))
     # Context switch between halt and resumption: export, clear, import into
-    # another CL, restore klstart, re-execute.  input_base is not serialized.
+    # another locker, restore klstart, re-execute.  input_base is not serialized.
     hart = Hart()
     cl = absorbing_cl('SHA3-384', hart=hart)
     cl.exec_('B', inp=MSG_A3[:12])
@@ -917,7 +917,7 @@ def main():
     saved = (cl.mdh(), cl.export_content(), hart.klstart)
     cl.setst(KL_STATE_UNCONFIGURED)
     hart.klstart = 0                                 # other software runs
-    cl2 = KleeSha3CL(hart)
+    cl2 = KleeSha3Locker(hart)
     cl2.import_scc(saved[0], saved[1])
     hart.klstart = saved[2]
     st2 = cl2.exec_('B', inp=MSG_A3[12:])
@@ -954,17 +954,17 @@ def main():
                'point) -> _Invalid_, klstart = 0',
                st == 'invalid' and cl.st == KL_STATE_INVALID and hart.klstart == 0,
                (st, cl.st, hart.klstart))
-    check_true('the invalidated CL retains only its MDH (SGR10)',
+    check_true('the invalidated locker retains only its MDH (SGR10)',
                cl.state == 0 and cl.block_base == 0)
     hart.klstart = 0
-    check_true('a later kl.setst on the Error State CL is a no-op (SGR16)',
+    check_true('a later kl.setst on the Error State locker is a no-op (SGR16)',
                cl.setst(KL_STATE_HASH_OUTPUT) == 'noop' and cl.st == KL_STATE_INVALID)
     out = bytearray(b'\xee' * 32)
     st = cl.exec_('C', out=out)
     check_true('a later Form C kl.exec is a no-op that zeroes its output window '
                '(SGR16)', st == 'noop' and out == bytearray(32)
                and cl.st == KL_STATE_INVALID, (st, cl.st))
-    info('interruption points: a CL can only test what its own state implies -- 0, '
+    info('interruption points: a locker can only test what its own state implies -- 0, '
          'the end of the window, or,',
          'with block_base = 0, an interior value.  The harness exercises only '
          'values that fail that test.')
@@ -1110,7 +1110,7 @@ def main():
     out = bytearray(b'\xee' * 64)
     st = cl.exec_('C', out=out)
     check_true('output only, klstart = 5 with block_base = 80 (no interruption '
-               'point): no operation, CL unchanged',
+               'point): no operation, locker unchanged',
                st == 'noop' and (cl.st, cl.state, cl.block_base) == snap
                and hart.klstart == 0, st)
     check_true('... and the output window [5, 64) is zeroed '
@@ -1128,7 +1128,7 @@ def main():
               '"no operation: no state changes",',
               'and that "bytes of the window it does not write are unchanged".  The '
               'harness models a vector output',
-              '(zeroed) and checks the CL itself, which both readings agree on.')
+              '(zeroed) and checks the locker itself, which both readings agree on.')
 
     print()
     print('-- 8. SHA3-n _Success_ transition after t bits --')
@@ -1272,7 +1272,7 @@ def main():
     info('`block_base` is serialized in bits, the unit that [[KLEE-process-VLI]] '
          'defines for it; the table',
          'of [[KLEE-SHA-3]] gives no unit.')
-    # round trips at various points, each resumed on a fresh CL
+    # round trips at various points, each resumed on a fresh locker
     trips = [
         ('SHA3-256 in _Hash_Absorb_ at block_base 800', 'SHA3-256', 100, None,
          bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')])),
@@ -1294,7 +1294,7 @@ def main():
             cl.exec_('C', out=o)
             head = bytes(o)
         mdh, content = cl.mdh(), cl.export_content()
-        cl2 = KleeSha3CL(Hart())
+        cl2 = KleeSha3Locker(Hart())
         cl2.import_scc(mdh, content)
         if n_out is None:
             cl2.exec_('B', inp=MSG_A3[n_abs:])
@@ -1302,7 +1302,7 @@ def main():
         o = bytearray(len(want) - len(head))
         cl2.exec_('C', out=o)
         check('export/import round trip, %s' % label, head + bytes(o), want)
-    cl = KleeSha3CL(Hart())
+    cl = KleeSha3Locker(Hart())
     cl.import_scc(new_cl('SHAKE256').mdh(), new_cl('SHAKE256').export_content())
     cl.setst(KL_STATE_HASH_ABSORB)
     cl.exec_('B', inp=MSG_ABC)
@@ -1390,11 +1390,11 @@ def main():
                and (snap == (src.st, src.state, src.block_base)
                     or src.st == KL_STATE_INVALID), (st, dst.st, src.st))
     spec_note('[[KLEE-instruction-derive]] says that "if the transfer is not allowed, '
-              'then both CLs transition to Error',
-              'State _Invalid_", while its Checks invalidate "the offending CL, or '
+              'then both lockers transition to Error',
+              'State _Invalid_", while its Checks invalidate "the offending locker, or '
               'both"; the two differ exactly when',
               'one endpoint alone is at fault.  The harness invalidates the offending '
-              'CL and checks only what both',
+              'locker and checks only what both',
               'readings share.')
 
     print()
@@ -1417,7 +1417,7 @@ def main():
     negative_control('M4 literal units (klstart bit count consumed as bytes)',
                      got != bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')]))
     cl = absorbing_cl('SHA3-256', MSG_A3[:100])
-    cl2 = KleeSha3CL(Hart())
+    cl2 = KleeSha3Locker(Hart())
     cl2.import_scc(cl.mdh(), cl.export_content(order_by_at=True))
     cl2.exec_('B', inp=MSG_A3[100:])
     cl2.setst(KL_STATE_HASH_OUTPUT)
