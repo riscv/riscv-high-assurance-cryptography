@@ -412,7 +412,7 @@ Also:
 
 ---
 
-### *DEFERRED* M9 — The reference pseudocode fails on every Zklmem path and several Zklmv paths
+### *DEFERRED (corrected code in §9.6)* M9 — The reference pseudocode fails on every Zklmem path and several Zklmv paths
 
 **Severity rationale.** The pseudocode is informative and marked "being rewritten" (pseudo 17–20), but unpriv 2497 cites it as describing behavior. It is the only usage reference. The Zklmem provisioning, export and import paths *never issue the completing `kl.mgmt`*, which leaves CLs open indefinitely. Under the "do not downgrade" instruction this is Major.
 
@@ -439,7 +439,7 @@ Also:
 V1 ← V1 and mask(len_in_bytes(PT) − 16*i)
 ```
 
-This goes before `V3 ← V3 xor V1` on the last iteration. Add a normative disclaimer to pseudo 11: "This chapter is informative; where it disagrees with Chapters … the latter prevail."
+This goes before `V3 ← V3 xor V1` on the last iteration. Complete replacement code, and three further defects (9–11), are given in §9.6. Add a normative disclaimer to pseudo 11: "This chapter is informative; where it disagrees with Chapters … the latter prevail."
 
 ---
 
@@ -859,3 +859,282 @@ The Group A item `kl_exc_emulate` (introduction 154) becomes unnecessary under (
 * **New defects from this commit:** n1–n6. n1 and n2 are small normative gaps in the new DER rules; the rest are editorial.
 
 **Verdict:** no Critical findings remain. With M3 and M5 closed and M9 either fixed or the chapter marked informative, the draft meets the "conditionally ready" conditions of §1.
+
+### 9.6 M9 — explicit corrected pseudocode
+
+This section gives drop-in replacements for the management snippets (pseudo 28–237) and the GCM-via-ECB loop (pseudo 459–471). They fix defects 1–8 of M9, plus three more found while writing them (9–11 below). They follow the spec text as of 2ae2b44: unpriv 3210–3320 (`kl.mgmt`), 3470–3490 (Error-State transfer), the `kl.size`, `kl.mv`, `kl.load` and `kl.store` descriptions, and GR1 (register pairs).
+
+#### 9.6.1 Additional defects
+
+9. **`vsetvli s2, s1, e8, m1` can produce an illegal `kl.mv`.** RVV 1.0 §6.3 lets `vl` be any value in [⌈AVL/2⌉, VLMAX] when VLMAX < AVL < 2·VLMAX. With VLEN = 256 (VLMAX = 32 bytes) and 48 bytes left, an implementation may set `vl` = 24. `vl`·SEW/8 is then not a multiple of 16, and `kl.mv` raises an illegal-instruction exception (unpriv, `kl.mv` variants table). Every image size is a multiple of 16, so clamping the AVL to VLMAX before `vsetvli` makes `vl` = AVL, which is always a multiple of 16. The code below does this with `bleu`, or with Zbb `minu`.
+10. **Export: "CL cleared ⇒ restart" is a dead end.** A cleared CL has no content left to export. The original code jumps to `restart`, where `kl.size` returns 0 and control falls into `handle_errors` by accident. The replacement treats it as an error directly. Provisioning and import can legitimately restart, because their source is still in memory.
+11. **Import accepts a PI.** An image whose MDH has State 0 passes the `kl.size` gate (16 + `pi_content_size`), but the opening `kl.mgmt` then transitions the CL to *Invalid* (unpriv 3258). The replacement rejects it before opening.
+
+#### 9.6.2 Conventions used by all snippets
+
+* RV64. `t0` = CL number, `t6` = image base. **Neither is modified.** `s4`/`s5` hold MDH[63:0]/MDH[127:64] and are not modified after the prologue either. `s5:s4` is the GR1 pair (`s4` = x20 is even), used by `kl.getmd` and by Form D `kl.mgmt`. Form B `kl.size` takes `s4` alone.
+* `s1` = `kl.size` result (the image size including the MDH); `s7` = bytes of `S` still to transfer; `t4` = walking pointer; `s3` = VLMAX in bytes; `t3` = `0x30`.
+* `s6` = the State expected while the operation is open, read once after the opening `kl.mgmt`. Inside a loop, any State other than `s6` is an exit, so the test catches State 48, which the unmasked `bltu` misses. It also catches Unconfigured and every Complete State without further masking.
+* `s8` = the State the image or CL had before the operation. Import and export completion restore exactly this State (unpriv 3303–3305), so the final test is `bne t2, s8`. That test catches `kl_state_mgmt_auth` and every other failure.
+* Error test, where needed: `andi t1, t2, 0x38 ; beq t1, t3, …`.
+* Precondition: on entry, `klmanagedcl` is 32 or `t0`. Otherwise the opening `kl.mgmt` raises an illegal-instruction exception (unpriv 3212).
+* Preemption inside a loop is transparent: the OS saves and restores the CL by nested export and import, together with `klstart`, `vstart` and `klmanagedcl` (unpriv 835–837). State 0 inside a loop therefore means that the OS discarded the CL. A bounded retry counter on `restart` is advisable, but is omitted here.
+
+VLMAX clamp, shared by every Zklmv loop (Zbb: `minu s2, s7, s3`):
+
+```
+  mv        s2, s7
+  bleu      s2, s3, 1f
+  mv        s2, s3                # s2 = min(s7, VLMAX): vl = AVL, a multiple of 16
+1:
+  vsetvli   zero, s2, e8, m1, ta, ma
+```
+
+#### 9.6.3 Provisioning (Zklmv)
+
+The caller no longer needs to supply the Content length in `t5`: Form B `kl.size` returns 16 + `pi_content_size` for an Unconfigured (PI) MDH. A caller that keeps `t5` must ensure that `t5` = `s1` − 16.
+
+```
+# In:  t0 = CL number, t6 = PI (MDH followed by Content)
+# Out: done          - K(t0) is Ready
+#      handle_errors - t2 holds the offending State (or 0)
+
+  ld        s4, 0(t6)             # MDH[63:0]
+  ld        s5, 8(t6)             # MDH[127:64]
+  srli      t2, s4, 19
+  andi      t2, t2, 0x3F          # State field of the PI's MDH
+  bnez      t2, handle_errors     # a PI carries State = Unconfigured (0)
+  kl.size   s1, s4                # Form B: 16 + pi_content_size, or 0
+  beqz      s1, handle_errors     # unsupported or invalid MDH
+  vsetvli   s3, zero, e8, m1, ta, ma   # s3 = VLMAX in bytes (>= 16, power of 2)
+  li        t3, 0x30              # Error-State group
+  li        s6, 56                # kl_cfg_provisioning
+
+restart:
+  kl.mgmt   K(t0), #kl_cfg_provisioning, s5:s4   # Form D; zeroizes, clears klstart
+  kl.getst  t2, K(t0)
+  bne       t2, s6, handle_errors # Invalid, Unsupported, or left Unconfigured
+  addi      t4, t6, 16            # walking source pointer
+  addi      s7, s1, -16           # bytes of Content to move (may be 0)
+  beqz      s7, complete
+
+vloop:
+  mv        s2, s7                # VLMAX clamp (defect 9)
+  bleu      s2, s3, 1f
+  mv        s2, s3
+1:
+  vsetvli   zero, s2, e8, m1, ta, ma
+  vle8.v    v1, (t4)
+  kl.mv     K(t0), v1             # Variant II; klstart += s2
+  add       t4, t4, s2
+  sub       s7, s7, s2
+  kl.getst  t2, K(t0)
+  beqz      t2, restart           # CL discarded: the PI is still in memory
+  bne       t2, s6, handle_errors
+  bnez      s7, vloop
+
+complete:
+  kl.mgmt   K(t0), #kl_cfg_management_end   # Form A: no MDH needed
+  kl.getst  t2, K(t0)
+  andi      t1, t2, 0x38
+  beq       t1, t3, handle_errors # e.g. SKS resolution failed at completion
+  j         done                  # t2 = Ready (1)
+```
+
+#### 9.6.4 Provisioning (Zklmem)
+
+The prologue is the same as in 9.6.3, without the `vsetvli`.
+
+```
+restart:
+  kl.mgmt   K(t0), #kl_cfg_provisioning, s5:s4
+  kl.getst  t2, K(t0)
+  bne       t2, s6, handle_errors
+  kl.load   K(t0), 16(t6)         # S[j] <- mem[t6 + 16 + j], j in [klstart, image_end);
+                                  # resumes from klstart after a precise halt
+  kl.getst  t2, K(t0)
+  beqz      t2, restart
+  bne       t2, s6, handle_errors # replaces the unmasked bltu (defect 1)
+  kl.mgmt   K(t0), #kl_cfg_management_end   # now reached (was skipped)
+  kl.getst  t2, K(t0)
+  andi      t1, t2, 0x38
+  beq       t1, t3, handle_errors
+  j         done
+```
+
+#### 9.6.5 Export (Zklmv)
+
+This version covers the Error-State export (defect 4) and the export of a partially provisioned or partially imported CL (the "PP" of the WARNING at pseudo 142). In both of the latter cases the flow is the same: the opening sets 59 or 57, the image is written verbatim, and completion restores the Partial State `s8` without authentication (unpriv 3283–3286, 3303–3311).
+
+```
+# In:  t0 = CL number, t6 = buffer of at least kl.size(K(t0)) bytes; the caller
+#      sizes it beforehand with  kl.size s1, K(t0)
+# Out: done - image (MDH || S) at t6; K(t0) back in its original State s8
+
+  li        t3, 0x30
+  kl.getmd  s5:s4, K(t0)          # MDH before opening; its State is what completion restores
+  srli      s8, s4, 19
+  andi      s8, s8, 0x3F          # s8 = original State
+  beqz      s8, handle_errors     # Unconfigured: kl.mgmt would raise illegal instruction
+  sd        s4, 0(t6)             # every image starts with the MDH
+  sd        s5, 8(t6)
+  andi      t1, s8, 0x38
+  beq       t1, t3, done          # Error State: image = MDH alone (kl.size = 16);
+                                  # NO kl.mgmt at all (unpriv 3470-3480)
+  kl.size   s1, K(t0)             # 32+c1, 64+c1+c2, or 16+pi_content_size
+  vsetvli   s3, zero, e8, m1, ta, ma
+  kl.mgmt   K(t0), #kl_cfg_exporting    # Form A: aux ignored; clears klstart
+  kl.getst  s6, K(t0)
+  li        t1, 57                # kl_cfg_exporting (Valid or scc-based Partial)
+  beq       s6, t1, 2f
+  li        t1, 59                # kl_cfg_ppi_exporting (pi-based Partial)
+  bne       s6, t1, handle_errors
+2:
+  addi      t4, t6, 16            # walking destination pointer (t6 not advanced)
+  addi      s7, s1, -16           # image_size = kl.size - 16
+
+store_loop:
+  mv        s2, s7                # VLMAX clamp
+  bleu      s2, s3, 1f
+  mv        s2, s3
+1:
+  vsetvli   zero, s2, e8, m1, ta, ma
+  kl.mv     v2, K(t0)             # Variant IV; klstart += s2
+  vse8.v    v2, (t4)
+  add       t4, t4, s2
+  sub       s7, s7, s2
+  kl.getst  t2, K(t0)
+  bne       t2, s6, handle_errors # includes 0: a discarded CL cannot be re-exported (defect 10)
+  bnez      s7, store_loop
+
+  kl.mgmt   K(t0), #kl_cfg_management_end, s5:s4   # Form D: restores s8;
+                                  # a Complete s8 is decrypted and re-authenticated
+  kl.getst  t2, K(t0)
+  bne       t2, s8, handle_errors # e.g. kl_state_mgmt_auth (51)
+  j         done
+```
+
+#### 9.6.6 Export (Zklmem)
+
+Identical to 9.6.5 up to label `2:`. `vsetvli s3` is not needed.
+
+```
+2:
+  kl.store  16(t6), K(t0)         # mem[t6 + 16 + j] <- S[j], j in [klstart, image_size)
+  kl.getst  t2, K(t0)
+  bne       t2, s6, handle_errors # t3 was uninitialized here before (defect 1)
+  kl.mgmt   K(t0), #kl_cfg_management_end, s5:s4
+  kl.getst  t2, K(t0)
+  bne       t2, s8, handle_errors
+  j         done
+```
+
+#### 9.6.7 Import (Zklmv)
+
+```
+# In:  t0 = CL number, t6 = image (MDH || S) produced by an export
+# Out: done             - K(t0) in the State s8 recorded in the image
+#      done_error_state - K(t0) configured in the image's Error State (short import)
+
+  ld        s4, 0(t6)
+  ld        s5, 8(t6)
+  li        t3, 0x30
+  srli      s8, s4, 19
+  andi      s8, s8, 0x3F          # s8 = State recorded in the image
+  beqz      s8, handle_errors     # a PI is provisioned, not imported (defect 11)
+  kl.size   s1, s4                # Form B, ONE GPR on RV64 (defect 5)
+  beqz      s1, handle_errors     # unsupported/invalid MDH, or State 61-63
+  andi      t1, s8, 0x38
+  bne       t1, t3, 3f
+  kl.mgmt   K(t0), #kl_cfg_importing, s5:s4   # short import: one instruction, no
+  j         done_error_state      # management_end; 54/55 become Invalid (unpriv 3232-3240)
+3:
+  vsetvli   s3, zero, e8, m1, ta, ma
+
+restart:                          # before every derived value (defect 7)
+  kl.mgmt   K(t0), #kl_cfg_importing, s5:s4   # Form D; zeroizes, clears klstart
+  kl.getst  s6, K(t0)
+  li        t1, 58                # kl_cfg_importing (Valid or scc-based image)
+  beq       s6, t1, 2f
+  li        t1, 60                # kl_cfg_ppi_importing (pi-based Partial image)
+  bne       s6, t1, handle_errors # Invalid, Unsupported, or left Unconfigured
+2:
+  addi      t4, t6, 16
+  addi      s7, s1, -16           # addi, not subi (defect 6)
+
+vloop:
+  mv        s2, s7                # VLMAX clamp
+  bleu      s2, s3, 1f
+  mv        s2, s3
+1:
+  vsetvli   zero, s2, e8, m1, ta, ma
+  vle8.v    v2, (t4)
+  kl.mv     K(t0), v2             # Variant II; bytes past image_end are ignored
+  add       t4, t4, s2
+  sub       s7, s7, s2
+  kl.getst  t2, K(t0)
+  beqz      t2, restart           # CL discarded: the image is still in memory
+  bne       t2, s6, handle_errors
+  bnez      s7, vloop
+
+  kl.mgmt   K(t0), #kl_cfg_management_end, s5:s4   # decrypt, authenticate, restore s8
+  kl.getst  t2, K(t0)
+  bne       t2, s8, handle_errors # kl_state_mgmt_auth, or any other outcome
+  j         done
+```
+
+#### 9.6.8 Import (Zklmem)
+
+The prologue is identical to 9.6.7 through `j done_error_state`. Label `3:` is not needed, and neither is `vsetvli s3`.
+
+```
+restart:
+  kl.mgmt   K(t0), #kl_cfg_importing, s5:s4
+  kl.getst  s6, K(t0)
+  li        t1, 58
+  beq       s6, t1, 2f
+  li        t1, 60
+  bne       s6, t1, handle_errors
+2:
+  kl.load   K(t0), 16(t6)         # S[j] <- mem[t6 + 16 + j]
+  kl.getst  t2, K(t0)
+  beqz      t2, restart
+  bne       t2, s6, handle_errors # replaces the unmasked bltu (defect 1)
+  kl.mgmt   K(t0), #kl_cfg_management_end, s5:s4
+  kl.getst  t2, K(t0)
+  bne       t2, s8, handle_errors
+  j         done
+```
+
+Replace the paragraph after the snippets (pseudo 236–237) with:
+
+> The opening `kl.mgmt` validates the whole MDH, which it receives in Form D (<<Zkl-ISA-unpriv.adoc#KLEE-MVR-open>>). Each snippet reads the State once after opening, and treats any other State observed while the operation is open as an exit. Completion can still move the CL to an Error State (SKS resolution at provisioning, authentication at import and export). An import or export completion restores exactly the State saved before the operation, so the final test compares against that State. A CL in an Error State is exported as its MDH alone, and imported with a single `kl.mgmt` (<<Zkl-ISA-unpriv.adoc#KLEE-error-state-transfer>>). Neither path issues `kl.mgmt` with `kl_cfg_management_end`.
+
+Remove the WARNING at pseudo 142–146 ("Need to add support for PP and ES export"): 9.6.5 covers both.
+
+#### 9.6.9 GCM via an ECB CC (defect 8)
+
+Here `mask(ℓ)` is the 128-bit value whose bytes 0 … ℓ−1 are `0xFF` and whose other bytes are zero. With the byte order of pseudo 8–10 this is 2^8ℓ^ − 1. The last block is also *loaded* with only ℓ bytes, so that the code does not read past the end of `PT`.
+
+```
+  counter ← 2
+  n ← ceil(len_in_bytes(PT)/16)
+  foreach(i from 0 to n-1) do:
+    ℓ ← min(16, len_in_bytes(PT) − 16*i)    // 16, except possibly for the last block
+    V5 ← bswap(bin(counter,32)) @ V0[95:0]
+    kl.exec V2, K0, V5                // keystream block E(K, CB_i)
+    V1 ← zext(PT[16*i .. 16*i+ℓ-1])   // bytes ℓ..15 of V1 are zero
+    V1 ← V1 xor V2                    // CTR encrypt
+    V1 ← V1 and mask(ℓ)               // clear the keystream beyond the message:
+                                      // GHASH absorbs the zero-padded C_n* (SP 800-38D §7.1 step 5)
+    V3 ← V3 xor V1
+    V3 ← Galoismul(V4, V3)
+    CT[16*i .. 16*i+ℓ-1] ← V1[8ℓ-1:0] // store only the ℓ message bytes
+    counter ← counter + 1
+```
+
+In vector code the partial load and store are `vsetvli zero, ℓ, e8, m1, tu, ma` around `vle8.v`/`vse8.v`. Zero `V1` beforehand with `vmv.v.i` at `vl` = 16. The masking step then becomes a `vand.vv` with a precomputed mask, or, equivalently, the XOR can run at `vl` = ℓ with `tu`. The AD loop above it (pseudo 452–454) should likewise state that the caller zero-fills the last AD block, as the dedicated GCM example at pseudo 360 does.
+
+#### 9.6.10 Disclaimer
+
+Pseudo 8 already reads "_This chapter is informative._" Extend it with "Where it disagrees with <<Zkl-ISA-unpriv.adoc#…>> or <<Zkl-ISA-priv.adoc#…>>, those chapters prevail." Unpriv 2577 cites this chapter as describing behavior. Once 9.6.3–9.6.9 are applied, the WARNING at pseudo 17–20 ("being rewritten") can be dropped.
