@@ -555,6 +555,7 @@ Start and initialize a hash function of the tag/MAC part of a Machine and start 
 |  12   |  `kl_state_dec_tag_finalize`     | _Dec_Tag_Finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
 |  13   |  `kl_state_set_aux_value`        | _Set_Aux_Value_     | Set a public/auxiliary value in a cryptographic scheme implemented by the Machine.
 |  14   |  `kl_state_set_aux_value_2`      | _Set_Aux_Value_2_   | Set a second public/auxiliary value in an a cryptographic scheme implemented by the Machine.
+|  15   |  `kl_state_set_key`              | _Set_Key_           | Reconfigure a ke field.
 |===
 
 We deliberately choose to not limit the number of blocks the CC can process in the various modes supported by KLEE.
@@ -2483,7 +2484,7 @@ function are those of the SM3 standard.
 While hash function acceleration is sufficient to compute HMACs, an environment may want to provide a secret or hidden key for HMAC computation.
 This section extends <<KLEE-hash-functions-MACs-XOFs>> to support HMAC computation with secret or hidden keys.
 
-When a hash function is operating under HMAC, padding and length encoding are performed internally by the HMAC algorithm during finalization, and not by the caller. For SHA-2 (<<KLEE-SHA-2>>) and SM3 (<<KLEE-SM3>>), standard padding is applied over the total absorbed length (`b` + `cumul_len` bits for the inner hash, `b` + `d` bits for the outer) using `cumul_len`, which is maintained under HMAC. For SHA-3, the suffix-and-padding of <<KLEE-SHA-3>> applies.
+When a hash function is operating under HMAC, padding and length encoding are performed internally by the HMAC algorithm during finalization, and not by the caller.  For SHA-2 (<<KLEE-SHA-2>>) and SM3 (<<KLEE-SM3>>), standard padding is applied over the total absorbed length (`b` + `cumul_len` bits for the inner hash, `b` + `d` bits for the outer) using `cumul_len`, which is maintained under HMAC.  For SHA-3, the suffix-and-padding of <<KLEE-SHA-3>> applies.
 
 Parameters:::
 +
@@ -2549,7 +2550,7 @@ Deriving `K0` from the original key is the responsibility of whoever provisions 
 State Machine::: {empty}
 +
 --
-This family of Machines inserts one state between _Ready_ and _Hash_Absorb_, called _Set_Key_.
+This family of Machines inserts state _Set_Key_ between _Ready_ and _Hash_Absorb_.
 
 The two variants differ only in how the key first reaches the CC.
 
@@ -2570,7 +2571,7 @@ In the NIK variant, the Provisioning Input carries no key. `K0` must be explicit
     `cumul_len` are set to zero. Re-entering _Set_Key_ therefore replaces the key rather than
     combining the new value with the old one.
 
- ** In State _Set_Key_ the `b`-bit value `K0` is loaded by one or more Form B
+ ** Once in State _Set_Key_ the `b`-bit value `K0` is loaded by one or more Form B
     ``kl.exec`` instructions, through Procedure `process_VLI`
     (cf. <<KLEE-process-VLI>>) entered as
 +
@@ -3666,27 +3667,6 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
   *** Every field whose bit is clear is retained. A Form A `kl.setst` sets no bit and
       therefore leaves `Generator`, `Scalar`, `SecondPt`, `Hash`, and `Signature`
       unmodified.
-//
-// [NOTE]
-// ====
-// Retaining `Signature` by default is what allows one CC whose _MachinePolicy_ permits both
-// operations to generate a signature and then verify it, since a locker in State _Success_ may only
-// transition to _Ready_ or _Unconfigured_ (<<KLEE-State-field>>) and must therefore pass through
-// _Ready_ between the two operations. The sequence is:
-//
-// . _Ready_ {rightarrow} _Set_Scalar_ (load the private key) {rightarrow} _Point_Mul_ {rightarrow}
-//   _Output_ {rightarrow} _Success_, leaving the public key in `SecondPt`;
-// . _Success_ {rightarrow} _Ready_, retaining `Generator`, `SecondPt`, and `Scalar`;
-// . _Ready_ {rightarrow} _Set_Hash_ (load the message value) {rightarrow} _Sign_Generate_
-//   {rightarrow} _Output_ {rightarrow} _Success_;
-// . _Success_ {rightarrow} _Ready_, retaining `SecondPt`, `Hash`, and `Signature`;
-// . _Ready_ {rightarrow} _Sign_Verify_, whose preconditions `HasSecondPt`, `HasHash`, and
-//   `HasSignature` are all met.
-//
-// Steps 2 and 4 may use a Form A `kl.setst`, or a Form B one with the bits of the fields to be
-// discarded set. The ordinary verification flow, in which `SecondPt`, `Hash`, and `Signature` are
-// loaded through their respective _Set_ states, is unaffected.
-// ====
 
 ** {empty}
 +
@@ -3722,7 +3702,7 @@ consequences; everything not restated here follows <<KLEE-ECC>>.
 Parameters:::
 
 * `H` is `SHA-512` for ed25519 and `SHAKE256`, with a 114-byte output, for ed448.
-* The size of the private key, or *seed*, in bits is given by `b`, which is 256 bits (32 bytes) for ed25519 and 456 bits (57 bytes) for ed448.
+* The size of the private key, or *seed*, in bits is given by `b`.
 * `dom` is `dom2(x, ctx)` for ed25519 and `dom4(x, ctx)` for ed448, as defined in
   cite:[RFC8032] {sect}2 and {sect}5.2, with `x` = 0 in pure mode and 1 in pre-hash mode.
   For ed25519 in pure mode with an empty context, `dom` is the empty string.
@@ -3795,7 +3775,7 @@ of this size, and it remains confidential in either case, being carried in the e
 
 State Machine:::
 
-* *States:* those of <<KLEE-ECC>>, except _Point_Mul_, which is removed, and in addition
+* *States:* those of <<KLEE-ECC>>, and in addition
  ** _Msg_Absorb_ (11), in which message data is absorbed.
  ** _Set_Ctx_ (12), in which the context string is set.
 
@@ -3895,8 +3875,6 @@ never computed.
 NOTE: Pass 2 recomputes `r` from its own message and requires it to equal the value stored in
 pass 1; a mismatch invalidates the locker. This binding prevents manipulation from the caller,
 whereby two signatures that share `R` but commit to different messages reveal the private scalar `s`.
-// `r` is a
-// keyed function of the message (`prefix` is secret), so the check cannot be forced off-line.
 Pre-hash mode is unaffected: `PH(M)` in the `Hash` field feeds both hashes.
 
 // ////////////////////////////////////////////////////////////////////
@@ -4318,7 +4296,7 @@ For the Machines defined in this Chapter, the architected `kl.derive` endpoints 
 
 | ECB mode (<<KLEE-ECB-mode>>), Keystream generation (<<KLEE-keystream-modes>>), GCM mode (<<KLEE-GCM-mode>>), GCM-SIV mode (<<KLEE-GCM-SIV-mode>>), CMAC mode (<<KLEE-CMAC-mode>>), OCB mode (<<KLEE-OCB-mode>>), Ascon AEAD128 mode (<<KLEE-Ascon-AEAD128>>) | `key` | destination | _Ready_
 
-| XEX/XTS modes (<<KLEE-tweakable>>) | `key1 {vvert} key2`    | destination | _Ready_
+| XEX/XTS modes (<<KLEE-XEX-XTS-modes>>) | `key1 {vvert} key2`    | destination | _Ready_
 
 | GCM mode (<<KLEE-GCM-mode>>)       | IV                     | destination | _Set_Aux_Value_
 
@@ -4331,7 +4309,9 @@ as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XO
 | `kl.exec` output                                            | source      | _Hash_Output_
 | `kl.exec` input                                             | destination | _Hash_Absorb_
 
-| Elliptic Curve (<<KLEE-ECC>>)      | `SecondPt`             | source      | if `HasSecondPt` is true
+.2+| Elliptic Curve (<<KLEE-ECC>>)
+| `SecondPt` | source      | if `HasSecondPt` is true
+| `Scalar`   | destination | _Set_Scalar_
 
 | ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | any
 |===
@@ -4339,6 +4319,7 @@ as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XO
 Any combination of source and destination is admissible as long as the Rules in <<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>> are satisfied.
 This is particularly useful for instance, to implement integrated encryption schemes by extracting fields from an ECC or ML-KEM Machine directly
 into an encryption/decryption Machine, or piping them together with auxiliary information through Hash or XOF functions.
+Some non-meaningful transfers, such as `kl.exec`-output ML-KEM, ML-DSA and ECC sources into the ECC scalar as a destination, are allowed as they do not represent a security risk.
 
 Using `kl.derive` to set initialization vectors or nonces is supported for GCM and OCB modes in case these values are transferred, for instance, in an encrypted format.
 

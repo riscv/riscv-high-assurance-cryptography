@@ -548,7 +548,7 @@ Error States 54 and 55, if defined, will not necessarily have a lower priority t
 | 54, 55 | (Reserved)                     | {empty}                 | Reserved for future use.
 |===
 
-If `Zklexpire` is not implemented, State _Expired_ is not used, a locker cannot be in that State, and if any metadata header of a PI, SCC, or PSCC with State _Expired_ is considered invalid.
+If `Zklexpire` is not implemented, State _Expired_ is not used, a locker cannot be in that State, and any metadata header of a PI, SCC, or PCCC with State _Expired_ is considered invalid.
 
 The rules governing the behavior of the KLEE architecture when interacting with lockers or SCCs in these states are defined in <<KLEE-State-management>>.
 
@@ -768,6 +768,7 @@ A supplied MDH header is _invalid_ when at least one of the following conditions
 * _State_ is 54, 55, or any value not supported by the Machine encoded in the MDH;
 * _State_ is _Expired_ in a PI, SCC, or PCCC when `Zklexpire` is not implemented;
 * _ExpirationDate_ is non-zero and `Zklexpire` is not implemented;
+* _AuxDataLen_ = 1;
 * _AuxDataLen_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`;
 * _ADSDropped_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`;
 * _AuxInfo_ is non-zero for a Machine that does not use it;
@@ -1011,8 +1012,14 @@ once per-block state effects have been committed (Rule
 `klmanagedlocker` is an XLEN-bit RW CSR, but currently only 6 bits are used.
 
 It contains the number of the currently managed locker, or 32 if no locker is currently being managed.
-If the locker it names ceases to be in a Configuration State otherwise than through a completing `kl.mgmt` — because it is
-cleared, also by the zeroizing step of a `kl.mgmt` whose opening then fails, because it is the destination of a `kl.clone`, or because it transitions to an Error State — `klmanagedlocker` is set to 32.
+
+If the locker it names is cleared, `klmanagedlocker` is set to 32.
+This may occur by explicit clearing,
+by the zeroizing step of a `kl.mgmt` whose opening then fails,
+because it is the destination of a `kl.clone` instruction,
+or because it transitions to an Error State.
+`kl.swap` and `kl.rename` instructions instead may change the value of `klmanagedlocker` to the number of a different locker.
+
 Otherwise, a KLEE exception raised during a management operation that does not transition the locker to an Error State leaves `klmanagedlocker` unchanged: the handler either resolves the condition or sets `klmanagedlocker` to 32 itself.
 
 Internal values of `SIV`, `SIV2` and `IMPQUAL` are associated with this locker.
@@ -1248,6 +1255,7 @@ alone (<<KLEE-data-formats>>, <<KLEE-length-rule>>). For an SCC the size include
 authentication tag(s) and the ADS; for a PI it is the size of the entire
 PI. Knowing this size is necessary for any feature that relies on exporting a locker, including context
 switching.
+For a locker in an Error State, the values of _AuxDataLen_ and _ADSDropped_ are ignored.
 
 The three Forms for the two instructions differ only in where the MDH is taken from,
 as the mnemonics above give:
@@ -1561,6 +1569,7 @@ The following categories of values for `#immed7` apply to all Machines:
    raise one, and later usage of the locker performs no operation (Rule <<KLEE-SGR-usage-locker-error-state>>).
    On a locker in the _Unconfigured_ State the instruction performs no operation: only the short import
    of <<KLEE-error-state-transfer>> configures a locker directly into an Error State.
+   Value 53 is not allowed as `#immed7` if `Zklexpire` is not enabled.
 * 56–63, i.e., when the top four bits of `#immed7` are `0b0111`, encode `kl.mgmt` (<<KLEE-instruction-mgmt>>).
 * 64 encodes `kl_cfg_clear_ads` (<<KLEE-instruction-clearads>>).
 * 65–127 are Machine-defined and may change other state information, such as _StateExtension_.
@@ -1963,7 +1972,7 @@ If `Ks` = `Kd`, no operation is performed, and no field is set to Dirty.
 Otherwise the CC of `Ks`, including any Partial or Configuration State, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, and `Ks` becomes _Unconfigured_. If `klmanagedlocker` = `s`, it becomes `d`. Otherwise, if `klmanagedlocker` = `d`, it becomes 32. The source access is not exempt from `kl_exc_locker_off`; the destination access is exempt as for `kl.clone`. The fields in effect for both lockers are set to Dirty.
 
 `kl.swap`:::
-If `Ks` = `Kd`, no operation is performed.
+If `Ks` = `Kd`, no operation is performed, even if the locker is Off.
 Otherwise the CCs of `Ks` and `Kd` are exchanged. If `klmanagedlocker` {in} {`s`,`d`}, it is replaced by the other index. Neither access is exempt from `kl_exc_locker_off`. The fields in effect for both lockers are set to Dirty.
 
 Neither `kl.rename` nor `kl.swap` raises `kl_exc_out_of_memory`, and neither changes the content of any MDH.
@@ -2040,7 +2049,7 @@ or the type of the data that would be generated or absorbed by `kl.exec` instruc
 No parameter is passed to `kl.derive` to select the source and destination data.
 
 An _endpoint descriptor_, for both the source and the destination locker, consists of the following information: +
-(MDH._Machine_ {vvert} _MachinePolicy_, MDH._State_ {vvert} _StateExtension_, +
+(MDH._Machine_ {vvert} _MachinePolicy_, MDH._State_ {vvert} _StateExtension_, MDH._KeyType_, +
 {nbsp}{nbsp}{nbsp}MDH._SCProtection_,  MDH._UsagePolicy_, MDH._Locality_, MDH._ExpirationDate_).
 
 A transfer may occur only if the architecture allows it for the given pair of endpoint descriptors
@@ -2063,15 +2072,17 @@ In what follows, “DER” means “DErivation Rule”.
 [[KLEE-DER-checks,DER1]]DER1:: The checks of Rule <<KLEE-SGR-gate-order>> apply to both lockers, each check being applied to
 the source before the destination, and with nothing transferred on any failure:
 
-. The _State_ and _StateExtension_ of each locker must admit its endpoint, and a destination whose
-  key is written must be in State _Ready_, and any other destination field must be written in a State that the pair lists for it;
-  otherwise the offending locker, or both, transition to Error State _Invalid_.
+. The _State_ and _StateExtension_ of each locker must define a source and destination endpoint.
+. A destination whose key is written must be in State _Ready_ or in a State explicitly named for the purpose by the description of the Machine,
+  such as _Set_Key_ for HMAC <<Zkl-ISA-machines.adoc#KLEE-HMAC>>
+. If the state of any locker does not satisfy these requirements,
+  the offending lockers transition to Error State _Invalid_.
 . A destination that violates any constraint on the data transfer
   transitions to Error State _Invalid_.
 . A transfer whose effective length (see <<KLEE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination locker to Error State _Invalid_.
 . A destination _key_ field of `dest_length` bytes requires `length` {ge} `dest_length` and a source field or output of at least `dest_length` bytes,   and receives exactly `dest_length` bytes. Otherwise the destination transitions to Error State _Invalid_ and nothing is transferred.
 
-[[KLEE-DER-narrowing,DER2]]DER2:: Before any byte of a _restricted transfer_ is transferred, the MDH of the destination locker is narrowed by the MDH of the source locker exactly as a SKID resolution narrows a locker (<<KLEE-system-keys>>):
+[[KLEE-DER-narrowing,DER2]]DER2:: Before any _restricted transfer_ is performed, the policies in the MDH of the destination locker are narrowed by the policies in the MDH of the source locker exactly as a SKID resolution narrows them (<<KLEE-system-keys>>):
 
 * _UsagePolicy_ bits 0–3 of the destination become the OR of both, and bit 4 the AND of both.
 * The destination _Locality_ becomes the union of both _Localities_, taking the stricter entry in each HW Binding chain and OR-ing bits 6–8. If the two Boot Session entries are non-zero and differ, or the result names an unconfigured entry (<<KLEE-Localities>>), the destination transitions to Error State _Invalid_ and nothing is transferred.
@@ -2089,19 +2100,21 @@ Any additional specific transfer defined by the Machines must respect these rest
 [[KLEE-DER-shared-secret,DER5]]DER5:: Moving a computed shared secret
 from a Machine implementing a public key agreement scheme into a field of a Machine
 implementing a symmetric key encryption scheme, or into a private key field of
-a Machine implementing a public key agreement scheme constitutes a _restricted transfer_.
+a Machine implementing a public key algorithm constitutes a _restricted transfer_.
 It is always allowed if the following conditions are satisfied:
 
 .. The source Machine must contain an explicit shared secret.
 .. The destination Machine must be in a State which allows the configuration of a field.
-.. If the destination field is a symmetric key, the State must be _Ready_.
-.. Both `length` and the source field's length must be at
-least as long as the destination field. If the latter is `b` bytes long, exactly `b`
-bytes are produced by the source Machine and copied into the key field of the
-target Machine.
+   For instance:
+... If the destination field is the key of a symmetric algorithm, the State must be _Ready_.
+... If the destination field is the private key of an ECC algorithm, the State must be _Set_Scalar_.
+.. Both `length` and the source field's length must be at least as long as the destination field.
+If the latter is `b` bytes long, exactly `b` bytes are produced by the source Machine and copied
+into the key field of the target Machine.
 
-[[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: Data that can be exported by the source Machine by repeated `kl.exec` instructions
-can always be transferred as an _unrestricted transfer_ into a hash/MAC function implemented by the destination Machine.
+[[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: Data that can be unconditionally exported
+from the source Machine by repeated `kl.exec` instructions can always be transferred as an
+_unrestricted transfer_ into a hash/MAC function implemented in the destination Machine.
 This case is always allowed because it is a shortcut to pairs of `kl.exec` instructions which
 produce data from the source Machine and feed it to the destination Machine.
 
@@ -2238,7 +2251,9 @@ Transfers follow the same constraints as those of `kl.mv` and `kl.load` (<<KLEE-
 
 The instruction exports raw data from `S`, starting with the first byte, to memory at address `%offset(Xs1)`.
 `klstart` tracks the prefix-complete number of bytes stored.
-Transfers follow the same constraints as those of `kl.load` (<<KLEE-instruction-load>>, <<KLEE-Memory-Alignment>>), with `image_size` and `image_end` as defined there. `kl.store` transfers offsets `[klstart, image_size)` of `S`: offsets below `image_end` are stored from the locker, offsets in `[image_end, image_size)` are stored as zero.
+
+Transfers follow the same constraints as those of `kl.load` (<<KLEE-instruction-load>>, <<KLEE-Memory-Alignment>>), with `image_size` and `image_end` as defined in `kl.mv` and used also in `kl.load`.
+`kl.store` transfers offsets `[klstart, image_size)` of `S`: offsets below `image_end` are stored from the locker, offsets in `[image_end, image_size)` are stored as zero.
 That is, for each _j_ from `klstart` to `image_size` − 1, the _j_-th byte of `S` is stored at memory address ``Xs1 + %offset + ``_j_.
 If `klstart` {ge} `image_size`, nothing is transferred.
 
@@ -2448,12 +2463,12 @@ This ensures that these states can be unambiguously determined from the _State_ 
 [[KLEE-SGR-no-exec-in-ready,SGR2]]SGR2:: No `kl.exec` instruction may be executed in State _Ready_ unless the Machine explicitly allows it.
 Issuing one otherwise transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-not-allowed-instructions>> in <<Zkl-ISA-machines.adoc#KLEE-Machines>>).
 
-SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or a `kl.clone` naming the locker as destination.
+SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or a `kl.clone`, `kl.rename` or `kl.swap` naming the locker as destination.
 
 SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be issued with the immediate of the current State.
 When the Machine needs to prevent this, it transitions to a different State upon completing the instruction.
 
-[[KLEE-SGR-success-failure,SGR5]]SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.restrict*`, and `kl.derive`.
+[[KLEE-SGR-success-failure,SGR5]]SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.rename`, `kl.swap`, `kl.restrict*`, and `kl.derive`.
 A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the locker to Error State _Invalid_ (cf. Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-not-allowed-instructions>> in <<Zkl-ISA-machines.adoc#KLEE-Machines>>).
 +
 In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF.
@@ -2530,9 +2545,10 @@ For a locker in a Configuration State used as the destination of a `kl.clone`, o
 For `kl.derive`, each condition is evaluated for both endpoints, the source first, before the next; an Error State on either endpoint makes the whole instruction a no-op.
 --
 
-[[KLEE-SGR-config-instructions-partial,SGR20]]SGR20:: Instructions `kl.size`, `kl.avail`, `kl.getmd*`, `kl.getst`, `kl.setst` with the 7-bit immediate equal to `kl_state_unconfigured` or an
-Error State, `kl.clear`, and `kl.clearall`, and `kl.rename` and `kl.swap`, which move a CC unchanged (<<KLEE-instruction-clone>>), which are configuration instructions and are not gated by Usage Control policies, are also allowed
-when the locker is in a _Partial_ State.
+[[KLEE-SGR-config-instructions-partial,SGR20]]SGR20:: Following instructions (which are configuration instructions and are not gated by Usage Control policies) are also allowed when the locker is in a _Partial_ State:
+`kl.size`, `kl.avail`, `kl.getmd*`, `kl.getst`,
+`kl.setst` with the 7-bit immediate equal to `kl_state_unconfigured` or an Error State,
+`kl.clear`, and `kl.clearall`, and `kl.rename` and `kl.swap`, which move a CC unchanged (<<KLEE-instruction-clone>>).
 
 [[KLEE-SGR-zkl-load-mv-allowed,SGR21]]SGR21:: `kl.load` and `kl.mv` with a destination locker
 are allowed in States `kl_cfg_provisioning`, `kl_cfg_importing` and `kl_cfg_ppi_importing`.
