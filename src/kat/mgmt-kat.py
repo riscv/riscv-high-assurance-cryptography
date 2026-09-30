@@ -36,9 +36,14 @@ text's own invariants and worked sequences:
   * the State Management rules SGR1-SGR22 (<<KLEE-State-management>>),
     including the gate order of Rule SGR19 and the output zeroing of SGR16;
   * kl.exec resumption and the klstart checks (<<KLEE-CSR-klstart>>);
-  * _ExpirationDate_ evaluation points (<<KLEE-Metadata-expiration-date>>);
-  * kl.clone, kl.clear, kl.clearall, kl.clearads, and the generic gates of
-    kl.derive (<<KLEE-instruction-derive>>);
+  * _ExpirationDate_ evaluation points (<<KLEE-Metadata-expiration-date>>), and
+    _Expired_ without Zklexpire or a readable clock (<<KLEE-states-error>>);
+  * kl.clone, kl.rename, kl.swap (<<KLEE-instruction-clone>>), kl.clear,
+    kl.clearall, kl.clearads, and kl.derive with Rules DER1-DER8
+    (<<KLEE-instruction-derive>>), unrestricted and restricted transfers;
+  * the instruction encodings, indirect locker addressing under Zklind, and
+    the field R of kl.clone, kl.rename, kl.swap and kl.derive
+    (<<KLEE-instructions-detailed>>, <<KLEE-cryptographic-registers>>);
   * the Error Handling Architecture (<<KLEE-error-architecture>>), with and
     without the Privileged Architecture, the CSK and KLS gates, and a compact
     model of the *llockerstatus Off gate (<<KLEE-CSR-llockerstatus>>);
@@ -46,10 +51,10 @@ text's own invariants and worked sequences:
     (<<KLEE-state-save-and-restore-order>>), run end to end with a locker whose
     import was interrupted.
 
-The Machines are three toy Machines whose only purpose is to have the shapes
-the Machine-independent rules talk about (an operation mask, a policy that
-extends _Machine_, a signature mask, a Machine-held counter, ...).  SCC sealing
-transcribes SCC_KeyDeriv, POLYVAL, SCC_Encrypt and SCC_Decrypt of
+The Machines are toy Machines whose only purpose is to have the shapes the
+Machine-independent rules talk about (an operation mask, a policy that extends
+_Machine_, a signature mask, a Machine-held counter, a shared secret, ...).
+SCC sealing transcribes SCC_KeyDeriv, POLYVAL, SCC_Encrypt and SCC_Decrypt of
 <<KLEE-SCC-AEAD>> step by step, with AESE256 replaced by a clearly labelled
 SHA-256 stand-in; the real construction is covered by scc-kat.py.  What is
 tested here is *when* sealing happens, over which associated data, and what it
@@ -146,14 +151,13 @@ MDH_FIELDS = [
     ("Reserved46",        46,  46, True),
     ("ADSDropped",        47,  47, False),
     ("AuxInfo",           61,  48, False),
-    ("Reserved62",        63,  62, True),
+    ("Version",           63,  62, False),
     ("UsagePolicy",       68,  64, False),
     ("Locality",          77,  69, False),
     ("Reserved78",        79,  78, True),
     ("MachineUse",        95,  80, False),
     ("ExpirationDate",   115,  96, False),
-    ("Reserved116",      125, 116, True),
-    ("Version",          127, 126, False),
+    ("Reserved116",      127, 116, True),
 ]
 
 FIELD = {f[0]: f for f in MDH_FIELDS}
@@ -240,7 +244,7 @@ BASE_TYPE = {CFG_PROVISIONING: "pi", CFG_EXPORTING: "scc", CFG_IMPORTING: "scc",
              CFG_PPI_EXPORTING: "pi", CFG_PPI_IMPORTING: "pi"}
 ERROR_STATE_FOR = {"unsupported": ST_UNSUPPORTED, "out_of_memory": ST_OUT_OF_MEMORY,
                    "privilege_violation": ST_PRIV_VIOLATION}
-MANAGEDCL_NONE = 32
+MANAGED_NONE = 32
 
 
 def completion_ml_ok(cl_state, ml_state):
@@ -273,6 +277,15 @@ class Trap(Exception):
         return self.cause if self.group is None else f"{self.cause}/{self.group}"
 
 
+class Ind:
+    """An indirect locker operand K(Xn): GPR number `reg` holding `value` (r = 1, or
+    field R, or funct3 = 7 in the encoding)."""
+
+    def __init__(self, value, reg=5):
+        self.value = value
+        self.reg = reg
+
+
 def trap_of(fn, *a, **kw):
     """The trap an instruction raises, as a tag, or None."""
     try:
@@ -287,6 +300,112 @@ def result_of(fn, *a, **kw):
         return fn(*a, **kw)
     except Trap as t:
         return "trap:" + t.tag
+
+
+# =====================================================================
+# encodings  --  <<KLEE-instructions-detailed>>
+# =====================================================================
+
+def decode(word, zklind=False):
+    """Decode a 32-bit KLEE instruction word: a tuple (mnemonic, ...), None for a word
+    outside the KLEE encodings, or Trap illegal/1 for a reserved one."""
+    def b(hi, lo):
+        return sl(word, hi, lo)
+    op, f3, rd, rs1, rs2 = b(6, 0), b(14, 12), b(11, 7), b(19, 15), b(24, 20)
+
+    def reserved(why):
+        return Trap("illegal", 1, note=why)
+
+    def locker(indirect, reg, always=False):
+        if indirect and not (zklind or always):
+            raise reserved("indirect locker addressing without Zklind")
+        if indirect and reg == 0:
+            raise reserved("GR11: X0 as an indirect locker index")
+        return f"K(X{reg})" if indirect else f"K{reg}"
+
+    if op == 0x0F and f3 == 4:
+        f2 = b(31, 30)
+        if f2 == 0 and b(27, 27) == 0:                  # kl.exec, and kl.mv in Forms B, C
+            if b(25, 25):
+                raise reserved("bit 25 of kl.exec")
+            form, k = b(29, 28), locker(b(26, 26), rs1)
+            if form == 0:
+                return ("kl.exec", "A", k)
+            if form == 1 and rd in (0, 1, 2):
+                return ("kl.exec", "B", k) if rd == 0 else ("kl.mv", ("I", "II")[rd - 1], k)
+            if form == 2 and rs2 in (0, 1, 2):
+                return ("kl.exec", "C", k) if rs2 == 0 else ("kl.mv", ("III", "IV")[rs2 - 1], k)
+            if form == 3 and rd == rs2 == 0:
+                return ("kl.exec", "D", k)
+            raise reserved("unused register field of kl.exec")
+        if f2 == 0:                                     # kl.size, kl.avail
+            F, r = b(29, 28), b(26, 26)
+            if rs2 or (F, r) not in ((0, 0), (0, 1), (1, 0), (2, 0)):
+                raise reserved("kl.size / kl.avail")
+            src = locker(r, rs1) if F == 0 else f"{'XV'[F - 1]}{rs1}"
+            return ("kl.avail" if b(25, 25) else "kl.size", "ABC"[F], src)
+        if f2 in (1, 3):                                # kl.restrict*, kl.getmd*
+            h, v = b(28, 28), b(29, 29)
+            if b(25, 25) or b(27, 27) or rs2 or (h and v):
+                raise reserved("kl.restrict* / kl.getmd*")
+            if f2 == 1:
+                return ("kl.restrict" + "lhv"[h + 2 * v], locker(b(26, 26), rd))
+            return (("kl.getmdl", "kl.getmd", "kl.getmdv")[h + 2 * v], locker(b(26, 26), rs1))
+        if b(29, 29):                                   # funct2 = 2
+            raise reserved("bit 29 of kl.clone / kl.derive")
+        T, R = b(28, 27), b(26, 25)
+        if T == 3:
+            return ("kl.derive", locker(R & 1, rd), locker(R >> 1, rs1), f"X{rs2}")
+        if rs2:
+            raise reserved("rs2 of kl.clone / kl.rename / kl.swap")
+        return (("kl.clone", "kl.rename", "kl.swap")[T], locker(R & 1, rd, always=True),
+                locker(R >> 1, rs1, always=True))
+    if op == 0x0F and f3 == 3:                          # kl.setst, kl.mgmt
+        r, F, imm = b(20, 20), b(22, 21), b(31, 25)
+        if b(24, 23) or (F == 0 and rs1):
+            raise reserved("kl.setst fixed fields")
+        if r and rd == 0:
+            if F == 0 and imm == 0:
+                return ("kl.clearall",)
+            raise reserved("kl.setst with r = 1 and X0")
+        k = locker(r, rd)
+        if imm >> 3 == 0b0111:
+            if 59 <= imm <= 62 or F == 1:
+                raise reserved("kl.mgmt immediate 59-62, or Form B")
+            return ("kl.mgmt", "ABCD"[F], k, imm)
+        if imm in (ST_SUCCESS, ST_FAILURE):
+            raise reserved("SGR7")
+        return ({0: "kl.clear", CFG_CLEAR_ADS: "kl.clearads"}.get(imm, "kl.setst"), "ABCD"[F], k, imm)
+    if op in (0x67, 0x23) and f3 in (6, 7):             # kl.load (JALR), kl.store (STORE)
+        return ("kl.load" if op == 0x67 else "kl.store",
+                locker(f3 == 7, rd if op == 0x67 else rs2))
+    if (op, f3) == (0x03, 7):
+        return ("kl.input",)
+    if (op, f3) == (0x23, 5):
+        return ("kl.output",)
+    return None
+
+
+def enc_r(funct2, hi5, rs2=0, rs1=0, rd=0):
+    """An R-type word of the kl.exec space: funct2 [31:30], bits [29:25], rs2, rs1, rd."""
+    return (funct2 << 30) | (hi5 << 25) | (rs2 << 20) | (rs1 << 15) | (4 << 12) | (rd << 7) | 0x0F
+
+
+def enc_setst(imm, F=0, r=0, rs1=0, rd=0):
+    return (imm << 25) | (F << 21) | (r << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | 0x0F
+
+
+def enc_ls(store, f3, ctx, rs1=2):
+    if store:
+        return (ctx << 20) | (rs1 << 15) | (f3 << 12) | 0x23
+    return (rs1 << 15) | (f3 << 12) | (ctx << 7) | 0x67
+
+
+def decoded(word, zklind=False):
+    try:
+        return decode(word, zklind)
+    except Trap as t:
+        return t.tag
 
 
 # =====================================================================
@@ -435,7 +554,7 @@ def apply_usagepolicy_restriction(cur, req):
 
 
 def carries_custom_value(m):
-    """Rule GR10's custom values present in the toy implementation."""
+    """Rule GR9's custom values present in the toy implementation."""
     return m["Machine"] >= 3072 or m["SCProtection"] in (6, 7) or m["Version"] == 3
 
 
@@ -452,6 +571,7 @@ SUPPORTED_VERSIONS = (0,)
 M_CIPHER = 0x011
 M_XOF = 0x021
 M_SIG = 0x031
+M_KEX = 0x041
 M_CUSTOM = 0xC05          # a custom Machine: values 3072-4095 (<<KLEE-Machine-field>>)
 M_ABSENT = 0x777          # an architected value this implementation does not implement
 
@@ -473,6 +593,7 @@ class Machine:
     uses_auxinfo = False
     machineuse = "none"     # "none", or "state" where the Machine keeps a counter there
     op_states = {}          # State -> the MachinePolicy bit only that State's operation uses
+    states = frozenset()    # the Valid States 2-45 the Machine defines (<<KLEE-Metadata-validity>>)
 
     def __init__(self, ident, name):
         self.ident = ident
@@ -537,8 +658,9 @@ class ToyCipher(Machine):
     state_len = 16
     clf_base = 64
     clf_both = 16
-    ENCRYPT, DECRYPT, VERIFY = 2, 3, 4
+    ENCRYPT, DECRYPT, VERIFY = 2, 3, 4      # VERIFY is an immediate only (SGR9)
     op_states = {2: 0b01, 3: 0b10}
+    states = frozenset({2, 3})
 
     def exec_form(self, m):
         return "A" if m["State"] in (self.ENCRYPT, self.DECRYPT) else None
@@ -576,7 +698,8 @@ class ToyXof(Machine):
     state_len = 32
     clf_base = 96
     machineuse = "state"            # a squeeze counter
-    ABSORB, FINAL = 2, 3
+    ABSORB, FINAL = 2, 3            # FINAL is an immediate only: it lands in Success
+    states = frozenset({2})
 
     def exec_form(self, m):
         if m["State"] in (ST_READY, self.ABSORB):
@@ -631,6 +754,7 @@ class ToySig(Machine):
     uses_auxinfo = True
     SIGN, VERIFY = 2, 3
     op_states = {2: 0b01, 3: 0b10}
+    states = frozenset({2, 3})
 
     def exec_form(self, m):
         return "A" if m["State"] == self.SIGN else None
@@ -655,8 +779,29 @@ class ToyCustom(Machine):
     clf_base = 32
 
 
+class ToyKex(Machine):
+    """A key agreement Machine: kl.setst SHARED with the peer's public value computes an
+    explicit shared secret into the state block, the source of Rule DER5."""
+    kind = "ext"
+    policies = frozenset({0})
+    sc_levels = frozenset({0, 1, 2})
+    key_len = 32
+    state_len = 32
+    clf_base = 96
+    SHARED = 2
+    states = frozenset({2})
+
+    def setst(self, unit, cl, imm, aux):
+        if imm == self.SHARED and cl.mdh["State"] == ST_READY:
+            self.put_state(cl, prf(b"kex", unit.key_of(cl), aux or 0))
+            cl.mdh["State"] = self.SHARED
+            return True
+        return False
+
+
 MACHINES = {m.ident: m for m in (ToyCipher(M_CIPHER, "toy-cipher"), ToyXof(M_XOF, "toy-xof"),
-                                 ToySig(M_SIG, "toy-sig"), ToyCustom(M_CUSTOM, "toy-custom"))}
+                                 ToySig(M_SIG, "toy-sig"), ToyCustom(M_CUSTOM, "toy-custom"),
+                                 ToyKex(M_KEX, "toy-kex"))}
 
 
 def content2_size(m):
@@ -741,16 +886,18 @@ class Unit:
     RO_ID = ("klmvendorid", "klmarchid", "klmimpid", "klmaxiobuflen")
 
     def __init__(self, *, zklv=True, zklio=True, zklmv=True, zklexpire=True, zklmem_hw=True,
-                 priv=True, h_ext=True, maxiobuflen=256, clf_total=1 << 20, clock=0,
-                 csk=DEFAULT_CSK, ids=None, hw=None, sks=None):
+                 zklind=False, priv=True, h_ext=True, maxiobuflen=256, clf_total=1 << 20,
+                 clock=0, csk=DEFAULT_CSK, ids=None, hw=None, sks=None):
         self.zklv, self.zklio, self.zklmv, self.zklexpire = zklv, zklio, zklmv, zklexpire
         self.zklmem_hw = zklmem_hw
+        self.zklind = zklind
         self.priv = priv
         self.h_ext = h_ext
         self.vendorid, self.archid, self.impid = ids or self.IDS
         self.klmaxiobuflen = maxiobuflen if zklio else 0
         self.clf_total = clf_total
-        self.clock = clock                       # hours since 2027-01-01 00:00 UTC; < 0 before
+        self.clock = clock                       # hours since 2027-01-01 00:00 UTC; < 0 before;
+                                                 # None: the secure clock cannot be read
         self.csk = csk
         self.hw = dict(DEFAULT_HW if hw is None else hw)
         self.sks = dict(DEFAULT_SKS if sks is None else sks)
@@ -763,7 +910,7 @@ class Unit:
         self.mode = "M"
         self.V = 0
         self.kls_off = False
-        self.lcr = {}                            # mllockerstatus fields: 'off' / 'initial' / 'clean' / 'dirty'
+        self.llstatus = {}                       # mllockerstatus fields: 'off'/'initial'/'clean'/'dirty'
         self.vstart = 0
         self._rbg = 0
         self.reset()
@@ -776,7 +923,7 @@ class Unit:
         self.kliobuftop = 0
         self.kliobuf = bytearray()
         self.klstart = 0
-        self.klmanagedlocker = MANAGEDCL_NONE
+        self.klmanagedlocker = MANAGED_NONE
         self.siv = self.impqual = self.siv2 = 0
 
     # ------------------------------------------------------------ helpers
@@ -888,16 +1035,18 @@ class Unit:
             r.append("State at provisioning")
         if ctx == "import" and (st == ST_UNCONFIGURED or st in (61, 62, 63)):
             r.append("State at import")
+        if st in (54, 55) or (mach is not None and 2 <= st <= 45 and st not in mach.states):
+            r.append("State not supported by the Machine")
+        if m["Version"] not in SUPPORTED_VERSIONS:           # [63:62]: seen by Form B too
+            r.append("Version")
         if not low_only:
             p = self.locality_problem(m["Locality"])
             if p:
                 r.append(p)
             if m["ExpirationDate"] and not self.zklexpire:
                 r.append("ExpirationDate without Zklexpire")
-            if m["Version"] not in SUPPORTED_VERSIONS:
-                r.append("Version")
             if carries_custom_value(m) and sl(m["Locality"], 1, 0) not in (2, 3):
-                r.append("GR10")
+                r.append("GR9")
         return r
 
     def available(self, m):
@@ -920,9 +1069,12 @@ class Unit:
         return not (up >> bit) & 1
 
     def expired(self, m):
-        """<<KLEE-Metadata-expiration-date>>, for a locker in a Valid State."""
+        """<<KLEE-Metadata-expiration-date>>, for a locker in a Valid State; a clock that
+        cannot be read expires every non-zero date."""
         if not self.zklexpire or m["ExpirationDate"] == 0:
             return False
+        if self.clock is None:
+            return True
         converted = max(0, self.clock)
         return not converted < m["ExpirationDate"]
 
@@ -934,7 +1086,7 @@ class Unit:
             return Trap(cause)
         return Trap("illegal", 2, note=f"{cause} without the Privileged Architecture")
 
-    def _exc_cl(self, k, cause):
+    def _exc_locker(self, k, cause):
         """An exception naming locker k; without the Privileged Architecture, the Error State."""
         if self.priv:
             raise Trap(cause)
@@ -947,29 +1099,38 @@ class Unit:
         if not self.csk and not ro_id:
             raise self._exc_trap("no_csk")
 
-    def _idx(self, k):
+    def _idx(self, k, always_ind=False):
+        """The locker index of an operand; indirect addressing needs Zklind except for
+        kl.clone, kl.rename and kl.swap (<<KLEE-cryptographic-registers>>)."""
+        if isinstance(k, Ind):
+            if not (self.zklind or always_ind):
+                raise Trap("illegal", 1, note="indirect addressing without Zklind")
+            if k.reg == 0 or not isinstance(k.value, int) or not 0 <= k.value <= 31:
+                raise Trap("illegal", 1, note="GR11: X0, or an index outside [0..31]")
+            return k.value
         if not isinstance(k, int) or not 0 <= k <= 31:
-            raise Trap("illegal", 1, note="GR1: locker index")
+            raise Trap("illegal", 1, note="a 5-bit locker field")
+        return k
 
     def _fields_in_effect(self):
         return self.priv and self.mode not in ("M", "D")
 
     def _off_gate(self, k, exempt=False):
-        if self._fields_in_effect() and self.lcr.get(k) == "off":
+        if self._fields_in_effect() and self.llstatus.get(k) == "off":
             if not exempt:
-                raise Trap("lockers_off")
+                raise Trap("locker_off")
             return True
         return False
 
     def _dirty(self, k):
         if self._fields_in_effect():
-            self.lcr[k] = "dirty"
+            self.llstatus[k] = "dirty"
 
     def _zeroize(self, k, dirty=True):
         was_cfg = self.lockers[k].mdh["State"] in PARTIAL_STATES
         self.lockers[k] = Locker()
         if self.klmanagedlocker == k and was_cfg:
-            self.klmanagedlocker = MANAGEDCL_NONE
+            self.klmanagedlocker = MANAGED_NONE
         if dirty:
             self._dirty(k)
 
@@ -984,12 +1145,12 @@ class Unit:
         cl.img = None
         cl.alloc = 0
         if self.klmanagedlocker == k and was_cfg:
-            self.klmanagedlocker = MANAGEDCL_NONE
+            self.klmanagedlocker = MANAGED_NONE
         self._dirty(k)
 
     def _after_mgmt(self, k):
         st = self.lockers[k].mdh["State"]
-        self.klmanagedlocker = k if st in PARTIAL_STATES else MANAGEDCL_NONE
+        self.klmanagedlocker = k if st in PARTIAL_STATES else MANAGED_NONE
         self.klstart = 0
 
     def _retire(self):
@@ -1023,12 +1184,12 @@ class Unit:
         elif name == "klstart":
             self.klstart = value
         elif name == "klmanagedlocker":
-            if value <= MANAGEDCL_NONE:                 # 33 and above: write ignored
+            if value <= MANAGED_NONE:                 # 33 and above: write ignored
                 self.klmanagedlocker = value
 
     # ------------------------------------------------------------ inspection
     def getmd(self, k):
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         return dict(self.lockers[k].mdh)
@@ -1040,7 +1201,7 @@ class Unit:
         if not self.zklv:
             raise Trap("illegal", 1, note="kl.getmdv needs Zklv")
         if vec_bits < 128:
-            raise Trap("illegal", 1, note="GR7")
+            raise Trap("illegal", 1, note="GR6")
         return mdh_pack(self.getmd(k))
 
     def getst(self, k):
@@ -1061,9 +1222,9 @@ class Unit:
             if not self.zklv:
                 raise Trap("illegal", 1)
             if vec_bits < 128:
-                raise Trap("illegal", 1, note="GR7")
+                raise Trap("illegal", 1, note="GR6")
         if form == "A":
-            self._idx(k)
+            k = self._idx(k)
         self._pre()
         if form == "A":
             self._off_gate(k)
@@ -1081,19 +1242,19 @@ class Unit:
         st = m["State"]
         if not supplied and st == ST_UNCONFIGURED:
             return 0                                                    # 1
-        if supplied and st not in ERROR_STATES:                         # 2
+        if supplied and st not in ERROR_STATES:                         # 2, 3
             if st in (61, 62, 63) or self.unsupported(m) \
                     or self.invalid_reasons(m, "size", low_only=low_only):
                 return 0
         if st in ERROR_STATES:
-            return 16                                                   # 3
+            return 16                                                   # 4
         mach = MACHINES[m["Machine"]]
-        if st in VALID_STATES or st in (CFG_IMPORTING, CFG_EXPORTING):  # 4
+        if st in VALID_STATES or st in (CFG_IMPORTING, CFG_EXPORTING):  # 5
             c1 = mach.content1_size(m)
             if m["AuxDataLen"] == 0:
                 return 32 + c1
             return 64 + c1 + content2_size(m)
-        return 16 + mach.pi_content_size(m)                             # 5
+        return 16 + mach.pi_content_size(m)                             # 6
 
     def avail(self, form="A", k=None, lo=None, md=None, vec_bits=128):
         m, supplied = self._md_operand(form, k, lo, md, vec_bits)
@@ -1127,12 +1288,12 @@ class Unit:
             if not self.zklv:
                 raise Trap("illegal", 1, note="Form C needs Zklv")
             if vec_bits < 128:
-                raise Trap("illegal", 1, note="GR7")
-        self._idx(k)
+                raise Trap("illegal", 1, note="GR6")
+        k = self._idx(k)
         self._pre()
         opening = imm in (CFG_PROVISIONING, CFG_IMPORTING)
         self._off_gate(k, exempt=opening)
-        if self.klmanagedlocker not in (k, MANAGEDCL_NONE):
+        if self.klmanagedlocker not in (k, MANAGED_NONE):
             raise Trap("illegal", 2, note="klmanagedlocker names another locker")
         st = self.lockers[k].mdh["State"]
         if imm == CFG_EXPORTING and st == ST_UNCONFIGURED:
@@ -1157,7 +1318,7 @@ class Unit:
             if self.kliobuflen == 0:
                 raise self._exc_trap("unconfigured_buffer")
             if self.kliobuftop < 16:
-                raise Trap("illegal", 2, note="GR7: kliobuftop < 16")
+                raise Trap("illegal", 2, note="GR6: kliobuftop < 16")
             return mdh_unpack(b2v(bytes(self.kliobuf[0:16])))      # bytes [0, 16), klstart ignored
         return as_mdh(md)
 
@@ -1168,7 +1329,7 @@ class Unit:
             m = dict(ml)                                    # the short import path
             m["AuxDataLen"] = 0
             m["ADSDropped"] = 0
-            if m["State"] in (54, 55):
+            if m["State"] in (54, 55) or (m["State"] == ST_EXPIRED and not self.zklexpire):
                 m["State"] = ST_INVALID
             cl.mdh = m
             self._after_mgmt(k)
@@ -1207,7 +1368,7 @@ class Unit:
                                     "out_of_memory": ST_OUT_OF_MEMORY}[why])
             self._after_mgmt(k)
             return why
-        self.klmanagedlocker = MANAGEDCL_NONE      # the zeroizing step left the locker Unconfigured
+        self.klmanagedlocker = MANAGED_NONE      # the zeroizing step left the locker Unconfigured
         raise Trap(why)
 
     def _open_export(self, k):
@@ -1351,13 +1512,13 @@ class Unit:
             raise Trap("illegal", 1, note="SGR7: immediates 46 and 47 are reserved")
         if 56 <= imm <= 63:
             return self.mgmt(k, imm, aux, form=form, vec_bits=vec_bits)
-        if k == "X0":
+        if k == "X0" or (isinstance(k, Ind) and k.reg == 0):   # r = 1, locker register X0
             if form == "A" and imm == ST_UNCONFIGURED:
                 return self.clearall()
             raise Trap("illegal", 1, note="reserved kl.setst with r = 1 and X0")
         if form == "C" and not self.zklv:
             raise Trap("illegal", 1)
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         if imm == ST_UNCONFIGURED:
             return self.clear(k)
@@ -1365,7 +1526,8 @@ class Unit:
             self._off_gate(k)
             if self.lockers[k].mdh["State"] == ST_UNCONFIGURED:
                 return "noop"
-            self._enter_error(k, ST_INVALID if imm in (54, 55) else imm)
+            unused = imm in (54, 55) or (imm == ST_EXPIRED and not self.zklexpire)
+            self._enter_error(k, ST_INVALID if unused else imm)
             return "error state"
         self._off_gate(k)
         g = self._usage_gate(k)
@@ -1409,7 +1571,7 @@ class Unit:
         self.kliobuf = bytearray()
         self.kliobuflen = self.kliobuftop = self.klstart = 0
         self.siv = self.impqual = self.siv2 = 0
-        self.klmanagedlocker = MANAGEDCL_NONE
+        self.klmanagedlocker = MANAGED_NONE
         return "cleared all"
 
     def _usage_gate(self, k, forbidden_sub=False, needs_buf=False):
@@ -1421,11 +1583,11 @@ class Unit:
         if st in ERROR_STATES:
             return "noop"
         if st in PARTIAL_STATES:
-            return self._exc_cl(k, "privilege_violation")
+            return self._exc_locker(k, "privilege_violation")
         if forbidden_sub:
             raise Trap("illegal", 2, note="forbidden KLIOBUF substitution")
         if not self.usage_allowed(cl.mdh):
-            return self._exc_cl(k, "privilege_violation")
+            return self._exc_locker(k, "privilege_violation")
         if self.expired(cl.mdh):
             self._enter_error(k, ST_EXPIRED)
             return "expired"
@@ -1439,7 +1601,7 @@ class Unit:
         VL * SEW/8 bytes, and may be the same object (Vd = Vs2)."""
         if form in ("A", "B", "C") and not self.zklv:
             raise Trap("illegal", 1, note="Forms A-C of kl.exec need Zklv")
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         nb = sew // 8
@@ -1512,8 +1674,8 @@ class Unit:
             if not self.zklv:
                 raise Trap("illegal", 1)
             if vec_bits < 128:
-                raise Trap("illegal", 1, note="GR7")
-        self._idx(k)
+                raise Trap("illegal", 1, note="GR6")
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         cl = self.lockers[k]
@@ -1522,7 +1684,7 @@ class Unit:
         if st == ST_UNCONFIGURED:
             return "noop"
         if st in PARTIAL_STATES:
-            return self._exc_cl(k, "privilege_violation")
+            return self._exc_locker(k, "privilege_violation")
         xv = x if isinstance(x, int) else mdh_pack(x)
         if which == "l":
             xv &= MASK64
@@ -1577,7 +1739,7 @@ class Unit:
                 new["Locality"] = newloc
         if (new["SCProtection"], new["Locality"]) != (m["SCProtection"], m["Locality"]):
             if carries_custom_value(new) and sl(new["Locality"], 1, 0) not in (2, 3):
-                bad.append("GR10")
+                bad.append("GR9")
         req = xs["UsagePolicy"]
         if req:
             new["UsagePolicy"] = apply_usagepolicy_restriction(m["UsagePolicy"], req)
@@ -1595,17 +1757,17 @@ class Unit:
         if st not in ERROR_STATES:
             extra = mach.clf_capacity(new) - cl.alloc
             if extra > self.clf_free():
-                return self._exc_cl(k, "out_of_memory")
+                return self._exc_locker(k, "out_of_memory")
             cl.alloc += max(0, extra)
         m.update(new)
         self._dirty(k)
         return "ok"
 
-    # ------------------------------------------------------------ kl.clone
+    # ------------------------------------------------------------ kl.clone, kl.rename, kl.swap
     def clone(self, kd, ks):
         """kl.clone  (<<KLEE-instruction-clone>>)."""
-        self._idx(kd)
-        self._idx(ks)
+        kd = self._idx(kd, always_ind=True)
+        ks = self._idx(ks, always_ind=True)
         self._pre()
         if kd == ks:
             return "noop"
@@ -1615,26 +1777,85 @@ class Unit:
         if src.mdh["State"] == ST_UNCONFIGURED:
             raise Trap("illegal", 2, note="kl.clone from an Unconfigured locker")
         if src.mdh["State"] in PARTIAL_STATES:
-            return self._exc_cl(ks, "privilege_violation")
+            return self._exc_locker(ks, "privilege_violation")
         if src.alloc > self.clf_free() + self.lockers[kd].alloc:
-            return self._exc_cl(kd, "out_of_memory")
+            return self._exc_locker(kd, "out_of_memory")
         self._zeroize(kd)
         dst = self.lockers[kd]
         dst.mdh = dict(src.mdh)
         dst.c1, dst.c2, dst.alloc = src.c1, src.c2, src.alloc
         return "cloned"
 
+    def rename(self, kd, ks):
+        """kl.rename  (<<KLEE-instruction-clone>>): the CC of Ks, whatever its State,
+        becomes that of Kd; Ks becomes Unconfigured.  No capacity check, no MDH change."""
+        kd = self._idx(kd, always_ind=True)
+        ks = self._idx(ks, always_ind=True)
+        self._pre()
+        if kd == ks:
+            return "noop"
+        self._off_gate(ks)
+        self._off_gate(kd, exempt=True)
+        self.lockers[kd] = self.lockers[ks]
+        self.lockers[ks] = Locker()
+        if self.klmanagedlocker == ks:
+            self.klmanagedlocker = kd
+        elif self.klmanagedlocker == kd:
+            self.klmanagedlocker = MANAGED_NONE
+        self._dirty(ks)
+        self._dirty(kd)
+        return "renamed"
+
+    def swap(self, kd, ks):
+        """kl.swap  (<<KLEE-instruction-clone>>): neither access is exempt from the Off gate."""
+        kd = self._idx(kd, always_ind=True)
+        ks = self._idx(ks, always_ind=True)
+        self._pre()
+        self._off_gate(ks)
+        self._off_gate(kd)
+        if kd == ks:
+            return "noop"
+        self.lockers[kd], self.lockers[ks] = self.lockers[ks], self.lockers[kd]
+        if self.klmanagedlocker in (ks, kd):
+            self.klmanagedlocker = kd if self.klmanagedlocker == ks else ks
+        self._dirty(ks)
+        self._dirty(kd)
+        return "swapped"
+
     # ------------------------------------------------------------ kl.derive
-    PAIRS = {(M_XOF, M_CIPHER): ("key", 32), (M_XOF, M_XOF): ("absorb", 0)}
+    # Toy endpoint pairs (<<KLEE-instruction-derive>>): a XOF output into a cipher key field
+    # and into another XOF (unrestricted: kl.exec yields the same bytes), and the shared
+    # secret of a key agreement into a cipher key field (restricted, Rule DER5).
+    PAIRS = {
+        (M_XOF, M_CIPHER): dict(key=True, minimum=32, dst_states={ST_READY}, restricted=False),
+        (M_XOF, M_XOF): dict(key=False, minimum=0, dst_states={ST_READY, ToyXof.ABSORB},
+                             restricted=False),
+        (M_KEX, M_CIPHER): dict(key=True, minimum=32, dst_states={ST_READY}, restricted=True),
+    }
+    EXPORT_STATES = {M_XOF: {ST_SUCCESS}, M_KEX: {ToyKex.SHARED}}
+
+    def _narrow(self, S, D):
+        """Rule DER2: the destination MDH narrowed by the source MDH, or None."""
+        loc = locality_union(D["Locality"], S["Locality"])
+        if loc is None or self.locality_problem(loc):
+            return None
+        if sc_rank(D["SCProtection"]) < sc_rank(S["SCProtection"]):
+            return None
+        new = {"UsagePolicy": ((D["UsagePolicy"] | S["UsagePolicy"]) & 0b01111)
+                              | (D["UsagePolicy"] & S["UsagePolicy"] & 0b10000),
+               "Locality": loc}
+        if self.zklexpire:
+            dates = [x for x in (D["ExpirationDate"], S["ExpirationDate"]) if x]
+            new["ExpirationDate"] = min(dates) if dates else 0
+        return new
 
     def derive(self, kd, ks, length):
-        """The generic part of kl.derive  (<<KLEE-instruction-derive>>), for two
-        toy endpoint pairs: a XOF output into a cipher key field (minimum 32
-        bytes), and a XOF output absorbed by another XOF (minimum 0)."""
+        """kl.derive  (<<KLEE-instruction-derive>>): the gates of SGR19 on both endpoints,
+        then the checks of Rule DER1, the narrowing of Rule DER2 and the sizes of DER8."""
+        kd = self._idx(kd)
+        ks = self._idx(ks)
         if kd == ks:
             raise Trap("illegal", 1, note="kl.derive with equal locker indices")
-        self._idx(kd)
-        self._idx(ks)
         self._pre()
         self._off_gate(ks)
         self._off_gate(kd)
@@ -1646,10 +1867,10 @@ class Unit:
             return "noop"
         for e in ends:
             if self.lockers[e].mdh["State"] in PARTIAL_STATES:
-                return self._exc_cl(e, "privilege_violation")
+                return self._exc_locker(e, "privilege_violation")
         for e in ends:
             if not self.usage_allowed(self.lockers[e].mdh):
-                return self._exc_cl(e, "privilege_violation")
+                return self._exc_locker(e, "privilege_violation")
         exp = [e for e in ends if self.expired(self.lockers[e].mdh)]
         for e in exp:
             self._enter_error(e, ST_EXPIRED)
@@ -1657,39 +1878,48 @@ class Unit:
             return "expired"
         S, D = self.lockers[ks].mdh, self.lockers[kd].mdh
         pair = self.PAIRS.get((S["Machine"], D["Machine"]))
-        src_ok = S["Machine"] == M_XOF and S["State"] == ST_SUCCESS
-        if pair and pair[0] == "key":
-            dst_ok = D["State"] == ST_READY
-        elif pair:
-            dst_ok = D["State"] in (ST_READY, ToyXof.ABSORB)
+        src_ok = S["State"] in self.EXPORT_STATES.get(S["Machine"], ())
+        if pair:
+            dst_ok = D["State"] in pair["dst_states"]           # DER1, check 1
         else:
-            dst_ok = D["State"] not in (ST_SUCCESS, ST_FAILURE)
+            dst_ok = D["State"] not in (ST_SUCCESS, ST_FAILURE)  # SGR5
         bad = [e for e, ok in ((ks, src_ok), (kd, dst_ok)) if not ok]
         if bad:
             for e in bad:
                 self._enter_error(e, ST_INVALID)
             return "invalid"
-        if pair is None:
+        if pair is None:                                        # an unlisted pair
             self._enter_error(ks, ST_INVALID)
             self._enter_error(kd, ST_INVALID)
             return "invalid"
-        if pair[0] == "key" and D["KeyType"] == 1:
+        dest_length = MACHINES[D["Machine"]].key_len
+        if pair["key"] and D["KeyType"] == 1:                   # DER4, via check 2
             self._enter_error(kd, ST_INVALID)
             return "invalid"
-        eff = min(length, 32) if pair[0] == "key" else length
-        if eff < pair[1]:
+        eff = min(length, dest_length) if pair["key"] else length        # DER8
+        if eff < pair["minimum"] or (pair["key"] and length < dest_length):  # checks 3, 4
             self._enter_error(kd, ST_INVALID)
             return "invalid"
         if length == 0:
             return "nothing"
-        xof = MACHINES[M_XOF]
-        data = b"".join(xof.squeeze(self, self.lockers[ks]) for _ in range(eff))
-        dcl = self.lockers[kd]
-        if pair[0] == "key":
-            dcl.c1 = data + bytes(32 - eff) + dcl.c1[32:]
+        if pair["restricted"]:
+            new = self._narrow(S, D)
+            if new is None:
+                self._enter_error(kd, ST_INVALID)
+                return "invalid"
+            D.update(new)
+        scl, dcl = self.lockers[ks], self.lockers[kd]
+        if S["Machine"] == M_XOF:
+            xof = MACHINES[M_XOF]
+            data = b"".join(xof.squeeze(self, scl) for _ in range(eff))
+        else:
+            data = MACHINES[M_KEX].get_state(scl)[:eff]
+            data += bytes(eff - len(data))
+        if pair["key"]:
+            dcl.c1 = data + dcl.c1[dest_length:]
         else:
             for b in data:
-                xof.absorb(self, dcl, bytes([b]))
+                MACHINES[M_XOF].absorb(self, dcl, bytes([b]))
         self._dirty(ks)
         self._dirty(kd)
         return "transferred"
@@ -1727,13 +1957,15 @@ class Unit:
             else (CFG_EXPORTING, CFG_PPI_EXPORTING)
         if st not in ok or self.klstart % 16:
             raise Trap("illegal", 2, note="SGR21/SGR22, or klstart not a multiple of 16")
+        if st in (CFG_IMPORTING, CFG_EXPORTING) and self.klmanagedlocker != k:
+            raise Trap("illegal", 2, note="SGR21/SGR22: not the locker klmanagedlocker names")
 
     # ------------------------------------------------------------ kl.load / kl.store
     def load(self, k, mem, addr, halt_after=None, restart=False):
         """kl.load  (<<KLEE-instruction-load>>)."""
         if not self.zklmem_hw:
             raise Trap("illegal", 1, note="kl.load is emulated (trap-and-emulate)")
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         self._transfer_state(k, writing=True)
@@ -1744,7 +1976,7 @@ class Unit:
         while j < iend:
             f = mem.fault(addr + j, 16, "load")
             if (halt_after is not None and moved >= halt_after) or f:
-                self.klstart = 0 if restart else j
+                self.klstart = 0 if restart and not f else j   # IRR3: no restart on a fault
                 if moved:
                     self._dirty(k)
                 if f:
@@ -1762,7 +1994,7 @@ class Unit:
         """kl.store  (<<KLEE-instruction-store>>)."""
         if not self.zklmem_hw:
             raise Trap("illegal", 1, note="kl.store is emulated (trap-and-emulate)")
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         self._transfer_state(k, writing=False)
@@ -1773,7 +2005,7 @@ class Unit:
         while j < isize:
             f = mem.fault(addr + j, 16, "store")
             if (halt_after is not None and moved >= halt_after) or f:
-                self.klstart = 0 if restart else j
+                self.klstart = 0 if restart and not f else j   # IRR3: no restart on a fault
                 if f:
                     raise Trap(f[0], tval=f[1])
                 return "halted"
@@ -1790,15 +2022,15 @@ class Unit:
             raise Trap("illegal", 1, note="kl.mv needs Zklmv (and Zklv for a vector)")
         if vec_len is not None and (vec_len % 16 or (self.vstart * (sew // 8)) % 16):
             raise Trap("illegal", 1, note="vl or vstart is not a multiple of 16 bytes")
-        self._idx(k)
+        k = self._idx(k)
         self._pre()
         self._off_gate(k)
         self._transfer_state(k, writing)
-        return self.layout(self.lockers[k].mdh)[4]
+        return k, self.layout(self.lockers[k].mdh)[4]
 
     def mv_in(self, k, value):
         """kl.mv Kd, Xs2."""
-        iend = self._mv_pre(k, True)
+        k, iend = self._mv_pre(k, True)
         if self.klstart >= iend:
             return "nothing"
         self._s_put(k, self.klstart, v2b(value, 16))
@@ -1808,7 +2040,7 @@ class Unit:
 
     def mv_out(self, k):
         """kl.mv Xd, Ks1."""
-        iend = self._mv_pre(k, False)
+        k, iend = self._mv_pre(k, False)
         if self.klstart >= iend:
             return 0
         v = b2v(self._s_block(k, self.klstart))
@@ -1817,7 +2049,7 @@ class Unit:
 
     def mv_in_vec(self, k, vec, sew=8, halt_after=None):
         """kl.mv Kd, Vs2."""
-        iend = self._mv_pre(k, True, len(vec), sew)
+        k, iend = self._mv_pre(k, True, len(vec), sew)
         nb = sew // 8
         if self.vstart >= len(vec) // nb:
             return "noop"
@@ -1842,7 +2074,7 @@ class Unit:
 
     def mv_out_vec(self, k, vd, sew=8, halt_after=None):
         """kl.mv Vd, Ks1: writes elements vstart .. vl-1 of `vd`."""
-        iend = self._mv_pre(k, False, len(vd), sew)
+        k, iend = self._mv_pre(k, False, len(vd), sew)
         nb = sew // 8
         if self.vstart >= len(vd) // nb:
             return "noop"
@@ -1884,7 +2116,7 @@ class Unit:
         while j < end:
             f = mem.fault(addr + j, 1, "load")
             if (halt_after is not None and moved >= halt_after) or f:
-                self.klstart = 0 if restart else j
+                self.klstart = 0 if restart and not f else j   # IRR3: no restart on a fault
                 if f:
                     raise Trap(f[0], tval=f[1])
                 return "halted"
@@ -1904,7 +2136,7 @@ class Unit:
         while j < end:
             f = mem.fault(addr + j, 1, "store")
             if (halt_after is not None and moved >= halt_after) or f:
-                self.klstart = 0 if restart else j
+                self.klstart = 0 if restart and not f else j   # IRR3: no restart on a fault
                 if f:
                     raise Trap(f[0], tval=f[1])
                 return "halted"
@@ -2024,7 +2256,7 @@ def snapshot(u):
             u.kliobuflen, u.kliobuftop, bytes(u.kliobuf))
 
 
-def cl_consistent(u, k):
+def locker_consistent(u, k):
     """For a locker in a Valid State, the plaintext has the length the length rule gives."""
     c = u.lockers[k]
     m = c.mdh
@@ -2099,7 +2331,8 @@ def test_mdh_layout():
     check_true("every field the length rule and kl.size name lies in MDH[63:0]",
                all(FIELD[f][1] <= 63 for f in ("Machine", "MachinePolicy", "MachineExtension",
                                                "KeyType", "StateExtension", "AuxDataLen",
-                                               "ADSDropped", "SCProtection", "State")))
+                                               "ADSDropped", "SCProtection", "State",
+                                               "Version")))
     years, rem = divmod(2 ** fwidth("ExpirationDate") / 24, 365.2425)
     check("20-bit _ExpirationDate_: 'approximately 119 years and 7 months'",
           (int(years), int(rem / (365.2425 / 12))), (119, 7))
@@ -2108,7 +2341,7 @@ def test_mdh_layout():
     check("_Locality_ holds [1:0], [3:2], [5:4] and bits 6, 7, 8",
           (fwidth("Locality"), max(h for _, h, _ in LOC_SUBFIELDS)), (9, 8))
     check("_UsagePolicy_ has bits 0-4", fwidth("UsagePolicy"), 5)
-    check("_Version_ is [127:126]", FIELD["Version"][1:3], (127, 126))
+    check("_Version_ is [63:62], so that MDH[63:0] carries it", FIELD["Version"][1:3], (63, 62))
     check("kl.getmd* of an Unconfigured locker returns an all-zero MDH (SGR13)",
           mdh_pack(u.getmd(0)), 0)
     check("mdh_bytes is the little-endian image (common.v2b)",
@@ -2196,9 +2429,8 @@ def test_states():
               "for an Error-State locker (kl.size = 16) and then issues kl_cfg_management_end, which "
               f"raises {end_on_error} on a locker with no management operation open; the Zklmem "
               "export shares a prefix that never sets t3; the Zklmv import subtracts 16 from s1 "
-              "again at every jump to 'restart'. The ECB example (<<KLEE-ECB-mode-example>>) still "
-              "tests 'X1 >= 24', the Error-State threshold of the old numbering, which now "
-              "flags Success and Failure as errors.")
+              "again at every jump to 'restart'. Every snippet names its locker as K(t0), which "
+              "needs Zklind (<<KLEE-cryptographic-registers>>); the chapter does not say so.")
 
 
 # =====================================================================
@@ -2221,7 +2453,7 @@ def test_validity():
         ("unsupported Version 1", dict(Version=1)),
         ("reserved Version 2", dict(Version=2)),
         ("system-specific Version 3, not supported here", dict(Version=3, Locality=loc(hw1=3))),
-        ("custom SCProtection without ChipFamScrt/ChipScrt (GR10)", dict(SCProtection=6)),
+        ("custom SCProtection without ChipFamScrt/ChipScrt (GR9)", dict(SCProtection=6)),
         ("AuxDataLen non-zero in a PI", dict(AuxDataLen=2)),
         ("State not Unconfigured at provisioning", dict(State=ST_READY)),
         ("a reserved bit in [127:64]", dict(Reserved116=1)),
@@ -2234,7 +2466,11 @@ def test_validity():
         check(f"provisioning with invalid Metadata ({label}) -> Error State Invalid, "
               "other MDH fields zero, no KLF capacity",
               (r, mdh_pack(u.getmd(3)), u.lockers[3].alloc, u.klmanagedlocker, u.klstart),
-              ("invalid", mdh_pack(mdh_new(State=ST_INVALID)), 0, MANAGEDCL_NONE, 0))
+              ("invalid", mdh_pack(mdh_new(State=ST_INVALID)), 0, MANAGED_NONE, 0))
+    spec_note("<<KLEE-Metadata-validity>>: the reorganised list of invalid-Metadata conditions "
+              "no longer contains _AuxDataLen_ = 1, which <<KLEE-metadata-header>>, "
+              "<<KLEE-Auxiliary-Data-Section>> and <<KLEE-SCC>> still call invalid; modelled as "
+              "invalid.")
     u = fresh(zklexpire=False)
     check("provisioning with a non-zero ExpirationDate without Zklexpire -> Invalid",
           (u.mgmt(0, CFG_PROVISIONING, cipher_pi(ExpirationDate=9)), u.getst(0)),
@@ -2244,9 +2480,9 @@ def test_validity():
           (u.mgmt(0, CFG_PROVISIONING, cipher_pi(Locality=loc(hw1=1))), u.getst(0)),
           ("invalid", ST_INVALID))
     u = fresh()
-    check("custom SCProtection naming ChipFamScrt is valid (GR10)",
+    check("custom SCProtection naming ChipFamScrt is valid (GR9)",
           provision(u, 0, cipher_pi(SCProtection=6, Locality=loc(hw1=2))), ST_READY)
-    check("a custom Machine naming ChipScrt is valid (GR10)",
+    check("a custom Machine naming ChipScrt is valid (GR9)",
           provision(u, 1, mdh_new(Machine=M_CUSTOM, MachinePolicy=1, Locality=loc(hw1=3))),
           ST_READY)
     check("a custom Machine naming only SiPScrt is invalid, even when SiPScrt is substituted",
@@ -2281,10 +2517,14 @@ def test_validity():
         u = fresh()
         check(f"import with ml.State {label} -> Invalid",
               (u.mgmt(0, CFG_IMPORTING, cipher_pi(State=st)), u.getst(0)), ("invalid", ST_INVALID))
-    for st in (1, 7, 45, 46, 47, 56, 57, 58, 59, 60):
+    for st in (1, ToyCipher.ENCRYPT, ToyCipher.DECRYPT, 46, 47, 56, 57, 58, 59, 60):
         u = fresh()
         check(f"import with ml.State {st} opens",
               u.mgmt(0, CFG_IMPORTING, cipher_pi(State=st)), "opened")
+    for st in (ToyCipher.VERIFY, 7, 45):
+        u = fresh()
+        check(f"import with ml.State {st}, a State the Machine does not define -> Invalid",
+              (u.mgmt(0, CFG_IMPORTING, cipher_pi(State=st)), u.getst(0)), ("invalid", ST_INVALID))
     u = fresh()
     check("an SCC MDH may carry AuxDataLen >= 2 and ADSDropped at import",
           u.mgmt(0, CFG_IMPORTING, cipher_pi(State=2, AuxDataLen=4, ADSDropped=1)), "opened")
@@ -2307,7 +2547,7 @@ def test_validity():
     check("insufficient KLF capacity raises kl_exc_out_of_memory; the locker stays Unconfigured; "
           "klmanagedlocker is set to 32",
           (trap_of(u.mgmt, 0, CFG_PROVISIONING, cipher_pi()), u.getst(0), u.klmanagedlocker),
-          ("out_of_memory", 0, MANAGEDCL_NONE))
+          ("out_of_memory", 0, MANAGED_NONE))
     u = fresh(clf_total=need)
     check("exactly enough KLF capacity suffices", provision(u, 0, cipher_pi()), ST_READY)
     check("an Error-State locker consumes no KLF capacity (SGR10)",
@@ -2315,7 +2555,7 @@ def test_validity():
 
     # the short import is exempt from every check
     u = fresh(zklexpire=False)
-    odd = mdh_new(Machine=M_ABSENT, State=ST_EXPIRED, Reserved116=5, KeyType=3,
+    odd = mdh_new(Machine=M_ABSENT, State=ST_MGMT_AUTH, Reserved116=5, KeyType=3,
                   ExpirationDate=7, AuxDataLen=9, ADSDropped=1, Locality=loc(boot=3))
     check("the short import of an Error-State MDH applies none of the validity checks",
           (u.mgmt(0, CFG_IMPORTING, odd), u.getmd(0)),
@@ -2344,12 +2584,14 @@ def test_lengths():
     check("Content1 length depends on StateExtension",
           cm.content1_size(cipher_pi(StateExtension=1)) - cm.content1_size(base), 16)
     for fld, val in (("SCProtection", 1), ("MachineUse", 9), ("UsagePolicy", 7),
-                     ("Locality", 2), ("ExpirationDate", 5), ("State", 9)):
+                     ("Locality", 2), ("ExpirationDate", 5), ("State", ToyCipher.DECRYPT)):
         check(f"SCC length independent of {fld}",
               u.size_of(cipher_pi(State=2, AuxDataLen=4, **{fld: val}), supplied=True)
               if fld != "State" else
               u.size_of(cipher_pi(State=val, AuxDataLen=4), supplied=True),
               u.size_of(cipher_pi(State=2, AuxDataLen=4), supplied=True))
+    check("... _State_ counts only through validity: a State the Machine does not define -> 0",
+          u.size_of(cipher_pi(State=9, AuxDataLen=4), supplied=True), 0)
     for fld, val in (("KeyType", 1), ("StateExtension", 3), ("AuxDataLen", 7),
                      ("ADSDropped", 1), ("UsagePolicy", 15), ("ExpirationDate", 9)):
         check(f"KLF capacity independent of {fld}",
@@ -2398,11 +2640,22 @@ def test_lengths():
     check("Form B does not examine [127:64] (same MDH -> the SCC size)",
           fb.size("B", lo=sl(mdh_pack(unconf_loc), 63, 0)), 32 + 32)
     gr10 = cipher_pi(State=2, SCProtection=6)
-    check("Form B does not apply Rule GR10; Form C does",
+    check("Form B does not apply Rule GR9; Form C does",
           (fb.size("B", lo=mdh_pack(gr10)), fb.size("C", md=gr10)), (32 + 32, 0))
     check("Form B ignores a reserved bit above bit 63",
           fb.size("B", lo=mdh_pack(cipher_pi(State=2, Reserved116=1))), 32 + 32)
-    check("Form C of kl.size needs a 128-bit vector operand (GR7)",
+    check("3: Form B returns 0 for an unsupported _Version_, now in [63:62]",
+          fb.size("B", lo=mdh_pack(cipher_pi(State=2, Version=1))), 0)
+    check("... but 16 for an Error-State MDH, whose other fields are not checked",
+          [fb.size(f, lo=mdh_pack(v), md=v) for f in ("B", "C")
+           for v in (cipher_pi(State=ST_INVALID, Version=1),)], [16, 16])
+    spec_note("<<KLEE-instruction-size>> places 'kl.size Form B returns 0 for _Version_ not in "
+              "{0}' as step 3, after step 2's Error-State exclusion and before the Error-State "
+              "step, so read literally a Form B Error-State MDH with _Version_ 1 gives 0 while "
+              "Form C gives 16; <<KLEE-error-state-transfer>> checks only _State_ of such an "
+              "image. Modelled as 16 (step 3 as a clarification of step 2); since _Version_ "
+              "moved to [63:62] step 3 is redundant with step 2.")
+    check("Form C of kl.size needs a 128-bit vector operand (GR6)",
           trap_of(u.size, "C", md=cipher_pi(), vec_bits=64), "illegal/1")
 
     # image_size = kl.size - 16, and ContentOffset, in every Configuration State
@@ -2471,7 +2724,7 @@ def test_usage_policy():
     check_true("authenticated Debug: bits 0-3 are not evaluated",
                u.usage_allowed(cipher_pi(UsagePolicy=0b11111)))
 
-    # enforced by usage-controlled instructions only (GR5 table)
+    # enforced by usage-controlled instructions only (GR4 table)
     u = fresh()
     ready_cipher(u, 0, UsagePolicy=0b00001)
     u.mode = "U"
@@ -2549,7 +2802,7 @@ def test_restrict():
     r, m, _ = run(cipher_pi(), mdh_new(SCProtection=3))
     check("an unsupported SCProtection invalidates", r, "invalid")
     r, m, _ = run(cipher_pi(), mdh_new(SCProtection=6))
-    check("a custom SCProtection without ChipFamScrt/ChipScrt invalidates (GR10 on the result)",
+    check("a custom SCProtection without ChipFamScrt/ChipScrt invalidates (GR9 on the result)",
           r, "invalid")
     r, m, _ = run(cipher_pi(Locality=loc(hw1=2)), mdh_new(SCProtection=6))
     check("a custom SCProtection with ChipFamScrt is accepted", (r, m["SCProtection"]), ("ok", 6))
@@ -2592,7 +2845,7 @@ def test_restrict():
                               ("Machine", "l", "_Machine_"),
                               ("State", "l", "_State_"),
                               ("AuxDataLen", "l", "_AuxDataLen_"),
-                              ("Version", "h", "_Version_"),
+                              ("Version", "l", "_Version_, which now lies in [63:0]"),
                               ("KeyType", "v", "_KeyType_")):
         r, m, _ = run(sig_pi(), mdh_new(**{fld: 1}), which)
         check(f"a non-zero {label} in the operand is a field the instruction does not name",
@@ -2649,7 +2902,7 @@ def test_restrict():
            m["MachinePolicy"], m["Machine"], m["State"]),
           ("ok", 2, 1, loc(hw1=1), 9, 0b01, M_CIPHER, ST_READY))
     u = fresh()
-    check("kl.restrictv needs a 128-bit vector operand (GR7)",
+    check("kl.restrictv needs a 128-bit vector operand (GR6)",
           trap_of(u.restrict, 0, 0, "v", vec_bits=96), "illegal/1")
 
     # States
@@ -2665,13 +2918,11 @@ def test_restrict():
     check("kl.restrict* narrows the MDH of an Error-State locker, as in any Complete State",
           (u.restrict(0, mdh_new(UsagePolicy=0b1000, ExpirationDate=9)), u.getmd(0)["UsagePolicy"],
            u.getmd(0)["ExpirationDate"], u.getst(0)), ("ok", 0b1000, 9, ST_EXPIRED))
-    check("... raising its SCProtection allocates nothing, the locker holding only its MDH",
+    check("... raising its SCProtection allocates nothing: a locker holding only its MDH "
+          "consumes no KLF capacity (<<KLEE-KLF>>)",
           (u.restrict(0, mdh_new(SCProtection=2)), u.lockers[0].alloc), ("ok", 0))
     check("... and a widening request turns it into Error State Invalid",
           (u.restrict(0, mdh_new(ExpirationDate=99)), u.getst(0)), ("invalid", ST_INVALID))
-    info("An Error-State locker holds no KLF capacity (it is its MDH alone), so this model "
-         "allocates nothing when kl.restrict* raises its _SCProtection_; the text states the "
-         "capacity rule only in general terms.")
     u = fresh(clock=5000)
     provision(u, 0, cipher_pi(ExpirationDate=10))
     check("kl.restrict* is not an evaluation point of _ExpirationDate_",
@@ -2864,9 +3115,9 @@ def test_mgmt_flows():
           u.mgmt(0, CFG_MANAGEMENT_END, form="A"), "completed")
     check("... State Ready, StateExtension and MachineUse zero, klmanagedlocker 32",
           (u.getst(0), u.getstx(0), u.getmd(0)["MachineUse"], u.klmanagedlocker),
-          (ST_READY, 0, 0, MANAGEDCL_NONE))
+          (ST_READY, 0, 0, MANAGED_NONE))
     check("... the implementation's ADS is recorded in _AuxDataLen_",
-          (u.getmd(0)["AuxDataLen"], cl_consistent(u, 0)), (ADS_BLOCKS, True))
+          (u.getmd(0)["AuxDataLen"], locker_consistent(u, 0)), (ADS_BLOCKS, True))
     check("... Content is the PI's", u.lockers[0].c1, content)
     check("kl.size is now the SCC length with the ADS",
           u.size(k=0), 64 + len(content) + 16 * (ADS_BLOCKS - 2))
@@ -2915,7 +3166,7 @@ def test_mgmt_flows():
           ("completed", md, content))
     check("... ml is consumed only for its _State_: the other fields of ml are ignored",
           (u.getmd(0)["UsagePolicy"], u.getmd(0)["Locality"]), (0b0001, loc(hw1=2)))
-    check("... klmanagedlocker is 32 again", u.klmanagedlocker, MANAGEDCL_NONE)
+    check("... klmanagedlocker is 32 again", u.klmanagedlocker, MANAGED_NONE)
 
     v = fresh()
     check("kl.size Form B of the stored MDH gives the image length",
@@ -2969,7 +3220,7 @@ def test_mgmt_flows():
     tampered[40] ^= 1
     check("a modified Content1 byte: Authentication Failed, no exception",
           (import_(v, 0, bytes(tampered)), v.getmd(0)["AuxDataLen"], v.klmanagedlocker),
-          (ST_MGMT_AUTH, 0, MANAGEDCL_NONE))
+          (ST_MGMT_AUTH, 0, MANAGED_NONE))
     widened = mdh_bytes(dict(st_md, UsagePolicy=0)) + img[16:]
     widened = mdh_bytes(dict(st_md, ExpirationDate=0)) + img[16:] \
         if st_md["UsagePolicy"] == 0 else widened
@@ -3007,7 +3258,7 @@ def test_mgmt_flows():
     check("... also for an export or a completion",
           (trap_of(u.mgmt, 1, CFG_EXPORTING), trap_of(u.mgmt, 1, CFG_MANAGEMENT_END, mdh_new())),
           ("illegal/2", "illegal/2"))
-    check("... the klmanagedlocker check precedes Rule GR8 for a Form A opening",
+    check("... the klmanagedlocker check precedes Rule GR7 for a Form A opening",
           trap_of(u.mgmt, 1, CFG_PROVISIONING, form="A"), "illegal/2")
     u.csr_write("klmanagedlocker", 32)
     check("writing 32 releases the check; the other locker can be managed",
@@ -3055,7 +3306,7 @@ def test_mgmt_flows():
     u = fresh()
     provision(u, 0, cipher_pi())
     k0 = snapshot(u)
-    check("an opening provisioning zeroizes even a Valid locker (GR6), the operation then "
+    check("an opening provisioning zeroizes even a Valid locker (GR5), the operation then "
           "failing", (trap_of(u.mgmt, 0, CFG_PROVISIONING, mdh_new(Machine=M_ABSENT)),
                       u.getst(0), u.clf_free() == u.clf_total), ("unsupported", 0, True))
     check_true("... which is the one KLEE state change an exception does not undo",
@@ -3131,7 +3382,7 @@ def test_nested():
     u.mgmt(4, CFG_MANAGEMENT_END, saved)
     u.setst(4, 0)
     check("clearing the locker releases klmanagedlocker", (u.getst(4), u.klmanagedlocker),
-          (0, MANAGEDCL_NONE))
+          (0, MANAGED_NONE))
     check("reimporting the PI-shaped PCCC opens kl_cfg_ppi_importing",
           (u.mgmt(4, CFG_IMPORTING, saved), u.getst(4), u.klmanagedlocker),
           ("opened", CFG_PPI_IMPORTING, 4))
@@ -3256,7 +3507,7 @@ def export_pccc(u, k, saved):
 # =====================================================================
 
 def test_error_states():
-    section("10. lockers in an Error State  --  <<KLEE-error-state-transfer>>, "
+    section("10. Lockers in an Error State  --  <<KLEE-error-state-transfer>>, "
             "<<KLEE-error-state-instructions>>")
 
     for st in sorted(ERROR_STATES):
@@ -3472,6 +3723,22 @@ def test_transfers():
            (u.mgmt(0, CFG_EXPORTING), trap_of(u.load, 0, Memory(), BASE))[1]),
           ("illegal/2", "illegal/2"))
     u = fresh()
+    ready_cipher(u, 0)
+    u.mgmt(0, CFG_EXPORTING)
+    u.csr_write("klmanagedlocker", 32)
+    check("in kl_cfg_exporting and kl_cfg_importing the locker must be the one klmanagedlocker "
+          "names (SGR21, SGR22)", (trap_of(u.store, 0, Memory(), BASE), trap_of(u.mv_out, 0)),
+          ("illegal/2", "illegal/2"))
+    u.csr_write("klmanagedlocker", 0)
+    check("... once it does, the transfer proceeds", u.store(0, Memory(), BASE), "done")
+    u.csr_write("klmanagedlocker", 32)
+    u.mgmt(1, CFG_IMPORTING, cipher_pi(State=1))
+    u.csr_write("klmanagedlocker", 32)
+    u.mgmt(2, CFG_PROVISIONING, cipher_pi())
+    u.csr_write("klmanagedlocker", 32)
+    check("... also for a locker being imported, but not in kl_cfg_provisioning",
+          (trap_of(u.mv_in, 1, 1), u.mv_in(2, 1)), ("illegal/2", "moved"))
+    u = fresh()
     u.mgmt(0, CFG_PROVISIONING, cipher_pi())
     u.csr_write("klstart", 8)
     check("a klstart that is not a multiple of 16 is an illegal instruction",
@@ -3523,15 +3790,15 @@ def test_transfers():
     u = fresh()
     u.mgmt(0, CFG_PROVISIONING, cipher_pi())
     mem.unmapped.append((BASE + 16, BASE + 32))
-    check("under the restart option a fault leaves klstart = 0",
-          (trap_of(u.load, 0, mem, BASE, restart=True), u.klstart), ("load_page_fault", 0))
+    check("the restart option is not available for a fault: klstart = the prefix point (IRR3)",
+          (trap_of(u.load, 0, mem, BASE, restart=True), u.klstart), ("load_page_fault", 16))
     mem.unmapped.clear()
+    u = fresh()
+    u.mgmt(0, CFG_PROVISIONING, cipher_pi())
+    check("under the restart option an asynchronous interrupt leaves klstart = 0",
+          (u.load(0, mem, BASE, halt_after=16, restart=True), u.klstart), ("halted", 0))
     check("... and re-execution transfers everything again",
           (u.load(0, mem, BASE), bytes(u.lockers[0].img)), ("done", pi_content(cipher_pi())))
-    info("MMR3 says re-execution after a non-idempotent access fault raises it again 'before "
-         "any component access'; that holds when klstart records the prefix-complete point, but "
-         "not literally under the restart option of IRR3, where re-execution transfers the "
-         "prefix again first. Modelled per IRR6/IRR8 (prefix committed, klstart = prefix point).")
 
     u = fresh()
     ready_cipher(u, 0)
@@ -3627,7 +3894,7 @@ def test_kliobuf():
     check("out of reset: kliobuflen, kliobuftop, klstart 0; klmanagedlocker 32",
           [u.csr_read(c) for c in ("kliobuflen", "kliobuftop", "klstart", "klmanagedlocker")],
           [0, 0, 0, 32])
-    check("kl.input on an unconfigured KLIOBUF raises kl_exc_unconfigured_buffer (GR8)",
+    check("kl.input on an unconfigured KLIOBUF raises kl_exc_unconfigured_buffer (GR7)",
           trap_of(u.input_, Memory(), BASE, 16), "unconfigured_buffer")
     u.csr_write("kliobuflen", 64)
     u.kliobuf[0:4] = b"\xFF" * 4
@@ -3705,8 +3972,12 @@ def test_kliobuf():
     u.csr_write("klstart", 0)
     check("a page fault in kl.output halts at the offending byte",
           (trap_of(u.output, dst, BASE, 32), u.klstart), ("store_page_fault", 10))
-    check("the restart option leaves klstart 0",
-          (trap_of(u.output, dst, BASE, 32, restart=True), u.klstart), ("store_page_fault", 0))
+    check("the restart option does not apply to a fault",
+          (trap_of(u.output, dst, BASE, 32, restart=True), u.klstart), ("store_page_fault", 10))
+    dst.unmapped.clear()
+    u.csr_write("klstart", 0)
+    check("... it applies to an asynchronous interrupt (klstart 0)",
+          (u.output(dst, BASE, 32, halt_after=8, restart=True), u.klstart), ("halted", 0))
     check("KLLEN = kliobuftop * 8", u.kliobuftop * 8, 256)
 
 
@@ -3839,7 +4110,7 @@ def test_sgr():
     provision(u, 2, cipher_pi())
     u.csr_write("klmanagedlocker", 0)
     check("... cloning onto it clears it and releases klmanagedlocker",
-          (u.clone(0, 2), u.getst(0), u.klmanagedlocker), ("cloned", ST_READY, MANAGEDCL_NONE))
+          (u.clone(0, 2), u.getst(0), u.klmanagedlocker), ("cloned", ST_READY, MANAGED_NONE))
     u = fresh()
     u.mgmt(3, CFG_PROVISIONING, cipher_pi())
     check("... a clone naming it as both source and destination performs no operation",
@@ -3895,13 +4166,14 @@ def test_sgr():
         w.lockers[0].mdh["State"] = st                  # white box
         w.lockers[0].img = bytearray(64)
         rows.append((st, trap_of(w.size, k=0), trap_of(w.avail, k=0), trap_of(w.getmd, 0),
-                     trap_of(w.getst, 0), trap_of(w.setst, 0, ST_EXPIRED)))
+                     trap_of(w.getst, 0), trap_of(w.swap, 1, 0), trap_of(w.rename, 0, 1),
+                     trap_of(w.setst, 0, ST_EXPIRED)))
         w = fresh()
         w.mgmt(0, CFG_PROVISIONING, cipher_pi())
-        rows.append((st, trap_of(w.setst, 0, 0), trap_of(w.clearall), None, None, None))
-    check("SGR20: kl.size, kl.avail, kl.getmd*, kl.getst, an Error-State or clearing kl.setst, "
-          "kl.clear and kl.clearall are allowed in every Partial State",
-          [r[1:] for r in rows], [(None,) * 5] * len(rows))
+        rows.append((st, trap_of(w.setst, 0, 0), trap_of(w.clearall)) + (None,) * 5)
+    check("SGR20: kl.size, kl.avail, kl.getmd*, kl.getst, kl.swap, kl.rename, an Error-State or "
+          "clearing kl.setst, kl.clear and kl.clearall are allowed in every Partial State",
+          [r[1:] for r in rows], [(None,) * 7] * len(rows))
     w = fresh()
     w.mgmt(0, CFG_PROVISIONING, cipher_pi())
     check("SGR20: an Error-State kl.setst on the managed locker releases klmanagedlocker",
@@ -3928,17 +4200,22 @@ def test_sgr():
     check("kl.setst through X0 other than Form A #0 is reserved",
           (trap_of(w.setst, "X0", 0, form="B"), trap_of(w.setst, "X0", 1)),
           ("illegal/1", "illegal/1"))
-    check("GR1: an indirect locker index outside [0..31] is an illegal instruction",
-          (trap_of(w.getmd, 32), trap_of(w.setst, 40, 0)), ("illegal/1", "illegal/1"))
+    z = fresh(zklind=True)
+    check("GR11: under Zklind, an indirect locker index outside [0..31], or X0, is an illegal "
+          "instruction", (trap_of(z.getmd, Ind(32)), trap_of(z.setst, Ind(40), 0),
+                          trap_of(z.getmd, Ind(0, reg=0)), z.getst(Ind(31))),
+          ("illegal/1", "illegal/1", "illegal/1", 0))
 
     # kl.clone
     w = fresh()
     check("kl.clone from an Unconfigured locker is an illegal instruction",
           trap_of(w.clone, 1, 0), "illegal/2")
     ready_cipher(w, 0, SCProtection=1)
-    check("kl.clone makes a perfect copy",
-          (w.clone(1, 0), w.getmd(1), w.lockers[1].c1, w.lockers[1].c2, w.lockers[1].alloc),
-          ("cloned", w.getmd(0), w.lockers[0].c1, w.lockers[0].c2, w.lockers[0].alloc))
+    w.siv, w.impqual, w.siv2 = 1, 2, 3
+    check("kl.clone makes a perfect copy and touches no authentication register",
+          (w.clone(1, 0), w.getmd(1), w.lockers[1].c1, w.lockers[1].c2, w.lockers[1].alloc,
+           (w.siv, w.impqual, w.siv2)),
+          ("cloned", w.getmd(0), w.lockers[0].c1, w.lockers[0].c2, w.lockers[0].alloc, (1, 2, 3)))
     check("... equivalent to an export and an import",
           (import_(w, 2, export(w, 0)), w.getmd(2), w.lockers[2].c1), (ToyCipher.ENCRYPT, w.getmd(1),
                                                                    w.lockers[1].c1))
@@ -3955,7 +4232,7 @@ def test_sgr():
           (t.restrict(1, mdh_new(MachinePolicy=0b01)), t.getmd(1)["MachinePolicy"],
            t.getmd(0)["MachinePolicy"]), ("ok", 1, 3))
 
-    # GR5 table: which instructions modify klstart
+    # GR4 table: which instructions modify klstart
     w = fresh()
     ready_cipher(w, 0)
     w.csr_write("klstart", 16)
@@ -3964,6 +4241,8 @@ def test_sgr():
                       ("kl.avail", lambda: w.avail(k=0)),
                       ("kl.restrict", lambda: w.restrict(0, mdh_new(UsagePolicy=1))),
                       ("kl.clone", lambda: w.clone(1, 0)),
+                      ("kl.rename", lambda: w.rename(2, 1)),
+                      ("kl.swap", lambda: w.swap(1, 2)),
                       ("kl.setst", lambda: w.setst(0, ToyCipher.ENCRYPT, 1))):
         fn()
         check(f"{label} leaves klstart unchanged", w.klstart, 16)
@@ -4141,6 +4420,30 @@ def test_expiration():
     check("without Zklexpire a non-zero ExpirationDate never reaches a locker",
           (n.mgmt(0, CFG_PROVISIONING, cipher_pi(ExpirationDate=1)),
            ready_cipher(n, 1).restrict(1, mdh_new(ExpirationDate=1))), ("invalid", "invalid"))
+    e = fresh()
+    provision(e, 0, cipher_pi())
+    e.setst(0, ST_EXPIRED)
+    n = fresh(zklexpire=False)
+    ready_cipher(n, 1)
+    check("without Zklexpire no locker is in State Expired: an Expired MDH imports as "
+          "Invalid, and kl.setst #53 sets Invalid (<<KLEE-states-error>>)",
+          (import_(n, 0, export(e, 0)), n.setst(1, ST_EXPIRED), n.getst(1)),
+          (ST_INVALID, "error state", ST_INVALID))
+    info("Without Zklexpire, <<KLEE-states-error>> makes a PI, SCC or PCCC with State Expired "
+         "invalid, yet <<KLEE-MVR-open>> exempts the short import from every validity check, and "
+         "kl.setst accepts any Error State. Modelled as the 54/55 case: the short import and "
+         "kl.setst #53 give _Invalid_, since 'a locker cannot be in that State'.")
+    u = exp_unit(0, ed=1 << 19)
+    ready_cipher(u, 1)
+    u.clock = None
+    out = bytearray(b"\x22" * 16)
+    check("a secure clock that cannot be read: a non-zero ExpirationDate is expired at the next "
+          "usage-controlled instruction, a zero one is not",
+          (u.exec_(0, "A", vin=bytearray(16), vout=out), u.getst(0), bytes(out), u.setst(1, ST_READY)),
+          ("expired", ST_EXPIRED, bytes(16), "ok"))
+    spec_note("<<KLEE-states-error>>: '... a locker cannot be in that State, and if any metadata "
+              "header of a PI, SCC, or PSCC with State _Expired_ is considered invalid' has a "
+              "stray 'if' and 'PSCC' for PCCC; a PCCC cannot carry an Error State.")
 
 
 # =====================================================================
@@ -4148,7 +4451,7 @@ def test_expiration():
 # =====================================================================
 
 def test_derive():
-    section("17. kl.derive, generic gates  --  <<KLEE-instruction-derive>>")
+    section("17. kl.derive  --  <<KLEE-instruction-derive>>, Rules DER1-DER8")
 
     def pair(**kw):
         u = fresh(**kw)
@@ -4172,7 +4475,7 @@ def test_derive():
     check("the source advances as kl.exec would; a longer length fills only the field",
           (u.derive(1, 0, 40), u.getmd(0)["MachineUse"]), ("transferred", 32))
     u = pair()
-    check("an effective length below the pair's minimum invalidates the destination",
+    check("a key field of 32 bytes with length 16 invalidates the destination (DER1, check 4)",
           (u.derive(1, 0, 16), u.getst(1), u.getst(0)), ("invalid", ST_INVALID, ST_SUCCESS))
     u = pair()
     check("equal locker indices are an illegal instruction (first group)",
@@ -4218,8 +4521,8 @@ def test_derive():
           (u.derive(2, 0, 32), u.getst(0), u.getst(2)), ("invalid", ST_INVALID, ST_INVALID))
     u = pair()
     provision(u, 3, cipher_pi(KeyType=1), skid_content(SKID_A))
-    check("a field configured by a SKID is never importable",
-          (u.derive(3, 0, 32), u.getst(3)), ("invalid", ST_INVALID))
+    check("a key field of a locker whose _KeyType_ is 1 is never importable (DER4)",
+          (u.derive(3, 0, 32), u.getst(3), u.getst(0)), ("invalid", ST_INVALID, ST_SUCCESS))
     u = pair()
     provision(u, 4, xof_pi())
     check("length 0 with a zero minimum transfers nothing and changes no state",
@@ -4228,9 +4531,63 @@ def test_derive():
           (u.derive(4, 0, 5), u.getst(4), u.getmd(0)["MachineUse"]),
           ("transferred", ToyXof.ABSORB, 5))
     info("kl.derive with length = 0 'transfers nothing and, if the checks above pass, changes no "
-         "state'; with a pair whose minimum is non-zero the third check fails first, so this "
-         "model invalidates the destination (toy cipher key pair) and leaves the state alone only "
+         "state' (DER8); for a key field checks 3 and 4 of DER1 fail first, so this model "
+         "invalidates the destination (toy cipher key pair) and leaves the state alone only "
          "for a pair with minimum 0.")
+    info("DER4 is modelled as a violated transfer constraint (DER1, check 2), destination only: "
+         "_KeyType_ is not part of the endpoint descriptor, so the pair list cannot exclude it.")
+
+    # unrestricted and restricted transfers
+    u = pair()
+    u.lockers[0].mdh.update(UsagePolicy=0b0001, Locality=loc(hw1=2))
+    before = u.getmd(1)
+    check("a XOF output, which kl.exec also yields, is an unrestricted transfer: the "
+          "destination policies are not narrowed (DER3)",
+          (u.derive(1, 0, 32), u.getmd(1)), ("transferred", before))
+
+    def kex(src=None, dst=None, **kw):
+        w = fresh(**kw)
+        provision(w, 0, mdh_new(Machine=M_KEX, **(src or {})))
+        w.setst(0, ToyKex.SHARED, 0x1234)
+        provision(w, 1, cipher_pi(**(dst or {})))
+        return w
+    w = kex(src=dict(UsagePolicy=0b10001, Locality=loc(hw1=2, mloc=1), ExpirationDate=500),
+            dst=dict(UsagePolicy=0b10010, Locality=loc(hw1=1, sloc=1), ExpirationDate=900))
+    secret = MACHINES[M_KEX].get_state(w.lockers[0])
+    check("a shared secret into a cipher key is a restricted transfer, the destination MDH "
+          "narrowed as a SKID resolution narrows (DER2, DER5)",
+          (w.derive(1, 0, 32), w.lockers[1].c1[:32], w.getmd(1)["UsagePolicy"],
+           w.getmd(1)["Locality"], w.getmd(1)["ExpirationDate"], w.getst(0)),
+          ("transferred", secret, 0b10011, loc(hw1=2, mloc=1, sloc=1), 500, ToyKex.SHARED))
+    w = kex(src=dict(ExpirationDate=500), dst=dict(ExpirationDate=0))
+    check("... the smaller non-zero _ExpirationDate_, or the one that is set",
+          (w.derive(1, 0, 32), w.getmd(1)["ExpirationDate"]), ("transferred", 500))
+    for kw, label in ((dict(src=dict(Locality=loc(boot=1)), dst=dict(Locality=loc(boot=2))),
+                       "two different Boot Session entries"),
+                      (dict(src=dict(SCProtection=2), dst=dict(SCProtection=1)),
+                       "a destination _SCProtection_ below the source's")):
+        w = kex(**kw)
+        check(f"DER2 with {label}: destination Invalid, nothing transferred, source unchanged",
+              (w.derive(1, 0, 32), w.getst(1), w.getst(0), MACHINES[M_KEX].get_state(w.lockers[0])),
+              ("invalid", ST_INVALID, ToyKex.SHARED, secret))
+    w = kex(src=dict(Locality=loc(sloc=1)))
+    w.slocality = 0
+    check("DER2 with a union naming an unconfigured entry: destination Invalid",
+          (w.derive(1, 0, 32), w.getst(1)), ("invalid", ST_INVALID))
+    w = kex(src=dict(SCProtection=1), dst=dict(SCProtection=2))
+    check("... a stronger destination _SCProtection_ is kept",
+          (w.derive(1, 0, 32), w.getmd(1)["SCProtection"]), ("transferred", 2))
+    w = kex()
+    w.setst(0, ST_READY)
+    check("DER5: a source without an explicit shared secret invalidates the source",
+          (w.derive(1, 0, 32), w.getst(0), w.getst(1)), ("invalid", ST_INVALID, ST_READY))
+    w = kex()
+    w.setst(1, ToyCipher.ENCRYPT, 1)
+    check("DER5: a symmetric key destination must be in Ready",
+          (w.derive(1, 0, 32), w.getst(1), w.getst(0)), ("invalid", ST_INVALID, ToyKex.SHARED))
+    w = kex(src=dict(UsagePolicy=0b0100))
+    check("the checks of DER1 precede the narrowing: a short length narrows no policy",
+          (w.derive(1, 0, 8), w.getst(1), w.getmd(1)["UsagePolicy"]), ("invalid", ST_INVALID, 0))
 
 
 # =====================================================================
@@ -4316,43 +4673,65 @@ def test_error_architecture():
     u = fresh()
     ready_cipher(u, 0)
     u.mode = "S"
-    u.lcr[0] = "off"
+    u.llstatus[0] = "off"
     check("an access to an Off locker raises kl_exc_locker_off (kl.getmd*, kl.size, kl.exec, "
           "kl.restrict, kl.clone source, export, kl.load, kl.mv)",
           [trap_of(u.getmd, 0), trap_of(u.size, k=0), trap_of(u.exec_, 0, "D"),
            trap_of(u.restrict, 0, 0, "h"), trap_of(u.clone, 1, 0),
            trap_of(u.mgmt, 0, CFG_EXPORTING), trap_of(u.load, 0, Memory(), BASE),
-           trap_of(u.mv_in, 0, 1)], ["CL_off"] * 8)
+           trap_of(u.mv_in, 0, 1)], ["locker_off"] * 8)
     check("the first illegal-instruction group precedes it", trap_of(u.setst, 0, 46), "illegal/1")
-    u.lcr[5] = "off"
+    u.llstatus[5] = "off"
     check("it precedes the second group (kl.clone from an Off, Unconfigured locker)",
-          trap_of(u.clone, 1, 5), "CL_off")
+          trap_of(u.clone, 1, 5), "locker_off")
     check("an Off source is not exempt, whichever locker is the destination",
-          trap_of(u.clone, 5, 0), "CL_off")
-    u.lcr[0] = "clean"
+          trap_of(u.clone, 5, 0), "locker_off")
+    u.llstatus[0] = "clean"
     check("kl.clone naming an Off locker as destination executes and sets it Dirty",
-          (u.clone(5, 0), u.lcr[5]), ("cloned", "dirty"))
-    u.lcr[6] = "off"
+          (u.clone(5, 0), u.llstatus[5]), ("cloned", "dirty"))
+    u.llstatus[6] = "off"
     check("kl.clear of an Off locker executes and sets Dirty even if already Unconfigured",
-          (u.setst(6, 0), u.lcr[6]), ("cleared", "dirty"))
-    u.lcr[7] = "clean"
+          (u.setst(6, 0), u.llstatus[6]), ("cleared", "dirty"))
+    u.llstatus[7] = "clean"
     check("kl.clear of an Unconfigured, accessible locker need not set Dirty",
-          (u.setst(7, 0), u.lcr[7]), ("cleared", "clean"))
-    u.lcr[8] = "off"
+          (u.setst(7, 0), u.llstatus[7]), ("cleared", "clean"))
+    u.llstatus[8] = "off"
     check("an opening provisioning into an Off locker executes and sets Dirty",
-          (u.mgmt(8, CFG_PROVISIONING, cipher_pi()), u.lcr[8]), ("opened", "dirty"))
-    u.lcr[9] = "off"
+          (u.mgmt(8, CFG_PROVISIONING, cipher_pi()), u.llstatus[8]), ("opened", "dirty"))
+    u.llstatus[9] = "off"
     check("an exempted opening that raises before zeroizing sets no field",
-          (trap_of(u.mgmt, 9, CFG_PROVISIONING, cipher_pi()), u.lcr[9]), ("illegal/2", "off"))
+          (trap_of(u.mgmt, 9, CFG_PROVISIONING, cipher_pi()), u.llstatus[9]), ("illegal/2", "off"))
     u.csr_write("klmanagedlocker", 32)
     check("an exempted opening that zeroizes and then raises has set Dirty",
-          (trap_of(u.mgmt, 9, CFG_PROVISIONING, mdh_new(Machine=M_ABSENT)), u.lcr[9]),
+          (trap_of(u.mgmt, 9, CFG_PROVISIONING, mdh_new(Machine=M_ABSENT)), u.llstatus[9]),
           ("unsupported", "dirty"))
-    u.lcr[10] = "off"
+    u.csr_write("klmanagedlocker", 32)
+    ready_cipher(u, 12)
+    u.llstatus.update({12: "off", 13: "off"})
+    check("kl.rename from an Off source traps; the Off destination keeps its mark",
+          (trap_of(u.rename, 13, 12), u.llstatus[13]), ("locker_off", "off"))
+    u.llstatus[12] = "clean"
+    check("kl.rename naming an Off locker as destination executes and sets both Dirty",
+          (u.rename(13, 12), u.llstatus[12], u.llstatus[13]), ("renamed", "dirty", "dirty"))
+    u.llstatus[14] = "off"
+    check("kl.clone and kl.rename with Ks = Kd execute on an Off locker and set no field",
+          (u.clone(14, 14), u.rename(14, 14), u.llstatus[14]), ("noop", "noop", "off"))
+    u.llstatus[15] = "off"
+    check("kl.swap: neither access is exempt, whichever side is Off",
+          (trap_of(u.swap, 15, 13), trap_of(u.swap, 13, 15)), ("locker_off", "locker_off"))
+    check("... not even with Ks = Kd",
+          (trap_of(u.swap, 15, 15), u.llstatus[15]), ("locker_off", "off"))
+    u.llstatus[13] = u.llstatus[16] = "clean"
+    check("kl.swap of accessible lockers sets both Dirty",
+          (u.swap(16, 13), u.llstatus[13], u.llstatus[16]), ("swapped", "dirty", "dirty"))
+    info("kl.swap with Ks = Kd on an Off locker: <<KLEE-CSR-llockerstatus>> lets kl.clone and "
+         "kl.rename with identical operands execute, but names no such case for kl.swap, of "
+         "which 'neither access is exempt'; modelled as trapping.")
+    u.llstatus[10] = "off"
     check("kl.clearall executes over Off lockers and sets them Dirty",
-          (u.clearall(), u.lcr[10]), ("cleared all", "dirty"))
+          (u.clearall(), u.llstatus[10]), ("cleared all", "dirty"))
     u.mode = "M"
-    u.lcr[0] = "off"
+    u.llstatus[0] = "off"
     check("in M-mode no *llockerstatus field is in effect", trap_of(u.getmd, 0), None)
 
 
@@ -4539,14 +4918,198 @@ def test_save_restore():
 
 
 # =====================================================================
-# 20. Negative controls
+# 20. Encodings and locker addressing
+# =====================================================================
+
+def test_encodings():
+    section("20. Encodings and locker addressing  --  <<KLEE-instructions-detailed>>, "
+            "<<KLEE-cryptographic-registers>>, <<KLEE-instruction-clone>>")
+
+    names = [decoded(enc_r(2, T << 2, rs1=3, rd=4))[0] for T in range(4)]
+    check("funct2 = 2: field T [28:27] selects kl.clone, kl.rename, kl.swap; T = 3 is kl.derive",
+          names, ["kl.clone", "kl.rename", "kl.swap", "kl.derive"])
+    check("field R [26:25]: bit 25 makes the destination, bit 26 the source, indirect",
+          [decoded(enc_r(2, R, rs1=6, rd=7))[1:] for R in range(4)],
+          [("K7", "K6"), ("K(X7)", "K6"), ("K7", "K(X6)"), ("K(X7)", "K(X6)")])
+    check("kl.clone, kl.rename and kl.swap address indirectly without Zklind",
+          [decoded(enc_r(2, (T << 2) | 3, rs1=6, rd=7)) for T in range(3)],
+          [(n, "K(X7)", "K(X6)") for n in ("kl.clone", "kl.rename", "kl.swap")])
+    check("kl.derive with R != 00 needs Zklind; with R = 00 or Zklind it decodes",
+          ([decoded(enc_r(2, (3 << 2) | R, rs2=9, rs1=6, rd=7)) for R in (1, 2, 3)],
+           decoded(enc_r(2, 3 << 2, rs2=9, rs1=6, rd=7)),
+           decoded(enc_r(2, (3 << 2) | 3, rs2=9, rs1=6, rd=7), zklind=True)),
+          (["illegal/1"] * 3, ("kl.derive", "K7", "K6", "X9"),
+           ("kl.derive", "K(X7)", "K(X6)", "X9")))
+    check("kl.clone with a non-zero rs2, or bit 29 set, is reserved",
+          (decoded(enc_r(2, 0, rs2=1, rs1=6, rd=7)), decoded(enc_r(2, 0b10000, rs1=6, rd=7))),
+          ("illegal/1", "illegal/1"))
+    ind_words = {
+        "kl.exec": enc_r(0, 0b00010, rs2=2, rs1=6, rd=3),
+        "kl.mv": enc_r(0, 0b01010, rs2=4, rs1=6, rd=1),
+        "kl.size": enc_r(0, 0b00110, rs1=6, rd=3),
+        "kl.restrictl": enc_r(1, 0b00010, rs1=4, rd=6),
+        "kl.getmdl": enc_r(3, 0b00010, rs1=6, rd=3),
+        "kl.setst": enc_setst(2, F=1, r=1, rs1=4, rd=6),
+        "kl.mgmt": enc_setst(CFG_PROVISIONING, F=3, r=1, rs1=4, rd=6),
+        "kl.load": enc_ls(False, 7, 6),
+        "kl.store": enc_ls(True, 7, 6),
+    }
+    check("every other instruction addresses indirectly only with Zklind (r = 1, funct3 = 7)",
+          {n: (decoded(w), decoded(w, zklind=True)[0]) for n, w in ind_words.items()},
+          {n: ("illegal/1", n) for n in ind_words})
+    check("kl.load and kl.store select with funct3: 6 direct, 7 indirect",
+          [decoded(enc_ls(s, 6, 6)) for s in (False, True)], [("kl.load", "K6"), ("kl.store", "K6")])
+    check("kl.clearall is r = 1 with rs1 = rd = 0, available without Zklind; other X0 forms reserved",
+          (decoded(enc_setst(0, r=1)), decoded(enc_setst(1, r=1)), decoded(enc_setst(0, F=1, r=1))),
+          (("kl.clearall",), "illegal/1", "illegal/1"))
+    check("GR11: X0 as an indirect locker index is an illegal instruction, even under Zklind",
+          (decoded(enc_r(0, 0b00010, rs1=0), zklind=True), decoded(enc_r(2, 0b00011, rs1=0, rd=7))),
+          ("illegal/1", "illegal/1"))
+    check("kl.mv sub-opcodes in the unused register field of Forms B and C of kl.exec",
+          [decoded(enc_r(0, form << 3, rs2=s, rs1=6, rd=d))[:2]
+           for form, d, s in ((1, 0, 5), (1, 1, 5), (1, 2, 5), (2, 5, 0), (2, 5, 1), (2, 5, 2))],
+          [("kl.exec", "B"), ("kl.mv", "I"), ("kl.mv", "II"), ("kl.exec", "C"), ("kl.mv", "III"),
+           ("kl.mv", "IV")])
+    check("kl.mgmt immediates 59-62 and Form B are reserved; kl.setst 46, 47 are reserved",
+          [decoded(enc_setst(i, F=3, rs1=4, rd=6)) for i in (59, 62, 46, 47)]
+          + [decoded(enc_setst(56, F=1, rs1=4, rd=6))], ["illegal/1"] * 5)
+    check("#immed7 0 and 64 name kl.clear and kl.clearads",
+          [decoded(enc_setst(i, rd=6))[0] for i in (0, 64, 65)],
+          ["kl.clear", "kl.clearads", "kl.setst"])
+
+    # the model's operands follow the same rules
+    u = fresh()
+    ready_cipher(u, 0)
+    check("model: indirect kl.getmd, kl.derive, kl.load without Zklind are illegal instructions",
+          [trap_of(u.getmd, Ind(0)), trap_of(u.derive, Ind(1), 0, 32),
+           trap_of(u.load, Ind(0), Memory(), BASE)], ["illegal/1"] * 3)
+    check("model: indirect kl.clone, kl.rename, kl.swap work without Zklind",
+          (u.clone(Ind(1), Ind(0)), u.rename(Ind(2), Ind(1)), u.swap(Ind(3), Ind(2)),
+           u.getst(3), u.getst(2)), ("cloned", "renamed", "swapped", ToyCipher.ENCRYPT, 0))
+    v = fresh(zklind=True)
+    ready_cipher(v, 4)
+    check("model: under Zklind an indirect index selects the locker",
+          (v.getst(Ind(4)), v.size(k=Ind(4))), (ToyCipher.ENCRYPT, v.size(k=4)))
+    spec_note("<<KLEE-instructions-detailed>> says bit r selects indirect addressing 'except "
+              "kl.load and kl.store, which select with funct3, and kl.derive, which selects with "
+              "field R'; kl.clone, kl.rename and kl.swap also select with field R.")
+
+
+# =====================================================================
+# 21. kl.rename and kl.swap
+# =====================================================================
+
+def test_rename_swap():
+    section("21. kl.rename and kl.swap  --  <<KLEE-instruction-clone>>")
+
+    cap = MACHINES[M_CIPHER].clf_capacity(cipher_pi(SCProtection=1))
+    u = fresh()
+    ready_cipher(u, 0, SCProtection=1)
+    img0 = (u.getmd(0), u.lockers[0].c1, u.lockers[0].c2, u.lockers[0].alloc)
+    check("kl.rename moves the CC unchanged and leaves the source Unconfigured",
+          (u.rename(5, 0), (u.getmd(5), u.lockers[5].c1, u.lockers[5].c2, u.lockers[5].alloc),
+           u.getst(0), u.lockers[0].alloc), ("renamed", img0, 0, 0))
+    ready_cipher(u, 6, SCProtection=1)
+    free = u.clf_free()
+    check("... the previous CC of the destination is discarded and its KLF capacity freed",
+          (u.rename(6, 5), u.getmd(6), u.clf_free()), ("renamed", img0[0], free + cap))
+    before = snapshot(u)
+    check("kl.rename and kl.swap with Ks = Kd perform no operation",
+          (u.rename(6, 6), u.swap(6, 6), snapshot(u) == before), ("noop", "noop", True))
+    provision(u, 1, sig_pi(AuxInfo=2))
+    a, b = u.getmd(1), u.getmd(6)
+    check("kl.swap exchanges two CCs",
+          (u.swap(1, 6), u.getmd(1), u.getmd(6), u.lockers[1].alloc), ("swapped", b, a, cap))
+    check("kl.rename from an Unconfigured locker discards the destination (no exception, "
+          "unlike kl.clone)", (trap_of(u.clone, 1, 9), u.rename(1, 9), u.getst(1)),
+          ("illegal/2", "renamed", 0))
+
+    t = fresh(clf_total=2 * cap)
+    ready_cipher(t, 0, SCProtection=1)
+    ready_cipher(t, 1, SCProtection=1)
+    check("neither raises kl_exc_out_of_memory: with no free KLF capacity both execute",
+          (t.clf_free(), t.swap(0, 1), t.rename(2, 0), trap_of(t.clone, 3, 1)),
+          (0, "swapped", "renamed", "out_of_memory"))
+
+    # Partial States, klmanagedlocker
+    src = fresh()
+    provision(src, 0, cipher_pi(SCProtection=1, Locality=loc(boot=1)))
+    scc = export(src, 0)
+    base_ml = mdh_unpack(b2v(scc[0:16]))
+    u = fresh()
+    u.mgmt(2, CFG_IMPORTING, base_ml)
+    mem = Memory()
+    mem.write(BASE, scc[16:])
+    u.load(2, mem, BASE, halt_after=48)
+    regs = (u.siv, u.impqual, u.siv2)
+    check("kl.rename moves a locker being imported: klmanagedlocker follows it, klstart and "
+          "the authentication registers are untouched",
+          (u.rename(7, 2), u.getst(7), u.getst(2), u.klmanagedlocker, u.klstart,
+           (u.siv, u.impqual, u.siv2)), ("renamed", CFG_IMPORTING, 0, 7, 48, regs))
+    check("... the import resumes on the new index and authenticates",
+          (trap_of(u.load, 2, mem, BASE), u.load(7, mem, BASE),
+           u.mgmt(7, CFG_MANAGEMENT_END, base_ml), u.getmd(7), u.lockers[7].c1),
+          ("illegal/2", "done", "completed", src.getmd(0), src.lockers[0].c1))
+    u = fresh()
+    ready_cipher(u, 4)
+    u.mgmt(3, CFG_PROVISIONING, cipher_pi())
+    check("kl.swap with the managed locker: klmanagedlocker names the other index",
+          (u.swap(3, 4), u.klmanagedlocker, u.getst(3), u.getst(4)),
+          ("swapped", 4, ToyCipher.ENCRYPT, CFG_PROVISIONING))
+    check("... a swap not involving it leaves klmanagedlocker",
+          (u.swap(0, 1), u.klmanagedlocker), ("swapped", 4))
+    check("kl.rename onto the managed locker discards it and writes 32",
+          (u.rename(4, 3), u.klmanagedlocker, u.getst(4)), ("renamed", 32, ToyCipher.ENCRYPT))
+    u.mgmt(8, CFG_PROVISIONING, cipher_pi())
+    check("kl.clone from a Configuration-State locker raises kl_exc_privilege_violation; "
+          "kl.rename and kl.swap move it (SGR18, SGR20)",
+          (trap_of(u.clone, 9, 8), u.swap(9, 8), u.rename(8, 9), u.getst(8), u.klmanagedlocker),
+          ("privilege_violation", "swapped", "renamed", CFG_PROVISIONING, 8))
+
+    # not usage-controlled, not an evaluation point, Error States, klstart
+    u = fresh(clock=0)
+    ready_cipher(u, 0, UsagePolicy=0b0001, ExpirationDate=10)
+    u.mode = "U"
+    u.clock = 99
+    u.csr_write("klstart", 32)
+    u.siv = 11
+    check("in a mode the _UsagePolicy_ denies, and past the _ExpirationDate_, both execute "
+          "and change no State", (u.rename(1, 0), u.swap(2, 1), u.getst(2), u.getmd(2)["UsagePolicy"]),
+          ("renamed", "swapped", ToyCipher.ENCRYPT, 0b0001))
+    check("they are uninterruptible and leave klstart and the authentication registers alone "
+          "(IRR1, <<KLEE-CSR-klstart>>)", (u.klstart, u.siv), (32, 11))
+    u.csr_write("klstart", 0)
+    check("... while kl.exec is gated", trap_of(u.exec_, 2, "A", vin=bytearray(16),
+                                                vout=bytearray(16)), "privilege_violation")
+    w = fresh()
+    ready_cipher(w, 0)
+    w.setst(0, ST_EXPIRED)
+    md = w.getmd(0)
+    check("an Error-State CC is moved as its MDH alone",
+          (w.rename(3, 0), w.getmd(3), w.lockers[3].alloc, w.swap(4, 3), w.getmd(4)),
+          ("renamed", md, 0, "swapped", md))
+    for final in (ST_SUCCESS, ST_FAILURE):
+        w = fresh()
+        provision(w, 0, cipher_pi())
+        tg = MACHINES[M_CIPHER].verify_tag(w, w.lockers[0])
+        w.setst(0, ToyCipher.VERIFY, tg if final == ST_SUCCESS else 0)
+        check(f"State {final}: kl.rename and kl.swap move the CC unchanged",
+              (w.rename(1, 0), w.swap(2, 1), w.getst(2)), ("renamed", "swapped", final))
+    spec_note("kl.rename and kl.swap are absent from the instructions SGR5 permits in _Success_ "
+              "and _Failure_, from the ways SGR3 lists to leave a Configuration State, and from "
+              "those <<KLEE-CSR-klmanagedlocker>> gives for resetting klmanagedlocker; SGR20 and "
+              "<<KLEE-instruction-clone>> allow them. Modelled per <<KLEE-instruction-clone>>.")
+
+
+# =====================================================================
+# 22. Negative controls
 # =====================================================================
 
 def test_negative_controls():
-    section("20. Negative controls")
+    section("22. Negative controls")
 
     for label in ("NEGCTRL-widen", "NEGCTRL-badresume", "NEGCTRL-adsbit",
-                  "NEGCTRL-oldlayout", "NEGCTRL-restoreorder"):
+                  "NEGCTRL-oldlayout", "NEGCTRL-restoreorder", "NEGCTRL-renamemanaged"):
         declare_negative_control(label)
 
     # 1: a restrict that replaces UsagePolicy when non-zero, as for other fields, widens
@@ -4629,16 +5192,31 @@ def test_negative_controls():
     expect_fail("NEGCTRL-restoreorder", "restoring the managed locker first preserves its SIV",
                 u.getst(2), src.getst(0))
 
+    # 6: a kl.rename that left klmanagedlocker on the old index strands the import (SGR21)
+    runs = {}
+    for faithful in (True, False):
+        u = fresh()
+        src, base_ml, mem = build_context(u)
+        u.csr_write("klstart", 64)
+        if faithful:
+            u.rename(9, 2)
+        else:
+            u.lockers[9], u.lockers[2] = u.lockers[2], Locker()
+        runs[faithful] = trap_of(u.load, 9, mem, BASE)
+    check("after kl.rename the interrupted import resumes on the new index", runs[True], None)
+    expect_fail("NEGCTRL-renamemanaged", "a rename that leaves klmanagedlocker behind still "
+                "resumes the import", runs[False], None)
+
 
 # =====================================================================
-# 21. Notes
+# 23. Notes
 # =====================================================================
 
 def test_notes():
-    section("21. Readings chosen, and text to review")
+    section("23. Readings chosen, and text to review")
 
     info("MachinePolicy = 0 for a Machine that requires a bit is listed as invalid Metadata, "
-         "while unsupported Metadata is 'a combination of _Machine_, _MachinePolicy_ and "
+         "while unsupported Metadata is 'the combination of _Machine_, _MachinePolicy_ and "
          "_SCProtection_ ... not implemented'. The opening kl.mgmt checks unsupported first, so "
          "the class decides between kl_exc_unsupported and Error State Invalid. Modelled as "
          "invalid (the explicit entry); kl.avail still returns 0 for it.")
@@ -4656,7 +5234,9 @@ def test_notes():
          "empty-window no-op rule is stated only for KLIOBUF and vector operands.")
     info("SGR5 permits kl.derive in Success 'under the conditions of use of kl.exec'; the toy "
          "XOF therefore admits a derive source only in Success. Pairs, minimums and field "
-         "lengths are Machine-specific and are toy values here.")
+         "lengths are Machine-specific and are toy values here: the XOF pairs are unrestricted "
+         "transfers (kl.exec yields the same bytes), the key agreement pair is restricted "
+         "(DER5).")
     info("The Error States are listed 'in decreasing severity order', but no rule says what the "
          "order decides when two conditions coincide; SGR19 fixes the order of the conditions "
          "instead, which is what this model follows.")
@@ -4687,6 +5267,8 @@ def main():
     test_derive()
     test_error_architecture()
     test_save_restore()
+    test_encodings()
+    test_rename_swap()
     test_negative_controls()
     test_notes()
 

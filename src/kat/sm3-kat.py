@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SM3 KAT for the KLEE specification (<<KLEE-SM3>> over <<KLEE-SHA-2>>/<<KLEE-hash-functions>>).
+"""SM3 KAT for the KLEE specification (<<KLEE-SM3>> over <<KLEE-SHA-2>>/<<KLEE-hash-functions-MACs-XOFs>>).
 
 <<KLEE-SM3>> says that SM3 "follows exactly the rules of the SHA-2 family
 (<<KLEE-SHA-2>>) with w = 32, b = 512, n = 256, and t = 256: it has a big-endian
@@ -30,13 +30,15 @@ kat/sha2-kat.py, transcribed from the current text, with the GB/T 32905-2016 cor
   * _Hash_Absorb_ -> _Hash_Output_ (Form A): block_base must be 0, else _Invalid_;
     the entry step block[t-1:0] <- finalize() is not performed; block_base <- 0.  In
     _Hash_Output_ each Form C kl.exec runs the output loop of
-    <<KLEE-hash-functions>> reading state[...]; at block_base = t the bits of OUTPUT
+    <<KLEE-hash-functions-MACs-XOFs>> reading state[...]; at block_base = t the bits of OUTPUT
     beyond output_base are cleared and the locker goes to _Success_.
   * Error handling: <<KLEE-MGR-not-allowed-instructions>>,
     <<KLEE-SGR-no-exec-in-ready>>, <<KLEE-SGR-success-failure>>,
-    <<KLEE-SGR-usage-cr-error-state>>, and the process_VLI rules (same-State
-    kl.setst; cumul_len >= max_len; termination at max_len).
-  * Serialized Content (Content1) per <<KLEE-hash-functions>>: state, last_blk_len
+    <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-instruction-setst>> (#immed7 = 0
+    clears; 46 and 47 are reserved encodings, <<KLEE-illegal-instruction-grounds>>),
+    and the process_VLI rules (same-State kl.setst; cumul_len >= max_len;
+    termination at max_len).
+  * Serialized Content (Content1) per <<KLEE-hash-functions-MACs-XOFs>>: state, last_blk_len
     replaced by padding, block_base, 32 padding bits, cumul_len absent (kept only
     under HMAC), block, zero-padded to a multiple of 128 bits; every vector is also
     run through an export/import taken in the middle of a block.
@@ -113,18 +115,20 @@ def sm3_ref(msg):
 
 # ------------------------------------------------------- KLEE constants
 
+KL_STATE_UNCONFIGURED = 0       # <<KLEE-state-off>>
 KL_STATE_READY = 1              # <<KLEE-states-valid>>
 KL_STATE_HASH_ABSORB = 2        # <<KLEE-state-constants-symmetric>>
 KL_STATE_HASH_LAST_BLOCK = 3    # <<KLEE-state-constants-symmetric>>
 KL_STATE_HASH_OUTPUT = 6        # <<KLEE-state-constants-symmetric>>
 KL_STATE_SUCCESS = 46           # <<KLEE-states-valid>>
+KL_STATE_FAILURE = 47           # <<KLEE-states-valid>>
 KL_STATE_INVALID = 49           # <<KLEE-states-error>>
 ERROR_STATES = range(48, 56)    # <<KLEE-states-error>> (54 and 55 reserved)
 
 W, B, N, T = 32, 512, 256, 256  # <<KLEE-SM3>>
 MACHINE = (9 << 4) | 0          # <<KLEE-exec-encodings>>: Type 9, Mode 0
 # Content1 length in bytes from the Serialized Content table of
-# <<KLEE-hash-functions>>: n + 16 + 16 + 32 + b bits, padded to a multiple of 128.
+# <<KLEE-hash-functions-MACs-XOFs>>: n + 16 + 16 + 32 + b bits, padded to a multiple of 128.
 EXPECTED_C1_BYTES = 112
 
 # ------------------------------------------------------- notation helpers
@@ -154,6 +158,9 @@ def chain_to_state(V):
 def state_to_chain(state):
     """V_i = int(bswap(state[(i+1)w-1 : iw]))."""
     return [bswap(sl(state, (i + 1) * W - 1, i * W), W // 8) for i in range(8)]
+
+class IllegalInstruction(Exception):
+    """An illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>)."""
 
 class Hart:
     """The hart state the Machines use: the klstart CSR, a byte count
@@ -250,7 +257,7 @@ class KleeSm3Locker:
         return self
 
     def export_content1(self):
-        """Content1 per the Serialized Content table of <<KLEE-hash-functions>>."""
+        """Content1 per the Serialized Content table of <<KLEE-hash-functions-MACs-XOFs>>."""
         return pack([
             # i    key or SKID: unkeyed, 0 bits
             (self.state, self.n),           # ii   state
@@ -278,13 +285,13 @@ class KleeSm3Locker:
 
     def _to_error(self, s):
         self.mdh_state = s
-        self._clear_content()           # <<KLEE-SGR-clear-cr-content-error-state>>
+        self._clear_content()           # <<KLEE-SGR-clear-locker-content-error-state>>
 
     def _invalid(self):
         self._to_error(KL_STATE_INVALID)
 
     def _enter_ready(self):
-        # <<KLEE-hash-functions>>: last_blk_len, block_base, cumul_len, block <- 0
+        # <<KLEE-hash-functions-MACs-XOFs>>: last_blk_len, block_base, cumul_len, block <- 0
         self._clear_content()
         # <<KLEE-SM3>>: state <- the initial hash value of the SM3 standard
         self.state = chain_to_state(IV_SM3)
@@ -301,9 +308,18 @@ class KleeSm3Locker:
     def kl_setst(self, immed, form='A'):
         """kl.setst Kd, #immed7 [, aux] (<<KLEE-instruction-setst>>)."""
         st = self.mdh_state
-        if immed in ERROR_STATES:       # accepted in any State, without an exception
-            self._to_error(immed if immed <= 53 else KL_STATE_INVALID)
+        if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
+            raise IllegalInstruction('#immed7 46 and 47 are reserved encodings')
+        if immed == KL_STATE_UNCONFIGURED:  # kl.clear, in any Form
+            self.mdh_state = KL_STATE_UNCONFIGURED
+            self._clear_content()
             return
+        if immed in ERROR_STATES:       # accepted in any State, without an exception
+            if st != KL_STATE_UNCONFIGURED:     # on _Unconfigured_: no operation
+                self._to_error(immed if immed <= 53 else KL_STATE_INVALID)
+            return
+        if st == KL_STATE_UNCONFIGURED:  # <<KLEE-SGR-transition-to-from-unconfigured>>
+            raise IllegalInstruction('usage-controlled instruction on _Unconfigured_')
         if st in ERROR_STATES:          # only a change of Error State is possible
             return
         if immed == KL_STATE_READY:     # from any valid State, _Success_ included
@@ -330,7 +346,7 @@ class KleeSm3Locker:
             if self.block_base != 0:
                 self._invalid()
                 return
-            # <<KLEE-hash-functions>> entry steps: block[t-1:0] <- finalize() is not
+            # <<KLEE-hash-functions-MACs-XOFs>> entry steps: block[t-1:0] <- finalize() is not
             # performed (<<KLEE-SHA-2>>); block_base <- 0.
             self.block_base = 0
             self.mdh_state = KL_STATE_HASH_OUTPUT
@@ -343,6 +359,8 @@ class KleeSm3Locker:
         Returns (status, output bytes or None)."""
         KLLEN = 8 * (len(data) if form == 'B' else nbytes)
         st = self.mdh_state
+        if st == KL_STATE_UNCONFIGURED:  # <<KLEE-SGR-transition-to-from-unconfigured>>
+            raise IllegalInstruction('usage-controlled instruction on _Unconfigured_')
         if st in ERROR_STATES:          # no operation; the output window is zeroed
             return 'noop', (bytes(nbytes) if form == 'C' else None)
         if st == KL_STATE_HASH_ABSORB and form == 'B':
@@ -364,7 +382,7 @@ class KleeSm3Locker:
         return 'invalid', (bytes(nbytes) if form == 'C' else None)
 
     def _hash_output(self, KLLEN, resuming, prior):
-        """The _Hash_Output_ loop of <<KLEE-hash-functions>>, reading `state`."""
+        """The _Hash_Output_ loop of <<KLEE-hash-functions-MACs-XOFs>>, reading `state`."""
         OUTPUT = b2v(prior) if prior is not None else 0   # the register's old content
         output_base = 8 * self.hart.klstart if resuming else 0
         while output_base < KLLEN:
@@ -390,7 +408,7 @@ def kl_derive(dst, src, length, hart):
     # <<KLEE-SGR-gate-order>>: an Error State on either endpoint makes it a no-op
     if src.mdh_state in ERROR_STATES or dst.mdh_state in ERROR_STATES:
         return 'noop'
-    # Checks, item 1, source first: each State must admit its endpoint.  The source
+    # <<KLEE-DER-checks>> item 1, source first: each State must admit its endpoint.  The source
     # endpoint is a kl.exec output, admitted where a Form C kl.exec is (not in
     # _Success_, <<KLEE-SGR-success-failure>>); the destination endpoint is the
     # kl.exec input of _Hash_Absorb_.
@@ -404,7 +422,8 @@ def kl_derive(dst, src, length, hart):
         return 'refused'                # nothing is transferred
     if length == 0:                     # transfers nothing, changes no state
         return 'noop'
-    # Transfer: not a field destination, so eff_length = length.  Each endpoint
+    # <<KLEE-derive-rule-both-fixed-size>>: not a field destination, so
+    # eff_length = length.  Each endpoint
     # advances as the kl.exec producing / consuming these bytes would.
     _, data = src.kl_exec('C', nbytes=length)
     dst.kl_exec('B', data=data)
@@ -511,7 +530,7 @@ ok &= not mism
 print(f'\nKLEE model vs byte-oriented reference, {3 * len(lens)} runs over messages of '
       f'0..1000 bytes: {pf(not mism) if not mism else f"FAIL {mism[:5]}"}')
 
-print('\nSerialized Content (Content1) length, <<KLEE-hash-functions>> table:')
+print('\nSerialized Content (Content1) length, <<KLEE-hash-functions-MACs-XOFs>> table:')
 cl = fresh()
 cl.kl_setst(KL_STATE_HASH_ABSORB)
 cl.kl_exec('B', bytes(8))
@@ -559,6 +578,26 @@ check('_Ready_ -> _Hash_Output_ -> _Invalid_ (not an allowed transition)',
 
 cl = fresh()
 cl.kl_setst(KL_STATE_HASH_ABSORB)
+try:
+    cl.kl_setst(KL_STATE_SUCCESS)
+    raised = False
+except IllegalInstruction:
+    raised = True
+check('kl.setst #kl_state_success: illegal-instruction exception, State kept '
+      '(<<KLEE-illegal-instruction-grounds>>)',
+      raised and cl.mdh_state == KL_STATE_HASH_ABSORB)
+cl.kl_setst(KL_STATE_UNCONFIGURED)
+try:
+    cl.kl_exec('B', bytes(4))
+    raised = False
+except IllegalInstruction:
+    raised = True
+check('kl.setst #kl_state_unconfigured clears the locker; a later kl.exec raises an '
+      'illegal-instruction exception (<<KLEE-SGR-transition-to-from-unconfigured>>)',
+      raised and cl.mdh_state == KL_STATE_UNCONFIGURED and cl.state == 0)
+
+cl = fresh()
+cl.kl_setst(KL_STATE_HASH_ABSORB)
 _, out = cl.kl_exec('C', nbytes=16)
 check('Form C kl.exec in _Hash_Absorb_ -> _Invalid_, output window zeroed '
       '(<<KLEE-MGR-not-allowed-instructions>>)',
@@ -578,7 +617,7 @@ cl.kl_exec('B', PAD_ABC)
 cl.kl_setst(KL_STATE_HASH_OUTPUT)
 _, out = cl.kl_exec('C', nbytes=40, prior=b'\xa5' * 40)
 check('read with KLLEN = 320 > t: 32 digest bytes, the 8 beyond cleared, -> _Success_ '
-      '(<<KLEE-hash-functions>>)',
+      '(<<KLEE-hash-functions-MACs-XOFs>>)',
       out == DIG_ABC + bytes(8) and cl.mdh_state == KL_STATE_SUCCESS)
 _, out = cl.kl_exec('C', nbytes=32, prior=b'\xa5' * 32)
 check('kl.exec in _Success_ of a hash function -> _Invalid_, output window zeroed '
@@ -586,7 +625,7 @@ check('kl.exec in _Success_ of a hash function -> _Invalid_, output window zeroe
       cl.mdh_state == KL_STATE_INVALID and out == bytes(32))
 st, out = cl.kl_exec('C', nbytes=32, prior=b'\xa5' * 32)
 check('kl.exec on a locker in _Invalid_: no operation, State kept, output zeroed '
-      '(<<KLEE-SGR-usage-cr-error-state>>)',
+      '(<<KLEE-SGR-usage-locker-error-state>>)',
       st == 'noop' and cl.mdh_state == KL_STATE_INVALID and out == bytes(32))
 
 cl = fresh()
@@ -686,14 +725,17 @@ print('  NOTE under it that an unused field "is replaced by a corresponding padd
 print('  block"; the model follows the table (block at bit n + 64).  Same total length.')
 print('  block_base is serialized as bin(block_base, 16) in bits, the process_VLI unit.')
 print('INFO: _Hash_Absorb_ -> _Hash_Output_ is modeled as a Form A kl.setst; the text')
-print('  names no auxiliary parameter for it.')
+print('  names no auxiliary parameter for it.  A same-State kl.setst in _Hash_Output_')
+print('  (admitted by SGR4, not mentioned by <<KLEE-SHA-2>>) is not exercised.')
 print('INFO: kl.derive is exercised with length = t/8 only; for a shorter length the')
 print('  source side has two readings ("the unused part of the last block is discarded"')
-print('  vs "advances as the kl.exec operations ... would").  A refused transfer')
-print('  invalidates only the offending locker (Checks, item 1), not "both lockers".')
-print('INFO: <<KLEE-HMAC>> names SM3 as an underlying hash function, but')
-print('  <<KLEE-exec-encodings>> gives SM3 only Type 9 Mode 0, with no HMAC pair, so no')
-print('  HMAC-SM3 Machine can be encoded and none is exercised here.')
+print('  vs "advances as the kl.exec operations ... would").  A State that does not')
+print('  admit its endpoint invalidates the offending locker only (<<KLEE-DER-checks>>')
+print('  item 1).')
+print('SPEC-NOTE: <<KLEE-HMAC>> names SM3 as an underlying hash function (padding over')
+print('  b + cumul_len bits), but <<KLEE-exec-encodings>> gives SM3 only Type 9 Mode 0,')
+print('  with no NIK/KIP HMAC pair, so no HMAC-SM3 Machine can be encoded; none is')
+print('  exercised here.')
 
 print(f'\nruntime: {time.time() - T0:.2f} s')
 print(f'KAT-RESULT: {"PASS" if ok else "FAIL"}')

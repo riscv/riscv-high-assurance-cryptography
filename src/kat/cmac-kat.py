@@ -13,7 +13,7 @@ Two independent implementations are checked against the published vectors:
         `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a locker
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
         General Rules for Machines (<<KLEE-Machines-other-rules>>: MGR1-MGR6)
-        and the State rules of the Instructions chapter (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
+        and the State rules of the Instructions chapter (<<KLEE-State-management>>: SGR2, SGR4-SGR6,
         SGR8, SGR10, SGR16) where CMAC relies on them, and it exports and
         imports the Serialized Content of <<KLEE-CMAC-mode>> (the plaintext of
         `Content1`, <<KLEE-SCC>>; the sealing itself is covered by scc-kat.py).
@@ -55,8 +55,10 @@ Checks performed
     <<KLEE-usage-input-output>>, KLLEN not a multiple of b in _Hash_Absorb_
     (MGR2), one block whatever KLLEN in the last-block and output States
     (MGR3) with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
-  * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
-    is written with the locker in State Ready; CMAC has no exportable field.
+  * <<KLEE-derive-endpoints>>: `key` (1) is the only importable field and
+    is written with the locker in State Ready, with at least dest_length bytes
+    (DER1 check 4 of <<KLEE-DER-checks>>, no zero-filling) and never into a
+    SKID-configured key (DER4); CMAC has no exportable field.
   * Negative controls (must NOT reproduce the standard):
       NC-K2full     : take the K2 path for a full final block instead of K1.
       NC-lemask     : derive the subkeys with the little-endian update_mask
@@ -130,13 +132,13 @@ def ref_cmac(K, M):
 
 class Invalid(Exception):
     """The locker transitioned to Error State _Invalid_.  `output` is the OUTPUT
-    operand as the instruction leaves it (<<KLEE-SGR-usage-cr-error-state>>)."""
+    operand as the instruction leaves it (<<KLEE-SGR-usage-locker-error-state>>)."""
     def __init__(self, why, output=0):
         super().__init__(why)
         self.output = output
 
 
-SKS = {}                     # System Key Store: SKID -> key bytes (MGR8)
+SKS = {}                     # System Key Store: SKID -> key bytes (MGR9)
 
 
 def cmac_layout(key_bits, b=B):
@@ -208,7 +210,7 @@ class KleeCmac:
         self.hash = 0                     # zeros(b)
 
     def _invalid(self, why, output=0):
-        # <<KLEE-SGR-clear-cr-content-error-state>>: Content beyond the MDH cleared
+        # <<KLEE-SGR-clear-locker-content-error-state>>: Content beyond the MDH cleared
         self.state = S_INVALID
         self.keyb, self.skid = None, None
         self.hash = self.last_blk_len = self.block_base = 0
@@ -217,7 +219,7 @@ class KleeCmac:
     def setst(self, immed, form='A', aux=None):
         """kl.setst Kd, #immed; Form B carries Xs in aux, Form C an INPUT."""
         s = self.state
-        if s == S_INVALID:                        # <<KLEE-SGR-usage-cr-error-state>>
+        if s == S_INVALID:                        # <<KLEE-SGR-usage-locker-error-state>>
             return
         if immed == S_READY:                      # from any valid state (SGR8)
             self.state = S_READY
@@ -290,23 +292,23 @@ class KleeCmac:
         return 0
 
     # -- <<KLEE-derive-endpoints>> -----------------------------------------
-    def derive_into(self, j, src, length):
-        """This locker as the destination of a kl.derive (<<KLEE-instruction-derive>>)."""
+    def derive_into(self, src, length):
+        """This locker as the destination of a kl.derive (<<KLEE-instruction-derive>>):
+        the endpoint is `key`, the only importable field (kl.derive has no selector)."""
         if self.state == S_INVALID:
             return
-        if j != 1:
-            self._invalid(f'j = {j} is not an importable field of CMAC')
         if self.skid is not None:
-            self._invalid('a field configured by a SKID is never importable')
+            self._invalid('DER4: the key of a KeyType 1 locker is never importable')
         if self.state != S_READY:
             self._invalid('a destination whose key is written must be in Ready')
         k = len(self.keyb)                        # dest_length, bytes
-        eff = min(length, k)                      # <<KLEE-derive-rule-both-fixed-size>>
-        self.keyb = src[:eff] + bytes(k - eff)
+        if length < k or len(src) < k:            # DER1 check 4 (length = 0 included)
+            self._invalid('DER1: length or source shorter than dest_length')
+        self.keyb = src[:k]                       # exactly dest_length bytes (DER8)
 
-    def derive_from(self, i):
+    def derive_from(self):
         """This locker as the source of a kl.derive: CMAC has no exportable field."""
-        self._invalid(f'i = {i} is not an exportable field of CMAC')
+        self._invalid('CMAC has no exportable field')
 
     # -- Serialized Content --------------------------------------------------
     def key_bits(self):
@@ -622,32 +624,43 @@ def main():
              invalid(lambda: cl.setst(S_HASH_ABSORB, 'A')))
     info("the text names no kl.setst Form for the transition _Ready_ -> "
          "_Hash_Absorb_; the harness uses Form A, as <<KLEE-pseudocode-CMAC>> does.")
-    spec_note("the Machines chapter, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
+    spec_note("the Machines chapter, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:346), "
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
-    info("MGR10 (<<KLEE-MGR-progress-discard>>) does not apply: CMAC designates no "
+    info("MGR8 (<<KLEE-MGR-progress-discard>>) does not apply: CMAC designates no "
          "progress field and none of its States has an interruptible "
          "long-running instruction.")
 
     # ------------------------------------------------ derive endpoints
     print("\n<<KLEE-derive-endpoints>> (provisional in the spec): CMAC imports "
-          "`key` (j = 1) and exports nothing")
+          "`key` (1) and exports nothing")
     src = K128 + bytes(range(0xF0, 0x100))        # e.g. a 256-bit shared secret
     for length in (16, 32):
         cl = KleeCmac(bytes(16))
-        cl.derive_into(1, src, length)
+        cl.derive_into(src, length)
         line(f"key derived in Ready (length = {length} bytes), then ex4",
              v2b(kl_cmac(None, MSG[:40], cl=cl).exec('C'), 16) == W4)
+    for length in (8, 0):
+        cl = KleeCmac(bytes(16))
+        line(f"kl.derive of {length} bytes into the 16-byte `key` -> Invalid, "
+             f"no zero-filled key (DER1)",
+             invalid(lambda: cl.derive_into(src, length)) and cl.keyb is None)
+    line("kl.derive from a 12-byte source field into the 16-byte `key` -> Invalid",
+         invalid(lambda: KleeCmac(bytes(16)).derive_into(src[:12], 16)))
     line("kl.derive into `key` of a locker in Hash_Absorb -> Invalid",
-         invalid(lambda: at_absorb().derive_into(1, src, 16)))
-    line("kl.derive into a key configured by a SKID -> Invalid",
-         invalid(lambda: KleeCmac(K128, skid=7).derive_into(1, src, 16)))
-    for j in (0, 2):
-        line(f"kl.derive into endpoint j = {j} (not importable) -> Invalid",
-             invalid(lambda: KleeCmac(K128).derive_into(j, src, 16)))
+         invalid(lambda: at_absorb().derive_into(src, 16)))
+    cl = kl_cmac(K128, MSG[:40])
+    cl.exec('C')
+    line("kl.derive into a locker in Success -> Invalid (SGR5)",
+         invalid(lambda: cl.derive_into(src, 16)))
+    line("kl.derive into the key of a KeyType 1 locker -> Invalid (DER4)",
+         invalid(lambda: KleeCmac(K128, skid=7).derive_into(src, 16)))
     line("CMAC as a kl.derive source (no exportable field) -> Invalid",
-         invalid(lambda: kl_cmac(K128, MSG[:40]).derive_from(1)))
+         invalid(lambda: kl_cmac(K128, MSG[:40]).derive_from()))
+    info("kl.derive into `key` with length = 0 fails DER1 check 4 (length >= "
+         "dest_length), so the destination is invalidated; DER8's \"length = 0 ... "
+         "changes no state\" holds only \"if the checks above pass\".")
 
     # ------------------------------------------------------ negative controls
     print("\nnegative controls (wrong formulations must NOT reproduce the standard):")

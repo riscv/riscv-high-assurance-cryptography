@@ -10,7 +10,7 @@ REF   Plain byte-string XTS with ciphertext stealing, written from the standard,
 
 KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexLocker): the PI is
       provisioned (the MDH first, then `key1` and `key2`, or one SKID that retrieves
-      both, MGR9), the locker moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
+      both, MGR10), the locker moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
       processed with the (multi-block) Form A kl.exec:
 
           on entering _Encrypt_/_Decrypt_ (Form C kl.setst):
@@ -50,8 +50,8 @@ RULES The behaviour the Machine text leaves to the general rules, and the parts 
       a same-State kl.setst (SGR4 of <<KLEE-State-management>>) re-tweaks; a KLLEN
       that is not a multiple of b performs no operation and invalidates the locker
       (MGR2), the output window being zeroed (Rule
-      <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared (Rule
-      <<KLEE-SGR-clear-cr-content-error-state>>); KLLEN > b truncates the tweak
+      <<KLEE-SGR-usage-locker-error-state>>) and the Content cleared (Rule
+      <<KLEE-SGR-clear-locker-content-error-state>>); KLLEN > b truncates the tweak
       (MGR5); the KLIOBUF substitution of <<KLEE-usage-input-output>>; the
       interruption points and resumption of a multi-block kl.exec
       (<<KLEE-CSR-klstart>>, Rule <<KLEE-IRR-block-iterated-instructions>>).
@@ -65,8 +65,11 @@ DATA  The Provisioning Input and the Serialized Content as "Definition of a Mach
       Content1.  Sizes are checked against kl.size (<<KLEE-instruction-size>>).
 
 DERIVE The destination endpoints `key1` (1) and `key2` (2) of
-      <<KLEE-derive-endpoints>>, with the Transfer Size Rules of
-      <<KLEE-derive-rule-both-fixed-size>> (that table is marked work in progress).
+      <<KLEE-derive-endpoints>> (marked work in progress), with DER1 check 4
+      (<<KLEE-DER-checks>>: `length` >= dest_length, exactly dest_length bytes, no
+      zero-filling), DER4 and DER8 (<<KLEE-derive-rule-both-fixed-size>>).  kl.derive
+      carries no field selector, so which of the two keys is written is a parameter
+      of this model (SPEC-NOTE).
 
 Vectors and provenance
 ----------------------
@@ -129,7 +132,8 @@ def machine(typ, mode):
     return (typ << 4) | mode
 
 
-# <<KLEE-exec-encodings>>: XEX is Mode 3 of Types 0-2 (AES) and of Type 3 (SM4)
+# <<KLEE-exec-encodings>>: XEX is Mode 3 of Types 0-2 (AES) and of Type 3 (SM4, not
+# instantiated here: no SM4-XTS vector is used)
 XEX_MACHINES = {machine(t, 3): c for t, c in enumerate(CIPHERS)}
 XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
 
@@ -179,7 +183,7 @@ def build_pi(mach, keytype, key1, key2=0, policy=POL_BOTH):
     """A PI: the MDH (i), then `key1` or the SKID (ii) and `key2` (iii, empty for a SKID)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     if keytype == 1:
-        content, width = key1, 64        # one SKID retrieves both keys (MGR8, MGR9)
+        content, width = key1, 64        # one SKID retrieves both keys (MGR9, MGR10)
     else:
         content, width = cat((key2, k), (key1, k)), 2 * k
     return v2b(make_mdh(mach, policy, keytype), 16) + v2b(content, padded_bytes(width))
@@ -284,7 +288,7 @@ class XexLocker:
             self.mdh = fset(self.mdh, F_KEYTYPE, 0)
         elif field != ONES64 and field in self.sks:
             self.skid = field
-            self.key1, self.key2 = self.sks[field]      # one SKID, two keys (MGR9)
+            self.key1, self.key2 = self.sks[field]      # one SKID, two keys (MGR10)
         else:
             self.invalidate()            # unresolved SKID (<<KLEE-MVR-open>>)
 
@@ -392,19 +396,19 @@ class XexLocker:
         """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>)."""
         if self.in_error():
             return False
-        if (j not in XEX_IMPORTABLE
+        dest_length = self.k() // 8
+        if (j not in XEX_IMPORTABLE              # `j` is a model parameter (SPEC-NOTE)
                 or self.state != ST_READY        # a key is filled in State _Ready_
-                or self.keytype == 1):           # a SKID-configured field is never importable
+                or self.keytype == 1             # DER4: never importable
+                or length < dest_length          # DER1 check 4 (length = 0 included)
+                or len(src) < dest_length):      # DER1 check 4: the source is too short
             self.invalidate()
             return False
-        dest_length = self.k() // 8
-        eff_length = min(length, dest_length)
-        if eff_length:
-            value = b2v(src[:eff_length] + bytes(dest_length - eff_length))
-            if j == 1:
-                self.key1 = value
-            else:
-                self.key2 = value
+        value = b2v(src[:dest_length])           # exactly dest_length bytes (DER8)
+        if j == 1:
+            self.key1 = value
+        else:
+            self.key2 = value
         return True
 
 
@@ -823,7 +827,7 @@ chk("key2 = key1: the mask is the raw enc_blk(key1, T), no alpha applied",
 print("\n== (h) DATA: Provisioning Input and Serialized Content")
 print("   (sizes in bytes, worked out by hand from the tables; SCC with _AuxDataLen_ = 0)")
 SKID = 0x0123456789abcdef
-SKS = {SKID: (b2v(k1), b2v(k2))}             # one SKID, two independent keys (MGR9)
+SKS = {SKID: (b2v(k1), b2v(k2))}             # one SKID, two independent keys (MGR10)
 for cipher, kt, pi_size, c1_size in (('AES-128', 0, 48, 48), ('AES-256', 0, 80, 80),
                                      ('AES-128', 1, 32, 32)):
     kk = CIPHERS[cipher]
@@ -876,10 +880,13 @@ d2 = cl.derive_dest(2, source2, 32)
 cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
 chk("derive `key1` and `key2` (32 bytes each, truncated to 16), then vector 2",
     (d1, d2, cl_run(cl, data)[0].hex()), (True, True, c))
+for length in (8, 0):
+    cl = new_xex(bytes(16), bytes(16))
+    chk(f"length {length} < 16 into `key1`: _Invalid_, no zero-filled key (DER1)",
+        (cl.derive_dest(1, source1, length), cl.state, cl.key1), (False, ST_INVALID, None))
 cl = new_xex(bytes(16), bytes(16))
-cl.derive_dest(1, k1[:8], 8)
-chk("length 8 < 16: `key1` zero-filled beyond byte 8",
-    v2b(cl.key1, 16).hex(), k1[:8].hex() + "00" * 8)
+chk("source field of 8 bytes < 16 into `key2`: _Invalid_ (DER1)",
+    (cl.derive_dest(2, k2[:8], 16), cl.state), (False, ST_INVALID))
 cl = new_xex(bytes(16), bytes(16))
 chk("destination index 3 (`mask` is not importable) -> _Invalid_",
     (cl.derive_dest(3, source1, 16), cl.state), (False, ST_INVALID))
@@ -889,7 +896,7 @@ chk("destination in _Encrypt_ -> _Invalid_",
     (cl.derive_dest(1, source1, 16), cl.state), (False, ST_INVALID))
 cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
-chk("keys configured by a SKID are never importable -> _Invalid_",
+chk("keys of a _KeyType_ 1 locker are never importable (DER4) -> _Invalid_",
     (cl.derive_dest(2, source2, 16), cl.state), (False, ST_INVALID))
 src = new_xex(k1, k2)
 dst = new_xex(bytes(16), bytes(16))
@@ -912,10 +919,18 @@ for length in list(range(16, 80)) + [128, 129, 255, 256]:
 chk("KLEE == REF and round-trips, lengths 16..79, 128, 129, 255, 256", rt, True)
 
 print()
-info("<<KLEE-XTS-from-XEX>> now reads \"the first `s`/8 bytes of the string\" and \"the "
-     "`j`-th block processed after the tweak was set\"; both readings are the ones this "
-     "harness models, the second because rule MGR3 makes one kl.exec process KLLEN/b "
-     "blocks, each advancing the mask.")
+spec_note("<<KLEE-XTS-from-XEX>> says \"the `j`-th `kl.exec` issued after the tweak was "
+          "set is the one that operates at mask index `j`\", true only for single-block "
+          "kl.exec: by MGR3 one kl.exec processes KLLEN/b blocks, each advancing the mask, "
+          "and step 1 may be one multi-block kl.exec.  Suggest \"the `j`-th block\".  It "
+          "also places the partial block \"where the first `s` bytes of the string live\", "
+          "but `s` is in bits: the first `s`/8 bytes.  The harness models both corrected "
+          "readings.")
+spec_note("<<KLEE-derive-endpoints>> lists two importable fields for XEX, `key1` (1) and "
+          "`key2` (2), both written in State _Ready_, but kl.derive carries only `length` "
+          "(\"No parameter is passed to kl.derive to select the source and destination "
+          "data\", <<KLEE-instruction-derive>>), so nothing selects which key is written.  "
+          "The harness takes the index as a model parameter.")
 info("<<KLEE-tweakable>> is not exercised: <<KLEE-exec-encodings>> instantiates no "
      "tweakable block cipher, so there is no Machine, and no published vector, for it.")
 info("\"(multi-block) kl.exec instructions are expected to be of Form A\" is read with "

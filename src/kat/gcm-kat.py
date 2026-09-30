@@ -25,7 +25,8 @@ Also checked: the counter-wrap rule (Invalid exactly when `ctr` reaches
 middle of a multi-block kl.exec, whose completed prefix stays written); the
 Serialized Content layout and export/import, including the _Set_Aux_Value_
 overlay; the derived field `auth_key` (MGR4) on import and after a kl.derive
-into `key` (<<KLEE-derive-endpoints>>); the kl.setst/kl.exec rules of the
+into `key` (<<KLEE-derive-endpoints>>; DER1 check 4, DER4, DER8 of
+<<KLEE-instruction-derive>>); the kl.setst/kl.exec rules of the
 Machines and of the general rules (MGR1-MGR6, SGR2-SGR16, IRR6/IRR7); and GCM
 with Set IV: key and J0 in the PI, no _Set_Aux_Value_, no block budget (removed
 from the specification), and a transition back to _Ready_ that is no longer
@@ -350,10 +351,10 @@ class GcmLocker:
         return self
 
     @classmethod
-    def provisioned(lockers, key, J0=None, skid=None, **kw):
-        cl = lockers(set_iv=J0 is not None, **kw)
+    def provisioned(cls, key, J0=None, skid=None, **kw):
+        cl = cls(set_iv=J0 is not None, **kw)
         k = 8 * len(SKS[skid] if skid is not None else key)
-        v, _ = lockers.pi_content(key, J0, skid)
+        v, _ = cls.pi_content(key, J0, skid)
         return cl.provision(v, k, 1 if skid is not None else 0)
 
     def export_content(self):
@@ -375,9 +376,9 @@ class GcmLocker:
         return v, pad128(kbits + 128 + 128 + 32 + 16)
 
     @classmethod
-    def imported(lockers, state, content, k, key_type=0, set_iv=False, policy=0b11, **kw):
+    def imported(cls, state, content, k, key_type=0, set_iv=False, policy=0b11, **kw):
         """kl.mgmt completing an import (kl_cfg_management_end)."""
-        cl = lockers(set_iv, policy, **kw)
+        cl = cls(set_iv, policy, **kw)
         cl.k, cl.key_type = k, key_type
         kbits = 64 if key_type == 1 else k
         kf = sl(content, kbits - 1, 0)
@@ -724,16 +725,19 @@ class GcmLocker:
         if self.state in ERROR_STATES:
             return                    # SGR19: an Error State endpoint makes it a no-op
         if self.key_type == 1:
-            self._invalid("a field configured by a SKID is never importable")
+            self._invalid("DER4: the key field of a KeyType 1 locker is never importable")
             return
         if self.state != KL_STATE_READY:
             self._invalid("a destination whose key is written must be in _Ready_")
             return
-        if length == 0:
-            return
         dest = self.k // 8
-        eff = min(length, dest)       # Transfer Size Rules
-        self.key = src[:eff] + bytes(dest - eff)
+        if length < dest:
+            # DER1 check 4: a key field of dest_length bytes requires length >= dest_length
+            # and receives exactly dest_length bytes (no zero-filling, DER8); length = 0
+            # fails this check too
+            self._invalid("DER1: length < dest_length for a key destination")
+            return
+        self.key = src[:dest]         # DER8: eff_length = min(length, dest_length)
         if not self.stale_auth_key:
             self._rederive()          # MGR4: "again whenever a field it depends upon is modified"
 
@@ -966,7 +970,7 @@ for label, k, iv, a, p, c, t in VECTORS:
           C == bytes.fromhex(c) and T == bytes.fromhex(t) and cl.state == KL_STATE_SUCCESS)
 cl = GcmLocker.provisioned(None, skid=0x0123456789ABCDEF)
 C, T, _ = kl_encrypt(None, bytes.fromhex(IV12), bytes.fromhex(AAD), bytes.fromhex(P60), cl=cl)
-check("KLEE encrypt tc4 with the key given by a SKID (KeyType 1, MGR8)",
+check("KLEE encrypt tc4 with the key given by a SKID (KeyType 1, MGR9)",
       (C, T) == ref_gcm(bytes.fromhex(K128), bytes.fromhex(IV12),
                         bytes.fromhex(AAD), bytes.fromhex(P60)))
 
@@ -1553,8 +1557,14 @@ check("kl.derive into `key` of a locker not in _Ready_ -> destination _Invalid_"
       cl.state == KL_STATE_INVALID)
 cl = GcmLocker.provisioned(None, skid=0x0123456789ABCDEF)
 cl.derive_into_key(SRC32, 16)
-check("kl.derive into a `key` configured by a SKID -> destination _Invalid_",
+check("kl.derive into a `key` configured by a SKID -> destination _Invalid_ (DER4)",
       cl.state == KL_STATE_INVALID)
+for k_, length in ((128, 8), (256, 16), (128, 0)):
+    cl = GcmLocker.provisioned(bytes(range(k_ // 8)))
+    cl.derive_into_key(SRC32, length)
+    check(f"k = {k_}: kl.derive of {length} bytes into `key` (length < dest_length) -> "
+          f"destination _Invalid_, no zero-filled key (DER1 check 4)",
+          cl.state == KL_STATE_INVALID and cl.key == b"")
 _, _, cl = kl_encrypt(K, IV, A, P)
 cl.derive_into_key(SRC32, 16)
 check("a locker in _Success_ may not be a kl.derive destination -> _Invalid_ (SGR5)",
@@ -1607,8 +1617,9 @@ print("INFO 1: interruption.  The model halts _Set_Aux_Value_ only at step 4.i o
 print("  process_VLI and the block-iterated states between blocks (IRR7); klstart must")
 print("  be a multiple of 16 bytes on resumption.  A short transfer is taken to be the")
 print("  last one when it reaches len (cumul_len + KLLEN >= len); any other short")
-print("  transfer violates the granularity b (MGR2).  MGR10 does not apply: no GCM")
-print("  State performs an IRR4 instruction (all carry a vector or KLIOBUF operand).")
+print("  transfer violates the granularity b (MGR2).  MGR8 (<<KLEE-MGR-progress-discard>>)")
+print("  does not apply: no GCM State performs an IRR4 operation (all carry a vector or")
+print("  KLIOBUF operand).")
 print("INFO 2: GCM with Set IV.  The budget field and rule are gone, and the")
 print("  prohibition of a transition back to _Ready_ is commented out, so SGR8 applies.")
 print("  _Ready_ initialises only auth_key and tag, and start_ctr is set only upon")
@@ -1623,6 +1634,9 @@ print("  paragraph, so the Content length does not depend on _State_")
 print("  (<<KLEE-length-rule>>).  A kl.setst naming _Hash_Absorb_ in _Set_Aux_Value_ is")
 print("  taken to run finalize() first (process_VLI), on the IV absorbed so far.  A")
 print("  transition that _MachinePolicy_ forbids is taken to be not allowed (MGR1).")
+print("INFO 4: kl.derive into `key` with length = 0 fails DER1 check 4 (length >=")
+print("  dest_length), so the destination is invalidated; DER8's \"length = 0 transfers")
+print("  nothing and ... changes no state\" holds only \"if the checks above pass\".")
 print()
 print("OBSERVATIONs (editorial; no computed value changes, hence not failures):")
 print("  1. The _Set_Aux_Value_ overlay rows are numbered iii.a-iii.d, but Pos. iii is")

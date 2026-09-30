@@ -26,11 +26,12 @@ What is validated (spec anchors, by heading):
                               transfers, partial-block boundaries, the Form A entry,
                               the same-State rejection, and the interruption point
                               klstart <- input_base / 8.
-  [[KLEE-hash-functions]]   -- the _Hash_Output_ squeeze loop, multi-exec output,
+  [[KLEE-hash-functions-MACs-XOFs]]   -- the _Hash_Output_ squeeze loop, multi-exec output,
                               resumption via output_base <- 8 * klstart, clearing
                               of OUTPUT beyond output_base.
   [[KLEE-Machine-rules]] (MGR1, MGR2, MGR6), [[KLEE-exec-encodings]] (Type 6,
-  Modes 10-13), [[KLEE-derive-endpoints]] (KMAC is no endpoint).
+  Modes 10-13), [[KLEE-derive-endpoints]] (no field endpoint; the `kl.exec`
+  endpoints, index 0, taken from [[KLEE-DER-exec-implies-unrestricted]]).
   modules/ROOT/pages/Zkl-ISA-unpriv.adoc (the Instructions chapter): [[KLEE-CSR-klstart]], [[KLEE-instruction-exec]],
   [[KLEE-instruction-derive]], [[KLEE-State-management]] (SGR2, SGR5, SGR6,
   SGR10, SGR16), [[KLEE-resumability]] (IRR6), [[KLEE-length-rule]],
@@ -47,7 +48,7 @@ Layered anchoring:
      outputs.
   3. The KLEE model (state machine from the spec text) checked against the same
      official outputs and against the reference on the derived cases.
-  hashlib is used only as a LABELED REFERENCE ORAlockerE for the plain SHA-3/SHAKE
+  hashlib is used only as a LABELED REFERENCE ORACLE for the plain SHA-3/SHAKE
   anchors; it has no KMAC and takes no part in the KMAC checks.
 
 Embedded vector provenance:
@@ -363,7 +364,7 @@ class Hart:
 # ----------------------------------------------------------------- KLEE locker model
 class KleeKmacLocker:
     """A locker holding a KLEE KMAC CC, implemented literally from [[KLEE-KMAC]] on
-    top of [[KLEE-SHA-3]] / [[KLEE-hash-functions]] / [[KLEE-process-VLI]].
+    top of [[KLEE-SHA-3]] / [[KLEE-hash-functions-MACs-XOFs]] / [[KLEE-process-VLI]].
 
     block is `state` for the whole SHA-3 family, so absorbed data is XORed
     directly into the rate at block_base (state_offset = 0), and process_VLI
@@ -476,7 +477,7 @@ class KleeKmacLocker:
     def _enter_ready(self):
         # [[KLEE-KMAC]], In State _Ready_: state is zeroed; cshake_block is XORed
         # into the rate and P() applied; key_block likewise.  block_base is set
-        # to zero ([[KLEE-hash-functions]]).
+        # to zero ([[KLEE-hash-functions-MACs-XOFs]]).
         self.st = KL_STATE_READY
         self.state = 0
         self.state ^= b2v(self.cshake_block)
@@ -506,7 +507,7 @@ class KleeKmacLocker:
             self.state = keccak_f1600(self.state)
             self.state ^= S >> room
             self.state = keccak_f1600(self.state)
-        # [[KLEE-hash-functions]] upon entering _Hash_Output_: finalize() is the
+        # [[KLEE-hash-functions-MACs-XOFs]] upon entering _Hash_Output_: finalize() is the
         # identity for block = state; block_base <- 0.
         self.block_base = 0
         self.out_bits = 0
@@ -656,7 +657,7 @@ class KleeKmacLocker:
         KLLEN, t = 8 * top, self.t
         # [[KLEE-KMAC]] states the end of the output in terms of L, so the generic
         # "if we are in a Hash function ... the state transitions to _Success_"
-        # branch that [[KLEE-hash-functions]] takes at block_base = t does not
+        # branch that [[KLEE-hash-functions-MACs-XOFs]] takes at block_base = t does not
         # apply here: at t bits KMAC applies update() and goes on, until L bits
         # have been made available.
         if self.xof:
@@ -679,7 +680,7 @@ class KleeKmacLocker:
             self.out_bits += amount
             if limit is not None and self.out_bits == limit:
                 # exactly L bits made available (the last byte zero-padded) and
-                # the rest of OUTPUT cleared ([[KLEE-hash-functions]], MGR6);
+                # the rest of OUTPUT cleared ([[KLEE-hash-functions-MACs-XOFs]], MGR6);
                 # then _Success_.
                 OUT &= (1 << output_base) - 1
                 out[:] = v2b(OUT, top)
@@ -698,21 +699,44 @@ class KleeKmacLocker:
 
 
 def kl_derive_kmac(hart, dst, src, length):
-    """kl.derive with KMAC lockers as endpoints: [[KLEE-derive-endpoints]] lists no
-    exportable and no importable field for [[KLEE-KMAC]], so neither locker admits
-    an endpoint in any State (Check 1 of [[KLEE-instruction-derive]])."""
+    """kl.derive Kd, Ks, Xs2 (Xs2 = length) between the `kl.exec` endpoints (index 0)
+    of two KMAC lockers: the output of _Hash_Output_ and the input of _Hash_Absorb_.
+    [[KLEE-derive-endpoints]] lists none for [[KLEE-KMAC]], but
+    [[KLEE-DER-exec-implies-unrestricted]] always allows data obtainable by repeated kl.exec to
+    be moved into a hash/MAC function, and such pairs "are listed for every pair of
+    Machines that implement the respective schemes" (SPEC-NOTE in section 12)."""
     if dst is src:
         raise IllegalInstruction('source and destination must differ')
-    for cl in (src, dst):
+    for cl in (src, dst):                                # SGR19, source first
         if cl.st == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction('SGR12')
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         hart.klstart = 0
         return 'noop'
-    src._invalidate()
-    dst._invalidate()
+    # [[KLEE-DER-checks]] item 1: each State must admit its endpoint.  A KMAC in _Success_ admits
+    # no kl.exec (SGR5); a locker in _Success_ is never a destination.
+    src_ok = src.st == KL_STATE_HASH_OUTPUT
+    dst_ok = dst.st == KL_STATE_HASH_ABSORB
+    if not (src_ok and dst_ok):
+        if not src_ok:
+            src._invalidate()
+        if not dst_ok:
+            dst._invalidate()
+        hart.klstart = 0
+        return 'invalid'
+    if length == 0:                                      # transfers nothing
+        hart.klstart = 0
+        return 'done'
+    if not src.xof and 8 * length > src.L - src.out_bits:
+        raise NotModelled('a KMAC source asked for more than its L bits')
+    # [[KLEE-derive-rule-both-fixed-size]]: eff_length = length; each endpoint advances as the kl.exec producing,
+    # resp. consuming, these bytes would.
     hart.klstart = 0
-    return 'invalid'
+    buf = bytearray(length)
+    src.exec_('C', out=buf)
+    dst.exec_('B', inp=bytes(buf))
+    hart.klstart = 0
+    return 'done'
 
 
 # ------------------------------------------------------------------- reporting
@@ -1157,9 +1181,11 @@ def main():
           bytes(out), bytes.fromhex(SAMPLES[10][7]))
     info('an auxiliary L of 2^32 or more (the Form B operand is XLEN bits, the field '
          '32) is not exercised: the',
-         'text does not say whether it is truncated or rejected.  _KeyType_ = 1 (a '
-         'SKID in place of key_block, MGR8)',
-         'is not exercised either: [[KLEE-KMAC]] gives no PI/SCC layout for it.')
+         'text does not say whether it is truncated or rejected (MGR5 truncates only '
+         'values taken from INPUT).',
+         '_KeyType_ = 1 (a SKID in place of key_block, [[KLEE-rules-system-keys]]) is '
+         'not exercised either:',
+         '[[KLEE-KMAC]] gives no PI/SCC layout for it.')
 
     print()
     print('-- 11. provisioning, Provisioning Input and Serialized Content --')
@@ -1256,22 +1282,71 @@ def main():
                st == 'success' and cl2.st == KL_STATE_SUCCESS, (st, cl2.st))
 
     print()
-    print('-- 12. kl.derive: KMAC is no endpoint ([[KLEE-derive-endpoints]]) --')
+    print('-- 12. kl.derive between kl.exec endpoints '
+          '([[KLEE-DER-exec-implies-unrestricted]]) --')
+    # (a) KMACXOF128 output -> KMAC128 absorb, destination left open and continued;
+    #     the source continues its stream.
     hart = Hart()
     src = squeezing_cl(128, KEY, TAG, DATA4, 0, xof=True, hart=hart)
     dst = absorbing_cl(128, KEY, TAG, DATA4, hart=hart)
     st = kl_derive_kmac(hart, dst, src, 32)
-    check_true('kl.derive KMACXOF128 output -> KMAC128 absorb: both lockers transition to '
-               '_Invalid_, klstart = 0', st == 'invalid'
-               and src.st == dst.st == KL_STATE_INVALID and hart.klstart == 0,
-               (st, src.st, dst.st))
-    spec_note('[[KLEE-derive-endpoints]] lists no `kl.exec` endpoint for '
-              '[[KLEE-KMAC]], although its _Hash_Absorb_',
-              'and _Hash_Output_ are those of [[KLEE-SHA-3]], which has both, and '
-              'KMAC/KMACXOF is an approved KDF',
-              '(SP 800-108r1).  Suggested: list `kl.exec` output (0) and input into '
-              '_Hash_Absorb_ (0) for KMAC, or',
-              'state why they are excluded (the section is marked work in progress).')
+    xof = ref_kmac(128, KEY, DATA4, 0, TAG, xof=True, out_bytes=64)
+    dst.exec_('B', inp=DATA4)
+    to_output(dst, 256)
+    out = bytearray(32)
+    dst.exec_('C', out=out)
+    check_true('kl.derive KMACXOF128 output -> KMAC128 _Hash_Absorb_ (32 B) completes, '
+               'klstart = 0', st == 'done' and hart.klstart == 0, (st, hart.klstart))
+    check('KMAC128(K, 00010203 || KMACXOF128(K, 00010203)[:32] || 00010203) via the '
+          'open destination', bytes(out),
+          ref_kmac(128, KEY, DATA4 + xof[:32] + DATA4, 256, TAG))
+    out = bytearray(32)
+    src.exec_('C', out=out)
+    check('the KMACXOF128 source continues at byte 32', bytes(out), xof[32:])
+    # (b) the whole KMAC256 output (L = 512) -> KMACXOF256 absorb; source _Success_.
+    hart = Hart()
+    src = squeezing_cl(256, KEY, TAG, DATA4, 512, hart=hart)
+    dst = absorbing_cl(256, KEY, b'', xof=True, hart=hart)
+    st = kl_derive_kmac(hart, dst, src, 64)
+    to_output(dst, 0)
+    out = bytearray(64)
+    dst.exec_('C', out=out)
+    check_true('derive of the whole KMAC256 output (L = 512) leaves the source in '
+               '_Success_', st == 'done' and src.st == KL_STATE_SUCCESS, (st, src.st))
+    check('KMACXOF256(K, KMAC256 sample #4 output)', bytes(out),
+          ref_kmac(256, KEY, bytes.fromhex(SAMPLES[3][7]), 0, b'', xof=True,
+                   out_bytes=64))
+    # (c) endpoints the States do not admit, and length 0.
+    hart = Hart()
+    st = kl_derive_kmac(hart, absorbing_cl(128, KEY, TAG, hart=hart), src, 16)
+    check_true('source in _Success_ (L bits already emitted): refused, source -> '
+               '_Invalid_', st == 'invalid' and src.st == KL_STATE_INVALID, st)
+    src = squeezing_cl(128, KEY, TAG, DATA4, 0, xof=True, hart=hart)
+    dst = squeezing_cl(128, KEY, TAG, DATA4, 256, hart=hart)
+    snap = (src.st, src.state, src.block_base)
+    st = kl_derive_kmac(hart, dst, src, 16)
+    check_true('destination in _Hash_Output_: refused, destination -> _Invalid_, '
+               'nothing taken from the source', st == 'invalid'
+               and dst.st == KL_STATE_INVALID
+               and (snap == (src.st, src.state, src.block_base)
+                    or src.st == KL_STATE_INVALID), (st, dst.st, src.st))
+    src = squeezing_cl(128, KEY, TAG, DATA4, 0, xof=True, hart=hart)
+    dst = absorbing_cl(128, KEY, TAG, DATA4, hart=hart)
+    snap = (src.state, src.block_base, dst.state, dst.block_base)
+    st = kl_derive_kmac(hart, dst, src, 0)
+    check_true('length = 0 transfers nothing and changes no state',
+               st == 'done' and snap == (src.state, src.block_base, dst.state,
+                                         dst.block_base))
+    spec_note('[[KLEE-derive-endpoints]] gives [[KLEE-KMAC]] "-- | -- (key supplied in '
+              'the PI only)" and omits it from',
+              'the hash-function row that lists the `kl.exec` endpoints (index 0), while '
+              '[[KLEE-DER-exec-implies-unrestricted]]',
+              'always allows kl.exec output into a hash/MAC function, and '
+              '[[KLEE-instruction-derive]] declares such pairs',
+              'listed.  The harness follows the rule (KMAC/KMACXOF output and input '
+              'are those of [[KLEE-SHA-3]]).',
+              'Suggested: add KMAC to the hash-function row, keeping "no field '
+              'endpoint" for its key blocks.')
 
     print()
     print('-- 13. negative controls --')

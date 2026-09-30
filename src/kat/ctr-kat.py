@@ -54,7 +54,9 @@ What changed in the specification, and how this file follows it
   <<KLEE-MGR-not-allowed-instructions>>.
 * The Serialized Content no longer lists the MDH: `key` (or SKID) is at position i,
   `IV` at ii and `ctr` at iii, zero-padded to a multiple of 128 bits.
-* <<KLEE-derive-endpoints>> makes `key` (1) the only importable field.
+* <<KLEE-derive-endpoints>> makes `key` (1) the only importable field; kl.derive
+  into it follows DER1 check 4 (`length` >= dest_length, exactly dest_length bytes,
+  no zero-filling), DER4 and DER8 of <<KLEE-instruction-derive>>.
 
 Vectors and provenance
 ----------------------
@@ -76,6 +78,7 @@ and (112, 16), including resumption, export/import and kl.derive.  Other splits
 anchored, as the oracle.  XCTR is reference-implementation anchored.
 """
 import os
+import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -236,6 +239,10 @@ class KeystreamLocker:
     def _install(self, field, importing):
         if self.keytype == 0:
             self.key = field
+        elif field == ONES64 and not importing:
+            # random key material; _KeyType_ is then set to 0 (<<KLEE-KeyType-field>>)
+            self.key = random.Random(2026).getrandbits(self.params()[1])
+            self.mdh = fset(self.mdh, F_KEYTYPE, 0)
         elif field != ONES64 and field in self.sks:
             self.skid, self.key = field, self.sks[field]
         else:
@@ -329,16 +336,17 @@ class KeystreamLocker:
         return out, 0
 
     # ------------------------------------------------------------ kl.derive
-    def derive_dest(self, j, src, length):
+    def derive_dest(self, src, length):
+        """This locker as the kl.derive destination: `key`, the only importable field
+        (kl.derive has no field selector); DER1 check 4, DER4, DER8."""
         if self.in_error():
             return False
-        if j not in KS_IMPORTABLE or self.state != ST_READY or self.keytype == 1:
+        dest_length = self.params()[1] // 8
+        if (self.state != ST_READY or self.keytype == 1
+                or length < dest_length or len(src) < dest_length):
             self.invalidate()
             return False
-        dest_length = self.params()[1] // 8
-        eff_length = min(length, dest_length)
-        if eff_length:
-            self.key = b2v(src[:eff_length] + bytes(dest_length - eff_length))
+        self.key = b2v(src[:dest_length])        # exactly dest_length bytes
         return True
 
 
@@ -712,6 +720,10 @@ other = KeystreamLocker(96, 32)
 other.import_scc(cl.mdh, cl.content1())
 chk("the same SCC imported with (n, j) = (96, 32) continues a different stream",
     bxor(head + keystream(other, 32), SP38A_PT).hex() != c, True)
+cl = KeystreamLocker(64, 64, sks=SKS)
+cl.provision(build_pi(KS_OF[('AES-128', 'CTR')], 1, ONES64))
+chk("all-ones SKID: random key, _KeyType_ 0, Content1 32 B (key by value)",
+    (cl.state, cl.keytype, len(cl.content1())), (ST_READY, 0, 32))
 spec_note("the counter size j (hence n = b - j) of a CTR Machine is fixed by no field: "
           "<<KLEE-exec-encodings>> has one AES128_CTR, and neither the PI nor the "
           "Serialized Content carries j.  The length rule is unaffected (n + j = b), but "
@@ -725,17 +737,21 @@ info("the CTR/XCTR text gates no transition on _MachinePolicy_; the PIs of this 
 print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
 source = key + bytes.fromhex("5a" * 16)      # a 32-byte source field
 cl = ctr_cl('AES-128', 0, 64, 64)
-done = cl.derive_dest(1, source, 32)
+done = cl.derive_dest(source, 32)
 enter_operate(cl, T1, f5_ctr0(64))
 chk("derive 32 bytes into the 16-byte key, then F.5.1",
     (done, bxor(keystream(cl, 64), SP38A_PT).hex()), (True, c))
-cl = ctr_cl('AES-128', 0, 64, 64)
-chk("destination index 2 (`IV` is not importable) -> _Invalid_",
-    (cl.derive_dest(2, source, 32), cl.state), (False, ST_INVALID))
+for length in (8, 0):
+    cl = ctr_cl('AES-128', 0, 64, 64)
+    chk(f"length {length} < 16: destination _Invalid_, no zero-filled key (DER1)",
+        (cl.derive_dest(source, length), cl.state), (False, ST_INVALID))
 cl = ctr_cl('AES-128', 0, 64, 64)
 enter_operate(cl, T1, 0)
 chk("destination in _Operate_ -> _Invalid_",
-    (cl.derive_dest(1, source, 32), cl.state), (False, ST_INVALID))
+    (cl.derive_dest(source, 32), cl.state), (False, ST_INVALID))
+cl = ctr_cl('AES-128', SKID, 64, 64, keytype=1, sks=SKS)
+chk("key of a _KeyType_ 1 locker is never importable (DER4) -> _Invalid_",
+    (cl.derive_dest(source, 32), cl.state), (False, ST_INVALID))
 
 for label, fired in (("little-endian counter", neg_fired['bswap']),
                      ("MS-first order", neg_fired['order'])):

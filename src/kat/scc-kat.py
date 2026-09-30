@@ -8,9 +8,10 @@ draft KLEE specification (modules/ROOT/pages/Zkl-ISA-unpriv.adoc) -- <<KLEE-SCC-
 <<KLEE-metadata-header>> with the _AuxDataLen_ / _ADSDropped_ rules of
 <<KLEE-Auxiliary-Data-Section>>, the formats of <<KLEE-data-formats>> and
 <<KLEE-SCC>>, the length rule of <<KLEE-length-rule>> with the image layout of
-<<KLEE-instruction-mv>> and <<KLEE-instruction-size>>, and the Error-State
-transfer of <<KLEE-error-state-transfer>> -- transcribed literally onto KLEE
-values (little-endian; common.py conventions).
+<<KLEE-instruction-mv>> and <<KLEE-instruction-size>> (Forms A-C), the
+klmanagedlocker discipline with kl.rename / kl.swap of <<KLEE-instruction-clone>>,
+and the Error-State transfer of <<KLEE-error-state-transfer>> -- transcribed
+literally onto KLEE values (little-endian; common.py conventions).
 
 ANCHOR LEVEL -- stated honestly, because it is not uniform:
 
@@ -45,7 +46,8 @@ ANCHOR LEVEL -- stated honestly, because it is not uniform:
                              properties the architecture relies on: round
                              trips, rejection of every kind of tampering,
                              Locality binding and substitution, the
-                             implementation qualifier, the ADS rules including
+                             implementation qualifier, moves of a locker
+                             under management, the ADS rules including
                              _ADSDropped_ as an unauthenticated format hint,
                              the SCC-shaped PCCC, the length rule, and the
                              Error-State transfer.  Regression vectors are
@@ -66,8 +68,9 @@ Vectors embedded offline, with provenance:
 Model (choices the specification leaves to the implementation):
   * The KLEE unit implements one Machine, AES256_ECB (Type 2, Mode 0 of
     <<KLEE-exec-encodings>>), whose Content1 is the 256-bit key or a 64-bit
-    SKID padded to a block (<<KLEE-ECB-mode>>), with side-channel protection
-    levels 0-2, MDH _Version_ 0, Zklexpire, and an ADS of up to 16 blocks.
+    SKID padded to a block and whose Valid States are Ready, Encrypt and
+    Decrypt (<<KLEE-ECB-mode>>), with side-channel protection levels 0-2,
+    MDH _Version_ 0, Zklexpire, and an ADS of up to 16 blocks.
   * Memory beyond a stored image reads as zeros.  Each transfer is performed
     by one uninterrupted kl.load or kl.store (klstart = 0).
   * PI-shaped images and SKID resolution (_KeyType_ = 1) are not modelled.
@@ -192,10 +195,10 @@ MDH_FIELDS = (                              # (name, hi, lo), in table order
     ('MachineExtension', 15, 14), ('SCProtection', 18, 16),
     ('State', 24, 19), ('StateExtension', 28, 25), ('KeyType', 30, 29),
     ('Reserved31', 31, 31), ('AuxDataLen', 45, 32), ('Reserved46', 46, 46),
-    ('ADSDropped', 47, 47), ('AuxInfo', 61, 48), ('Reserved62', 63, 62),
+    ('ADSDropped', 47, 47), ('AuxInfo', 61, 48), ('Version', 63, 62),
     ('UsagePolicy', 68, 64), ('Locality', 77, 69), ('Reserved78', 79, 78),
     ('MachineUse', 95, 80), ('ExpirationDate', 115, 96),
-    ('Reserved116', 125, 116), ('Version', 127, 126),
+    ('Reserved116', 127, 116),
 )
 FIELD = {name: (hi, lo) for name, hi, lo in MDH_FIELDS}
 RESERVED = tuple(name for name in FIELD if name.startswith('Reserved'))
@@ -233,11 +236,17 @@ ERROR_STATE_NAMES = {
 }
 KL_STATE_INVALID = 49
 KL_STATE_MGMT_AUTH = 51                     # _Authentication Failed_
+KL_STATE_EXPIRED = 53
 KL_CFG_PROVISIONING = 56
 KL_CFG_EXPORTING = 57
 KL_CFG_IMPORTING = 58
 KL_CFG_PPI_EXPORTING = 59
 KL_CFG_PPI_IMPORTING = 60
+# The Valid States AES256_ECB defines (<<KLEE-ECB-mode>>, values from
+# <<KLEE-state-constants-symmetric>>): Ready, Encrypt, Decrypt.  Any other
+# Valid State is "a value not supported by the Machine" (<<KLEE-Metadata-validity>>).
+KL_STATE_ENCRYPT, KL_STATE_DECRYPT = 7, 8
+ECB_STATES = (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT)
 
 
 def is_valid_state(st): return 1 <= st <= 47
@@ -384,10 +393,11 @@ class KleeException(Exception):
 
 
 class Locker:
-    """A Cryptographic Locker: its MDH and its Content, partitioned into
-    Content1 and Content2 (<<KLEE-cryptographic-registers>>)."""
+    """A Cryptographic Locker K(idx): its MDH and its Content, partitioned
+    into Content1 and Content2 (<<KLEE-cryptographic-registers>>)."""
 
-    def __init__(self, mdh=0, content1=None, content2=None):
+    def __init__(self, mdh=0, content1=None, content2=None, idx=0):
+        self.idx = idx
         self.mdh = mdh
         self.content1 = None if content1 is None else list(content1)
         self.content2 = None if content2 is None else list(content2)
@@ -403,14 +413,14 @@ class Locker:
                 None if self.content2 is None else tuple(self.content2))
 
 
-def enter_error_state(cl: locker, st: int):
-    """Rule <<KLEE-SGR-clear-cr-content-error-state>>: the Content beyond the
+def enter_error_state(cl: Locker, st: int):
+    """Rule <<KLEE-SGR-clear-locker-content-error-state>>: the Content beyond the
     MDH is cleared, the ADS released, _AuxDataLen_ and _ADSDropped_ set to 0."""
     cl.content1 = cl.content2 = None
     cl.mdh = put(put(put(cl.mdh, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
 
 
-def outcome(cl: locker) -> str:
+def outcome(cl: Locker) -> str:
     st = cl.state()
     if is_valid_state(st):
         return 'ok'
@@ -441,7 +451,26 @@ class Unit:
         self.zklexpire = zklexpire
         # The three per-hart authentication registers (<<KLEE-KLF>>).
         self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0
+        self.klmanagedlocker = 32    # <<KLEE-CSR-klmanagedlocker>>, out of reset
         self.decrypts = []           # sep of every SCC_Decrypt call (DIEL factor)
+
+    # -- klmanagedlocker (<<KLEE-locker-management>>, common steps 1-2) --
+    def _check_managed(self, cl: Locker):
+        if self.klmanagedlocker not in (cl.idx, 32):
+            raise IllegalInstruction('kl.mgmt: klmanagedlocker names another locker')
+
+    def _set_managed(self, cl: Locker):
+        """The target's number if left in a Configuration State, else 32
+        (a Complete State, or Unconfigured after the zeroizing step)."""
+        st = cl.state()
+        self.klmanagedlocker = cl.idx if KL_CFG_PROVISIONING <= st <= 60 else 32
+
+    def _check_transfer(self, cl: Locker):
+        """SGR21/SGR22: in kl_cfg_importing / kl_cfg_exporting the locker must
+        be the one klmanagedlocker names."""
+        if (cl.state() in (KL_CFG_IMPORTING, KL_CFG_EXPORTING)
+                and cl.idx != self.klmanagedlocker):
+            raise IllegalInstruction('locker not named by klmanagedlocker')
 
     # -- identification ------------------------------------------------
     def impqual(self) -> int:
@@ -494,42 +523,52 @@ class Unit:
         return self.content1_size(mdh) + 16 * max(0, self.max_aux - 2)
 
     # -- <<KLEE-Metadata-validity>> ------------------------------------
-    def metadata_check(self, M: int, base: str, at_import=False):
+    def metadata_check(self, M: int, base: str, at_import=False, low_only=False):
         """None, 'unsupported' or 'invalid' for the MDH M of an image whose
-        base type is `base` ('pi' or 'scc')."""
+        base type is `base` ('pi' or 'scc'); low_only: only the conditions on
+        bits [63:0] (kl.size Form B, <<KLEE-instruction-size>>)."""
         if (fld(M, 'MachineExtension') != 0 or fld(M, 'Machine') != AES256_ECB
                 or fld(M, 'SCProtection') not in self.SC_LEVELS):
             return 'unsupported'
-        loc = fld(M, 'Locality')
-        custom = (fld(M, 'Machine') >= 3072 or fld(M, 'SCProtection') >= 6
-                  or fld(M, 'Version') == 3)
+        st = fld(M, 'State')
         invalid = (
-            any(fld(M, r) for r in RESERVED)
-            or fld(M, 'AuxDataLen') == 1
+            any(fld(M, r) for r in RESERVED if FIELD[r][0] < 64)
+            or fld(M, 'AuxDataLen') == 1         # <<KLEE-metadata-header>>
             or (base == 'pi' and (fld(M, 'ADSDropped') or fld(M, 'AuxDataLen')))
             or fld(M, 'MachinePolicy') == 0      # ECB needs a bit (<<KLEE-Machine-field>>)
             or fld(M, 'KeyType') in (2, 3)
-            or sl(loc, 5, 4) == 3
-            or any(self.unconfigured(j) for j in localities_of(M))
             or fld(M, 'AuxInfo') != 0            # not used by ECB
-            or (fld(M, 'ExpirationDate') != 0 and not self.zklexpire)
             or fld(M, 'Version') not in self.VERSIONS
-            or (custom and sl(loc, 1, 0) not in (2, 3))   # <<KLEE-GR-custom-locality>>
-            or (at_import and fld(M, 'State') in (0, 61, 62, 63)))
+            or st in (54, 55)
+            or (is_valid_state(st) and st not in ECB_STATES)
+            or (at_import and st in (0, 61, 62, 63)))
+        if not low_only:
+            loc = fld(M, 'Locality')
+            custom = (fld(M, 'Machine') >= 3072 or fld(M, 'SCProtection') >= 6
+                      or fld(M, 'Version') == 3)
+            invalid = invalid or (
+                any(fld(M, r) for r in RESERVED if FIELD[r][0] >= 64)
+                or sl(loc, 5, 4) == 3
+                or any(self.unconfigured(j) for j in localities_of(M))
+                or (fld(M, 'ExpirationDate') != 0 and not self.zklexpire)
+                or (custom and sl(loc, 1, 0) not in (2, 3)))  # <<KLEE-GR-custom-locality>>
         return 'invalid' if invalid else None
 
     # -- kl.size -------------------------------------------------------
     def kl_size(self, mdh: int, form='C') -> int:
-        """<<KLEE-instruction-size>>; Form A takes the MDH of a locker, Form C a
-        supplied MDH (whose validity is checked)."""
+        """<<KLEE-instruction-size>>; Form A takes the MDH of a locker, Form B
+        a supplied MDH[63:0], Form C a supplied MDH (whose validity is checked,
+        in Form B only on bits [63:0])."""
+        if form == 'B':
+            mdh &= (1 << 64) - 1
         st = fld(mdh, 'State')
         if form == 'A' and st == KL_STATE_UNCONFIGURED:
             return 0
-        if form == 'C' and not is_error_state(st):
+        if form in ('B', 'C') and not is_error_state(st):
             if st in (61, 62, 63):
                 return 0
             base = 'pi' if st == 0 or base_type(st) == 'pi' else 'scc'
-            if self.metadata_check(mdh, base) is not None:
+            if self.metadata_check(mdh, base, low_only=(form == 'B')) is not None:
                 return 0
         if is_error_state(st):
             return 16
@@ -543,7 +582,14 @@ class Unit:
         return 16 + self.pi_content_size(mdh)
 
     # -- kl.mgmt #kl_cfg_importing: <<KLEE-SCC-import>> steps 1-5 -------
-    def mgmt_open_import(self, cl: locker, ml: int):
+    def mgmt_open_import(self, cl: Locker, ml: int):
+        self._check_managed(cl)
+        try:
+            self._open_import(cl, ml)
+        finally:                                     # also after kl_exc_unsupported
+            self._set_managed(cl)
+
+    def _open_import(self, cl: Locker, ml: int):
         cl.clear()                                   # step 1: clear K(i)
         st = fld(ml, 'State')
         if is_error_state(st):
@@ -567,22 +613,25 @@ class Unit:
                                      or aux > self.max_aux) else 0
         cl.mdh = put(put(ml, 'ADSDropped', dropped), 'State', KL_CFG_IMPORTING)
 
-    def _short_import(self, cl: locker, ml: int):
+    def _short_import(self, cl: Locker, ml: int):
         """<<KLEE-error-state-transfer>>: configure the locker into the Error State
         ml names (54 and 55 as Invalid), installing the entire MDH except that
         _AuxDataLen_ and _ADSDropped_ are set to 0; no Metadata-validity check;
         no management operation is opened, so the authentication registers
         take no part."""
         st = fld(ml, 'State')
-        if st in (54, 55):
+        # Without Zklexpire "a locker cannot be in" Expired (<<KLEE-states-error>>):
+        # mapped like 54 and 55 (see the SPEC-NOTE).
+        if st in (54, 55) or (st == KL_STATE_EXPIRED and not self.zklexpire):
             st = KL_STATE_INVALID
         cl.mdh = put(put(put(ml, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
 
     # -- kl.load: <<KLEE-SCC-import>> step 6 ---------------------------
-    def load(self, cl: locker, mem: Mem, at=16):
+    def load(self, cl: Locker, mem: Mem, at=16):
         if cl.state() not in (KL_CFG_PROVISIONING, KL_CFG_IMPORTING,
                               KL_CFG_PPI_IMPORTING):
             raise IllegalInstruction('kl.load: State not admitted (SGR21)')
+        self._check_transfer(cl)
         off = content_offset(cl.mdh)
         c1 = self.content1_size(cl.mdh)
         content_size = c1 + content2_size(cl.mdh)
@@ -598,10 +647,15 @@ class Unit:
         cl.content2 = deser(S[off + c1:image_end]) if has_content2 else None
 
     # -- kl.mgmt #kl_cfg_exporting: <<KLEE-SCC-export>> steps 1-2 -------
-    def mgmt_open_export(self, cl: locker):
-        st = cl.state()
-        if st == KL_STATE_UNCONFIGURED:
+    def mgmt_open_export(self, cl: Locker):
+        self._check_managed(cl)
+        if cl.state() == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction('export of an Unconfigured locker')
+        self._open_export(cl)
+        self._set_managed(cl)
+
+    def _open_export(self, cl: Locker):
+        st = cl.state()
         if is_error_state(st):
             return                                   # locker unchanged, nothing opened
         if is_valid_state(st):
@@ -632,9 +686,10 @@ class Unit:
         raise NotImplementedError('PI-shaped images are outside this harness')
 
     # -- kl.store ------------------------------------------------------
-    def store(self, cl: locker) -> bytes:
+    def store(self, cl: Locker) -> bytes:
         if cl.state() not in (KL_CFG_EXPORTING, KL_CFG_PPI_EXPORTING):
             raise IllegalInstruction('kl.store: State not admitted (SGR22)')
+        self._check_transfer(cl)
         off = content_offset(cl.mdh)
         S = v2b(self.reg_SIV, 16)
         if off == 48:
@@ -647,16 +702,22 @@ class Unit:
         return S
 
     # -- kl.mgmt #kl_cfg_management_end: <<KLEE-SCC-import>> steps 7-15 --
-    def mgmt_complete(self, cl: locker, ml: int, regen=None, clear_ads_dropped=True):
+    def mgmt_complete(self, cl: Locker, ml: int, regen=None, clear_ads_dropped=True):
         """Completion of an import or an export of a locker of base type scc
         (<<KLEE-locker-management>> 3).  `regen` = (AuxDataLen, Content2) is a
         replacement ADS the Machine's state machine generates at step 15;
         clear_ads_dropped=False is the harness-only negative control."""
+        self._check_managed(cl)
         if cl.state() not in (KL_CFG_IMPORTING, KL_CFG_EXPORTING):
             raise IllegalInstruction('no management operation open on the locker')
         st = fld(ml, 'State')
         if not (is_complete_state(st) or st in (KL_CFG_IMPORTING, KL_CFG_EXPORTING)):
             raise IllegalInstruction('ml.State not admitted for base type scc')
+        self._complete(cl, ml, regen, clear_ads_dropped)
+        self._set_managed(cl)
+
+    def _complete(self, cl: Locker, ml: int, regen, clear_ads_dropped):
+        st = fld(ml, 'State')
         # ml is consumed only for its State field.
         cl.mdh = put(cl.mdh, 'State', st)
         if not is_complete_state(st):
@@ -704,7 +765,7 @@ class Unit:
 # Software sequences (<<KLEE-management-operations>>, informative)
 # ======================================================================
 
-def export_cl(unit: Unit, cl: locker) -> bytes:
+def export_cl(unit: Unit, cl: Locker) -> bytes:
     """kl.size, kl.getmd, and -- unless the locker is in an Error State, whose
     image is the MDH alone (<<KLEE-error-state-transfer>>) -- kl.mgmt
     #kl_cfg_exporting, kl.store, and the completing kl.mgmt with the saved MDH."""
@@ -737,7 +798,7 @@ def import_image(unit: Unit, mem: Mem, ml=None, regen=None,
     return cl, outcome(cl)
 
 
-def open_and_load(unit: Unit, image: bytes) -> locker:
+def open_and_load(unit: Unit, image: bytes) -> Locker:
     """The first two phases of an import, as preempted before completion."""
     mem = Mem(image)
     cl = Locker()
@@ -746,7 +807,7 @@ def open_and_load(unit: Unit, image: bytes) -> locker:
     return cl
 
 
-def export_pccc(unit: Unit, cl: locker) -> bytes:
+def export_pccc(unit: Unit, cl: Locker) -> bytes:
     """Nested export of a locker under import (<<KLEE-data-formats>>, PCCC): the
     saved MDH followed by the SCC-shaped image, exported verbatim."""
     ml = cl.mdh
@@ -756,11 +817,34 @@ def export_pccc(unit: Unit, cl: locker) -> bytes:
     return image
 
 
-def reimport_pccc(unit: Unit, image: bytes) -> locker:
+def reimport_pccc(unit: Unit, image: bytes) -> Locker:
     """Re-import of an SCC-shaped PCCC, completed at the nested level."""
     cl = open_and_load(unit, image)
     unit.mgmt_complete(cl, b2v(image[0:16]))         # nested: no authentication
     return cl
+
+
+def kl_rename(unit: Unit, klf, s: int, d: int):
+    """<<KLEE-instruction-clone>>: the CC of K(s), in whatever State, becomes
+    that of K(d) unchanged; K(s) becomes Unconfigured."""
+    if s == d:
+        return
+    klf[d], klf[s] = klf[s], Locker(idx=s)
+    klf[d].idx = d
+    if unit.klmanagedlocker == s:
+        unit.klmanagedlocker = d
+    elif unit.klmanagedlocker == d:
+        unit.klmanagedlocker = 32
+
+
+def kl_swap(unit: Unit, klf, s: int, d: int):
+    """<<KLEE-instruction-clone>>: the CCs of K(s) and K(d) are exchanged."""
+    if s == d:
+        return
+    klf[s], klf[d] = klf[d], klf[s]
+    klf[s].idx, klf[d].idx = s, d
+    if unit.klmanagedlocker in (s, d):
+        unit.klmanagedlocker = s + d - unit.klmanagedlocker
 
 
 # ======================================================================
@@ -1010,10 +1094,10 @@ def main():
         "kl.getst / kl.getstx expansions (srli 19, andi 0x3F; srli 25, "
         "andi 0x0F) read _State_ / _StateExtension_ (<<KLEE-instruction-getst>>)")
     length_fields = ('Machine', 'MachinePolicy', 'KeyType', 'StateExtension',
-                     'AuxDataLen', 'ADSDropped', 'SCProtection')
+                     'AuxDataLen', 'ADSDropped', 'SCProtection', 'Version')
     chk(all(FIELD[f][0] < 64 for f in length_fields),
-        "every field that determines a length or the KLF capacity lies in "
-        "bits [63:0] (<<KLEE-length-rule>>)")
+        "every field that determines a length or the KLF capacity, and "
+        "_Version_, lies in bits [63:0] (<<KLEE-length-rule>>, kl.size Form B)")
     for locs in LOC_SETS:
         chk(tuple(localities_of(make_mdh(localities=locs))) == tuple(sorted(locs)),
             f"MDH._Locality_ round-trips for Localities {locs or '(none)'}")
@@ -1063,6 +1147,26 @@ def main():
         "kl.size reports 0 for AuxDataLen = 1 (invalid Metadata)")
     chk(all(unit.kl_size(put(base, 'State', st)) == 16 for st in range(48, 56)),
         "kl.size reports 16 for every Error State (<<KLEE-error-state-transfer>>)")
+    chk(unit.kl_size(put(base, 'State', 3)) == 0,
+        "kl.size reports 0 for a Valid State the Machine does not define")
+
+    # Form B sees MDH[63:0] only; the conditions on bits [127:64] are not applied.
+    chk(all(unit.kl_size(m, 'B') == unit.kl_size(m) != 0 for m in (
+            base, make_mdh(), put(base, 'ADSDropped', 1), make_mdh(key_type=1),
+            put(base, 'State', KL_CFG_IMPORTING))),
+        "kl.size Form B equals Form C on valid Metadata")
+    high = [put(base, 'Reserved116', 1), put(base, 'Reserved78', 2),
+            put(base, 'Locality', 0b110000),                     # Boot [5:4] = 3
+            make_mdh(localities=(10,)), make_mdh(expiration_date=5)]
+    lean = new_unit(LST_NO_SLOC, zklexpire=False)
+    chk(all(lean.kl_size(m, 'C') == 0 and lean.kl_size(m, 'B') == lean.kl_size(
+            m & ((1 << 64) - 1), 'C') != 0 for m in high),
+        "kl.size Form B ignores reserved bits, _Locality_ and _ExpirationDate_ "
+        "in [127:64]; Form C reports 0")
+    chk(unit.kl_size(put(base, 'Version', 1), 'B') == 0
+        and unit.kl_size(put(base, 'AuxInfo', 1), 'B') == 0,
+        "kl.size Form B reports 0 for an unsupported _Version_ or an unused "
+        "_AuxInfo_, both in [63:0]")
 
     # ------------------------------------------------------------------
     print("\n-- export -> import round trip")
@@ -1125,7 +1229,7 @@ def main():
               or (name == 'KeyType' and value >= 2)
               or (name == 'AuxDataLen' and value == 1)
               or (name == 'Locality' and sl(value, 5, 4) == 3)
-              or (name == 'State' and value == 0)):
+              or (name == 'State' and value not in ECB_STATES)):
             want = 'kl_state_invalid'
         else:
             want = 'kl_state_mgmt_auth'
@@ -1145,6 +1249,22 @@ def main():
         + (f" -- mismatches: {wrong[:4]}" if wrong else ""))
     info("MDH single-bit changes: " + ", ".join(
         f"{v} {k}" for k, v in sorted(kinds.items())) + ", bit 47 ignored")
+    # A single-bit change of State 1 names 0 or a State ECB does not define,
+    # so the State's binding is checked by substituting Encrypt and Decrypt.
+    m_enc = make_mdh(machine_policy=0b11, state=KL_STATE_ENCRYPT,
+                     localities=LOC_SETS[2])
+    scc_enc = sealed(unit, m_enc)
+    cl, res = import_image(unit, Mem(scc_enc))
+    chk(res == 'ok' and cl.state() == KL_STATE_ENCRYPT,
+        "an SCC exported in State Encrypt imports in State Encrypt")
+    m_dec = put(m_enc, 'State', KL_STATE_DECRYPT)
+    chk(import_image(unit, Mem(v2b(m_dec, 16) + scc_enc[16:]))[1]
+        == 'kl_state_mgmt_auth',
+        "substituting Decrypt for Encrypt in the MDH fails authentication")
+    chk(import_image(unit, Mem(v2b(put(m_enc, 'State', KL_STATE_SUCCESS), 16)
+                               + scc_enc[16:]))[1] == 'kl_state_invalid',
+        "a Valid State the Machine does not define (Success, for ECB) is "
+        "invalid Metadata")
     exp_unit = new_unit(zklexpire=False)
     chk(all(import_image(exp_unit, Mem(tampered(scc, b)))[1] == 'kl_state_invalid'
             for b in (96, 105, 115)),
@@ -1450,6 +1570,69 @@ def main():
         "setting bit 47 in that PCCC only drops the ADS")
 
     # ------------------------------------------------------------------
+    print("\n-- klmanagedlocker; kl.rename and kl.swap under management "
+          "(<<KLEE-instruction-clone>>)")
+    u = new_unit()
+    klf = {i: Locker(idx=i) for i in range(32)}
+
+    def illegal(f, *args):
+        try:
+            f(*args)
+        except IllegalInstruction:
+            return True
+        return False
+
+    mem = Mem(scc_i)
+    u.mgmt_open_import(klf[3], b2v(mem.read(0, 16)))
+    u.load(klf[3], mem)
+    chk(u.klmanagedlocker == 3,
+        "the opening kl.mgmt writes the locker's number to klmanagedlocker")
+    snap = klf[3].snapshot()
+    kl_rename(u, klf, 3, 7)
+    chk(klf[7].snapshot() == snap and klf[3].state() == KL_STATE_UNCONFIGURED
+        and u.klmanagedlocker == 7,
+        "kl.rename moves a locker under import unchanged; klmanagedlocker "
+        "follows it (3 -> 7)")
+    chk(illegal(u.mgmt_open_import, klf[2], mdh_i) and klf[2].snapshot()
+        == (0, (), None),
+        "kl.mgmt on another locker while K7 is managed is an illegal "
+        "instruction, with no effect")
+    u.mgmt_complete(klf[7], mdh_i)
+    chk(outcome(klf[7]) == 'ok' and klf[7].snapshot() == ref_cl.snapshot()
+        and u.klmanagedlocker == 32,
+        "... and the import completes on K7 with both segments authenticated "
+        "(the authentication registers are per hart); klmanagedlocker -> 32")
+
+    klf[2] = Locker(mdh_i, CONTENT1, CONTENT2, idx=2)
+    klf[5] = Locker(make_mdh(), CONTENT1_B, idx=5)
+    snap2, snap5 = klf[2].snapshot(), klf[5].snapshot()
+    ml = klf[2].mdh
+    u.mgmt_open_export(klf[2])
+    kl_swap(u, klf, 2, 5)
+    chk(u.klmanagedlocker == 5 and klf[2].snapshot() == snap5,
+        "kl.swap mid-export exchanges the lockers; klmanagedlocker follows "
+        "the exported one (2 -> 5)")
+    u.klmanagedlocker = 32                           # CSR write
+    chk(illegal(u.store, klf[5]),
+        "kl.store from a locker in kl_cfg_exporting not named by "
+        "klmanagedlocker is an illegal instruction (SGR22)")
+    u.klmanagedlocker = 5
+    img = v2b(ml, 16) + u.store(klf[5])
+    u.mgmt_complete(klf[5], ml)
+    chk(img == scc_i and klf[5].snapshot() == snap2 and u.klmanagedlocker == 32,
+        "... kl.store from K5 emits the SCC of the original locker, and the "
+        "completion on K5 restores it")
+
+    u.mgmt_open_import(klf[7], mdh_i)
+    klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
+    snap1 = klf[1].snapshot()
+    kl_rename(u, klf, 1, 7)
+    chk(u.klmanagedlocker == 32 and klf[7].snapshot() == snap1
+        and klf[1].state() == KL_STATE_UNCONFIGURED,
+        "kl.rename onto the managed locker discards its import; "
+        "klmanagedlocker -> 32")
+
+    # ------------------------------------------------------------------
     print("\n-- Error States (<<KLEE-error-state-transfer>>)")
     bad_c1 = tampered(scc_i, 8 * (off1 + 6))         # a Content1 byte changed
     cl_fail, res = import_image(unit, Mem(bad_c1))
@@ -1519,6 +1702,11 @@ def main():
         "Error States 48-55: the short import installs the whole MDH without "
         "validity checks, AuxDataLen and ADSDropped 0, 54 and 55 as Invalid"
         + (f" -- failing: {bad}" if bad else ""))
+    cl_x = Locker()
+    exp_unit.mgmt_open_import(cl_x, put(dirty_body, 'State', KL_STATE_EXPIRED))
+    chk(cl_x.mdh == (dirty_body & mask) | (KL_STATE_INVALID << 19),
+        "without Zklexpire the short import of State Expired installs the MDH "
+        "in State Invalid, as for 54 and 55")
     chk(import_image(unit, Mem(v2b(put(dirty_body, 'State', 1), 16)))[1]
         == 'kl_exc_unsupported',
         "the same MDH naming a Valid State is checked (unsupported)")
@@ -1588,16 +1776,34 @@ def main():
               "AD_auth[0][47] (ADSDropped) is cleared in a local copy. Only the "
               "SIV NOTE of that section mentions it; the list should too.")
     spec_note("_ContentOffset_, content_size, max_admissible, image_size, "
-              "image_end and S are now defined in <<KLEE-instruction-mv>>, yet "
+              "image_end and S are defined only in <<KLEE-instruction-mv>>, yet "
               "<<KLEE-SCC-GCM-SIV-enc>> (len_PC bound), "
-              "<<KLEE-Memory-Alignment>>, the PCCC paragraph of "
-              "<<KLEE-data-formats>>, kl.store and kl.mv itself cite "
-              "<<KLEE-instruction-load>>, which only refers back to kl.mv. "
-              "This harness cites <<KLEE-instruction-mv>>.")
-    spec_note("<<KLEE-locker-management>> (kl.mgmt opening, Error-State branch) "
-              "configures the locker 'in that Error State' without the mapping of "
-              "54 and 55 to Invalid that <<KLEE-error-state-transfer>> and "
-              "kl.setst state; this harness applies the mapping.")
+              "<<KLEE-Memory-Alignment>>, <<KLEE-CSR-klstart>>, the PCCC "
+              "paragraph of <<KLEE-data-formats>>, kl.store ('as defined "
+              "there') and kl.mv itself cite <<KLEE-instruction-load>> for them, "
+              "which refers back to kl.mv. This harness cites "
+              "<<KLEE-instruction-mv>>.")
+    spec_note("<<KLEE-Metadata-validity>> no longer lists _AuxDataLen_ = 1, "
+              "which <<KLEE-metadata-header>> and <<KLEE-Auxiliary-Data-Section>> "
+              "call invalid and for which _ContentOffset_ is undefined; this "
+              "harness treats it as invalid Metadata.")
+    spec_note("<<KLEE-Metadata>> says bits unused by a Machine are zero, but "
+              "<<KLEE-Metadata-validity>> checks only _AuxInfo_; a non-zero "
+              "_StateExtension_ on AES256_ECB, which does not use it, is "
+              "modelled as valid (it then fails authentication).")
+    spec_note("<<KLEE-Metadata-validity>> makes Metadata unsupported when the "
+              "(_Machine_, _MachinePolicy_, _SCProtection_) combination is not "
+              "implemented, and invalid when _MachinePolicy_ is zero for a "
+              "Machine that needs a bit; kl.mgmt tests unsupported first. This "
+              "harness takes the specific rule: _MachinePolicy_ = 0 on "
+              "AES256_ECB is invalid.")
+    spec_note("<<KLEE-Metadata-validity>> now makes State Expired invalid 'in a "
+              "PI, SCC, or PCCC' without Zklexpire, but an Expired image is the "
+              "16-byte Error-State image, whose short import is exempt from those "
+              "checks and maps only 54 and 55 (<<KLEE-locker-management>>, "
+              "<<KLEE-error-state-transfer>>); this harness maps Expired to "
+              "Invalid there too. The <<KLEE-states-error>> sentence is garbled "
+              "('and if any ... PSCC').")
     spec_note("<<KLEE-import-and-DIEL>> item 4 says an unsupported ADS 'is "
               "skipped or only partially loaded', but step 5 of "
               "<<KLEE-SCC-import>> now sets ADSDropped, after which step 6 and "

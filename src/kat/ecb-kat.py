@@ -32,13 +32,15 @@ RULES  Behaviour the ECB text now leaves to the general rules: a kl.exec in _Rea
        invalidates the locker (Rules <<KLEE-SGR-no-exec-in-ready>> and
        <<KLEE-MGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
        performs no operation and invalidates the locker (MGR2), the output window is
-       zeroed (Rule <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared
-       (Rule <<KLEE-SGR-clear-cr-content-error-state>>); the _MachinePolicy_ gate on
+       zeroed (Rule <<KLEE-SGR-usage-locker-error-state>>) and the Content cleared
+       (Rule <<KLEE-SGR-clear-locker-content-error-state>>); the _MachinePolicy_ gate on
        the transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8 of
        <<KLEE-State-management>>); the KLIOBUF substitution
        (<<KLEE-usage-input-output>>); the interruption points and resumption of a
        multi-block kl.exec (<<KLEE-CSR-klstart>>, Rule
-       <<KLEE-IRR-block-iterated-instructions>>).
+       <<KLEE-IRR-block-iterated-instructions>>); the Metadata Validity Rule
+       (<<KLEE-Metadata-validity>>) for a zero _MachinePolicy_ and for a _State_ ECB
+       does not have.
 
 DATA   The Provisioning Input and the Serialized Content as "Definition of a
        Machine in KLEE" now describes them.  The PI starts with the 128-bit MDH,
@@ -50,11 +52,14 @@ DATA   The Provisioning Input and the Serialized Content as "Definition of a
        and the all-ones SKID are checked against <<KLEE-KeyType-field>>,
        <<KLEE-system-keys>> and <<KLEE-MVR-open>>.
 
-DERIVE The destination endpoint `key` (1) of <<KLEE-derive-endpoints>>, with the
-       Transfer Size Rules of <<KLEE-derive-rule-both-fixed-size>> (that table is
-       marked work in progress).
+DERIVE The destination endpoint `key` (1) of <<KLEE-derive-endpoints>> (marked work
+       in progress), with Rule DER1 check 4 (<<KLEE-DER-checks>>: a key needs
+       `length` >= dest_length and receives exactly dest_length bytes, no
+       zero-filling), DER4 (<<KLEE-DER-SKID-no-export>>) and DER8
+       (<<KLEE-derive-rule-both-fixed-size>>).  kl.derive carries no field selector
+       (only `length`), so the endpoint is the one the Machine and State define.
 
-BOOK 4 The informative example <<KLEE-pseudocode-ECB-encryption>> (SPEC-NOTE only).
+BOOK 4 The informative example <<KLEE-pseudocode-ECB-encryption>>: its Error State test.
 
 SM4 is included because KLEE names it as an instantiable block cipher, and because
 it exercises the value/byte-string mapping with a cipher whose own specification is
@@ -310,6 +315,9 @@ class EcbLocker:
     def provision(self, pi):
         """kl.mgmt opening a provisioning with the PI's MDH, kl.mv, completing kl.mgmt."""
         self.mdh, self.key, self.skid = b2v(pi[:16]), None, None     # position i
+        if fget(self.mdh, F_MACHINEPOLICY) == 0:
+            self.invalidate()            # "At least one of the bits must be set"
+            return
         self._install(sl(b2v(pi[16:]), self.key_field_width() - 1, 0), False)
         if not self.in_error():
             self.mdh = fset(self.mdh, F_STATE, ST_READY)   # provisioning ends in _Ready_
@@ -322,6 +330,9 @@ class EcbLocker:
     def import_scc(self, mdh, content1):
         """Import from the plaintext of an SCC; _State_ is restored from the MDH."""
         self.mdh, self.key, self.skid = mdh, None, None
+        if self.state not in (ST_READY, ST_ENCRYPT, ST_DECRYPT):
+            self.invalidate()            # a _State_ the Machine does not support
+            return
         self._install(sl(b2v(content1), self.key_field_width() - 1, 0), True)
 
     # ------------------------------------------------------------ usage
@@ -374,30 +385,29 @@ class EcbLocker:
         return out, 0                    # retired: klstart <- 0
 
     # ------------------------------------------------------------ kl.derive
-    def derive_dest(self, j, src, length):
-        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>).
+    def derive_dest(self, src, length):
+        """This locker as the destination of kl.derive (<<KLEE-derive-endpoints>>): the
+        endpoint is `key`, the only importable field (kl.derive has no field selector).
 
         `src` stands for the bytes the source endpoint supplies.
         """
         if self.in_error():
             return False
-        if (j not in ECB_IMPORTABLE
-                or self.state != ST_READY        # "filled with the destination locker in State _Ready_"
-                or self.keytype == 1):           # "A field configured by a SKID is never importable"
+        dest_length = self.cipher()[2] // 8
+        if (self.state != ST_READY               # "filled with the destination locker in State _Ready_"
+                or self.keytype == 1             # DER4: never importable
+                or length < dest_length          # DER1 check 4 (length = 0 included)
+                or len(src) < dest_length):      # DER1 check 4: the source is too short
             self.invalidate()
             return False
-        if length == 0:
-            return True                          # transfers nothing, changes no state
-        dest_length = self.cipher()[2] // 8
-        eff_length = min(length, dest_length)
-        self.key = b2v(src[:eff_length] + bytes(dest_length - eff_length))
+        self.key = b2v(src[:dest_length])        # exactly dest_length bytes (DER1, DER8)
         return True
 
 
-def kl_derive_from_ecb(src_cl, i, dst_cl, j, length):
-    """kl.derive with an ECB locker as the source.  ECB has no exportable field, so the
-    endpoint descriptor is never allowed and both lockers are invalidated."""
-    assert i not in ECB_EXPORTABLE
+def kl_derive_from_ecb(src_cl, dst_cl, length):
+    """kl.derive with an ECB locker as the source.  ECB has no exportable field, so no
+    pair lists it and both lockers are invalidated."""
+    assert not ECB_EXPORTABLE
     src_cl.invalidate()
     dst_cl.invalidate()
     return False
@@ -689,71 +699,75 @@ cl2.import_scc(make_mdh(ECB_OF['AES-192'], POL_BOTH, 1, ST_READY),
                v2b(ONES64, 16))
 chk("SCC carrying the all-ones SKID in a Complete State -> _Invalid_",
     cl2.state, ST_INVALID)
+cl = EcbLocker(sks=SKS)
+cl.provision(build_pi(ECB_OF['AES-128'], 0, 0, b2v(bytes.fromhex(SP38A_F1[0][2]))))
+chk("PI with _MachinePolicy_ = 0 (invalid Metadata) -> _Invalid_", cl.state, ST_INVALID)
+cl2 = EcbLocker()
+cl2.import_scc(make_mdh(ECB_OF['AES-128'], POL_BOTH, 0, ST_OPERATE),
+               bytes.fromhex(SP38A_F1[0][2]))
+chk("SCC whose _State_ (2) ECB does not have -> _Invalid_", (cl2.state, cl2.key),
+    (ST_INVALID, None))
 
 print("\n== DERIVE: <<KLEE-derive-endpoints>>, destination `key` (1), locker in _Ready_")
 name, cipher, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 source = bytes.fromhex(k) + bytes.fromhex("a5" * 8)  # a 32-byte source field
-zero_key = "00" * 24
 
 
-def derived(length, j=1, state=None, keytype=0):
+def derived(length, state=None, keytype=0, src=source):
     cl = EcbLocker(sks=SKS)
     field = SKID if keytype else 0
     cl.provision(build_pi(ECB_OF[cipher], POL_BOTH, keytype, field))
     if state is not None:
         cl.setst(state)
-    done = cl.derive_dest(j, source, length)
+    done = cl.derive_dest(src, length)
     return cl, done
 
 
 cl, done = derived(32)
 cl.setst(ST_ENCRYPT)
-chk("length 32 > 24: eff_length 24, source truncated; F.1.3 reproduced",
+chk("length 32 > 24: exactly 24 bytes received, source truncated; F.1.3 reproduced",
     (done, cl_run(cl, pt)[0].hex()), (True, c))
 cl, done = derived(24)
 cl.setst(ST_ENCRYPT)
 chk("length 24 = dest_length: F.1.3 reproduced", (done, cl_run(cl, pt)[0].hex()), (True, c))
 cl, done = derived(16)
-cl.setst(ST_ENCRYPT)
-padded = bytes.fromhex(k)[:16] + bytes(8)
-chk("length 16 < 24: key zero-filled beyond byte 16 [vs REF]",
-    (done, cl_run(cl, pt)[0].hex()), (True, ref_ecb(aes_encrypt, padded, pt).hex()))
+chk("length 16 < 24: destination _Invalid_, no zero-filled key (DER1 check 4)",
+    (done, cl.state, cl.key), (False, ST_INVALID, None))
 cl, done = derived(0)
-chk("length 0: nothing transferred, no state change",
-    (done, cl.state, v2b(cl.key, 24).hex()), (True, ST_READY, zero_key))
+chk("length 0 < 24: destination _Invalid_ (DER1 check 4, INFO below)",
+    (done, cl.state), (False, ST_INVALID))
+cl, done = derived(24, src=source[:16])
+chk("source field of 16 bytes < 24: destination _Invalid_ (DER1 check 4)",
+    (done, cl.state), (False, ST_INVALID))
 cl, done = derived(32, state=ST_ENCRYPT)
 chk("destination in _Encrypt_ -> _Invalid_", (done, cl.state), (False, ST_INVALID))
-cl, done = derived(32, j=2)
-chk("destination index 2 (ECB imports only `key`) -> _Invalid_", (done, cl.state),
-    (False, ST_INVALID))
 cl, done = derived(32, keytype=1)
-chk("key configured by a SKID is never importable -> _Invalid_", (done, cl.state),
-    (False, ST_INVALID))
+chk("key of a _KeyType_ 1 locker is never importable (DER4) -> _Invalid_",
+    (done, cl.state), (False, ST_INVALID))
 src_cl = new_cl(cipher, k)
 dst_cl = new_cl(cipher, "00" * 24)
-done = kl_derive_from_ecb(src_cl, 1, dst_cl, 1, 24)
+done = kl_derive_from_ecb(src_cl, dst_cl, 24)
 chk("ECB locker as a source (a key is never exportable) -> both _Invalid_",
     (done, src_cl.state, dst_cl.state), (False, ST_INVALID, ST_INVALID))
 info("kl.derive into `key`: byte t of the transfer is taken as byte t of the key "
      "(<<KLEE-Notation>>); the endpoint table is marked work in progress.")
+info("kl.derive into `key` with length = 0 fails DER1 check 4 (length >= dest_length), "
+     "so the destination is invalidated; DER8's \"length = 0 transfers nothing and ... "
+     "changes no state\" holds only \"if the checks above pass\".")
 info("a derive whose source endpoint does not exist invalidates both lockers, per "
-     "'If the transfer is not allowed, then both lockers transition to Error State "
-     "_Invalid_' (<<KLEE-instruction-derive>>).")
+     "'Any other pair transitions both lockers to Error State _Invalid_' "
+     "(<<KLEE-instruction-derive>>).")
 
 print("\n== BOOK 4: <<KLEE-pseudocode-ECB-encryption>> [informative]")
-# The example checks `if (X1 >= 24) then: handle error` after each kl.getst.
-ecb_states = (ST_READY, ST_ENCRYPT, ST_DECRYPT)
-chk("the example's test lets the ECB States 1, 7, 8 through",
-    [s >= 24 for s in ecb_states], [False] * 3)
+# The example checks `if (48 <= X1 <= 55) then: handle error` after each kl.getst.
+def is_err(s):
+    return 48 <= s <= 55
+
+
+chk("the example's test lets every Valid State (1-47) through",
+    [s for s in range(1, 48) if is_err(s)], [])
 chk("the example's test catches every Error State (48-55)",
-    all(s >= 24 for s in range(48, 56)), True)
-misread = [s for s in range(1, 48) if s >= 24]
-spec_note("<<KLEE-pseudocode-ECB-encryption>> (modules/ROOT/pages/Zkl-pseudocode.adoc) tests "
-          "`X1 >= 24` for an error.  24 was the first Error State of the former 5-bit "
-          f"_State_ field.  Error States are now 48-55 (<<KLEE-states-error>>), so the "
-          f"test would report the {len(misread)} Valid States 24-47 (including "
-          "_Success_ and _Failure_) as errors.  Harmless for ECB; suggest `X1 >= 48` "
-          "(or the `andi 0x38` / `0x30` test of the management snippets).")
+    all(is_err(s) for s in range(48, 56)), True)
 
 if not neg_fired:
     print("\nnegative control did not fire: the block-order test is not discriminating")

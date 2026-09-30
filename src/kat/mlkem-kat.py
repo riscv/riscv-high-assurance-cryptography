@@ -29,7 +29,7 @@ What this harness validates
       finishes loading: a key check failure is a *configuration* error (Error
       State _Invalid_), a ciphertext type check failure a *data* error (State
       _Failure_, a Valid State);
-    - the long-running operations of Rule <<KLEE-MGR-progress-discard>> (MGR10),
+    - the long-running operations of Rule <<KLEE-MGR-progress-discard>> (MGR8),
       for which _MachineUse_ is the progress field _P_: a halted operation resumes
       with the random values it drew, and every transition of the _State_ discards
       them and their intermediate values;
@@ -37,8 +37,12 @@ What this harness validates
       unconditionally, implicit rejection being indistinguishable to the caller;
     - `kl.derive` (<<KLEE-instruction-derive>>, <<KLEE-derive-endpoints>>): the
       exportable field `sharedkey` into the key field of a separately provisioned
-      single-key Machine of at most 256 bits in State _Ready_, with that
-      instruction's Checks, its Transfer Size Rules and the gate order of Rule
+      single-key Machine of at most 256 bits in State _Ready_, a restricted
+      transfer (Rule <<KLEE-DER-shared-secret>>) that narrows the destination's
+      policies (Rule <<KLEE-DER-narrowing>>); the outputs of the emitting States
+      into a hash, an unrestricted transfer (Rule
+      <<KLEE-DER-exec-implies-unrestricted>>); the Checks of Rule
+      <<KLEE-DER-checks>>, the Transfer Size Rule and the gate order of Rule
       <<KLEE-SGR-gate-order>>.
 
 3.  *Where the text is silent, ambiguous or inconsistent*, an INFO line states the
@@ -49,9 +53,7 @@ The model does not use `process_VLI`: <<KLEE-PQC-ML-KEM>> loads and emits its lo
 fields under Rule <<KLEE-MGR-load-long-field>> alone, with a byte counter.  The RBG
 (<<KLEE-RBG>>) is injectable so that the derandomized official vectors can be used:
 FIPS 203 Algorithms 19 and 20 draw `d`, `z`, resp. `m`, and hand them to Algorithms
-16 and 17, which the vectors fix.  (The spec cites these as "Machine 19/20/21",
-which is damage from the Algorithm -> Machine renaming: they are FIPS 203
-*Algorithms*.)
+16 and 17, which the vectors fix.
 
 Vector provenance
 -----------------
@@ -123,13 +125,13 @@ MDH_FIELDS = {
     'AuxDataLen':       (45, 32),
     'ADSDropped':       (47, 47),
     'AuxInfo':          (61, 48),
+    'Version':          (63, 62),
     'UsagePolicy':      (68, 64),
     'Locality':         (77, 69),
     'MachineUse':       (95, 80),
     'ExpirationDate':   (115, 96),
-    'Version':          (127, 126),
 }
-MDH_RESERVED = [(31, 31), (46, 46), (63, 62), (79, 78), (125, 116)]
+MDH_RESERVED = [(31, 31), (46, 46), (79, 78), (127, 116)]
 
 F_MACHINE = MDH_FIELDS['Machine']
 F_STATE = MDH_FIELDS['State']
@@ -142,6 +144,7 @@ F_USAGEPOLICY = MDH_FIELDS['UsagePolicy']
 F_LOCALITY = MDH_FIELDS['Locality']
 F_MACHINEUSE = MDH_FIELDS['MachineUse']
 F_EXPIRATION = MDH_FIELDS['ExpirationDate']
+F_SCPROT = MDH_FIELDS['SCProtection']
 
 
 def mdh_get(mdh, fld):
@@ -210,19 +213,26 @@ MLKEM_MACHINE = {512: machine_code(11, 0), 768: machine_code(11, 1),
 PSET_OF_MACHINE = {code: ps for ps, code in MLKEM_MACHINE.items()}
 
 # Destination Machines for `kl.derive`: the importable key fields of
-# <<KLEE-derive-endpoints>>, with the key widths their Data Structures give.
+# <<KLEE-derive-endpoints>>, with the key widths their Data Structures give, and the
+# scheme each implements, which decides whether Rule <<KLEE-DER-shared-secret>> lists
+# the pair: 'sym' (symmetric encryption), 'ecdh' (the private key `Scalar` of a
+# key-agreement curve of <<KLEE-ECC>>), or None.
 DEST_MACHINES = {
-    machine_code(0, 0):  ('AES128_ECB', (128,)),
-    machine_code(0, 4):  ('AES128_GCM', (128,)),
-    machine_code(1, 4):  ('AES192_GCM', (192,)),
-    machine_code(2, 1):  ('AES256_CTR', (256,)),
-    machine_code(3, 0):  ('SM4_ECB', (128,)),
-    machine_code(8, 0):  ('Ascon-AEAD128', (128,)),
-    machine_code(0, 3):  ('AES128_XEX', (128, 128)),   # key1 (1), key2 (2)
-    machine_code(6, 10): ('KMAC128', ()),              # key supplied in the PI only
-    machine_code(10, 0): ('secp256r1', ()),            # nothing importable
+    machine_code(0, 0):  ('AES128_ECB', (128,), 'sym'),
+    machine_code(0, 4):  ('AES128_GCM', (128,), 'sym'),
+    machine_code(1, 4):  ('AES192_GCM', (192,), 'sym'),
+    machine_code(2, 1):  ('AES256_CTR', (256,), 'sym'),
+    machine_code(3, 0):  ('SM4_ECB', (128,), 'sym'),
+    machine_code(8, 0):  ('Ascon-AEAD128', (128,), 'sym'),
+    machine_code(0, 3):  ('AES128_XEX', (128, 128), 'sym'),   # key1 (1), key2 (2)
+    machine_code(6, 10): ('KMAC128', (), None),               # key supplied in the PI only
+    machine_code(10, 0): ('secp256r1', (256,), 'ecdh'),
+    machine_code(10, 1): ('secp384r1', (384,), 'ecdh'),
+    machine_code(10, 3): ('ed25519', (256,), None),           # a signature scheme
 }
 S_ENCRYPT = 7                    # kl_state_encrypt, <<KLEE-state-constants-symmetric>>
+S_HASH_ABSORB = 2                # kl_state_hash_absorb, the same table
+SHA3_256 = machine_code(6, 1)
 SKID_ALL_ONES = (1 << 64) - 1
 KEY_FILL = 0x5A                  # the placeholder key a destination is provisioned with
 
@@ -313,7 +323,7 @@ class Locker:
         return date != 0 and HART.now >= date
 
     def enter_error(self, st):
-        """A transition to an Error State: Rule <<KLEE-SGR-clear-cr-content-error-state>>
+        """A transition to an Error State: Rule <<KLEE-SGR-clear-locker-content-error-state>>
         clears the Content beyond the MDH and releases the ADS."""
         self.put(F_STATE, st)
         self.put(F_AUXDATALEN, 0)
@@ -335,15 +345,16 @@ class Locker:
         return True
 
 
-class SymmetricCL(Locker):
-    """A locker provisioned with a symmetric Machine, used as a `kl.derive` destination.
-    Only its key fields are modelled."""
+class KeyLocker(Locker):
+    """A locker provisioned with a single- or two-key Machine, used as a `kl.derive`
+    destination.  Only its key fields are modelled."""
 
     def __init__(self, machine, state=S_READY, keytype=0, skid=0, usage=0,
-                 locality=0, expiration=0):
-        self.name, self.key_widths = DEST_MACHINES[machine]
+                 locality=0, expiration=0, scprot=0):
+        self.name, self.key_widths, self.kind = DEST_MACHINES[machine]
         self.mdh = 0
         self.put(F_MACHINE, machine)
+        self.put(F_SCPROT, scprot)
         self.put(F_USAGEPOLICY, usage)
         self.put(F_LOCALITY, locality)
         self.put(F_EXPIRATION, expiration)
@@ -359,13 +370,45 @@ class SymmetricCL(Locker):
         self.keys = [bytes(len(k)) for k in self.keys]
 
     def admits_key_destination(self):
-        # A written key field requires State _Ready_, and a field configured by a SKID
-        # is never importable (<<KLEE-instruction-derive>>).
-        return (self.state == S_READY and len(self.key_widths) > 0
-                and self.get(F_KEYTYPE) != 1)
+        # Rule <<KLEE-DER-checks>>: "a destination whose key is written must be in
+        # State _Ready_".
+        return self.state == S_READY
+
+    def key_configurable(self):
+        # Rule <<KLEE-DER-SKID-no-export>>: "a key field of a locker whose _KeyType_ is 1
+        # is _never_ importable".
+        return self.get(F_KEYTYPE) != 1
 
     def admits_source(self):
         return False                               # no exportable field
+
+
+class HashLocker(Locker):
+    """A locker holding a hash Machine (<<KLEE-hash-functions-MACs-XOFs>>), the destination of
+    an unrestricted transfer (Rule <<KLEE-DER-exec-implies-unrestricted>>): its
+    importable endpoint is the `kl.exec` input of _Hash_Absorb_ (index 0 of
+    <<KLEE-derive-endpoints>>).  Only the absorbed bytes are modelled."""
+
+    kind = 'hash'
+    key_widths = ()
+
+    def __init__(self, state=S_HASH_ABSORB, usage=0, locality=0):
+        self.name = 'SHA3-256'
+        self.mdh = 0
+        self.put(F_MACHINE, SHA3_256)
+        self.put(F_USAGEPOLICY, usage)
+        self.put(F_LOCALITY, locality)
+        self.put(F_STATE, state)
+        self.absorbed = b''
+
+    def clear_content(self):
+        self.absorbed = b''
+
+    def admits_exec_destination(self):
+        return self.state == S_HASH_ABSORB
+
+    def admits_source(self):
+        return False
 
 
 class MLKEMLocker(Locker):
@@ -388,7 +431,7 @@ class MLKEMLocker(Locker):
     EXPORTABLE = {'sharedkey': 1}
     IMPORTABLE = {}
 
-    def __init__(self, pset, rbg=None, usage=0, locality=0, expiration=0,
+    def __init__(self, pset, rbg=None, usage=0, locality=0, expiration=0, scprot=0,
                  auxinfo=0, pi_extra=0, check_keys=True, resume_redraws=False,
                  ct_type_check=None, disable_implicit_rejection=False):
         self.pset = pset
@@ -403,6 +446,7 @@ class MLKEMLocker(Locker):
         # _Unconfigured_ (<<KLEE-data-formats>>).
         pi = 0
         pi = mdh_set(pi, F_MACHINE, MLKEM_MACHINE[pset])
+        pi = mdh_set(pi, F_SCPROT, scprot)
         pi = mdh_set(pi, F_USAGEPOLICY, usage)
         pi = mdh_set(pi, F_LOCALITY, locality)
         pi = mdh_set(pi, F_EXPIRATION, expiration)
@@ -437,20 +481,20 @@ class MLKEMLocker(Locker):
         self.put(F_MACHINEUSE, v)
 
     def discard_progress(self):
-        """MGR10: _P_ is zeroed and the material kept for the operation destroyed."""
+        """MGR8: _P_ is zeroed and the material kept for the operation destroyed."""
         self.use = 0
         self.ads = None
         self.put(F_AUXDATALEN, 0)
 
     def enter_error(self, st):
         super().enter_error(st)
-        self.use = 0                               # MGR10: a transition zeroes _P_
+        self.use = 0                               # MGR8: a transition zeroes _P_
 
     def transition(self, st):
         """A change of _State_ among the Valid States, by `kl.setst` or on completion
         of an operation."""
         self.put(F_STATE, st)
-        # MGR10 zeroes _P_ on every transition, a same-State `kl.setst` included; MGR7
+        # MGR8 zeroes _P_ on every transition, a same-State `kl.setst` included; MGR7
         # zeroes _W_ on entry into a loading or emitting State.
         self.discard_progress()
         if st == S_READY:
@@ -504,7 +548,7 @@ class MLKEMLocker(Locker):
             return
         st = self.state
         if st not in IN_FIELDS:
-            self.enter_error(S_INVALID)            # SGR2, SGR5, MGR10, MGR1
+            self.enter_error(S_INVALID)            # SGR2, SGR5, MGR8, MGR1
             return
         name = IN_FIELDS[st]
         size, w = self.size[name], self.use
@@ -574,7 +618,7 @@ class MLKEMLocker(Locker):
             self.enter_error(S_INVALID)
             return 'retired'
         if self.use == 0 or self.resume_redraws:
-            # MGR10: "starts a new one, drawing fresh random values, if it is zero".
+            # MGR8: "starts a new one, drawing fresh random values, if it is zero".
             work = self.start(st)
             if work is None:
                 # FIPS 203 returns its bottom value: "If `ML-KEM.KeyGen` fails, the
@@ -635,7 +679,7 @@ class MLKEMLocker(Locker):
 
     def export_import(self, keep_ads=True):
         """An export as an SCC and the import of that image into a locker
-        (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule MGR10
+        (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule MGR8
         needs: `Content1` is the *Serialized Content* table -- `decapsk`, `ciphertext`,
         `sharedkey`, in that order -- the MDH is restored with its _State_ and
         _MachineUse_, and the importer either keeps the ADS or discards it."""
@@ -648,30 +692,62 @@ class MLKEMLocker(Locker):
         new.encapsk = new.decapsk[384 * self.k:768 * self.k + 32]
         new.ads = copy.deepcopy(self.ads) if keep_ads else None
         if not keep_ads:
-            new.discard_progress()                 # MGR10: an import discarding the ADS
+            new.discard_progress()                 # MGR8: an import discarding the ADS
         return new
 
     # -- `kl.derive` endpoints ------------------------------------------
-    def admits_source(self):
+    kind = None                                    # nothing importable
+
+    def pair(self, dest):
+        """The transfer the architecture lists for (this CC, `dest`), or None.
+        'restricted': `sharedkey` into the key of "a supported single-key Machine"
+        (<<KLEE-PQC-ML-KEM>>) implementing a scheme of Rule <<KLEE-DER-shared-secret>>;
+        'exec': the output of an emitting State into a hash (Rule
+        <<KLEE-DER-exec-implies-unrestricted>>)."""
+        if dest.kind in ('sym', 'ecdh') and len(dest.key_widths) == 1:
+            return 'restricted'
+        if dest.kind == 'hash':
+            return 'exec'
+        return None
+
+    def admits_source(self, mode='restricted'):
+        if mode == 'exec':
+            return self.state in OUT_FIELDS
         return self.state in (S_SUCCESS, S_FAILURE, S_CT_OUT)
 
     def admits_key_destination(self):
-        return False                               # nothing importable
+        return False
 
-    def accepts_destination(self, dest):
-        # "a supported single-key Machine that accepts a key of at most 256 bits"
-        return len(dest.key_widths) == 1 and dest.key_widths[0] <= 256
+    def emit_exec(self, n):
+        """The `n` bytes that Form C `kl.exec` instructions would emit, advancing _W_
+        as they would (Rule <<KLEE-derive-rule-both-fixed-size>>); None when they would
+        carry _W_ past the field (MGR7)."""
+        name = OUT_FIELDS[self.state]
+        w = self.use
+        if w + n > self.size[name]:
+            return None
+        self.use = w + n
+        return getattr(self, name)[w:w + n]
 
-    def pair_minimum(self, dest):
-        # "Both `length` and the source field's length must be at least as long as the
-        #  destination field".
-        return dest.key_widths[0] // 8
 
-    def source_bytes(self, n):
-        # "the transferred part of a field is truncated to `eff_length` bytes if longer
-        #  or zero-padded if shorter"; for a key of `m` bits this is the `m` least
-        #  significant bits of `sharedkey`.
-        return self.sharedkey[:n].ljust(n, b'\0')
+def der2_narrow(dest, src):
+    """Rule <<KLEE-DER-narrowing>>, before any byte of a restricted transfer: the
+    destination MDH is narrowed by the source MDH.  False when the destination must
+    instead transition to _Invalid_ with nothing transferred."""
+    ls, ld = src.get(F_LOCALITY), dest.get(F_LOCALITY)
+    boot_s, boot_d = sl(ls, 5, 4), sl(ld, 5, 4)
+    if boot_s and boot_d and boot_s != boot_d:
+        return False                               # two differing Boot Session entries
+    if dest.get(F_SCPROT) < src.get(F_SCPROT):
+        return False                               # levels 0-3 of <<KLEE-SC-protection-levels>>
+    us, ud = src.get(F_USAGEPOLICY), dest.get(F_USAGEPOLICY)
+    dest.put(F_USAGEPOLICY, ((us | ud) & 0xF) | (us & ud & 0x10))
+    dest.put(F_LOCALITY, max(sl(ls, 1, 0), sl(ld, 1, 0))
+             | max(sl(ls, 3, 2), sl(ld, 3, 2)) << 2
+             | (boot_s or boot_d) << 4 | ((ls | ld) & 0x1C0))
+    dates = [d for d in (src.get(F_EXPIRATION), dest.get(F_EXPIRATION)) if d]
+    dest.put(F_EXPIRATION, min(dates) if dates else 0)
+    return True
 
 
 def kl_derive(dest, src, length):
@@ -682,35 +758,58 @@ def kl_derive(dest, src, length):
     ends = (src, dest)
     # Rule <<KLEE-SGR-gate-order>>: "each condition is evaluated for both endpoints,
     # the source first, before the next".
-    for cl in ends:
-        if cl.state == S_UNCONFIGURED:
+    for lk in ends:
+        if lk.state == S_UNCONFIGURED:
             raise IllegalInstruction('kl.derive with an Unconfigured endpoint')
-    if any(cl.in_error() for cl in ends):
+    if any(lk.in_error() for lk in ends):
         return 'noop'                              # "an Error State on either endpoint"
-    for cl in ends:
-        if cl.usage_excludes_mode():
-            raise PrivilegeViolation(cl)
-    for cl in ends:
-        if cl.expired():
-            cl.enter_error(S_EXPIRED)
+    for lk in ends:
+        if lk.usage_excludes_mode():
+            raise PrivilegeViolation(lk)
+    for lk in ends:
+        if lk.expired():
+            lk.enter_error(S_EXPIRED)
             return 'noop'
-    # The Checks, "each check being applied to the source before the destination, and
-    # with nothing transferred on any failure".
-    offending = [cl for cl, ok in ((src, src.admits_source()),
-                                   (dest, dest.admits_key_destination())) if not ok]
-    if offending:
-        for cl in offending:                       # "the offending locker, or both"
-            cl.enter_error(S_INVALID)
+    mode = src.pair(dest)
+    if mode is None:
+        # "Only listed ... pairs are allowed. ... Any other pair transitions both
+        #  lockers to Error State _Invalid_."
+        for lk in ends:
+            lk.enter_error(S_INVALID)
         return 'retired'
-    if not src.accepts_destination(dest):
-        dest.enter_error(S_INVALID)                # a destination violating the pair
+    # Rule <<KLEE-DER-checks>>, "each check being applied to the source before the
+    # destination, and with nothing transferred on any failure".
+    dest_ok = (dest.admits_exec_destination() if mode == 'exec'
+               else dest.admits_key_destination())
+    offending = [lk for lk, ok in ((src, src.admits_source(mode)), (dest, dest_ok))
+                 if not ok]
+    if offending:
+        for lk in offending:                       # 1. "the offending locker, or both"
+            lk.enter_error(S_INVALID)
+        return 'retired'
+    if mode == 'exec':
+        # An unrestricted transfer: no narrowing (DER3); the destination receives
+        # `eff_length` = `length` bytes (<<KLEE-derive-rule-both-fixed-size>>).
+        data = src.emit_exec(length)
+        if data is None:
+            src.enter_error(S_INVALID)
+            return 'retired'
+        dest.absorbed += data
+        return 'retired'
+    if not dest.key_configurable():
+        dest.enter_error(S_INVALID)                # 2. a constraint on the transfer
         return 'retired'
     dest_length = dest.key_widths[0] // 8
-    eff_length = min(length, dest_length)          # Transfer Size Rules
-    if eff_length < src.pair_minimum(dest):
+    if length < dest_length or len(src.sharedkey) < dest_length:
+        # 4. "requires `length` >= `dest_length` and a source field ... of at least
+        #  `dest_length` bytes, and receives exactly `dest_length` bytes"
         dest.enter_error(S_INVALID)
         return 'retired'
-    dest.keys[0] = src.source_bytes(eff_length).ljust(dest_length, b'\0')
+    if not der2_narrow(dest, src):
+        dest.enter_error(S_INVALID)
+        return 'retired'
+    # "the `m` least significant bits of the shared key are used"
+    dest.keys[0] = src.sharedkey[:dest_length]
     return 'retired'
 
 
@@ -847,13 +946,13 @@ def t_mdh():
                   + ', '.join(f'_{n}_ = {BOOK1_GLOBAL[n]}' for n in stale)
                   + ' and leaves 2-45 to the Machine; the model follows the Instructions chapter.  The '
                     'ECC and ML-DSA State lists carry the same stale numbers.')
-    spec_note('the Instructions chapter says _AuxInfo_ is "currently used only by ML-KEM and ML-DSA", but '
-              '<<KLEE-PQC-ML-KEM>> now defines no use for it: its former role -- the '
-              'policies required of a kl.derive destination, in the 16-bit format of '
-              'MDH[79:64], which no longer fits the 14-bit field -- sits in a '
-              'commented-out block.  Whether a non-zero _AuxInfo_ is invalid Metadata '
-              'for ML-KEM (<<KLEE-Metadata-validity>>) is undecided; the model '
-              'provisions _AuxInfo_ = 0 and gives it no role in kl.derive.')
+    spec_note('the Instructions chapter says _AuxInfo_ is "currently used only by ML-KEM '
+              'and ML-DSA", but <<KLEE-PQC-ML-KEM>> defines no use for it: its former '
+              'role -- the policies required of a kl.derive destination, in the 16-bit '
+              'format of MDH[79:64], which does not fit the 14-bit field -- sits in a '
+              'commented-out block.  <<KLEE-Metadata-validity>> makes a non-zero '
+              '_AuxInfo_ invalid "for a Machine that does not use it", so whether it is '
+              'invalid for ML-KEM is undecided; the model provisions _AuxInfo_ = 0.')
 
 
 def t_keygen():
@@ -1148,12 +1247,12 @@ def t_state_machine():
         c2 = MLKEMLocker(ps)
         c2.setst(st)
         c2.exec_B(bytes(16))
-        chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (MGR10: besides '
+        chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (MGR8: besides '
             'kl.setst, only Form D is admitted)', c2.state == S_INVALID)
 
 
 def t_long_running():
-    print('\n-- Long-running operations: Rule MGR10, _MachineUse_ as the field P --')
+    print('\n-- Long-running operations: Rule MGR8, _MachineUse_ as the field P --')
     ps = 768
     kv = vector('keyGen', ps)
     ev = vector('encaps', ps)
@@ -1223,7 +1322,7 @@ def t_long_running():
     cc.setst(S_ENCAPSULATE)
     cc.exec_D()
     chk('an Encapsulate halted under one key and re-entered under another draws a fresh '
-        'value: the first is never consumed against the second key (GR11)',
+        'value: the first is never consumed against the second key (GR10)',
         rbg.draws == 2 and cc.state == S_CT_OUT
         and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(ek2, m2, ps))
 
@@ -1297,7 +1396,7 @@ def t_long_running():
     chk('kl.clearads keeps the _State_, removes the ADS, and the operation restarts',
         kept_state and rbg.draws == 4
         and (cc.encapsk, cc.decapsk) == K.keygen_internal(d2, z2, ps))
-    info('MGR10 does not list kl.clearads among the events that zero P, yet IRR4 makes '
+    info('MGR8 does not list kl.clearads among the events that zero P, yet IRR4 makes '
          'an operation whose ADS was removed with kl.clearads restart, and a non-zero P '
          'means "resume"; the model zeroes P on kl.clearads.')
 
@@ -1323,7 +1422,7 @@ def t_derive():
     emit(src, (1088,))
     for code in (machine_code(0, 0), machine_code(1, 4), machine_code(2, 1),
                  machine_code(3, 0), machine_code(8, 0)):
-        dest = SymmetricCL(code)
+        dest = KeyLocker(code)
         bits = dest.key_widths[0]
         kl_derive(dest, src, -(-bits // 8))
         chk(f'source in _ciphertext_Output_ -> {dest.name}: length = ceil({bits}/8) '
@@ -1333,47 +1432,60 @@ def t_derive():
             and src.state == S_CT_OUT and src.sharedkey == ss
             and src.use == SPEC_SIZES[ps][2])
 
-    dest = SymmetricCL(machine_code(0, 0))
+    dest = KeyLocker(machine_code(0, 0))
     kl_derive(dest, src, 33)
-    chk('a length above the destination key (33 B into AES-128) transfers eff_length = '
-        'min(length, dest_length) bytes', dest.keys[0] == ss[:16]
+    chk('a length above the destination key (33 B into AES-128) transfers exactly '
+        'dest_length bytes (DER1 item 4, DER8)', dest.keys[0] == ss[:16]
         and dest.state == S_READY)
     for n in (15, 0):
-        dest = SymmetricCL(machine_code(2, 1))
+        dest = KeyLocker(machine_code(2, 1))
         kl_derive(dest, src, n)
         chk(f'length = {n} B, below the 32-B key of AES256_CTR: the destination becomes '
             '_Invalid_, nothing is transferred, the source is untouched',
             dest.state == S_INVALID and dest.keys[0] == bytes(32)
             and src.state == S_CT_OUT and src.sharedkey == ss)
-    info('Read with the Transfer Size Rules: ceil(m/8) is this pair\'s minimum ("Both '
-         'length and the source field\'s length must be at least as long as the '
-         'destination field"), a larger length is cut to the key size, and a smaller '
-         'one -- length = 0 included -- fails the minimum of Checks item 3.')
+    info('<<KLEE-PQC-ML-KEM>> says length = ceil(m/8); Rules DER1 (item 4) and DER5 '
+         'require only length >= the key size and deliver exactly the key size.  The '
+         'model follows the Rules.')
 
-    dest = SymmetricCL(machine_code(0, 4), state=S_ENCRYPT)
+    dest = KeyLocker(machine_code(0, 4), state=S_ENCRYPT)
     kl_derive(dest, src, 16)
     chk('a destination not in _Ready_ (AES128_GCM in _Encrypt_) becomes _Invalid_; the '
         'source is untouched', dest.state == S_INVALID and src.state == S_CT_OUT)
-    dest = SymmetricCL(machine_code(0, 4), state=S_SUCCESS)
+    dest = KeyLocker(machine_code(0, 4), state=S_SUCCESS)
     kl_derive(dest, src, 16)
     chk('a locker in _Success_ may not be the destination of a kl.derive (SGR5): _Invalid_',
         dest.state == S_INVALID)
-    for code in (machine_code(0, 3), machine_code(6, 10), machine_code(10, 0)):
-        dest = SymmetricCL(code)
-        kl_derive(dest, src, 32)
-        chk(f'a {dest.name} destination (not a single-key Machine of at most 256 bits) '
-            'becomes _Invalid_; the source is untouched',
-            dest.state == S_INVALID and src.state == S_CT_OUT and src.sharedkey == ss)
-    other = MLKEMLocker(ps)
-    kl_derive(other, src, 32)
-    chk('an ML-KEM destination (nothing importable) becomes _Invalid_',
-        other.state == S_INVALID and src.state == S_CT_OUT)
 
-    dest = SymmetricCL(machine_code(0, 0), keytype=1, skid=0x1234)
+    dest = KeyLocker(machine_code(10, 0))
+    kl_derive(dest, src, 32)
+    chk('secp256r1 in _Ready_ receives sharedkey in its private key `Scalar` (DER5: '
+        '"into a private key field of a Machine implementing a public key agreement '
+        'scheme")', dest.keys[0] == ss and dest.state == S_READY)
+    dest = KeyLocker(machine_code(10, 1))
+    kl_derive(dest, src, 48)
+    chk('secp384r1: the 32-B shared key is shorter than the 48-B `Scalar`, so the '
+        'destination becomes _Invalid_ (DER1 item 4); the source is untouched',
+        dest.state == S_INVALID and src.state == S_CT_OUT and src.sharedkey == ss)
+    for code in (machine_code(0, 3), machine_code(6, 10), machine_code(10, 3)):
+        s2 = encapsulated()
+        dest = KeyLocker(code)
+        kl_derive(dest, s2, 32)
+        chk(f'{dest.name} (not a single-key Machine of a DER5 scheme) is no listed pair: '
+            'both lockers become _Invalid_', dest.state == S_INVALID
+            and s2.state == S_INVALID)
+    s2 = encapsulated()
+    other = MLKEMLocker(ps)
+    kl_derive(other, s2, 32)
+    chk('an ML-KEM destination (nothing importable) is no listed pair: both lockers '
+        'become _Invalid_', other.state == S_INVALID and s2.state == S_INVALID)
+
+    dest = KeyLocker(machine_code(0, 0), keytype=1, skid=0x1234)
     kl_derive(dest, src, 16)
-    chk('a destination whose key is configured by a SKID is never importable: _Invalid_',
-        dest.state == S_INVALID)
-    dest = SymmetricCL(machine_code(0, 0), keytype=1, skid=SKID_ALL_ONES)
+    chk('a key field of a locker whose _KeyType_ is 1 is never importable (DER4): the '
+        'destination becomes _Invalid_', dest.state == S_INVALID
+        and src.state == S_CT_OUT)
+    dest = KeyLocker(machine_code(0, 0), keytype=1, skid=SKID_ALL_ONES)
     kl_derive(dest, src, 16)
     chk('the placeholder pattern -- provisioned with the all-ones SKID, so _KeyType_ 0 '
         'and a random key -- receives the shared key',
@@ -1385,7 +1497,7 @@ def t_derive():
     load(cd, S_CT_IN, bytes.fromhex(dv['c']))
     cd.setst(S_DECAPSULATE)
     cd.exec_D()
-    dest = SymmetricCL(machine_code(2, 1))
+    dest = KeyLocker(machine_code(2, 1))
     kl_derive(dest, cd, 32)
     chk('source in _Success_ after _Decapsulate_ (SGR5): AES256_CTR receives the '
         'decapsulated shared key',
@@ -1394,26 +1506,26 @@ def t_derive():
     for st in (S_READY,) + LONG_RUNNING:
         s2 = encapsulated()
         s2.setst(st)
-        dest = SymmetricCL(machine_code(0, 0))
+        dest = KeyLocker(machine_code(0, 0))
         kl_derive(dest, s2, 16)
         chk(f'a source in _{STATE_NAME[st]}_ does not admit the endpoint: the source '
-            'becomes _Invalid_ and the destination is untouched',
+            'becomes _Invalid_ and the destination is untouched (DER1 item 1)',
             s2.state == S_INVALID and dest.state == S_READY
             and dest.keys[0] == placeholder)
     info('No text names the source States that admit the `sharedkey` endpoint.  Read '
          'as: _Success_ and _Failure_ (SGR5, which admits kl.derive on an exportable '
          'field there) and _ciphertext_Output_, where _Encapsulate_ leaves the CC; the '
-         'long-running States admit only Form D kl.exec and kl.setst (MGR10), and no '
+         'long-running States admit only Form D kl.exec and kl.setst (MGR8), and no '
          'other State admits kl.derive (MGR1).  _Failure_ is not exercised.')
 
     chk('kl.derive naming the same locker twice raises an illegal-instruction exception',
         _raises(IllegalInstruction, lambda: kl_derive(src, src, 32)))
-    blank = SymmetricCL(machine_code(0, 0))
+    blank = KeyLocker(machine_code(0, 0))
     blank.mdh = 0
     chk('kl.derive with an Unconfigured endpoint raises an illegal-instruction '
         'exception', _raises(IllegalInstruction, lambda: kl_derive(blank, src, 16)))
 
-    dest = SymmetricCL(machine_code(0, 0))
+    dest = KeyLocker(machine_code(0, 0))
     dest.enter_error(S_PRIV_VIOLATION)
     s3 = encapsulated()
     r = kl_derive(dest, s3, 16)
@@ -1421,43 +1533,67 @@ def t_derive():
         r == 'noop' and dest.state == S_PRIV_VIOLATION and s3.state == S_CT_OUT
         and s3.sharedkey == ss)
     s3.setst(S_INVALID)
-    dest = SymmetricCL(machine_code(0, 0))
+    dest = KeyLocker(machine_code(0, 0))
     r = kl_derive(dest, s3, 16)
     chk('an Error State on the source makes the whole kl.derive a no-op',
         r == 'noop' and dest.state == S_READY and dest.keys[0] == placeholder)
 
+    # Rule <<KLEE-DER-narrowing>>: sharedkey is a restricted transfer (DER5).
     HART.mode = 'U'
     try:
         src_u = encapsulated(usage=0b01110, locality=0b000001110)
-        dest = SymmetricCL(machine_code(0, 0), usage=0b00001)
+        dest = KeyLocker(machine_code(0, 0), usage=0b00001)
         raised = _raises(PrivilegeViolation, lambda: kl_derive(dest, src_u, 16))
         chk('the _UsagePolicy_ of each endpoint is evaluated on its own: a destination '
             'barred in the current mode raises kl_exc_privilege_violation, with no '
             'State changed and nothing transferred',
             raised and dest.state == S_READY and dest.keys[0] == placeholder
             and src_u.state == S_CT_OUT)
-        dest = SymmetricCL(machine_code(0, 0))
+        dest = KeyLocker(machine_code(0, 0), usage=0b10000, locality=0b101000101)
         kl_derive(dest, src_u, 16)
-        chk('no constraint applies to the destination\'s policies '
-            '(<<KLEE-derive-endpoints>>): a destination less restricted than the source '
-            'receives the key, and its _UsagePolicy_ and _Locality_ are left alone',
-            dest.keys[0] == ss[:16] and dest.get(F_USAGEPOLICY) == 0
-            and dest.get(F_LOCALITY) == 0)
+        chk('DER2: the destination _UsagePolicy_ becomes the OR of bits 0-3 and the AND '
+            'of bit 4, its _Locality_ the stricter entry of each HW Binding chain with '
+            'bits 6-8 OR-ed', dest.keys[0] == ss[:16]
+            and dest.get(F_USAGEPOLICY) == 0b01110
+            and dest.get(F_LOCALITY) == 0b101001110)
     finally:
         HART.mode = 'M'
+    s2 = encapsulated(locality=0b000010000)       # PhysBootScrt
+    dest = KeyLocker(machine_code(0, 0), locality=0b000100000)     # VirtBootScrt
+    kl_derive(dest, s2, 16)
+    chk('DER2: two differing non-zero Boot Session entries make the destination '
+        '_Invalid_, nothing transferred', dest.state == S_INVALID
+        and dest.keys[0] == bytes(16) and s2.state == S_CT_OUT)
+    s2 = encapsulated(scprot=2)
+    dest = KeyLocker(machine_code(0, 0), scprot=1)
+    kl_derive(dest, s2, 16)
+    chk('DER2: a destination whose _SCProtection_ is lower than the source\'s becomes '
+        '_Invalid_', dest.state == S_INVALID and s2.state == S_CT_OUT)
+    dest = KeyLocker(machine_code(0, 0), scprot=3)
+    kl_derive(dest, s2, 16)
+    chk('... and a higher one receives the key, its _SCProtection_ kept',
+        dest.keys[0] == ss[:16] and dest.get(F_SCPROT) == 3)
 
     HART.now = 1000
     try:
         s4 = encapsulated(expiration=5000)
-        dest = SymmetricCL(machine_code(0, 0), expiration=1000)
+        dest = KeyLocker(machine_code(0, 0), expiration=1000)
         kl_derive(dest, s4, 16)
         chk('an expired destination transitions to _Expired_ (53), its key cleared by '
             'SGR10 rather than written; the source is untouched',
             dest.state == S_EXPIRED and dest.keys[0] == bytes(16)
             and s4.state == S_CT_OUT and s4.sharedkey == ss)
+        dest = KeyLocker(machine_code(0, 0), expiration=9000)
+        kl_derive(dest, s4, 16)
+        chk('DER2: the destination _ExpirationDate_ becomes the smaller non-zero date',
+            dest.keys[0] == ss[:16] and dest.get(F_EXPIRATION) == 5000)
+        dest = KeyLocker(machine_code(0, 0))
+        kl_derive(dest, s4, 16)
+        chk('... and inherits the source\'s when it had none',
+            dest.get(F_EXPIRATION) == 5000)
         s5 = encapsulated(expiration=1001)
         HART.now = 1001
-        dest = SymmetricCL(machine_code(0, 0))
+        dest = KeyLocker(machine_code(0, 0))
         kl_derive(dest, s5, 16)
         chk('an expired source transitions to _Expired_, the destination being reached '
             'only by the next condition', s5.state == S_EXPIRED
@@ -1465,16 +1601,66 @@ def t_derive():
     finally:
         HART.now = 0
 
+    # Rule <<KLEE-DER-exec-implies-unrestricted>>: what _encapsk_Output_ and
+    # _ciphertext_Output_ emit through kl.exec may be moved into a hash.
+    s6 = encapsulated(usage=0b00110, locality=0b000000011)
+    h = HashLocker()
+    kl_derive(h, s6, 512)
+    mid = s6.use
+    kl_derive(h, s6, 576)
+    chk('DER6: _ciphertext_Output_ -> SHA3-256 in _Hash_Absorb_ moves the ciphertext '
+        'in two transfers, _MachineUse_ advancing as Form C kl.exec would',
+        h.absorbed.hex() == v['c'] and mid == 512 and s6.use == 1088
+        and s6.state == S_CT_OUT and h.state == S_HASH_ABSORB, v['src'])
+    chk('DER3: an unrestricted transfer applies no narrowing to the destination',
+        h.get(F_USAGEPOLICY) == 0 and h.get(F_LOCALITY) == 0)
+    kl_derive(h, s6, 16)
+    chk('a further transfer would carry _MachineUse_ past the field: the source becomes '
+        '_Invalid_ (MGR7) and nothing is absorbed', s6.state == S_INVALID
+        and len(h.absorbed) == 1088)
+    kv = vector('keyGen', ps)
+    g = MLKEMLocker(ps, rbg=ScriptedRBG(bytes.fromhex(kv['d']), bytes.fromhex(kv['z'])))
+    g.setst(S_GENKEYPAIR)
+    g.exec_D()
+    g.setst(S_EK_OUT)
+    h = HashLocker()
+    kl_derive(h, g, SPEC_SIZES[ps][0])
+    chk('DER6: _encapsk_Output_ -> SHA3-256 absorbs the generated encapsk, from which '
+        'H(encapsk) follows', h.absorbed.hex() == kv['ek']
+        and K.H(h.absorbed) == g.decapsk[768 * 3 + 32:768 * 3 + 64], kv['src'])
+    s7 = encapsulated()
+    h = HashLocker(state=S_READY)
+    kl_derive(h, s7, 32)
+    chk('a hash destination in _Ready_ does not admit the endpoint: only it becomes '
+        '_Invalid_', h.state == S_INVALID and s7.state == S_CT_OUT)
+
     spec_note('<<KLEE-PQC-ML-KEM>> still calls this transfer "Form 00" with source '
               'index i = 1 and destination index j, and <<KLEE-derive-endpoints>> '
-              'numbers the fields, but <<KLEE-instruction-derive>> no longer has a Form '
-              'field (bits [29:28] are fixed at 0) and its auxiliary GPR carries length '
-              'alone; the paragraph that defined i and j is commented out.  The model '
-              'takes the endpoints from the Machines and States of the two lockers.')
-    spec_note('<<KLEE-instruction-derive>> says that both lockers transition to _Invalid_ '
-              'when the endpoint descriptor is not allowed, while its Checks invalidate '
-              'only the offending locker (item 1) or only the destination (items 2 and 3); '
-              'the model follows the Checks, which are the more specific statement.')
+              'numbers the fields, but <<KLEE-instruction-derive>> has neither: "No '
+              'parameter is passed to kl.derive to select the source and destination '
+              'data".  The model takes the endpoints from the Machines and States of '
+              'the two lockers.')
+    spec_note('<<KLEE-instruction-derive>> sends both lockers to _Invalid_ for "any other '
+              'pair", a listed pair naming the States too, while DER1 item 1 invalidates '
+              'only the locker whose State does not admit its endpoint.  The model '
+              'invalidates both for an unlisted Machine pair and the offending locker '
+              'for a State mismatch.')
+    spec_note('the transfers of DER5 and DER6 "are listed for every pair of Machines '
+              'that implement the respective schemes", yet the table of '
+              '<<KLEE-derive-endpoints>> gives ML-KEM no exportable field but sharedkey '
+              'and <<KLEE-ECC>> no importable field, and <<KLEE-PQC-ML-KEM>> calls '
+              'sharedkey "the only exportable field".  The model admits sharedkey into '
+              'the `Scalar` of a key-agreement curve in _Ready_ (the State DER1 and '
+              '<<KLEE-PQC-ML-KEM>> require, although DER5 asks for "a State which allows '
+              'the configuration of a field", _Set_Scalar_ for <<KLEE-ECC>>), and '
+              'encapsk/ciphertext output into a hash.  XEX is excluded by the '
+              '"single-key Machine" of <<KLEE-PQC-ML-KEM>>, although DER5 names every '
+              'symmetric encryption Machine.')
+    spec_note('<<KLEE-derive-endpoints>> says no constraint applies to the destination\'s '
+              'policies unless a Machine states otherwise, but sharedkey is a restricted '
+              'transfer (DER5) and DER2 narrows the destination, invalidating it on a '
+              'lower _SCProtection_ or a conflicting Boot Session entry.  The model '
+              'applies DER2.')
 
 
 def t_negative_controls():

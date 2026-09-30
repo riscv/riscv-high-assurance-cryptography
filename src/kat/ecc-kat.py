@@ -3,7 +3,7 @@
 
 WHAT IS BEING TESTED.  This harness does not test an implementation; it tests the
 *specification text* of `modules/ROOT/pages/Zkl-ISA-machines.adoc`, sections `[[KLEE-ECC]]` and
-`[[KLEE-EdDSA]]`.  A model of the KLEE control register -- its fields, its
+`[[KLEE-EdDSA]]`.  A model of a KLEE locker -- its fields, its
 `block_base`-tracked "set"/"output" transfers, its state machine and its allowed
 transitions -- is built strictly from that text, and standard vectors are then
 pushed through the model exactly as a caller would drive a real KLEE unit
@@ -30,8 +30,10 @@ ANCHOR LEVELS, strongest first.  Each case prints its level.
               this is deliberately the weaker anchor.
   [MODEL] Properties of the specification itself: state-machine legality, entry
           conditions, field-retention (`Xs`) semantics, representation rules,
-          retry rules, and the `Progress` discipline of Rule
-          <<KLEE-MGR-progress-discard>> (MGR10) for the interruptible States.
+          retry rules, the `Progress` discipline of Rule
+          <<KLEE-MGR-progress-discard>> (MGR8) for the interruptible States, and
+          `kl.derive` of the _Output_ into a hash (Rule
+          <<KLEE-DER-exec-implies-unrestricted>>).
           Anchored on the spec text, not on an external vector.
 
 NOTE ON k.  A real KLEE unit draws the per-signature secret k from the RBG
@@ -112,7 +114,11 @@ def negative(label, must_fail, name):
 READY, SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN = 1, 2, 3, 4, 5
 SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG, OUTPUT = 6, 7, 8, 9, 10
 MSG_ABSORB, SET_CTX = 11, 12
-SUCCESS, FAILURE = 22, 23
+# _Success_ and _Failure_ of <<KLEE-states-valid>>; the <<KLEE-ECC>> list still says
+# 22 and 23 (SPEC-NOTE in test_state_machine).
+SUCCESS, FAILURE = 46, 47
+ECC_LIST_GLOBAL = {'Success': 22, 'Failure': 23}
+HASH_ABSORB = 2                  # kl_state_hash_absorb, <<KLEE-state-constants-symmetric>>
 
 SNAME = {READY: 'Ready', SET_GEN: 'Set_Generator', SET_SCALAR: 'Set_Scalar',
          POINT_MUL: 'Point_Mul', SIGN_GEN: 'Sign_Generate', SIGN_VER: 'Sign_Verify',
@@ -122,7 +128,16 @@ SNAME = {READY: 'Ready', SET_GEN: 'Set_Generator', SET_SCALAR: 'Set_Scalar',
 
 
 class KLEEInvalid(Exception):
-    """The locker transitioned to Error State _Invalid_."""
+    """The locker transitioned to Error State _Invalid_.  For a `kl.derive`, `who`
+    says which endpoint did: 'source', 'destination' or 'both'."""
+
+    def __init__(self, msg='', who=None):
+        super().__init__(msg)
+        self.who = who
+
+
+class IllegalInstruction(Exception):
+    """An illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>)."""
 
 
 # -- the transition relation, transcribed from "Allowed State Transitions" ----
@@ -137,7 +152,10 @@ def transition_targets(state, eddsa, literal):
 
     _Ready_ is a target of every valid state because <<KLEE-ECC>> does not forbid it
     and SGR8 then permits it; this is how a caller abandons a long-running operation,
-    which Rule <<KLEE-MGR-progress-discard>> requires to discard its Progress.
+    which Rule <<KLEE-MGR-progress-discard>> requires to discard its Progress.  SGR4
+    admits the current State itself, except in _Success_ and _Failure_, which are
+    never `kl.setst` targets: they are reached on completion, and their immediates
+    are reserved (SGR7).  <<KLEE-EdDSA>> removes _Point_Mul_.
 
     `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
     had no exit at all (review finding M10, since resolved).  It is kept so that
@@ -153,7 +171,7 @@ def transition_targets(state, eddsa, literal):
     entry = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT, SET_SIG}
     if eddsa:
         entry = entry | {SET_CTX}
-    ops = {POINT_MUL, SIGN_GEN, SIGN_VER}
+    ops = {SIGN_GEN, SIGN_VER} if eddsa else {POINT_MUL, SIGN_GEN, SIGN_VER}
     if state == READY:
         t = entry | ops
     elif state in free:
@@ -162,16 +180,14 @@ def transition_targets(state, eddsa, literal):
         t = free | ops | {MSG_ABSORB, READY}
     elif state in (POINT_MUL, SIGN_GEN):
         t = {OUTPUT, READY}
-    elif state == OUTPUT:
-        t = {SUCCESS, READY}
-    elif state == SIGN_VER:
-        t = {SUCCESS, FAILURE, READY}
-    elif state in (SUCCESS, FAILURE):
+    elif state in (OUTPUT, SIGN_VER, SUCCESS, FAILURE):
         t = {READY}
     else:
         t = set()
     if eddsa and (state == READY or state in free):
         t = t | {MSG_ABSORB}
+    if state not in (SUCCESS, FAILURE) and (state != POINT_MUL or not eddsa):
+        t = t | {state}                                   # SGR4
     return t
 
 
@@ -187,7 +203,7 @@ def retry_required(mode, r, s, k, n):
 
 
 class Locker:
-    """A model of a KLEE control register holding an elliptic-curve CC."""
+    """A model of a KLEE locker holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
                  policy_sign=True, policy_verify=True, literal=False):
@@ -215,7 +231,7 @@ class Locker:
         self.rnd = None
         self.has_sec = self.has_sig = self.has_hash = self.has_rnd = False
         self.out_type = False
-        self.progress = 0                       # _MachineUse_[15:1], MGR10's field P
+        self.progress = 0                       # _MachineUse_[15:1], MGR8's field P
         self.block_base = 0
         self.msg_pass = 0
         self.ctx = b''
@@ -271,12 +287,14 @@ class Locker:
     # -- state transitions ------------------------------------------------
     def setst(self, target, form='A', xs=0, rand_scalar=None):
         eddsa = self.mode == 'eddsa'
+        if target in (SUCCESS, FAILURE):
+            raise IllegalInstruction('kl.setst with #immed7 46 or 47 (SGR7)')
         if target not in transition_targets(self.state, eddsa, self.literal):
             raise KLEEInvalid(f'{SNAME[self.state]} -> {SNAME.get(target, target)}'
-                             ' is not an allowed transition (Generic Rule 2)')
+                             ' is not an allowed transition (MGR1)')
         if self.state == MSG_ABSORB:
             self._finalize_pass()
-        # MGR10: P is zeroed, and the material kept for the operation destroyed, on
+        # MGR8: P is zeroed, and the material kept for the operation destroyed, on
         # every transition of _State_ -- including a same-State kl.setst, one to
         # _Ready_ and one to an Error State -- and the operation restarts.
         self.discard_progress()
@@ -297,7 +315,7 @@ class Locker:
                 setattr(self, fld, None)
                 setattr(self, 'has_' + fld, False)
             if target == SET_SCALAR and form == 'B' and xs != 0:
-                # random private key generated inside the Locker, never disclosed
+                # random private key generated inside the locker, never disclosed
                 if rand_scalar is None:
                     raise KLEEInvalid('model needs an injected RBG value')
                 self.scalar = self._enc_field(rand_scalar)
@@ -322,7 +340,7 @@ class Locker:
             self._return_to_ready(form, xs)
         self.state = target
 
-    # -- MGR10: Progress, and the material that is meaningful only with it -----
+    # -- MGR8: Progress, and the material that is meaningful only with it -----
     @property
     def machine_use(self):
         """_MachineUse_ as <<KLEE-ECC-MachineUse>> lays it out: bit 0 OutputType,
@@ -330,7 +348,7 @@ class Locker:
         return (1 if self.out_type else 0) | (self.progress << 1)
 
     def discard_progress(self):
-        """MGR10: zero P and destroy the material kept for the interrupted
+        """MGR8: zero P and destroy the material kept for the interrupted
         operation.  RndNum is that material for <<KLEE-ECC>> (and `r`, `k'` for
         <<KLEE-EdDSA>>, which keeps no random value of its own)."""
         self.progress = 0
@@ -477,7 +495,7 @@ class Locker:
         e = b2v(self.hash)
         # "If Progress is zero, the per-signature secret k is drawn from the RBG into
         # RndNum ...; otherwise the interrupted operation is resumed with the RndNum
-        # held" (MGR10).  A resumed operation therefore consumes no RBG value; should
+        # held" (MGR8).  A resumed operation therefore consumes no RBG value; should
         # the held k turn out degenerate, the retry rules draw the next one.
         held = [b2v(self.rnd)] if self.progress and self.has_rnd else []
         it = iter(held + list(rbg or []))
@@ -628,7 +646,7 @@ class Locker:
         elif self._pass_xs == 1:
             # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
             # message and must match the value stored in pass 1, binding the two passes;
-            # otherwise the Locker is invalidated and msg_pass stays at 1.
+            # otherwise the locker is invalidated and msg_pass stays at 1.
             dom = self._dom(0)
             msg = self._absorb[len(dom) + 2 * self.fw:]       # dom @ R @ A @ M
             _, prefix, _ = self._keys()
@@ -895,6 +913,10 @@ def test_parameters():
             p['b'] == c.bbits and p['u'] == 1 and p['v'] == 2)
     chk('MODEL', 'secp521r1: b = 576 with 55 zero msbs covers the 521-bit field',
         CURVE_PARAMS['secp521r1']['b'] - EC.P521.msb_zero == 521)
+    note('the Serialized Content numbers the optional fields iv-vii, but the text sizes'
+         ' "the optional Fields v to viii", calls `RndNum` "Position viii", and'
+         ' <<KLEE-EdDSA>> places `msg_pass` "at Position xi", which is `r` (x in its'
+         ' table).')
 
 
 def test_ecdsa_kats():
@@ -1023,6 +1045,14 @@ def test_point_mul_validation():
     except KLEEInvalid:
         ok = True
     chk('MODEL', 'secp256r1: off-curve SecondPt -> Invalid (curve validation)', ok)
+    cr = fresh(c)
+    load_field(cr, SET_SECONDPT, off)
+    load_field(cr, SET_HASH, v2b(1, cr.hashlen))
+    load_field(cr, SET_SIG, v2b(1, cr.fw) + v2b(1, cr.fw))
+    cr.setst(SIGN_VER)
+    chk('MODEL', 'secp256r1: Sign_Verify with an off-curve public key -> Failure, not '
+        'Invalid ("the validity of the public key as a curve point")',
+        not cr.exec_run() and cr.state == FAILURE)
     # known small multiples of G
     cr = fresh(c)
     load_field(cr, SET_SCALAR, v2b(2, cr.fw))
@@ -1043,7 +1073,7 @@ def test_point_mul_validation():
     note('Point_Mul requires the base point to be "a point of the curve", but the text'
          ' does not say whether the point-at-infinity *sentinel* is an acceptable input'
          ' in SecondPt. This model treats it as acceptable and returns the sentinel;'
-         ' an explicit rejection would be the safer prescription. NEW FINDING.')
+         ' an explicit rejection would be the safer prescription.')
 
 
 def _point_mul_ok(c, k):
@@ -1057,9 +1087,9 @@ def _point_mul_ok(c, k):
         return False
 
 
-def test_progress_agr10():
+def test_progress_mgr8():
     head('Interrupted long-running operations: `Progress` and Rule '
-         '<<KLEE-MGR-progress-discard>> (MGR10)')
+         '<<KLEE-MGR-progress-discard>> (MGR8)')
     c = EC.P256
     vec = RFC6979['secp256r1']
     msg, hname, k, r_exp, s_exp = vec['sigs'][0]
@@ -1247,6 +1277,44 @@ def test_state_machine():
     chk('MODEL', 'Output: block_base-tracked export, zero fill, then -> Success',
         b''.join(pieces)[:cr.ptlen] == cr.sec and pieces[2][16:] == bytes(8)
         and cr.state == SUCCESS)
+    note('_Output_ follows Rule <<KLEE-MGR-load-long-field>>, under which "an emitting '
+         'kl.exec that would carry W past the field size invalidates the locker", yet '
+         'says "Data beyond the length of the output is replaced with zeros in the last '
+         'exported part"; the model follows <<KLEE-ECC>>.')
+    for imm in (SUCCESS, FAILURE):
+        cr = fresh(c)
+        try:
+            cr.setst(imm)
+            ok = False
+        except IllegalInstruction:
+            ok = cr.state == READY
+        chk('MODEL', f'kl.setst #{imm} is a reserved encoding: illegal-instruction '
+            'exception, State unchanged (SGR7)', ok)
+    cr = fresh(c)
+    load_field(cr, SET_SCALAR, v2b(2, cr.fw))
+    cr.setst(POINT_MUL)
+    cr.halt(progress=3)
+    cr.setst(POINT_MUL)
+    chk('MODEL', 'a same-State kl.setst is admitted (SGR4) and zeroes Progress (MGR8)',
+        cr.state == POINT_MUL and cr.progress == 0)
+    cr = fresh(EC.ED25519)
+    load_field(cr, SET_SCALAR, bytes(range(1, 33)))
+    try:
+        cr.setst(POINT_MUL)
+        ok = False
+    except KLEEInvalid:
+        ok = True
+    chk('MODEL', 'ed25519: _Point_Mul_, which <<KLEE-EdDSA>> removes, -> Invalid', ok)
+    note('<<KLEE-EdDSA>> removes _Point_Mul_, and _Output_ emits only `SecondPt` after '
+         '_Point_Mul_ or `Signature`: the public key A of a seed held in the locker, e.g. '
+         'one drawn by a Form B kl.setst into _Set_Scalar_, can never be obtained.')
+    stale = [n for n, v in ECC_LIST_GLOBAL.items()
+             if v != {'Success': SUCCESS, 'Failure': FAILURE}[n]]
+    if stale:
+        note('the State list of <<KLEE-ECC>> still gives '
+             + ', '.join(f'_{n}_ ({ECC_LIST_GLOBAL[n]})' for n in stale)
+             + f'; <<KLEE-states-valid>> defines {SUCCESS} and {FAILURE}.  The model '
+             'follows the Instructions chapter.')
     # illegal transitions
     cr = fresh(c)
     try:
@@ -1254,7 +1322,7 @@ def test_state_machine():
         ok = False
     except KLEEInvalid:
         ok = True
-    chk('MODEL', 'Ready -> Output is not allowed (Generic Rule 2) -> Invalid', ok)
+    chk('MODEL', 'Ready -> Output is not allowed (MGR1) -> Invalid', ok)
 
     # ---- Ready-return Xs bits
     def loaded():
@@ -1327,12 +1395,6 @@ def test_state_machine():
     cc.setst(READY, form='B', xs=(1 << 5) | 2)
     chk('MODEL', 'Xs bits 5+1: copy, then SecondPt erased and HasSecondPt False',
         cc.gen == sec0 and cc.sec is None and not cc.has_sec)
-    note('"Upon returning to State _Ready_" previously assigned *SecondPt* to both Bit 1'
-         ' and Bit 3, leaving Bit 3 with no distinct meaning, said nothing about the fate'
-         ' of `Hash`, and reset `Signature` unconditionally. All three are now fixed, with'
-         ' uniform polarity throughout: a set bit discards the field it names (Bit 3'
-         ' `Hash`, Bit 6 `Signature`) and a clear bit retains it, so Form A and Xs = 0'
-         ' retain everything and one CC can sign and then verify.')
 
 
 # an arbitrary valid per-signature secret; this flow checks reachability, not a KAT
@@ -1422,13 +1484,8 @@ def test_m10_dead_end():
         else:
             chk('MODEL', f'transition list {label}: Set_Signature -> Sign_Verify is reachable',
                 reachable)
-    note('M10 is RESOLVED in the current text. <<KLEE-ECC>> "Allowed State Transitions"'
-         ' now defines the five _Set_ states collectively, lets any two of them'
-         ' transition freely, and admits all of them as sources for _Point_Mul_,'
-         ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
-         ' also completed. Previously _Set_Signature_ appeared in neither exit rule, so'
-         ' by Generic Rule 2 a Locker that had just loaded a signature could make no legal'
-         ' move and verification was unreachable. The pre-fix relation is retained above'
+    info('M10 (no exit from _Set_Signature_) is resolved: the _Set_ states now'
+         ' transition freely and all reach _Sign_Verify_; the pre-fix relation is kept'
          ' as a regression check.')
     # the strictness of the rest of the list is still enforced
     cr = fresh(EC.P256, literal=True)
@@ -1562,6 +1619,9 @@ def test_ed25519():
         ok = True
     chk('MODEL', 'C1: different messages in the two signing passes -> Invalid at pass 2 '
         '(no signature emitted)', ok and cr.msg_pass == 1)
+    note('<<KLEE-EdDSA>> invalidates the locker on a pass-2 mismatch "with `msg_pass` left'
+         ' at 1", but `msg_pass` is Content, which SGR10 clears on entering an Error'
+         ' State; the clause is unobservable.')
     # identical messages in both passes still sign correctly (the r-rebinding matches)
     cr = fresh(c)
     load_field(cr, SET_SCALAR, seed)
@@ -1734,6 +1794,77 @@ def test_brainpool():
          ' correctness and self-consistency, not interoperability.')
 
 
+class HashLocker:
+    """A locker holding SHA-256 (<<KLEE-hash-functions-MACs-XOFs>>); only its State and the
+    bytes absorbed in _Hash_Absorb_ are modelled."""
+
+    def __init__(self, state=HASH_ABSORB):
+        self.state = state
+        self.absorbed = b''
+
+
+def kl_derive(dest, src, length):
+    """`kl.derive` with an ECC source.  <<KLEE-derive-endpoints>> lists no ECC
+    endpoint, but Rule <<KLEE-DER-exec-implies-unrestricted>> always allows what
+    `kl.exec` emits in _Output_ to go into a hash, as an unrestricted transfer.
+    Anything else is no listed pair."""
+    if not isinstance(dest, HashLocker):
+        raise KLEEInvalid('no listed pair', who='both')
+    if src.state != OUTPUT:
+        raise KLEEInvalid('the source State emits nothing', who='source')
+    if dest.state != HASH_ABSORB:
+        raise KLEEInvalid('the destination State absorbs nothing', who='destination')
+    # "Each endpoint advances as the kl.exec operations producing or consuming these
+    #  blocks would advance it" (<<KLEE-derive-rule-both-fixed-size>>).
+    dest.absorbed += src.exec_out(length)
+
+
+def test_derive():
+    head('kl.derive: an ECDH result into a hash (Rule DER6)')
+    c = EC.P256
+    da, db = RFC6979['secp256r1']['x'], 0x1D5A0B2C3E4F
+    qb = v2b(c.mul_g(db)[0], 32) + v2b(c.mul_g(db)[1], 32)
+    cr = fresh(c)
+    load_field(cr, SET_SCALAR, v2b(da, 32))
+    load_field(cr, SET_SECONDPT, qb)
+    cr.setst(POINT_MUL)
+    Z = cr.exec_run()
+    h = HashLocker()
+    kl_derive(h, cr, 40)
+    mid = cr.block_base
+    kl_derive(h, cr, 24)
+    chk('MODEL', 'Point_Mul by a peer point, then two kl.derive into SHA-256 in'
+        ' _Hash_Absorb_: the hash absorbs the shared point, block_base advancing as'
+        ' Form C kl.exec would, and _Output_ ends in _Success_',
+        Z == c.mul(db, c.mul_g(da)) and h.absorbed == v2b(Z[0], 32) + v2b(Z[1], 32)
+        and mid == 40 and cr.state == SUCCESS)
+    for label, dest, st, who in (
+            ('a source not in _Output_', HashLocker(), SET_HASH, 'source'),
+            ('a hash destination in _Ready_', HashLocker(state=READY), OUTPUT,
+             'destination'),
+            ('an ECDH result into a symmetric key', object(), OUTPUT, 'both')):
+        cr = fresh(c)
+        load_field(cr, SET_SCALAR, v2b(da, 32))
+        cr.setst(POINT_MUL)
+        cr.exec_run()
+        if st != OUTPUT:
+            cr.setst(READY)
+            cr.setst(st)
+        try:
+            kl_derive(dest, cr, 64)
+            got = None
+        except KLEEInvalid as e:
+            got = e.who
+        chk('MODEL', f'{label} -> _Invalid_ ({who})', got == who)
+    info('Rule DER5 lists a transfer of "a computed shared secret" only from a Machine'
+         ' that "must contain an explicit shared secret"; <<KLEE-ECC>> holds a point, so'
+         ' the model lists no ECC -> key pair, and the ECDH result reaches a key only'
+         ' through a hash (DER6).')
+    note('Rule DER6 always allows the _Output_ of an ECC Machine into a hash, and such'
+         ' transfers "are listed for every pair of Machines", but the table of'
+         ' <<KLEE-derive-endpoints>> gives <<KLEE-ECC>> no exportable endpoint.')
+
+
 def test_negative_controls():
     head('Negative controls (declared to run-kats.py as KAT-EXPECT-FAIL)')
     # 1. Ed25519 with the scalar S encoded big-endian instead of little-endian
@@ -1794,7 +1925,7 @@ def main():
     test_p521_representation()
     test_point_mul_validation()
     test_retry_rules()
-    test_progress_agr10()
+    test_progress_mgr8()
     test_state_machine()
     test_sign_then_verify_one_cc()
     test_m10_dead_end()
@@ -1802,6 +1933,7 @@ def main():
     test_ed448()
     test_sm2()
     test_brainpool()
+    test_derive()
     test_negative_controls()
 
     head('Summary')

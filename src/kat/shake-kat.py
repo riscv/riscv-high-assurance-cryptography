@@ -11,7 +11,7 @@ What is validated (spec anchors, by heading):
          absorption; S = D || pad10*1 with its one-block (|S| = b - block_base)
          and two-block (|S| = 2b - block_base) clauses; a single t-bit digest
          then _Success_ for SHA3-n; unbounded squeezing for SHAKE.
-  [[KLEE-hash-functions]]
+  [[KLEE-hash-functions-MACs-XOFs]]
       -- _Ready_ initialisation; entry into _Hash_Output_ (finalize,
          block_base <- 0); the Form C squeeze loop, including the clearing of
          OUTPUT beyond output_base on _Success_ and the interruption point
@@ -338,7 +338,7 @@ class Hart:
 # ----------------------------------------------------------------- KLEE locker model
 class KleeSha3Locker:
     """A locker holding a KLEE SHA-3 CC, implemented literally from [[KLEE-SHA-3]] +
-    [[KLEE-hash-functions]] + [[KLEE-process-VLI]] and the Instructions chapter rules.
+    [[KLEE-hash-functions-MACs-XOFs]] + [[KLEE-process-VLI]] and the Instructions chapter rules.
 
     `state` is the 1600-bit KLEE value; for the SHA-3 family `block` is `state`
     (inputs are XORed directly into the rate, state_offset = 0), max_len = 0 (no
@@ -415,7 +415,7 @@ class KleeSha3Locker:
 
     # ----------------------------------------------------------------- States
     def _enter_ready(self):
-        # [[KLEE-hash-functions]]: last_blk_len, block_base, cumul_len and block
+        # [[KLEE-hash-functions-MACs-XOFs]]: last_blk_len, block_base, cumul_len and block
         # are set to zero (only block_base exists here); [[KLEE-SHA-3]]: `state`
         # is zeroed.
         self.st = KL_STATE_READY
@@ -449,7 +449,7 @@ class KleeSha3Locker:
             self.state = keccak_f1600(self.state)
             self.state ^= S >> room          # the remaining b bits, at rate bit 0
             self.state = keccak_f1600(self.state)
-        # [[KLEE-hash-functions]], upon entering _Hash_Output_:
+        # [[KLEE-hash-functions-MACs-XOFs]], upon entering _Hash_Output_:
         # block[t-1:0] <- finalize(): block is `state`, whose bits [t-1:0] already
         # hold the output after the padding step, so this is the identity;
         # block_base <- 0.
@@ -1247,13 +1247,12 @@ def main():
         cl.exec_('C', out=out)
         check('_%s_ -> _Ready_ restarts SHAKE128 (abc)' % mid_state, bytes(out),
               bytes.fromhex(VECTORS[('SHAKE128', 'abc')]))
-    info('a same-State kl.setst in _Hash_Output_ is permitted by SGR4 and counts as '
-         'a transition for MGR10, but',
-         '[[KLEE-SHA-3]] does not say whether the padding step "upon transitioning to '
-         '_Hash_Output_" is then',
-         'repeated; the harness does not exercise it.  The Form of the kl.setst to '
-         '_Hash_Output_ is not stated',
-         'either: Form A (no auxiliary operand) is used.')
+    info('a same-State kl.setst in _Hash_Output_ is permitted by SGR4, but '
+         '[[KLEE-SHA-3]] does not say whether',
+         'the padding step "upon transitioning to _Hash_Output_" is then repeated; '
+         'the harness does not exercise it.',
+         'The Form of the kl.setst to _Hash_Output_ is not stated either: Form A '
+         '(no auxiliary operand) is used.')
 
     print()
     print('-- 10. Provisioning Input and Serialized Content --')
@@ -1389,13 +1388,23 @@ def main():
                st == 'invalid' and dst.st == KL_STATE_INVALID
                and (snap == (src.st, src.state, src.block_base)
                     or src.st == KL_STATE_INVALID), (st, dst.st, src.st))
-    spec_note('[[KLEE-instruction-derive]] says that "if the transfer is not allowed, '
-              'then both lockers transition to Error',
-              'State _Invalid_", while its Checks invalidate "the offending locker, or '
-              'both"; the two differ exactly when',
-              'one endpoint alone is at fault.  The harness invalidates the offending '
-              'locker and checks only what both',
-              'readings share.')
+    spec_note('[[KLEE-derive-rule-both-fixed-size]] requires, for a XOF squeezed into '
+              'a process_VLI absorb, that "one',
+              'block size ... must divide the other".  Read as the rates, it would '
+              'exclude SHAKE128 (168 B) -> SHA3-256',
+              '(136 B), exercised in (a), and SHA3-512 (72 B) -> SHAKE256 (136 B) in '
+              '(b); the harness reads the "basic',
+              'unit" as the common 32-bit granularity and admits both; the common '
+              'interruption points (c) are then the',
+              'multiples of the lcm of the two rates.')
+    spec_note('[[KLEE-DER-checks]] item 1 invalidates "the offending locker, or both" '
+              'when a State does not admit its',
+              'endpoint, while [[KLEE-instruction-derive]] lists the allowed pairs by '
+              '(Machine, State, field) and sends',
+              '"any other pair" of lockers both to _Invalid_; a pair unlisted only '
+              'because of one locker\'s State falls',
+              'under both.  The harness invalidates the offending locker and checks '
+              'only what both readings share.')
 
     print()
     print('-- 12. negative controls --')

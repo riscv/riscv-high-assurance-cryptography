@@ -237,8 +237,8 @@ class GcmSivLocker:
 
     # -- provisioning, derived fields, export, import ------------------
     @classmethod
-    def provisioned(lockers, key=None, skid=None, **kw):
-        cl = lockers(**kw)
+    def provisioned(cls, key=None, skid=None, **kw):
+        cl = cls(**kw)
         cl.key_type = 1 if skid is not None else 0
         cl.skid = skid or 0
         cl.key = SKS[skid] if skid is not None else key
@@ -268,8 +268,8 @@ class GcmSivLocker:
         return v, pad128(kbits + 96 + 32 + 128 + 128 + 16)
 
     @classmethod
-    def imported(lockers, state, content, k, key_type=0, **kw):
-        cl = lockers(**kw)
+    def imported(cls, state, content, k, key_type=0, **kw):
+        cl = cls(**kw)
         cl.k, cl.key_type = k, key_type
         kb = 64 if key_type == 1 else k
         kf = sl(content, kb - 1, 0)
@@ -356,7 +356,7 @@ class GcmSivLocker:
             self._invalid('SGR5/SGR6')
             return
         if immed7 == KL_STATE_ENCRYPT:
-            # "State _Encrypt_ is *not* entered by kl.setst ... an kl.setst naming
+            # "State _Encrypt_ is *not* entered by kl.setst ... a kl.setst naming
             # _Encrypt_ is a not-allowed transition and invalidates the locker"
             self._invalid('kl.setst naming _Encrypt_')
             return
@@ -500,12 +500,13 @@ class GcmSivLocker:
         if self.state in ERROR_STATES:
             return
         if self.key_type == 1 or self.state != KL_STATE_READY:
-            self._invalid('kl.derive destination')
+            self._invalid('kl.derive destination (DER4, DER1 check 1)')
             return
-        if length == 0:
+        if length < self.k // 8:
+            # DER1 check 4: length >= dest_length, exactly dest_length bytes, no zero-filling
+            self._invalid('DER1: length < dest_length for a key destination')
             return
-        eff = min(length, self.k // 8)
-        self.key = src[:eff] + bytes(self.k // 8 - eff)
+        self.key = src[:self.k // 8]
         self._rederive()                      # MGR4
 
 
@@ -912,7 +913,7 @@ def main():
     m.setst(KL_STATE_ENCRYPT)
     chk(m.state == KL_STATE_INVALID,
         "a kl.setst naming Encrypt issued in Encrypt itself also invalidates the locker "
-        "(reading of SPEC-NOTE 1)")
+        "(<<KLEE-GCM-SIV-mode>>: Encrypt is not entered by kl.setst)")
 
     # -- Set_Aux_Value / Set_Aux_Value_2 -------------------------------------
     print()
@@ -1105,7 +1106,7 @@ def main():
             f"Content for {'a SKID' if skid else f'k = {8 * len(kk)}'}: {kb} + 96 + 32 + "
             f"128 + 128 + 16 bits, {blocks} blocks")
     got, _ = kl_encrypt(None, n5, a5, p5, m=GcmSivLocker.provisioned(skid=0x00C0FFEE00C0FFEE))
-    chk(got == w5, "a key given by a SKID (MGR8): C.1 #15 reproduced")
+    chk(got == w5, "a key given by a SKID (MGR9): C.1 #15 reproduced")
     m = GcmSivLocker.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_HASH_ABSORB)
@@ -1180,7 +1181,13 @@ def main():
     chk(m.state == KL_STATE_INVALID, "kl.derive into `key` outside Ready -> Invalid")
     m = GcmSivLocker.provisioned(skid=0x00C0FFEE00C0FFEE)
     m.derive_into_key(src, 16)
-    chk(m.state == KL_STATE_INVALID, "kl.derive into a `key` configured by a SKID -> Invalid")
+    chk(m.state == KL_STATE_INVALID, "kl.derive into a `key` configured by a SKID -> Invalid (DER4)")
+    for kk, length in ((key, 8), (k256, 16), (key, 0)):
+        m = GcmSivLocker.provisioned(kk)
+        m.derive_into_key(src, length)
+        chk(m.state == KL_STATE_INVALID and m.key == b'',
+            f"kl.derive of {length} bytes into a {len(kk)}-byte `key` -> Invalid, no "
+            f"zero-filled key (DER1 check 4)")
 
     # -- negative control ---------------------------------------------------------
     # GCM assembles its length block big-endian; the spec mandates bin()
@@ -1196,33 +1203,26 @@ def main():
           f"BE-lengths GCM-style length block vs {v['src']}")
     chk(fired, "negative control fired: BE length block changes the tag")
 
-    print("\nSPEC-NOTE 1: <<KLEE-GCM-SIV-mode>> says an kl.setst naming Encrypt \"is a "
-          "not-allowed transition and invalidates the locker\", while SGR4 lets kl.setst "
-          "name the current State in any Valid State, and the Pseudocode chapter's "
-          "<<KLEE-pseudocode-GCM-SIV-encryption>> issues `kl.setst K0, "
-          "#kl_state_encrypt` right after the Enc_Tag_Finalize kl.exec, i.e. in "
-          "Encrypt.  The model follows the Machine text (Invalid), under which the "
-          "the Pseudocode chapter sequence invalidates the locker; either drop that line from the Pseudocode chapter or "
-          "restrict the rule to kl.setst issued in a State other than Encrypt.")
-    print("INFO 1: the counter rule (ctr = 2^32-1 -> Invalid) admits at most "
+    print("\nINFO 1: the counter rule (ctr = 2^32-1 -> Invalid) admits at most "
           "2^32 - 1 blocks per message, one fewer than RFC 8452's P_MAX = 2^36 "
           "bytes; a message of exactly 2^36 bytes cannot be processed.")
     print("INFO 2: the encryption path ends in Encrypt or Enc_Last_Block, never in "
           "Success; software returns to Ready with kl.setst (SGR8), as done here.")
-    print("INFO 3: MGR10 does not apply: no GCM-SIV State performs an IRR4 "
-          "instruction; block-iterated kl.exec is interrupted between blocks "
+    print("INFO 3: MGR8 (<<KLEE-MGR-progress-discard>>) does not apply: no GCM-SIV "
+          "State performs an IRR4 operation; block-iterated kl.exec is interrupted between blocks "
           "(IRR7) and klstart must be a multiple of 16 bytes on resumption.  A "
           "transition that _MachinePolicy_ forbids is taken to be not allowed "
           "(MGR1).  After a kl.derive into `key` and on entering Ready, enc_key "
           "and auth_key are re-derived (MGR4); this is not observable, since "
           "Set_Aux_Value derives them again.")
-    print("OBSERVATIONs (editorial): (1) the Dec_Tag_Finalize kl.exec is typeset "
-          "``kl.exec Kn|K(Xn), INPUT``` with a third backtick; (2) \"If `tmp` = "
-          "SIV match\" should read \"If `tmp` = SIV\"; (3) in Enc_Last_Block and "
-          "Dec_Last_Block, `INPUT xor enc_blk(...)` xors a KLLEN-bit INPUT with a "
-          "128-bit block, which the notation (|V| = |W|) does not allow when "
-          "KLLEN < 128; `INPUT[last_blk_len-1:0] xor enc_blk(...)[last_blk_len-1:0]` "
-          "would; (4) \"a `kl.setst`\" in the Encrypt paragraph (rename residue).")
+    print("INFO 4: kl.derive into `key` with length = 0 fails DER1 check 4 (length >= "
+          "dest_length) and invalidates the destination; DER8's \"length = 0 ... changes "
+          "no state\" holds only \"if the checks above pass\".")
+    print("OBSERVATIONs (editorial): (1) \"If `tmp` = SIV match\" should read \"If "
+          "`tmp` = SIV\"; (2) in Enc_Last_Block and Dec_Last_Block, `INPUT xor "
+          "enc_blk(...)` xors a KLLEN-bit INPUT with a 128-bit block, which the notation "
+          "(|V| = |W|) does not allow when KLLEN < 128; `INPUT[last_blk_len-1:0] xor "
+          "enc_blk(...)[last_blk_len-1:0]` would.")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

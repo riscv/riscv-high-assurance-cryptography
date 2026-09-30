@@ -21,13 +21,16 @@ What this harness validates
     `rnd` the `kl.exec` then draws or holds across an interruption under Rule
     <<KLEE-MGR-progress-discard>>, _Sign_Generate_ via ML-DSA.Sign_internal,
     _Sign_Verify_ via ML-DSA.Verify_internal, _compute_pubKey_ with its
-    tr-consistency check, and the _MachineUse_ transfer-counter rules
-    (excess bits ignored on input, past-the-end -> Error State _Invalid_).
+    tr-consistency check, the _MachineUse_ transfer-counter rules of Rule
+    <<KLEE-MGR-load-long-field>> (excess data ignored on input, past-the-end ->
+    Error State _Invalid_), the MDH fields the Machine uses (_MachinePolicy_,
+    _AuxInfo_, _StateExtension_), and `kl.derive` of an emitted public key into a
+    hash (Rule <<KLEE-DER-exec-implies-unrestricted>>).
 
 3.  *Review finding M12, since FIXED*: <<KLEE-PQC-ML-DSA>> now splits a malformed
     `privkey`/`pubkey` (a configuration error -> Error State Invalid) from a
     well-formed value that does not verify (a data error -> State Failure, a
-    valid state), no longer calls state 23 an "Error State", and states the
+    valid state), no longer calls _Failure_ an "Error State", and states the
     _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Algorithm 8
     actually returns.  This harness had already modelled that reading.
 
@@ -67,15 +70,21 @@ def chk(name, ok, note=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{note}]" if note else ''))
     return ok
 
+def info(text):
+    print(f"  INFO       {text}")
+
+def spec_note(text):
+    print(f"  SPEC-NOTE  {text}")
+
 # ================================================================ KLEE model
 
 # MDH field positions, modules/ROOT/pages/Zkl-ISA-unpriv.adoc <<KLEE-metadata-header>>.
-F_MACHINE    = (11, 0)
-F_ALGPOLICY    = (13, 12)
-F_STATE        = (25, 21)
-F_STATEEXT     = (29, 26)
-F_AUXINFO      = (61, 46)
-F_MACHINEUSE = (95, 80)
+F_MACHINE      = (11, 0)
+F_MACHPOLICY   = (13, 12)
+F_STATE        = (24, 19)
+F_STATEEXT     = (28, 25)
+F_AUXINFO      = (61, 48)
+F_MACHINEUSE   = (95, 80)
 
 def mdh_get(mdh, fld):
     hi, lo = fld
@@ -86,16 +95,20 @@ def mdh_set(mdh, fld, val):
     m = ((1 << (hi - lo + 1)) - 1) << lo
     return (mdh & ~m) | ((val << lo) & m)
 
-# States from the ML-DSA state list in [[KLEE-PQC-ML-DSA]] plus the global ones.
+# States from the ML-DSA state list in [[KLEE-PQC-ML-DSA]] plus the global ones of
+# <<KLEE-states-valid>> and <<KLEE-states-error>> (the Machine's list still gives
+# _Success_ and _Failure_ as 22 and 23; see the SPEC-NOTE in t_mdh).
 S_READY, S_GENKEYPAIR = 1, 2
 S_PK_OUT, S_PK_IN, S_CTX_IN, S_MU_IN, S_TR_IN = 3, 4, 5, 6, 7
 S_SIGN_GEN, S_SIGN_OUT, S_SIGN_VERIFY, S_SIGN_IN = 8, 9, 10, 11
 S_SK_IN, S_COMPUTE_PK = 12, 13
-S_SUCCESS, S_FAILURE, S_INVALID = 22, 23, 25
+S_SUCCESS, S_FAILURE, S_INVALID = 46, 47, 49
+ML_DSA_LIST_GLOBAL = {'Success': 22, 'Failure': 23}
 
 IN_STATES  = {S_PK_IN: 'pubkey', S_CTX_IN: 'ctx', S_MU_IN: 'mu',
               S_TR_IN: 'tr', S_SIGN_IN: 'signature', S_SK_IN: 'privkey'}
 OUT_STATES = {S_PK_OUT: 'pubkey', S_SIGN_OUT: 'signature'}
+ML_DSA_STATES = set(range(S_GENKEYPAIR, S_COMPUTE_PK + 1))
 
 # StateExtension bit assignment for the three booleans of [[KLEE-PQC-ML-DSA]]
 # ("Apart from HasPrivKey, HasPubKey and Hedged (which are stored in
@@ -103,22 +116,37 @@ OUT_STATES = {S_PK_OUT: 'pubkey', S_SIGN_OUT: 'signature'}
 # HasPrivKey and HasPubKey take the two below it.
 SE_HASPRIVKEY, SE_HASPUBKEY, SE_HEDGED = 1, 2, 4
 
+# The hash Machines of <<KLEE-exec-encodings>> (Type 4 and 6, Modes 0-5): the
+# SHA-2 and SHA-3/SHAKE functions FIPS 204 {sect}5.4 admits, the only values the
+# _AuxInfo_ of an ML-DSA CC may encode ("any other value causes the locker to
+# transition to Error State Invalid").  It has "the same format as the _Machine_ and
+# _MachinePolicy_ Fields": a 12-bit _Machine_ code, here with _MachinePolicy_ 0.
+HASH_MACHINES = {(4 << 4) | m for m in range(6)} | {(6 << 4) | m for m in range(6)}
+AUX_SHAKE256 = (6 << 4) | 5
+S_HASH_ABSORB = 2                # kl_state_hash_absorb, <<KLEE-state-constants-symmetric>>
+
+
+class IllegalInstruction(Exception):
+    """An illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>)."""
+
 
 class Invalidated(Exception):
-    """The locker transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
+    """The locker transitioned to Error State _Invalid_ (kl_state_invalid, 49)."""
 
 
 class MLDSAContext:
     """Model of a KLEE Cryptographic Context running an ML-DSA Machine."""
 
-    def __init__(self, ps, algpolicy=0b11, auxinfo=0):
+    def __init__(self, ps, machpolicy=0b11, auxinfo=AUX_SHAKE256):
         self.ps = ps
         self.sk_len, self.pk_len, self.sig_len = D.sizes(ps)
-        if algpolicy == 0:
-            # "An MachinePolicy of 0 is not valid, and it causes the locker to
-            #  transition to Error State Invalid."
+        if machpolicy == 0:
+            # "A _MachinePolicy_ of 0 is not valid, and it causes the locker to
+            #  transition to Error State _Invalid_."
             raise Invalidated('MachinePolicy == 0 at provisioning')
-        self.mdh = mdh_set(0, F_ALGPOLICY, algpolicy)
+        if auxinfo not in HASH_MACHINES:
+            raise Invalidated(f'AuxInfo {auxinfo:#x} encodes no FIPS 204 hash')
+        self.mdh = mdh_set(0, F_MACHPOLICY, machpolicy)
         self.mdh = mdh_set(self.mdh, F_AUXINFO, auxinfo)
         self.mdh = mdh_set(self.mdh, F_STATE, S_READY)
         # "Upon provisioning, fields privkey and pubkey are cleared, both flags
@@ -141,11 +169,11 @@ class MLDSAContext:
         return mdh_get(self.mdh, F_STATE)
 
     @property
-    def alguse(self):
+    def use(self):
         return mdh_get(self.mdh, F_MACHINEUSE)
 
-    @alguse.setter
-    def alguse(self, v):
+    @use.setter
+    def use(self, v):
         self.mdh = mdh_set(self.mdh, F_MACHINEUSE, v)
 
     def _flag(self, bit):
@@ -173,14 +201,19 @@ class MLDSAContext:
         raise Invalidated(why)
 
     # -- field bookkeeping ----------------------------------------------
-    def field_bits(self, name):
-        return {'privkey': self.sk_len * 8, 'pubkey': self.pk_len * 8,
-                'signature': self.sig_len * 8, 'mu': 512, 'tr': 512,
-                'ctx': self.ctxlen * 8}[name]
+    def field_bytes(self, name):
+        return {'privkey': self.sk_len, 'pubkey': self.pk_len,
+                'signature': self.sig_len, 'mu': 64, 'tr': 64,
+                'ctx': self.ctxlen}[name]
 
     # -- instructions ---------------------------------------------------
     def setst(self, state, aux=None):
         """Form A `kl.setst` (aux None) or Form B (aux = Xs)."""
+        if state in (S_SUCCESS, S_FAILURE):
+            # SGR7: the immediates 46 and 47 are reserved.
+            raise IllegalInstruction('kl.setst with #immed7 46 or 47')
+        if state != S_READY and state not in ML_DSA_STATES:
+            self._invalidate(f'kl.setst #{state}, which ML-DSA does not define')
         if state == S_CTX_IN:
             # "a Form B kl.setst instruction must be used where the GPR
             #  contains the parameter ctxlen.  Only values 0..255 are valid."
@@ -191,20 +224,24 @@ class MLDSAContext:
         if state == S_PK_OUT and not self.has_pubkey:
             self._invalidate('pubkey_Output entered with HasPubKey false')
         if state == S_SIGN_GEN:
+            if not mdh_get(self.mdh, F_MACHPOLICY) & 1:
+                self._invalidate('Sign_Generate with MachinePolicy[0] clear')
             if not self.has_privkey:
                 self._invalidate('Sign_Generate entered with HasPrivKey false')
             # "If Xs = 0 ... hedged signing is selected and Hedged is set.  If Xs is
             #  non-zero, then deterministic signing is selected and Hedged is cleared."
             # The value of `rnd` is drawn by the kl.exec, not here.
             self._set_flag(SE_HEDGED, aux in (None, 0))
+        if state == S_SIGN_VERIFY and not mdh_get(self.mdh, F_MACHPOLICY) & 2:
+            self._invalidate('Sign_Verify with MachinePolicy[1] clear')
         self.mdh = mdh_set(self.mdh, F_STATE, state)
         if state == S_READY:
             self._clear_volatile()
-        # MGR10: _MachineUse_ is the field P of <<KLEE-MGR-progress-discard>>, so it
+        # MGR8: _MachineUse_ is the field P of <<KLEE-MGR-progress-discard>>, so it
         # is zeroed on every transition of _State_, together with the material kept
         # for an interrupted operation -- here `rnd`.  For the loading and emitting
         # states this is also MGR7's "W is zeroed on entry".
-        self.alguse = 0
+        self.use = 0
         self.rnd = b'\0' * 32
         if state in IN_STATES:
             # MGR7: "entering a loading state also zeroes the field, so that
@@ -220,20 +257,24 @@ class MLDSAContext:
             self._set_flag(SE_HASPUBKEY, False)
 
     def exec_input(self, data):
-        """Form B `kl.exec ..., INPUT` in an _*_Input_ state (process_VLI with
-        process_block = finalize = None)."""
+        """Form B `kl.exec ..., INPUT` in an _*_Input_ state (Rule
+        <<KLEE-MGR-load-long-field>>, _W_ = _MachineUse_ in bytes)."""
         name = IN_STATES[self.state]
-        n = self.field_bits(name)
-        cum = self.alguse
+        n = self.field_bytes(name)
+        cum = self.use
         if cum >= n:
             self._invalidate(f'{name}_Input with MachineUse >= n ({cum} >= {n})')
-        amount = min(len(data) * 8, n - cum)         # bits in excess are ignored
-        buf = bytearray(getattr(self, name).ljust(n // 8, b'\0'))
-        buf[cum // 8: cum // 8 + amount // 8] = data[:amount // 8]
+        amount = min(len(data), n - cum)             # excess data is ignored
+        buf = bytearray(getattr(self, name).ljust(n, b'\0'))
+        buf[cum:cum + amount] = data[:amount]
         setattr(self, name, bytes(buf))
-        self.alguse = cum + amount
-        if self.alguse == n:
+        self.use = cum + amount
+        if self.use == n:
             if name == 'privkey':
+                # "a malformed `privkey` ... is a configuration error": checked, as
+                # ML-KEM checks its keys, when the field finishes loading.
+                if not D.sk_well_formed(self.privkey, self.ps):
+                    self._invalidate('malformed privkey (FIPS 204 skDecode)')
                 self._set_flag(SE_HASPRIVKEY, True)
                 self.tr = self.privkey[64:128]       # tr is embedded in privkey
             elif name == 'pubkey':
@@ -243,19 +284,19 @@ class MLDSAContext:
     def exec_output(self, nbytes):
         """Form C `kl.exec` in _pubkey_Output_ / _Sign_Output_.
 
-        NOTE the asymmetry in the spec text: on *input* "the bits in excess are
-        ignored", but on *output* an over-long transfer sends the locker to Error
-        State _Invalid_.  Modelled literally.
+        Rule <<KLEE-MGR-load-long-field>> is asymmetric: on *input* "excess data in
+        a final loading transfer is ignored", but "an emitting `kl.exec` that would
+        carry _W_ past the field size invalidates the locker".
         """
         name = OUT_STATES[self.state]
-        n = self.field_bits(name)
-        cum = self.alguse
+        n = self.field_bytes(name)
+        cum = self.use
         if cum >= n:
             self._invalidate(f'{name}_Output with MachineUse >= n')
-        if cum + nbytes * 8 > n:
+        if cum + nbytes > n:
             self._invalidate(f'{name}_Output transfer past the end of the field')
-        out = getattr(self, name)[cum // 8: cum // 8 + nbytes]
-        self.alguse = cum + nbytes * 8
+        out = getattr(self, name)[cum:cum + nbytes]
+        self.use = cum + nbytes
         return out
 
     def exec_d(self, xi=None, rnd=None, halt=None):
@@ -293,7 +334,7 @@ class MLDSAContext:
             #  approved random bit generator when Hedged is set and is zeros(256)
             #  otherwise; if it is non-zero, the interrupted operation is resumed
             #  with the rnd held.  On completion rnd is destroyed."
-            if self.alguse == 0:
+            if self.use == 0:
                 if self.hedged:
                     if rnd is None:
                         raise AssertionError('hedged signing needs an RBG value')
@@ -307,11 +348,11 @@ class MLDSAContext:
                 # `rnd` stays with it, and _State_ does not change.
                 if halt == 0:
                     self._invalidate('Progress recorded at a halt is never zero')
-                self.alguse = halt
+                self.use = halt
                 return
             sig = D.sign_internal_mu(self.privkey, self.mu, self.rnd, self.ps)
             self.rnd = b'\0' * 32                    # destroyed on completion
-            self.alguse = 0                          # P zeroed on completion
+            self.use = 0                          # P zeroed on completion
             if sig is None:
                 self.mdh = mdh_set(self.mdh, F_STATE, S_FAILURE)
                 return
@@ -333,13 +374,13 @@ class MLDSAContext:
             self._invalidate('kl.exec in State Ready')
         raise AssertionError(f'no Form D kl.exec defined in state {st}')
 
-    def restrictl_algpolicy(self, mask):
+    def restrictl_machpolicy(self, mask):
         """`kl.restrictl` on _MachinePolicy_: clearing the field is not
         admissible."""
-        new = mdh_get(self.mdh, F_ALGPOLICY) & mask
+        new = mdh_get(self.mdh, F_MACHPOLICY) & mask
         if new == 0:
             self._invalidate('kl.restrictl cleared MachinePolicy')
-        self.mdh = mdh_set(self.mdh, F_ALGPOLICY, new)
+        self.mdh = mdh_set(self.mdh, F_MACHPOLICY, new)
 
 
 # ================================================================ tests
@@ -366,12 +407,16 @@ def t_sizes():
         chk(f'ML-DSA-{ps} Serialized Content, MDH and padding included',
             (got + pad) // 8 == nbytes and (got + pad) // 128 == blocks,
             f'{got} + {pad} = {got + pad} bits = {(got + pad) // 128} blocks')
-    # The AuxInfo field has "the same format as the Machine and
-    # MachinePolicy Fields and the next two Reserved bits" -> 12 + 2 + 2 = 16.
-    chk('_AuxInfo_ is 16 bits, matching Machine+MachinePolicy+2 Reserved',
-        (F_AUXINFO[0] - F_AUXINFO[1] + 1) == 16 and
-        (F_MACHINE[0] - F_MACHINE[1] + 1) +
-        (F_ALGPOLICY[0] - F_ALGPOLICY[1] + 1) + 2 == 16)
+    # The AuxInfo field has "the same format as the Machine and MachinePolicy
+    # Fields and the next two Reserved bits".
+    width = lambda f: f[0] - f[1] + 1
+    chk('_AuxInfo_ (MDH[61:48], 14 bits) holds exactly _Machine_ @ _MachinePolicy_',
+        width(F_AUXINFO) == 14 == width(F_MACHINE) + width(F_MACHPOLICY))
+    spec_note('_AuxInfo_ is said to have "the same format as the _Machine_ and '
+              '_MachinePolicy_ Fields and the next two Reserved bits", 16 bits, but it '
+              'is 14 bits wide, and the two bits after _MachinePolicy_ are '
+              '_MachineExtension_, not Reserved.  The model uses _Machine_ @ '
+              '_MachinePolicy_.')
 
 
 def t_keygen():
@@ -398,13 +443,20 @@ def t_sign():
           'interface vectors:')
     for v in VECTORS['sigGenCtx']:
         sk = bytes.fromhex(v['sk'])
-        Mp = D.format_Mp(bytes.fromhex(v['ctx']), bytes.fromhex(v['msg']))
-        mu = D.mu_external(sk[64:128], Mp)          # tr @ M'
+        ctx, msg = bytes.fromhex(v['ctx']), bytes.fromhex(v['msg'])
+        Mp = D.format_Mp(ctx, msg)
+        mu = D.mu_external(sk[64:128], Mp)          # tr || M', tr first
         sig = D.sign_internal_mu(sk, mu, bytes(32), v['ps'])
-        chk(f"mu = SHAKE256(tr @ 0x00 @ bin(|ctx|,8) @ ctx @ M, 64) reproduces "
+        chk(f"mu = SHAKE256(tr || 0x00 || |ctx| || ctx || M, 64) reproduces "
             f"the pure-ML-DSA vector  {v['src']}",
             sig is not None and sig.hex() == v['sig'],
             f"ctxlen={len(v['ctx']) // 2}")
+        # The same strings joined with `@` (<<KLEE-Notation-concatenation>>) instead
+        # of ||: the left operand is the more significant, i.e. the later bytes.
+        lit = D.H(msg + ctx + bytes([len(ctx), 0]) + sk[64:128], 64)
+        chk(f"... while the `@` byte order, tr and 0x00 last in memory, does not  "
+            f"{v['src']}", D.sign_internal_mu(sk, lit, bytes(32), v['ps']).hex()
+            != v['sig'])
 
 
 def t_verify():
@@ -414,6 +466,85 @@ def t_verify():
                                    bytes.fromhex(v['sig']), v['ps'])
         chk(f"Verify_internal external-mu  {v['src']}  ({v['reason']})",
             got == v['pass'], 'accepted' if got else 'rejected')
+
+
+def t_mdh():
+    print('\n-- MDH: State numbers, _MachinePolicy_, _AuxInfo_, kl.setst immediates --')
+    ps = 44
+    stale = {n: v for n, v in ML_DSA_LIST_GLOBAL.items()
+             if v != {'Success': S_SUCCESS, 'Failure': S_FAILURE}[n]}
+    if stale:
+        spec_note('the State list of <<KLEE-PQC-ML-DSA>> still gives '
+                  + ', '.join(f'_{n}_ ({v})' for n, v in stale.items())
+                  + f'; <<KLEE-states-valid>> defines {S_SUCCESS} and {S_FAILURE} and '
+                  'leaves 2-45 to the Machine.  The model follows the Instructions '
+                  'chapter.')
+    cc = MLDSAContext(ps)
+    chk('provisioning: _State_ _Ready_ (1) in MDH[24:19], _AuxInfo_ in MDH[61:48]',
+        mdh_get(cc.mdh, F_STATE) == S_READY and mdh_get(cc.mdh, F_AUXINFO)
+        == AUX_SHAKE256 and cc.mdh >> 19 & 0x3F == S_READY)
+    for aux, name in ((0x43, 'SHA2-512'), (0x65, 'SHAKE256'), (0x61, 'SHA3-256')):
+        chk(f'_AuxInfo_ = {aux:#05x} ({name}) is an admissible hash',
+            MLDSAContext(ps, auxinfo=aux).state == S_READY)
+    for aux, name in ((0x000, 'AES128_ECB'), (0x046, 'SHA2-224_HMAC'),
+                      (0x06A, 'KMAC128'), (0x083, 'Ascon-Hash256')):
+        try:
+            MLDSAContext(ps, auxinfo=aux)
+            ok = False
+        except Invalidated:
+            ok = True
+        chk(f'_AuxInfo_ = {aux:#05x} ({name}) encodes no hash FIPS 204 admits: '
+            '_Invalid_', ok)
+    info('FIPS 204 fixes SHAKE256 for mu, so _AuxInfo_ constrains only the PH of '
+         'HashML-DSA; the model admits the twelve SHA-2 and SHA-3/SHAKE Machines, and '
+         '_AuxInfo_ = 0, being AES128_ECB, is invalid.')
+    spec_note('<<KLEE-Machine-field>> says that for signature primitives "both bits may '
+              'be zero", but <<KLEE-PQC-ML-DSA>> makes a _MachinePolicy_ of 0 invalid.  '
+              'The model follows the Machine.')
+    spec_note('HasPrivKey and HasPubKey are "stored in _StateExtension_" and "readable '
+              'with kl.getmdl", but only `Hedged` has a bit (2); the model takes bits 0 '
+              'and 1.')
+    cc = MLDSAContext(ps)
+    for imm in (S_SUCCESS, S_FAILURE):
+        try:
+            cc.setst(imm)
+            ok = False
+        except IllegalInstruction:
+            ok = cc.state == S_READY
+        chk(f'kl.setst #{imm} is a reserved encoding: illegal-instruction exception '
+            '(SGR7)', ok)
+    for imm in (14, 45):
+        c2 = MLDSAContext(ps)
+        try:
+            c2.setst(imm)
+            ok = False
+        except Invalidated:
+            ok = c2.state == S_INVALID
+        chk(f'kl.setst #{imm}, an immediate ML-DSA does not define, gives _Invalid_', ok)
+    kv = VECTORS['keyGen'][0]
+    for pol, st, label in ((0b10, S_SIGN_GEN, 'Sign_Generate with _MachinePolicy_[0] '
+                            'clear'),
+                           (0b01, S_SIGN_VERIFY, 'Sign_Verify with _MachinePolicy_[1] '
+                            'clear')):
+        c3 = MLDSAContext(ps, machpolicy=pol)
+        c3.setst(S_GENKEYPAIR)
+        c3.exec_d(xi=bytes.fromhex(kv['seed']))
+        try:
+            c3.setst(st, aux=1)
+            ok = False
+        except Invalidated:
+            ok = c3.state == S_INVALID
+        chk(f'{label} -> Error State _Invalid_', ok)
+    info('<<KLEE-PQC-ML-DSA>> says what the two _MachinePolicy_ bits permit but not what '
+         'entering a forbidden operation does; the model applies MGR1 (_Invalid_) on '
+         'entry to _Sign_Generate_ or _Sign_Verify_.')
+    info('<<KLEE-PQC-ML-DSA>> names no State reached when _GenerateKeyPair_, '
+         '_compute_pubKey_ or _Sign_Generate_ completes; the model takes _Success_, left '
+         'by kl.setst for an output State, which the Machine allows "between any two '
+         'valid states" although SGR6 lists only _Ready_ from _Success_.')
+    spec_note('<<KLEE-PQC-ML-DSA>> records the long-field transfers "in _MachineUse_" '
+              'without naming the unit that Rule <<KLEE-MGR-load-long-field>> requires; '
+              'the model counts bytes, as the ML-KEM and ECC Machines do.')
 
 
 def t_state_machine():
@@ -437,12 +568,12 @@ def t_state_machine():
 
     # pubkey_Output streams the public key; over-long transfer -> Invalid
     cc.setst(S_PK_OUT)
-    chk('setst(_pubkey_Output_) zeroes _MachineUse_', cc.alguse == 0)
+    chk('setst(_pubkey_Output_) zeroes _MachineUse_', cc.use == 0)
     out = b''
     for n in (512, 512, 288):
         out += cc.exec_output(n)
     chk('_pubkey_Output_ streams the ACVP public key',
-        out == pk and cc.alguse == 1312 * 8)
+        out == pk and cc.use == 1312)
     try:
         cc.exec_output(16)
         chk('_pubkey_Output_ past the end -> Error State _Invalid_', False)
@@ -471,21 +602,37 @@ def t_state_machine():
     for n in (1000, 1000, 560):
         cc.exec_input(sk[off:off + n]); off += n
     chk('privkey loaded in chunks; HasPrivKey set only when the value is complete',
-        cc.privkey == sk and cc.has_privkey and cc.alguse == 2560 * 8)
+        cc.privkey == sk and cc.has_privkey and cc.use == 2560)
 
     # excess bits of the last input transfer are ignored
     cc2 = MLDSAContext(ps)
     cc2.setst(S_SK_IN)
     cc2.exec_input(sk[:2048])
     took = cc2.exec_input(sk[2048:] + b'\x5A' * 100)
-    chk('_privkey_Input_: bits in excess of the last transfer are ignored',
-        took == 512 * 8 and cc2.privkey == sk and cc2.has_privkey)
+    chk('_privkey_Input_: data in excess of the last transfer is ignored',
+        took == 512 and cc2.privkey == sk and cc2.has_privkey)
     try:
         cc2.exec_input(b'\x00' * 8)
         chk('kl.exec with _MachineUse_ >= n -> Error State _Invalid_', False)
     except Invalidated:
         chk('kl.exec with _MachineUse_ >= n -> Error State _Invalid_',
             cc2.state == S_INVALID)
+
+    bad = bytearray(sk)
+    bad[128] = 0xFF                      # s1 coefficients eta - 7 = -5, outside [-2, 2]
+    cc7 = MLDSAContext(ps)
+    cc7.setst(S_SK_IN)
+    try:
+        cc7.exec_input(bytes(bad))
+        ok = False
+    except Invalidated:
+        ok = cc7.state == S_INVALID and not cc7.has_privkey
+    chk('a malformed privkey (s1 coefficient outside [-eta, eta]) -> Error State '
+        '_Invalid_ when it finishes loading', ok)
+    info('<<KLEE-PQC-ML-DSA>> makes a malformed privkey a configuration error without '
+         'saying when it is detected; the model checks when the field finishes loading, '
+         'as <<KLEE-PQC-ML-KEM>> does.  Every pubkey byte string decodes, so pubkey '
+         'cannot be malformed.')
 
     # pubkey_Input does not disturb the private key
     cc.setst(S_PK_IN)
@@ -511,7 +658,7 @@ def t_state_machine():
     cc4.setst(S_CTX_IN, aux=255)
     cc4.exec_input(bytes(range(255)))
     chk('_ctx_Input_ with ctxlen = 255 loads the whole context',
-        cc4.ctx == bytes(range(255)) and cc4.alguse == 255 * 8)
+        cc4.ctx == bytes(range(255)) and cc4.use == 255)
     for bad in (256, 1 << 16, -1):
         cc5 = MLDSAContext(ps)
         try:
@@ -523,16 +670,16 @@ def t_state_machine():
 
     # MachinePolicy
     try:
-        MLDSAContext(ps, algpolicy=0)
+        MLDSAContext(ps, machpolicy=0)
         chk('provisioning with _MachinePolicy_ = 0 -> Error State _Invalid_', False)
     except Invalidated:
         chk('provisioning with _MachinePolicy_ = 0 -> Error State _Invalid_', True)
-    cc6 = MLDSAContext(ps, algpolicy=0b11)
-    cc6.restrictl_algpolicy(0b10)
+    cc6 = MLDSAContext(ps, machpolicy=0b11)
+    cc6.restrictl_machpolicy(0b10)
     chk('kl.restrictl may narrow _MachinePolicy_ to verify-only',
-        mdh_get(cc6.mdh, F_ALGPOLICY) == 0b10)
+        mdh_get(cc6.mdh, F_MACHPOLICY) == 0b10)
     try:
-        cc6.restrictl_algpolicy(0b00)
+        cc6.restrictl_machpolicy(0b00)
         chk('kl.restrictl clearing _MachinePolicy_ -> Error State _Invalid_', False)
     except Invalidated:
         chk('kl.restrictl clearing _MachinePolicy_ -> Error State _Invalid_',
@@ -625,9 +772,13 @@ def t_compute_pubkey():
         chk('_compute_pubKey_ with corrupted tr in privkey -> Error State _Invalid_',
             cc.state == S_INVALID)
 
-    # a corrupted s1 also breaks the tr check, since pubkey then changes
+    # a corrupted, still well-formed s1 also breaks the tr check, since pubkey changes
     bad = bytearray(sk)
-    bad[128] ^= 0x01
+    for bit in range(128 * 8, 160 * 8):
+        bad[bit // 8] ^= 1 << (bit % 8)
+        if D.sk_well_formed(bytes(bad), ps):
+            break
+        bad[bit // 8] ^= 1 << (bit % 8)
     cc = MLDSAContext(ps)
     cc.setst(S_SK_IN); cc.exec_input(bytes(bad))
     try:
@@ -659,11 +810,11 @@ def t_sign_verify_flow():
         cc.signature.hex() == det['sig'] and cc.state == S_SUCCESS)
     cc.setst(S_SIGN_OUT)
     out = b''
-    while cc.alguse < D.sizes(ps)[2] * 8:
-        n = min(1024, D.sizes(ps)[2] - cc.alguse // 8)
+    while cc.use < D.sizes(ps)[2]:
+        n = min(1024, D.sizes(ps)[2] - cc.use)
         out += cc.exec_output(n)
     chk('_Sign_Output_ streams the signature, _MachineUse_ complete',
-        out.hex() == det['sig'] and cc.alguse == 2420 * 8)
+        out.hex() == det['sig'] and cc.use == 2420)
 
     # hedged: Form B setst with Xs = 0, rnd injected from the "RBG"
     cc = MLDSAContext(ps)
@@ -732,7 +883,7 @@ def t_sign_verify_flow():
     cc.setst(S_MU_IN); cc.exec_input(bytes([mu[0] ^ 1]) + mu[1:])
     cc.setst(S_SIGN_IN); cc.exec_input(sig)
     cc.setst(S_SIGN_VERIFY); cc.exec_d()
-    chk('verification under a different mu -> State _Failure_ (23, a VALID state)',
+    chk('verification under a different mu -> State _Failure_ (47, a Valid State)',
         cc.state == S_FAILURE)
     # determinism of the rejection loop
     cc2 = MLDSAContext(ps)
@@ -743,9 +894,9 @@ def t_sign_verify_flow():
         cc2.signature == sig)
 
 
-def t_progress_agr10():
+def t_progress_mgr8():
     print('\n-- Interrupted _Sign_Generate_: Rule <<KLEE-MGR-progress-discard>> '
-          '(MGR10) --')
+          '(MGR8) --')
     ps = 44
     hed = [v for v in VECTORS['sigGenMu'] if v['rnd'] != '00' * 32][0]
     rnd = bytes.fromhex(hed['rnd'])
@@ -758,22 +909,22 @@ def t_progress_agr10():
         return cc
 
     cc = armed()
-    chk('_MachineUse_ (the field P) is zero when the operation starts', cc.alguse == 0)
+    chk('_MachineUse_ (the field P) is zero when the operation starts', cc.use == 0)
     cc.exec_d(rnd=rnd, halt=0x2A)
     chk('a precise halt records a non-zero P in _MachineUse_, keeps the drawn rnd '
         'and leaves _State_ at _Sign_Generate_',
-        cc.alguse == 0x2A and cc.rnd == rnd and cc.state == S_SIGN_GEN)
+        cc.use == 0x2A and cc.rnd == rnd and cc.state == S_SIGN_GEN)
     cc.exec_d()                      # resumed: draws nothing, rnd is held
     chk('resuming with P non-zero reproduces the ACVP signature of the held rnd '
         f"  {hed['src']}", cc.signature.hex() == hed['sig'] and cc.state == S_SUCCESS)
     chk('on completion P is zeroed and rnd destroyed',
-        cc.alguse == 0 and cc.rnd == bytes(32))
+        cc.use == 0 and cc.rnd == bytes(32))
 
     cc = armed()
     cc.exec_d(rnd=rnd, halt=1)
     cc.setst(S_READY)
     chk('a kl.setst out of _Sign_Generate_ zeroes P and destroys the held rnd',
-        cc.alguse == 0 and cc.rnd == bytes(32))
+        cc.use == 0 and cc.rnd == bytes(32))
 
     cc = armed()
     cc.exec_d(rnd=rnd, halt=1)
@@ -794,11 +945,59 @@ def t_progress_agr10():
     cc = armed(aux=1)
     cc.exec_d(halt=5)
     chk('a halted deterministic signature keeps rnd = zeros(256) and P non-zero',
-        cc.rnd == bytes(32) and cc.alguse == 5)
+        cc.rnd == bytes(32) and cc.use == 5)
     cc.exec_d()
     chk('it resumes to the deterministic ACVP-equivalent signature',
         cc.state == S_SUCCESS and cc.signature == D.sign_internal_mu(
             bytes.fromhex(hed['sk']), bytes.fromhex(hed['mu']), bytes(32), ps))
+
+
+def kl_derive_exec(dest, src, length):
+    """`kl.derive` of an unrestricted transfer (Rule
+    <<KLEE-DER-exec-implies-unrestricted>>): what the Form C `kl.exec` of an emitting
+    State would return goes into a hash in _Hash_Absorb_ (`dest`, a dict).  ML-DSA
+    has no other endpoint: <<KLEE-derive-endpoints>> lists no field of it, and a
+    secret key is never an exportable source."""
+    if src.state not in OUT_STATES:
+        src._invalidate('kl.derive from a State that emits nothing')   # DER1 item 1
+    dest['absorbed'] += src.exec_output(length)
+
+
+def t_derive():
+    print('\n-- kl.derive: _pubkey_Output_ into a hash (Rule DER6) --')
+    ps = 44
+    kv = VECTORS['keyGen'][0]
+    pk = bytes.fromhex(kv['pk'])
+    cc = MLDSAContext(ps)
+    cc.setst(S_GENKEYPAIR)
+    cc.exec_d(xi=bytes.fromhex(kv['seed']))
+    cc.setst(S_PK_OUT)
+    shake = {'state': S_HASH_ABSORB, 'absorbed': b''}
+    kl_derive_exec(shake, cc, 1000)
+    kl_derive_exec(shake, cc, 312)
+    chk('DER6: _pubkey_Output_ -> SHAKE256 absorbs the public key in two transfers, '
+        '_MachineUse_ advancing as Form C kl.exec would, and SHAKE256(pubkey, 64) = tr',
+        shake['absorbed'] == pk and cc.use == 1312
+        and D.H(shake['absorbed'], 64) == cc.tr, kv['src'])
+    try:
+        kl_derive_exec(shake, cc, 16)
+        ok = False
+    except Invalidated:
+        ok = cc.state == S_INVALID and len(shake['absorbed']) == 1312
+    chk('a transfer that would carry _MachineUse_ past the field invalidates the '
+        'source (MGR7)', ok)
+    cc = MLDSAContext(ps)
+    cc.setst(S_SK_IN)
+    cc.exec_input(bytes.fromhex(kv['sk']))
+    try:
+        kl_derive_exec({'state': S_HASH_ABSORB, 'absorbed': b''}, cc, 64)
+        ok = False
+    except Invalidated:
+        ok = cc.state == S_INVALID
+    chk('a source in _privkey_Input_ does not admit an endpoint: _Invalid_', ok)
+    spec_note('Rule DER6 lets the output of _pubkey_Output_ and _Sign_Output_ go into a '
+              'hash and such transfers "are listed for every pair of Machines", but '
+              '<<KLEE-derive-endpoints>> lists no ML-DSA endpoint.')
 
 
 def _tamper_hint_padding(sig, ps):
@@ -900,6 +1099,7 @@ def t_negative_control():
 def main():
     print('KLEE ML-DSA known-answer tests (FIPS 204, [[KLEE-PQC-ML-DSA]])')
     t_sizes()
+    t_mdh()
     t_keygen()
     t_sign()
     t_verify()
@@ -907,7 +1107,8 @@ def main():
     t_compute_pubkey()
     t_tr_recompute_on_import()
     t_sign_verify_flow()
-    t_progress_agr10()
+    t_progress_mgr8()
+    t_derive()
     t_hint_checks()
     control_fired = not t_negative_control()
     print()
