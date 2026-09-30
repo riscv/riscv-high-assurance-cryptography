@@ -21,7 +21,7 @@ We refer to the KLEE Unprivileged Architecture for the definitions of KLEE instr
 [%header,cols="18%,45%,17%,10%,10%"]
 |===
 |  Extension       | Features                                                                                       | Defined in:                  | Minimum version | Lifecycle state
-| `Smklstatus`  | Defines the `*lclstatus` per-CL status-tracking CSRs.                                          | <<KLEE-CSR-lclstatus>>        | v0.0.0 | --
+| `Smklstatus`  | Defines the `*lclstatus` per-locker status-tracking CSRs.                                          | <<KLEE-CSR-lclstatus>>        | v0.0.0 | --
 | `Ssklstatus`  | The supervisor-visible part of `Smklstatus`: `slclstatus` and, with the H extension, `vslclstatus`. | <<KLEE-CSR-lclstatus>>   | v0.0.0 | --
 | `Smklcsk`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<KLEE-CSR-mklcsk>>          | v0.0.0 | --
 | `Smklpbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<Zkl-ISA-unpriv.adoc#KLEE-Localities>>). | <<KLEE-CSR-mklphysbootscrt>> | v0.0.0 | --
@@ -96,11 +96,11 @@ The actual numbers are TBD.
 |      | Illegal instruction, or virtual instruction | The KLEE grounds decided without accessing the state of the KLEE unit, listed first in <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>. They are defects in the encoding or the operands of the instruction. A virtual-instruction exception is raised in place of the illegal-instruction exception where `Smstateen` or the CSR access rules of the hypervisor extension so prescribe (<<KLEE-CSRs-priv>>). The `Smstateen` check precedes the `KLS`-Off check, which precedes the CSR privilege check.
 | TBD  | `kl_exc_fatal`                | Fatal system failure in the KLEE unit. Not delegable below M-mode.
 | TBD  | `kl_exc_no_csk`               | Use of the KLEE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>>, <<KLEE-CSR-mklcsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
-| TBD  | `kl_exc_CL_off`               | Any access, as defined in <<KLEE-CSR-lclstatus>>, to a CL whose `*lclstatus` field is _Off_. Not delegable below M-mode, whichever field is _Off_: the hardware does not know which mode holds the authoritative copy of the CL, so M-mode receives the exception and forwards it to the mode that owns the _Off_ field (see <<KLEE-CSR-lclstatus>>). Evaluated before every condition that requires the state of the KLEE unit. Enables on-demand (lazy) CL loading and trap-and-emulate. `kl_exc_unsupported` arises only from an opening `kl.mgmt`, which <<KLEE-CSR-lclstatus>> exempts from this gate: an unsupported Machine provisioned or imported into an _Off_ CL is reported to the emulator by `kl_exc_unsupported`, and every later access to the CL that <<KLEE-CSR-lclstatus>> does not exempt is reported by `kl_exc_CL_off` (<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>).
-|      | Illegal instruction            | The KLEE grounds that require the state of the KLEE unit, listed second in <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>. They are raised only once no fatal condition is pending, and after `kl_exc_no_csk` and `kl_exc_CL_off`.
+| TBD  | `kl_exc_locker_off`               | Any access, as defined in <<KLEE-CSR-lclstatus>>, to a locker whose `*lclstatus` field is _Off_. Not delegable below M-mode, whichever field is _Off_: the hardware does not know which mode holds the authoritative copy of the locker, so M-mode receives the exception and forwards it to the mode that owns the _Off_ field (see <<KLEE-CSR-lclstatus>>). Evaluated before every condition that requires the state of the KLEE unit. Enables on-demand (lazy) locker loading and trap-and-emulate. `kl_exc_unsupported` arises only from an opening `kl.mgmt`, which <<KLEE-CSR-lclstatus>> exempts from this gate: an unsupported Machine provisioned or imported into an _Off_ locker is reported to the emulator by `kl_exc_unsupported`, and every later access to the locker that <<KLEE-CSR-lclstatus>> does not exempt is reported by `kl_exc_locker_off` (<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>).
+|      | Illegal instruction            | The KLEE grounds that require the state of the KLEE unit, listed second in <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>. They are raised only once no fatal condition is pending, and after `kl_exc_no_csk` and `kl_exc_locker_off`.
 | TBD  | `kl_exc_unsupported`          | Unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>) when opening a provisioning or import.
-| TBD  | `kl_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<Zkl-ISA-unpriv.adoc#KLEE-Metadata>>. This includes any attempt to use, clone or restrict a CL in a Configuration State (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-usage-cr-config-state>>), which is forbidden at all privilege levels.
-| TBD  | `kl_exc_out_of_memory`        | Insufficient CLF capacity when opening a provisioning or import, cloning, or raising _SCProtection_ with `kl.restrict*`.
+| TBD  | `kl_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<Zkl-ISA-unpriv.adoc#KLEE-Metadata>>. This includes any attempt to use, clone or restrict a locker in a Configuration State (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-usage-cr-config-state>>), which is forbidden at all privilege levels.
+| TBD  | `kl_exc_out_of_memory`        | Insufficient KLF capacity when opening a provisioning or import, cloning, or raising _SCProtection_ with `kl.restrict*`.
 | TBD  | `kl_exc_unconfigured_buffer`  | Use of KLIOBUF as an input or an output while unconfigured. Where the MDH is taken from the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-mgmt>>), evaluated before every condition that depends on that MDH.
 |      | Load/store address breakpoint  | On the address of a component access of `kl.load`, `kl.store`, `kl.input` or `kl.output`, when that access is about to be performed; for the first component access, before the address-misaligned check.
 |      | Load/store address misaligned  | On the effective address of `kl.load`, resp. `kl.store`, before any component access (<<Zkl-ISA-unpriv.adoc#KLEE-Memory-Alignment>>); for `kl.input` and `kl.output`, as for an ordinary access on the implementation.
@@ -109,7 +109,7 @@ The actual numbers are TBD.
 
 The relative order of the standard exceptions is that of the Privileged Specification and is reproduced for reference only; the load/store address breakpoint and the load/store faults are evaluated per component access because the component addresses of a KLEE memory instruction are determined from the state of the KLEE unit.
 
-The `medeleg` and `hedeleg` bits corresponding to `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_CL_off` are read-only zero: these three causes are never delegated below M-mode. Those corresponding to `kl_exc_unsupported`, `kl_exc_out_of_memory`, `kl_exc_privilege_violation` and `kl_exc_unconfigured_buffer` are writable wherever `medeleg`, resp. `hedeleg`, is implemented, so that these causes can be delegated to S-mode and, with the H extension, to VS-mode.
+The `medeleg` and `hedeleg` bits corresponding to `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off` are read-only zero: these three causes are never delegated below M-mode. Those corresponding to `kl_exc_unsupported`, `kl_exc_out_of_memory`, `kl_exc_privilege_violation` and `kl_exc_unconfigured_buffer` are writable wherever `medeleg`, resp. `hedeleg`, is implemented, so that these causes can be delegated to S-mode and, with the H extension, to VS-mode.
 
 // [NOTE]
 // ====
@@ -132,11 +132,11 @@ high shadows — and up to 32 indirect CSRs on RV32, 16 on RV64.
 [float="center",align="center",options="header"]
 |===
 | Address     | Privilege  | Field                     | Description
-| 0xXXX       | MRW        | `mlclstatus`              | Per-CL dirtiness and accessibility tracking below M-mode; supports on-demand CL loading
+| 0xXXX       | MRW        | `mlclstatus`              | Per-locker dirtiness and accessibility tracking below M-mode; supports on-demand locker loading
 | 0xXXX       | MRW        | `mlclstatush`             | RV32 only: Shadow of the top 32 bits of `mlclstatus`
-| 0xXXX       | SRW        | `slclstatus`              | Per-CL dirtiness and accessibility tracking below S-mode; supports on-demand CL loading
+| 0xXXX       | SRW        | `slclstatus`              | Per-locker dirtiness and accessibility tracking below S-mode; supports on-demand locker loading
 | 0xXXX       | SRW        | `slclstatush`             | RV32 only: Shadow of the top 32 bits of `slclstatus`
-| 0xXXX       | HRW        | `vslclstatus`             | Per-CL dirtiness and accessibility tracking below VS-mode; supports on-demand CL loading
+| 0xXXX       | HRW        | `vslclstatus`             | Per-locker dirtiness and accessibility tracking below VS-mode; supports on-demand locker loading
 | 0xXXX       | HRW        | `vslclstatush`            | RV32 only: Shadow of the top 32 bits of `vslclstatus`
 | (Indirect)  | MRW        | `mklcsk{0..7}`           | KLEE Context Sealing Key.  CSRs "4" to "7" are RV32 only.
 | (Indirect)  | MRW        | `mklphysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret. CSRs "2" and "3" are RV32 only.
@@ -192,7 +192,7 @@ M-mode firmware must not clear `misa.L` without first zeroizing all KLEE state, 
 (((CSR,KLS field in sstatus)))
 A KLEE context status field, `KLS`, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25].
 It is defined analogously to the floating-point context status field, `FS`, and the vector context status field, `VS`,
-and tracks the dirtiness of the CLs, of the KLIOBUF and of every writable KLEE-specific CSR other than the `mklcsk` group.
+and tracks the dirtiness of the lockers, of the KLIOBUF and of every writable KLEE-specific CSR other than the `mklcsk` group.
 `mstatus.KLS` is always in effect; when V=1 the `vsstatus.KLS` field of <<KLEE-KLS-field-VS>> is
 in effect as well.
 
@@ -213,10 +213,10 @@ in effect as well.
 |===
 |Value |Name |Meaning
 |   0   | Off     | KLEE disabled. The KLEE state is inaccessible. Executing any KLEE instruction, or accessing any KLEE-specific CSR other than the read-only identification CSRs of <<Zkl-ISA-unpriv.adoc#KLEE-CSRs-unpriv>>, raises an illegal-instruction exception.
-|   1   | Initial | KLEE enabled. Every CL is _Unconfigured_, and every other state tracked by the field holds its reset value. The hart may issue any KLEE instruction.
+|   1   | Initial | KLEE enabled. Every locker is _Unconfigured_, and every other state tracked by the field holds its reset value. The hart may issue any KLEE instruction.
 |   2   | Clean   | KLEE enabled. The state tracked by the field is potentially different from its reset value, but matches the last context swap.
-|   3   | Dirty   | KLEE enabled. At least one CL, KLIOBUF, or KLEE-specific CSR may have changed since the last context swap.
-Unconfigured CLs that were previously configured also cause `KLS` to become Dirty, since context-switching code must erase any stale saved state.
+|   3   | Dirty   | KLEE enabled. At least one locker, KLIOBUF, or KLEE-specific CSR may have changed since the last context swap.
+Unconfigured lockers that were previously configured also cause `KLS` to become Dirty, since context-switching code must erase any stale saved state.
 |===
 
 
@@ -233,7 +233,7 @@ KLEE unit relies on it. The `*lclstatus` fields and `KLS` fields that an instruc
 NOTE: Precise management of `mstatus.KLS` is an optimization that software may use to reduce context-switch overhead.
 
 Writes to a `KLS` field do not modify any KLEE state.
-Setting a field to Off, Initial, or Clean does not clear CLs, KLIOBUF, or KLEE CSRs;
+Setting a field to Off, Initial, or Clean does not clear lockers, KLIOBUF, or KLEE CSRs;
 any state changes must be explicit and must precede such a write.
 
 // ////////////////////////////////////////////////////////////////////
@@ -258,7 +258,7 @@ for the purposes of state tracking, and hence writes to `vsstatus.KLS` do not se
 (((CSR, `mlclstatus`)))
 (((CSR, `slclstatus`)))
 (((CSR, `vslclstatus`)))
-The 64-bit registers `mlclstatus`, `slclstatus`, and `vslclstatus` track per-CL status, including dirtiness, at all levels below M-mode, S-mode, and VS-mode, respectively.
+The 64-bit registers `mlclstatus`, `slclstatus`, and `vslclstatus` track per-locker status, including dirtiness, at all levels below M-mode, S-mode, and VS-mode, respectively.
 
 For each of these three CSRs:::
 `*lclstatus`(__i__) = `*lclstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible status values for ``K(``__i__``)``, as described in the following table.
@@ -269,22 +269,22 @@ For each of these three CSRs:::
 [float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
 |===
 | Value | Name           | Behavior
-|   0   | Off            | The CL is inaccessible.
-|   1   | Initial        | The CL is accessible and in an initial state as defined by software.
-|   2   | Clean          | The CL is accessible and its state matches the last context swap.
-|   3   | Dirty          | The CL is accessible and its state may not match the last context swap.
+|   0   | Off            | The locker is inaccessible.
+|   1   | Initial        | The locker is accessible and in an initial state as defined by software.
+|   2   | Clean          | The locker is accessible and its state matches the last context swap.
+|   3   | Dirty          | The locker is accessible and its state may not match the last context swap.
 |===
 --
 +
-`*lclstatus` is evaluated after the illegal-instruction grounds that do not require KLEE unit state (the first group of <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, and `kl_exc_no_csk`, but before all other conditions, including the second group of <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>> and Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-gate-order>>. The hardware state of a CL with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the CL.
+`*lclstatus` is evaluated after the illegal-instruction grounds that do not require KLEE unit state (the first group of <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, and `kl_exc_no_csk`, but before all other conditions, including the second group of <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>> and Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-gate-order>>. The hardware state of a locker with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
-A KLEE instruction _accesses_ ``K(``__i__``)`` if it names the CL as an operand, directly or through a GPR, or if the instruction is `kl.clearall`. An access to a CL with an _Off_ field in effect raises `kl_exc_CL_off`, with the following exceptions: a `kl.mgmt` opening a provisioning or import, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` as a destination access. These operations do not depend on the CL's contents and set every field in effect for that CL to _Dirty_, even if the CL was already _Unconfigured_. However, a `kl.clone` or `kl.rename` with identical source and destination executes without setting any field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the CL.
+A KLEE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or through a GPR, or if the instruction is `kl.clearall`. An access to a locker with an _Off_ field in effect raises `kl_exc_locker_off`, with the following exceptions: a `kl.mgmt` opening a provisioning or import, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` as a destination access. These operations do not depend on the locker's contents and set every field in effect for that locker to _Dirty_, even if the locker was already _Unconfigured_. However, a `kl.clone` or `kl.rename` with identical source and destination executes without setting any field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
 +
-A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware CL as authoritative: a mode that held the authoritative image of the CL for lazy loading discards it, and M-mode, which alone emulates a CL, discards the emulated copy it held for it (<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>).
+A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware locker as authoritative: a mode that held the authoritative image of the locker for lazy loading discards it, and M-mode, which alone emulates a locker, discards the emulated copy it held for it (<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>).
 +
-`kl.getmd*` on a CL with an _Off_ field in effect traps like any other access. An implementation may return the MDH without trapping only if the result matches what the trap and subsequent restore would have produced.
+`kl.getmd*` on a locker with an _Off_ field in effect traps like any other access. An implementation may return the MDH without trapping only if the result matches what the trap and subsequent restore would have produced.
 +
-A mode marks a CL _Off_ only while it holds the authoritative image or emulates the CL; the hardware contents of an _Off_ CL are never the sole copy of a CC. A handler that has not yet saved a CL leaves its field _Clean_ or _Dirty_.
+A mode marks a locker _Off_ only while it holds the authoritative image or emulates the locker; the hardware contents of an _Off_ locker are never the sole copy of a CC. A handler that has not yet saved a locker leaves its field _Clean_ or _Dirty_.
 
 For `mlclstatus`:::
 +
@@ -292,7 +292,7 @@ For `mlclstatus`:::
 When the privilege mode is (H)S, VS or U/VU:
 
 * Accesses to ``K(``__i__``)``
-when `mlclstatus`(__i__) is 0 (Off) raise a `kl_exc_CL_off` exception.
+when `mlclstatus`(__i__) is 0 (Off) raise a `kl_exc_locker_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `mlclstatus`(__i__) to Dirty.
 
@@ -308,7 +308,7 @@ For `slclstatus`:::
 When the privilege mode is VS, U, or VU:
 
 * Accesses to ``K(``__i__``)``
-when either `mlclstatus`(__i__) or `slclstatus`(__i__) is 0 (Off) raise a `kl_exc_CL_off` exception.
+when either `mlclstatus`(__i__) or `slclstatus`(__i__) is 0 (Off) raise a `kl_exc_locker_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `slclstatus`(__i__) and `mlclstatus`(__i__) to Dirty.
 
@@ -328,7 +328,7 @@ When V=1, `vslclstatus` substitutes for `slclstatus`: CSR accesses that would ta
 When the privilege mode is VU:
 
 * Accesses to ``K(``__i__``)``
-when any one of `mlclstatus`(__i__), `vslclstatus`(__i__), or `slclstatus`(__i__) is 0 (Off) raise a `kl_exc_CL_off` exception.
+when any one of `mlclstatus`(__i__), `vslclstatus`(__i__), or `slclstatus`(__i__) is 0 (Off) raise a `kl_exc_locker_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `vslclstatus`(__i__), `slclstatus`(__i__) and `mlclstatus`(__i__) to Dirty.
 
@@ -339,12 +339,12 @@ Any direct write to `vslclstatus`(__i__) does not change either `mlclstatus`(__i
 
 The `*lclstatus` fields that an instruction sets to Dirty are those in effect, that is those owned by the privilege modes above the one in which it executes; an instruction never writes the field owned by its own mode.
 
-`kl_exc_CL_off` is a single exception cause and is not delegable below M-mode, whichever `*lclstatus` field is _Off_: raising it, the hardware does not know which mode holds the authoritative copy of the CL. The M-mode handler examines the fields in effect in the order `mlclstatus`, `slclstatus`, `vslclstatus`. If `mlclstatus`(__i__) is _Off_, it resolves the condition itself, and otherwise forwards the exception to the most privileged mode whose field is _Off_, which owns that field and can write it.
-A handler therefore never services `kl_exc_CL_off` for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
+`kl_exc_locker_off` is a single exception cause and is not delegable below M-mode, whichever `*lclstatus` field is _Off_: raising it, the hardware does not know which mode holds the authoritative copy of the locker. The M-mode handler examines the fields in effect in the order `mlclstatus`, `slclstatus`, `vslclstatus`. If `mlclstatus`(__i__) is _Off_, it resolves the condition itself, and otherwise forwards the exception to the most privileged mode whose field is _Off_, which owns that field and can write it.
+A handler therefore never services `kl_exc_locker_off` for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
 
 [NOTE]
 ====
-The _Off_ value and the `kl_exc_CL_off` exception provide an architectural hook for on-demand (lazy) CL loading. At context restore, a handler may leave a CL unrestored, set its `*lclstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `kl_exc_CL_off` to M-mode, which forwards it to the mode that owns the _Off_ field; that handler then imports the SCC before resuming execution. The architecture defines no separate “lazy” state: software that marks a CL _Off_ is responsible for ensuring that the authoritative SCC is restored.
+The _Off_ value and the `kl_exc_locker_off` exception provide an architectural hook for on-demand (lazy) locker loading. At context restore, a handler may leave a locker unrestored, set its `*lclstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `kl_exc_locker_off` to M-mode, which forwards it to the mode that owns the _Off_ field; that handler then imports the SCC before resuming execution. The architecture defines no separate “lazy” state: software that marks a locker _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -427,7 +427,7 @@ When the H extension is implemented, `vskllocality` substitutes for `skllocality
 CSR accesses that would target `skllocality` instead access `vskllocality`, analogously to
 `vsstatus` and `sstatus` and to `vslclstatus` (<<KLEE-CSR-lclstatus>>), and _SLocality_ then
 denotes its value (<<Zkl-ISA-unpriv.adoc#KLEE-Localities>>). Like the other VS CSRs, `vskllocality` is accessible
-from HS-mode and M-mode, and a hypervisor saves and restores it with them. Software that exports CLs on behalf of a lower privilege level configures every SW Filter Group register it owns before doing so: an export whose CC names an unconfigured entry yields an SCC that no import accepts (<<Zkl-ISA-unpriv.adoc#KLEE-Localities>>). Before running software not entrusted with the CCs of the virtual machine loaded, a hypervisor writes `zeros(128)`, or a value that no virtual machine uses, to `hkllocality` and `hklvirtbootscrt`.
+from HS-mode and M-mode, and a hypervisor saves and restores it with them. Software that exports lockers on behalf of a lower privilege level configures every SW Filter Group register it owns before doing so: an export whose CC names an unconfigured entry yields an SCC that no import accepts (<<Zkl-ISA-unpriv.adoc#KLEE-Localities>>). Before running software not entrusted with the CCs of the virtual machine loaded, a hypervisor writes `zeros(128)`, or a value that no virtual machine uses, to `hkllocality` and `hklvirtbootscrt`.
 
 The Locality CSR groups are readable at their respective privilege levels.
 Context-switching software saves and restores them like any other CSR.

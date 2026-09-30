@@ -22,7 +22,7 @@ KLEE's main features are:
 
 * To mitigate key misuse, KLEE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, expiration date, or other policies.
 
-* To implement CCs, KLEE introduces _Cryptographic Lockers_ (CLs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CL. KLEE instructions operate on CLs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, and also benefit from higher performance and side-channel-protected implementations when available.
+* To implement CCs, KLEE introduces _Cryptographic Lockers_—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a locker. KLEE instructions operate on lockers instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, and also benefit from higher performance and side-channel-protected implementations when available.
 
 * Cryptographic operations are performed _atomically_ to avoid leaking data through architectural side-channels.
   Instructions can be interrupted only between cryptographic operations, or at the points that the algorithms they execute define for their long-running operations.
@@ -37,7 +37,7 @@ KLEE's main features are:
 
 * KLEE provides a secure mechanism to store a CC to memory via authenticated
   encryption, producing a _Sealed Cryptographic Context_ (SCC). Once generated,
-  an SCC can later be re-imported into a CL. If an SCC is passed to a process
+  an SCC can later be re-imported into a locker. If an SCC is passed to a process
   in place of the key value, the key is not exposed in that process's memory.
 
 * KLEE scales from embedded to server cores with a unified ISA and ABI.
@@ -103,7 +103,7 @@ Group A — items requiring closure by the RISC-V Architecture Review Committee 
   `kl.output`.
   For `kl.load` and `kl.store` we use two `funct3` slots of `JALR` and `STORE`, respectively.
 +
-`kl.load` under JALR `funct3` 6/7 is an I-type encoding whose `rd` is a CL number rather than a GPR.
+`kl.load` under JALR `funct3` 6/7 is an I-type encoding whose `rd` is a locker number rather than a GPR.
 Tools that decode JALR generically may mis-disassemble it (but in theory they should check `funct3` first).
 +
 A second option for `kl.size`, `kl.avail`, `kl.getmd*`, `kl.setmd*`, `kl.restrict*`, and `kl.clone`
@@ -128,8 +128,8 @@ A second option for `kl.size`, `kl.avail`, `kl.getmd*`, `kl.setmd*`, `kl.restric
   is to be determined by the ARC.
 
 . *Exception cause codes.* The ARC must allocate `mcause` values: individual causes, or a single
-  KLEE cause with a subcause register. Some form of “`mvalue`” reporting the CL number is also
-  needed; it would spare handlers from decoding direct and indirect CL references.
+  KLEE cause with a subcause register. Some form of “`mvalue`” reporting the locker number is also
+  needed; it would spare handlers from decoding direct and indirect locker references.
 
 . *KLV scope.* <<Zkl-ISA-unpriv.adoc#KLEE-KLV>> defines the vector subset KLEE requires, which we consider complete.
   The following questions do not block candidacy but must be resolved; we request ARC feedback.
@@ -174,7 +174,7 @@ Group B — open design questions owned by this task group.:::
 . *`kl.mgmt` interruptibility.* `kl.mgmt` can be relatively long-running, though not on the order of ECC
   scalar multiplication or signature verification. It is currently uninterruptible: preemption and
   resumption of `kl.mgmt` may introduce new attack vectors. Interrupting the internal encryption or decryption
-  process complicates export, as a CL may contain both encrypted and unencrypted content,
+  process complicates export, as a locker may contain both encrypted and unencrypted content,
   and unencrypted content cannot be exported as such.
   We do not think there is a secure way to interrupt `kl.mgmt` precisely except by having the KLEE unit work on internal copy.
 
@@ -185,24 +185,24 @@ Group B — open design questions owned by this task group.:::
 // One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
 . *Additional inputs for random key generation.* KDFs that accept arbitrary inputs and produce
-  unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a CL's
+  unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a locker's
   key field. Should standard KDFs be defined?
 
 . *`SCC_Encrypt` security claim.* Substantiate the claim “secure for up to 2^64^ 128-bit blocks.”
 
 . *Last block.* Should Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-load-long-field>> handle a “last block”?
 
-. *CLF capacity.* Residual CLF capacity is not discoverable.
-  The capacity used by a CL depends on the implementation's internal representation (ADS size, number
+. *KLF capacity.* Residual KLF capacity is not discoverable.
+  The capacity used by a locker depends on the implementation's internal representation (ADS size, number
   of shares of a masked implementation), so exact requirements are impossible; the task group may
   discuss approximate mechanisms. We could extend `kl.size`/`kl.avail` to return whether there is
   sufficient capacity available for a given provision/import/clone operation, and whether implementations
-  can offer to suggest which CL to free first except a given one (for instance, the current largest, or
+  can offer to suggest which locker to free first except a given one (for instance, the current largest, or
   the one that has not been used longest). Intel may cache keys; we have to manage them explicitly.
 
 . *Random material in exportable States.* Compare and streamline Rules
   <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>>, <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-atomic-randomness>> and
-  <<Zkl-ISA-unpriv.adoc#KLEE-GR-opening-cr-when>>, and establish how to implement “No State from which the CL can be
+  <<Zkl-ISA-unpriv.adoc#KLEE-GR-opening-cr-when>>, and establish how to implement “No State from which the locker can be
   exported or cloned holds random material that could be consumed against an input other than the
   one it was drawn for.”
 //  An implementation may, for instance, record in the ADS the _State_ the
