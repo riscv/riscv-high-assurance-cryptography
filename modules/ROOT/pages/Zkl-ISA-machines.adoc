@@ -426,18 +426,26 @@ significant bits of `INPUT` are considered, and the rest are ignored. The width 
 the block size `b`.
 
 MGR6:: When a state writes fewer than `KLLEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
-cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
-tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLEE-KLV>>, are a separate matter.
+cleared. This concerns the bits *within* the operand; the elements beyond `VL` are governed by the
+tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLEE-KLV>>.
 
-[[KLEE-MGR-load-long-field,MGR7]] MGR7:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `kl.exec`
-instructions records the amount transferred so far in a state field _W_ (e.g., _MachineUse_ of
-the MDH). Each such state names _W_ and its unit, bits or bytes. _W_ is zeroed on entry, rises
-monotonically, and is not reset when the field completes; entering a loading state also zeroes the
-field, so that reloading replaces it. Where the loading is performed by `process_VLI`
+[[KLEE-MGR-load-long-field,MGR7]] MGR7:: A State _X_ that loads a long field from `INPUT`, or emits one to
+`OUTPUT`, using multiple `kl.exec` instructions records the amount transferred so far in a state
+field _W_ (e.g., _MachineUse_ of the MDH).
++
+Each such state names the field _W_ and its unit, bits or bytes.
++
+Upon entering State _X_, _W_ is zeroed.
+_W_ rises monotonically by the amount of data transferred by
+`kl.exec` (i,.e., `KLLEN` or `KLLEN/8`), and is not reset when the field completes.
++
+Entering a loading state also zeroes the field, so that reloading replaces it.
++
+Where the loading is performed by `process_VLI`
 (<<KLEE-process-VLI>>), it is invoked with `block` = `state` = the field, `max_len` = `b` = `n` = its
 size, `cumul_len` = _W_, `mode` = `assign`, and `process_block` and `finalize` both equal to `None`.
 +
-Once _W_ reaches the size of the field, the transfer is complete. Unless the state defines a
+Once _W_ reaches the size of the field, the transfer is complete. Unless State _X_ defines a
 transition of its own at that point, no further `kl.exec` is allowed in it and issuing one
 transitions the locker to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
 emitting `kl.exec` that would carry _W_ past the field size invalidates the locker. Where _W_ is a
@@ -445,9 +453,15 @@ field of the MDH, `kl.restrict*` may not write it (<<Zkl-ISA-unpriv.adoc#KLEE-in
 
 [[KLEE-MGR-progress-discard,MGR8]] MGR8:: _Interrupted long-running operations._
 A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>> admits, besides `kl.setst`, only that one instruction Form.
-Each Machine designates one field _P_ that is zero whenever no such operation is interrupted and non-zero from the first precise halt of one until its completion; the encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt is never zero.
++
+Each Machine in which `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>>
+designates one field _P_ that is zero whenever no such operation is interrupted and non-zero from the first precise halt of one until its completion.
++
+The encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt is never zero.
++
 Every random value and every intermediate value kept for the operation, in a state field or in the ADS, is meaningful only while _P_ is non-zero.
 _P_ is zeroed, and that material destroyed, on every transition of the locker's _State_, including a same-State `kl.setst`, a transition to _Ready_ or to an Error State, on completion of the operation, and by an import that discards the ADS; it is not changed by an interrupt, by export, import or `kl.clone`, or by re-execution of the instruction.
++
 The instruction issued in such a State resumes the interrupted operation if _P_ is non-zero and starts a new one, drawing fresh random values, if it is zero.
 
 // ////////////////////////////////////////////////////////////////////
@@ -3366,11 +3380,16 @@ The parameters for the defined curves are:
   ** secp256r1 (NIST P-256): `b` = `h` = `j` = 256, `u` = `v` = 2.
   ** secp384r1 (NIST P-384): `b` = `h` = `j` = 384, `u` = `v` = 2.
   ** secp521r1 (NIST P-521): `b` = 576 (55 msbs set to zero), `h` = `j` = 576 (55 msbs set to zero), `u` = `v` = 2.
- * Edwards cite:[RFC8032,nist-fips-186-5]:
+* Edwards cite:[RFC8032,nist-fips-186-5]:
   ** ed25519:  `b` = 256, `h` = 512; `u` = 1, `v` = 2.
   ** ed448: `b` = 456, `h` = 512; `u` = 1, `v` = 2.
-+
---
+* Brainpool cite:[RFC5639,RFC8734]:
+  ** brainpoolP256r1: `b` = `h` = `j` = 256; `u` = `v` = 2.
+  ** brainpoolP384r1: `b` = `h` = `j` = 384; `u` = `v` = 2.
+  ** brainpoolP512r1: `b` = `h` = `j` = 512; `u` = `v` = 2.
+* SM2 cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012]: `b` = `h` = `j` = 256; `u` = `v` = 2.
+
+Depending on the specification of the algorithm, non-compressed or compressed points may be used:
 For the Edwards curves, `u` = 1 because a point is transmitted in the compressed form of
 cite:[RFC8032] {sect}5, a single `b`-bit string, and `v` = 2 because a signature is the pair
 (`R`, `S`), each a `b`-bit string: an Ed25519 signature is 512 bits and an Ed448
@@ -3378,14 +3397,6 @@ signature 912 bits. Note that `b` = 456 for ed448, the compressed point and each
 signature component being 57 bytes rather than 56. `h` = 512 for both because the `Hash`
 field, in pre-hash mode, holds the 64-byte `PH(M)`; no value of `j` is given because
 these curves do not use `RndNum` (cf. <<KLEE-EdDSA>>).
---
- * Brainpool cite:[RFC5639,RFC8734]:
-  ** brainpoolP256r1: `b` = `h` = `j` = 256; `u` = `v` = 2.
-  ** brainpoolP384r1: `b` = `h` = `j` = 384; `u` = `v` = 2.
-  ** brainpoolP512r1: `b` = `h` = `j` = 512; `u` = `v` = 2.
- * SM2 cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012]: `b` = `h` = `j` = 256; `u` = `v` = 2.
-
-Depending on the specification of the algorithm, non-compressed or compressed points may be used.
 
 All curves specified here are defined over prime fields.
 Since the all-ones `b`-bit string does not represent any valid field value, it is used as the coordinate value(s) of a point to represent the point at infinity.
@@ -3430,7 +3441,7 @@ Data Structures:::
 The *Provisioning Input* contains only the MDH.
 
 * *Internal State*:
-  ** `OutputType`: Bool.
+ ** `OutputType`: Bool.
  ** `Progress`: integer, held in bits [15:1] of the MDH field _MachineUse_. Used only
     for the implementation-defined tracking of long-running operations described above; it is
     the field _P_ of Rule <<KLEE-MGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
@@ -3439,7 +3450,7 @@ The *Provisioning Input* contains only the MDH.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
  ** `SecondPt` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
     For signature verification and for multiplication by an unknown point, `SecondPt`
-    holds the public key, resp., the peer point.
+    holds the public key, resp., the a common shared point.
  ** `Scalar`: `b`-bit string.
  ** If signature generation or verification is allowed:
   *** `Signature` (R,S): two `b`-bit strings representing the `R` and `S` components.
@@ -3509,8 +3520,8 @@ State Machine::: {empty}
 * *States:*
 Besides
 _Ready_ (1),
-_Success_ (22),
-_Failure_ (23),
+_Success_ (46),
+_Success_ (47),
 ECC Machines define:
  ** _Set_Generator_ (2)
  ** _Set_Scalar_ (3)
@@ -3603,7 +3614,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
  ** In State _Point_Mul_, a single Form D ``kl.exec Kn|K(Xn)`` performs a scalar
     multiplication:
 
-  . If `Scalar` does not hold a value with `1` {le} `int(Scalar)` < `n`, the locker
+  . If `Scalar` does satisfy `1` {le} `int(Scalar)` < `n`, the locker
     transitions to Error State _Invalid_.
   . The base point `P` is `SecondPt` if `HasSecondPt` is set (multiplication by an
     unknown point, e.g., a Diffie-Hellman peer value), and `Generator` otherwise
@@ -3712,14 +3723,13 @@ invocations take material the caller does not hold:
 `{fournbsp}{fournbsp}` `r{nbsp}`  = `H(dom {vvert} prefix {vvert} M)`, where `prefix` is secret, and +
 `{fournbsp}{fournbsp}` `k'` = `H(dom {vvert} R {vvert} A {vvert} M)`, where `R` = `r` {interpunct} `B` is computed inside.
 
-The KLEE unit therefore performs the hashing itself. This subsection states the
+The Machine therefore needs to perform the hashing itself. This subsection states the
 consequences; everything not restated here follows <<KLEE-ECC>>.
 
 Parameters:::
 
 * `H` is `SHA-512` for ed25519 and `SHAKE256`, with a 114-byte output, for ed448.
-* The private key is the *seed*: 32 bytes for ed25519 and 57 for ed448, in both cases
-  exactly `b` bits, held in the `Scalar` field.
+* The size of the private key, or *seed*, in bits is given by `b`, which is 256 bits (32 bytes) for ed25519 and 456 bits (57 bytes) for ed448.
 * `dom` is `dom2(x, ctx)` for ed25519 and `dom4(x, ctx)` for ed448, as defined in
   cite:[RFC8032] {sect}2 and {sect}5.2, with `x` = 0 in pure mode and 1 in pre-hash mode.
   For ed25519 in pure mode with an empty context, `dom` is the empty string.
@@ -3785,12 +3795,9 @@ The public key `A` is likewise derived from the seed, or cached in the ADS.
 |===
 
 `r` is present unconditionally, and holds zero whenever no signing operation is in progress.
-Making its presence conditional on `msg_pass` would be unimplementable: `msg_pass` is carried in
-the Content, at Position xi, so the length of the Content could not be computed without first
-decrypting it, whereas <<Zkl-ISA-unpriv.adoc#KLEE-length-rule>> requires that length to follow from bits [63:0] of the
-MDH alone. `r` is `b` bits — 32 bytes for ed25519 and 57 for ed448 — which is a negligible
-addition to an SCC of this size, and it remains confidential in either case, being carried in the
-encrypted `Content`.
+Making its presence conditional on `msg_pass` would only increase the complexity of the Machine.
+`r` is `b` bits (256 for ed25519 and 456 for ed448) which is a small addition to an SCC
+of this size, and it remains confidential in either case, being carried in the encrypted `Content`.
 --
 
 State Machine:::
@@ -3818,10 +3825,11 @@ State Machine:::
 
 ** To transition to State _Set_Ctx_, a Form B `kl.setst` is used whose auxiliary
    argument `Xs` sets `ctxlen`. Values greater than 255 cause the locker to transition to
-   Error State _Invalid_. If `ctxlen` {ne} 0, the `ctx` value is then loaded with
+   Error State _Invalid_.
++
+If `ctxlen` {ne} 0, the `ctx` value is then loaded with
    (multi-block) Form B `kl.exec` instructions, following Rule <<KLEE-MGR-load-long-field>>
-   as the _Set_ states of
-   <<KLEE-ECC>> do, with the progress recorded in `block_base`.
+   as the _Set_ states of <<KLEE-ECC>> do, with the progress recorded in `block_base`.
 
 ** To enter State _Msg_Absorb_ (pure mode only), a Form B `kl.setst` is used whose auxiliary
    argument `Xs` selects the pass:
@@ -3845,10 +3853,13 @@ State Machine:::
    in signing pass 2, into `H'` — through Procedure `process_VLI`
    (cf. <<KLEE-process-VLI>>), invoked as +
    `{fournbsp}` `process_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, cumul_len, process_block(), None, mode)`, +
-   where `block`, `b`, `state`, `n`, `block_base` and `cumul_len` are the buffer, block size,
+   where:
+  *** `block`, `b`, `state`, `n`, `block_base` and `cumul_len` are the buffer, block size,
    state, state size, and partial-block and cumulative-length counters of the hash instance;
-   `process_block()` applies its compression function; `cumul_len` is tracked because the unit
-   finalizes the hash itself, appending the padding and length at pass finalization; and `mode` is
+  *** `process_block()` applies its compression function;
+  *** `cumul_len` is tracked because the unit
+   finalizes the hash itself, appending the padding and length at pass finalization; and
+  *** `mode` is
    `assign` for ed25519, whose `H` is `SHA-512` (<<KLEE-SHA-2>>), and `xor_accumulate` for ed448,
    whose `H` is `SHAKE256` (<<KLEE-SHA-3>>).
 
@@ -4014,8 +4025,8 @@ State Machine:::
 * *States:*
 Besides
 _Ready_ (1),
-_Success_ (22),
-_Failure_ (23),
+_Success_ (46),
+_Success_ (47),
 ML-KEM Machines define:
  ** _GenerateKeyPair_ (2)
  ** _Encapsulate_ (3)
@@ -4091,19 +4102,10 @@ progress recorded in _MachineUse_. Both fields are public, so no restriction app
 are written.
 
 ** The `kl.derive` instruction (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>) is used to move the shared key from
-this CC into a secret field of a second locker, without it becoming visible to software.
-`sharedkey` is the only exportable field of an ML-KEM CC, and its index is 1.
-The instruction is of `Form` `00` — an exportable field of the source into a secret field of the
-destination — with the source index `i` = 1 and the destination index `j` naming the key field of
-the destination CC.
+this CC into a key field of a destination locker, without it becoming visible to software.
+`sharedkey` is the only exportable field of an ML-KEM CC.
 The destination CC must have been provisioned beforehand with a supported single-key Machine that
 accepts a key of at most 256 bits, and must be in State _Ready_.
-`length` gives the number of bytes transferred: if the key of the destination Machine is `m` bits
-long, `length` = {lceil}``m``/8{rceil} and the `m` least significant bits of the shared key are used.
-// The destination CC's _UsagePolicy_ and _Locality_ must satisfy the requirement recorded in the
-// _AuxInfo_ field of this CC, as described above.
-// ** Any policy restriction applied to the ML-KEM locker is not applied to the _AuxInfo_ field. The only way to properly configure them
-// independently is through locker provisioning.
 
 //
 
@@ -4228,8 +4230,8 @@ State Machine::: {empty}
 * *States:*
 Besides
 _Ready_ (1),
-_Success_ (22),
-_Failure_ (23),
+_Success_ (46),
+_Success_ (47),
 ML-DSA Machines define:
  ** _GenerateKeyPair_ (2)
  ** _pubkey_Output_ (3)
@@ -4324,10 +4326,40 @@ An attempt to clear the field using `kl.restrictl` causes the locker to transiti
 [[KLEE-derive-endpoints]]
 == Derivation Endpoints of the Machines
 
-[WARNING]
-====
-This section is *work in progress*.
-It will contain a summary of the `kl.derive` endpoints.
-====
+The admissible derivation endpoints
+For the Machines defined in this Chapter, the `kl.derive` endpoints are
+are listed in <<KLEE-defined-derivation-endpoints>>.
+
+[[KLEE-defined-derivation-endpoints]]
+.Derivation Endpoints of the Architected Machines
+[float="center",align="center",width="100%",cols="<48%,<16%,<16%,<20%",options="header"]
+|===
+| Machine(s) | Transferrable Field/Operation | Role  |  State
+
+| ECB mode (<<KLEE-ECB-mode>>), Keystream generation (<<KLEE-keystream-modes>>), GCM mode (<<KLEE-GCM-mode>>), GCM-SIV mode (<<KLEE-GCM-SIV-mode>>), CMAC mode (<<KLEE-CMAC-mode>>), OCB mode (<<KLEE-OCB-mode>>), Ascon AEAD128 mode (<<KLEE-Ascon-AEAD128>>) | `key` | destination | _Ready_
+
+| GCM mode (<<KLEE-GCM-mode>>) | IV/`J0` | destination | _Set_Aux_Value_
+
+| OCB mode (<<KLEE-OCB-mode>>) | `nonce` | destination | _Set_Aux_Value_
+
+| Tweakable mode (<<KLEE-tweakable>>) | `key1` {vvert}  `key2` | destination | _Ready_
+
+| HMAC, NIK variant (<<KLEE-HMAC>>) | `K0` (1)  | destination | _Ready_
+
+.2+| Hash functions, MACs, XOFs (<<KLEE-hash-functions-MACs-XOFs>>), such as SHA-2, SHA-3, SM3, SHAKE,
+as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XOF128>>), and Ascon-CXOF128 (<<KLEE-Ascon-CXOF128>>)
+| `kl.exec` output  | source | _Hash_Output_
+| `kl.exec` input | destination | _Hash_Absorb_
+
+| Elliptic Curve (<<KLEE-ECC>>) | `SecondPt` | source | if `HasSecondPt` is true
+
+| ML-KEM (<<KLEE-PQC-ML-KEM>>) | `sharedkey`  | source | any
+|===
+
+Any combination of source and destination is admissible as long as the Rules in <<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>> are satisfied.
+This is particularly useful for instance, to implement integrated encryption schemes by extracting fields from an ECC or ML-KEM Machine directly
+into an encryption/decryption Machine, or piping them together with auxiliary information through Hash or XOF functions.
+
+Using `kl.derive` to set initialization vectors or nonces is supported for GCM and OCB modes in case these values are transferred, for instance, in an encrypted format.
 
 // ////////////////////////////////////////////////////////////////////
