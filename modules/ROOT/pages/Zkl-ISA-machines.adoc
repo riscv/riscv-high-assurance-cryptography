@@ -190,6 +190,8 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 11   | 3    | PQC: `ML-DSA-44` and `HashML-DSA-44`          | `Zklmldsa44s`
 | 11   | 4    | PQC: `ML-DSA-65` and `HashML-DSA-65`          | `Zklmldsa65s`
 | 11   | 5    | PQC: `ML-DSA-87` and `HashML-DSA-87`          | `Zklmldsa87s`
+//
+// | 12   | 0    | Local DBRG                                    | `Zkldbrg`
 4+<| *Note on the HMAC variants.* In every HMAC Machine, the lower of the two Types selects the “No Initial Key” (NIK)
 variant and the higher one the “Key In PI” (KIP) variant (<<KLEE-HMAC>>). A NIK variant must
 have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid metadata.
@@ -472,9 +474,41 @@ As a general rule, the caller must pad inputs shorter than a full vector length 
 
 Cryptographic inputs are normally supplied through GPRs or vector registers in whole bytes. Standards that permit arbitrary bit lengths are supported by specifying the bit length of the final input piece—usually as a `kl.setst` parameter. The Machine then truncates that input internally to the specified length. Outputs are not necessarily truncated; the caller must discard any excess bits.
 
-This occurs, for instance, with the `last_blk_len` parameters in <<KLEE-GCM-mode>>, <<KLEE-GCM-SIV-mode>>, <<KLEE-OCB-mode>>, <<KLEE-Ascon-AEAD128>>, and <<KLEE-hash-functions>>. Such a parameter specifies a truncation of the passed input, not its length, with the only restriction being that `KLLEN` ≥ `last_blk_len`. Procedure `process_VLI` receives field lengths in bits, but what is received through the `kl.exec` instructions is always at byte granularity, and the last input may be internally truncated.
+This occurs, for instance, with the `last_blk_len` parameters in <<KLEE-GCM-mode>>, <<KLEE-GCM-SIV-mode>>, <<KLEE-OCB-mode>>, <<KLEE-Ascon-AEAD128>>, and <<KLEE-hash-functions-MACs-XOFs>>. Such a parameter specifies a truncation of the passed input, not its length, with the only restriction being that `KLLEN` ≥ `last_blk_len`. Procedure `process_VLI` receives field lengths in bits, but what is received through the `kl.exec` instructions is always at byte granularity, and the last input may be internally truncated.
 
 Where a standard's formula requires a bit count, it is obtained by multiplying the byte count by 8, as with the length block of GHASH in <<KLEE-GCM-mode>>.
+
+// ////////////////////////////////////////////////////////////////////
+
+// [[KLEE-DRBG]]
+// == Deterministic Random Bit Generator
+//
+// This Machine defines a deterministic random bit generator (DRBG) that can be used to generate random numbers.
+// It must be based on a NIST SP 800-90A Rev. 1 cite:[nist-SP-800-90-r1] and correspond to a Security Strength
+// of 256 bits.
+//
+// The *Provisioning Input* consist only of the MDH.
+//
+// The *Internal State* may contain all the necessary data for the DRBG to function.
+//
+// The *Serialized Content* consist only of the MDH.
+//
+// State Machine:::
+//
+// * *States:*
+//  ** _Ready_: The CC is ready.
+//
+// * *Allowed State Transitions:*
+//  ** None.
+//
+// * *Behavior:*
+//  ** When the locker is provisioned or a SCC is imported into it, the internal state of the Machine obtains new true random bits from the underlying RNG and is accordingly initialized.
+//  ** This is the only algorithm that allows ``kl.exec`` instructions in State _Ready_.
+//     In State _Ready_, (multi-block) ``kl.exec`` instructions are expected to be of Form C.
+//     "``kl.exec OUTPUT, Kn|K(Xn)``" produces KLLEN bytes of pseudo-random bits.
+//
+// Since the SCC of the DRBG Machine consists of the MDH only, and the DRBG is reset at each import,
+// the export and import routines are the same as for lockers in an Error State, i.e., there is no authentication.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -491,7 +525,7 @@ In particular, the mnemonics in the table do not apply to Machines implementing 
 .Common Constants defining CC states for Symmetric Machines
 [float="center",align="center",width="100%",cols="^7%,<30%,<17%,<46%",options="header"]
 |===
-| Value | Mnemonic for the Constant         | State Name          | Description
+| Value | Mnemonic for the Constant        | State Name          | Description
 .2+| 2  |  `kl_state_operate`              |  _Operate_          | Generic operational state.
 <|  `kl_state_hash_absorb`                 | _Hash_Absorb_       | (Same value as _Operate_. This is just a more intuitive mnemonic for hash functions.)
 Start and initialize a hash function of the tag/MAC part of a Machine and start absorbing blocks of data (in the case of an AEAD scheme, this usually is the associated data).
@@ -1064,7 +1098,7 @@ Beside `max_len`, `block`, and `state`, which are fixed for the duration of the 
    `input_base` is a whole number of bytes at this point, so the division is exact; the
    procedure defines no interruption point at a finer granularity, so `klstart` never has
    to describe a position inside a byte. The conversion matches the one State
-   _Hash_Output_ performs on the output side (<<KLEE-hash-functions>>).
+   _Hash_Output_ performs on the output side (<<KLEE-hash-functions-MACs-XOFs>>).
 --
 +
 
@@ -2181,7 +2215,7 @@ Pseudocode is given in <<Zkl-pseudocode.adoc#KLEE-CMAC-mode-example>>.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[KLEE-hash-functions]]
+[[KLEE-hash-functions-MACs-XOFs]]
 === Hash and MAC Functions, and XOFs
 
 {empty}
@@ -2215,10 +2249,10 @@ Data Structures:::
 --
 
 * *Internal State*:
-  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
+ ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
  ** `last_blk_len`: int. Present only if the Hash/MAC needs to provide special handling of a final block beyond caller-managed padding and appending the length.
- ** `input_base`: int. Offset within input/output to read from/write to.
+ ** `input_base`/`output_base` (same field): int. Offset within input/output to read from/write to.
  ** `block_base`: int. Length of absorbed data so far for the current block. Only if required by the algorithm implemented by the Machine.
  ** `cumul_len`: int. Cumulative length of data absorbed so far.
  ** `block`: `b` bits.  Included only if a partial block is maintained separately—for instance when the inputs are not directly absorbed into `state`.
@@ -2233,10 +2267,11 @@ Data Structures:::
 <|        If unkeyed: 0        | none              | --
 |   ii | `n`                  | `state`           | --
 |  iii | 16                   | `last_blk_len`    | Present only if the Hash/MAC needs to provide special handling of a final block beyond caller-managed padding and appending the length.
-|   iv | 16                    | `block_base`      | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the Machine, else zero padding.
-|    v |  32                   | Padding           |--
-|   vi | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far. Present only if incorporated into the hash by the Machine, or under HMAC (<<KLEE-HMAC>>), else absent.
-|  vii | `b`                  | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
+|   iv | 16                    | `block_base`     | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the Machine, else zero padding.
+|    v | 16                    | `input_base`/`output_base`  | Only the least significant {lceil} log_2_(n) {rceil} bits used. Remaining most significant bits are zero.
+|   vi |  16                   | Padding          |--
+|   vii | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far. Present only if incorporated into the hash by the Machine, or under HMAC (<<KLEE-HMAC>>), else absent.
+|  viii | `b`                  | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
 |===
 --
 
@@ -2268,6 +2303,7 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> { _Hash_Absorb_Last_Block_ -> } _Hash_Output_ -> _Success_.
+ ** If the Machine is a XOF, there is transitions from _Hash_Output_ to _Success_ do not occur.
  ** From any valid state to State _Ready_.
 
 * *Behavior:*
@@ -2311,7 +2347,6 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
 +
 --
     * `amount : int`, `{nbsp}` amount of data to copy from `block` to `OUTPUT`
-    * `#define output_base input_base`
 
 []
    . `output_base <- 0` // upon resumption, `output_base <- 8 {interpunct} klstart`
@@ -2338,7 +2373,7 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
 (((KLEE, Machine, SHA-2)))
 The primitives of the SHA-2 family cite:[nist-fips-180-4] — SHA-224, SHA-256, SHA-384,
 SHA-512, SHA-512/224, and SHA-512/256 — are instantiations of the algorithm specified in
-<<KLEE-hash-functions>>, and only the differences with respect to the behavior described
+<<KLEE-hash-functions-MACs-XOFs>>, and only the differences with respect to the behavior described
 there are given here.
 
 Parameters:::
@@ -2381,7 +2416,7 @@ Data Structures:::
    ** `block_base`.
    ** `cumul_len` only when operating under HMAC (<<KLEE-HMAC>>).
 
-* *Serialized Content*: as prescribed by <<KLEE-hash-functions>>, with `last_blk_len`
+* *Serialized Content*: as prescribed by <<KLEE-hash-functions-MACs-XOFs>>, with `last_blk_len`
   unused (replaced by padding) and `block` present.
 
 Machine-Specific Functions:::
@@ -2414,7 +2449,7 @@ State Machine:::
     be zero — the padded message is a whole number of blocks — otherwise the locker
     transitions to Error State _Invalid_.
  ** In State _Hash_Output_, the `t`-bit digest is taken from `state`, not from `block`. The
-    output loop of <<KLEE-hash-functions>> therefore reads
+    output loop of <<KLEE-hash-functions-MACs-XOFs>> therefore reads
     `state[block_base + amount - 1 : block_base]` in place of
     `block[block_base + amount - 1 : block_base]`, and the entry step
     `block[t - 1 : 0] <- finalize()` is not performed, `finalize()` being `None` here. The bytes
@@ -2440,7 +2475,7 @@ function are those of the SM3 standard.
 === HMAC
 
 While hash function acceleration is sufficient to compute HMACs, an environment may want to provide a secret or hidden key for HMAC computation.
-This section extends <<KLEE-hash-functions>> to support HMAC computation with secret or hidden keys.
+This section extends <<KLEE-hash-functions-MACs-XOFs>> to support HMAC computation with secret or hidden keys.
 
 When a hash function is operating under HMAC, padding and length encoding are performed internally by the HMAC algorithm during finalization, and not by the caller. For SHA-2 (<<KLEE-SHA-2>>) and SM3 (<<KLEE-SM3>>), standard padding is applied over the total absorbed length (`b` + `cumul_len` bits for the inner hash, `b` + `d` bits for the outer) using `cumul_len`, which is maintained under HMAC. For SHA-3, the suffix-and-padding of <<KLEE-SHA-3>> applies.
 
@@ -2570,7 +2605,7 @@ where `mode` is `assign` because `K0` is *loaded* into its field, not absorbed i
 (((KLEE, Machine, SHA-3)))
 We describe here the Machines realizing the primitives of the SHA-3 family, currently including SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256-
 all parameter choices of KECCAK cite:[DBLP-conf-eurocrypt-BertoniDPA13] as standardized by NIST cite:[nist-fips-202].
-They are instantiations of the Machine of <<KLEE-hash-functions>>: only the differences with respect to the generic behavior need to be described.
+They are instantiations of the Machine of <<KLEE-hash-functions-MACs-XOFs>>: only the differences with respect to the generic behavior need to be described.
 
 //
 
@@ -2666,7 +2701,7 @@ State Machine::: {empty}
   The four SHA3-``n`` functions make a single `t`-bit digest available and then transition to _Success_.
   SHAKE128 and SHAKE256 are XOFs: they never transition to _Success_, and output may be squeezed indefinitely.
 
-The rest of the Machine follows <<KLEE-hash-functions>>.
+The rest of the Machine follows <<KLEE-hash-functions-MACs-XOFs>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2774,7 +2809,7 @@ State Machine:::
 +
 For `KMACXOF128` and `KMACXOF256`, a Form A `kl.setst` instruction is expected, and `L` is assumed to be zero in the following.
 
- ** Upon transitioning to State _Hash_Output_:
+  ** Upon transitioning from _Hash_Absorb_ to State _Hash_Output_:
   . `right_encode(L)` is absorbed, continuing from the current `block_base`.
   . The suffix and padding string `S` = `pad10*1` appended to `D` is generated and
     absorbed exactly as in <<KLEE-SHA-3>>, but with the cSHAKE domain-separation suffix
@@ -2784,8 +2819,9 @@ For `KMACXOF128` and `KMACXOF256`, a Form A `kl.setst` instruction is expected, 
     {lceil}``L``/8{rceil} bytes, the last one zero-padded if `L` is not a multiple of 8 —
     at `b` bits per application of `P()`, after which the state transitions to _Success_.
 +
-For `KMACXOF128` and `KMACXOF256`, arbitrarily many bits can be squeezed, and these
-Machines never transition to _Success_.
+For `KMACXOF128` and `KMACXOF256`, arbitrarily many bits can be squeezed,
+following the semantics of <<KLEE-hash-functions-MACs-XOFs>>, producing `XLLEN` for each `ace.exec` call,
+and the Machine never transitions to _Success_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3252,17 +3288,20 @@ The Machine is the same as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>) with the follo
 
 ** Upon entering _Hash_Finalize_, `countdown` is set to 1.
 
-** In State _Hash_Finalize_, any number of ``kl.exec`` instructions of Form C
-   can be issued. “``kl.exec OUTPUT, Kn|K(Xn)``” performs
+** In State _Hash_Finalize_, arbitrarily many bits can be squeezed,
+   following the semantics of <<KLEE-hash-functions-MACs-XOFs>>, producing `XLLEN` bits for each `ace.exec` call,
+   and the Machine never transitions to _Success_.
+
+  The instruction to update the state is
 +
 --
 . If `countdown` = 0, then:
 .. `ASCON(12)`
-. `OUTPUT[63:0] <- state[0]`
 . If `countdown` {ne} 0 then:
 .. `countdown <- 0`
 --
 +
+and the output bits are taken from `state[0]`. The output block length `t` is 64 bits.
 This way, in State _Hash_Output_/_Hash_Finalize_, the permutation `ASCON(12)` is applied before
 every output word **except the first**.
 
@@ -3438,7 +3477,7 @@ The ECC Machines are amongst the few that make use of the _StateExtension_ MDH f
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.
 
-The size in bytes of the optional Fields v to viii is:
+The size in bytes of the optional Fields iv to vii is:
 
 `{fournbsp}{fournbsp}` `varlen` <- (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} ``vb``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
@@ -4133,8 +4172,8 @@ any other value causes the locker to transition to Error State _Invalid_.
 ** In the Metadata Header, the field _MachineUse_ is used to keep track of input and output of long fields in an architecturally defined way and to track
   long-running operations in an implementation-specific way.
   The field _AuxInfo_ contains the description of the Hash Function used by the Machine.
- ** `HasPrivKey`, `HasPubKey`: Booleans recording whether `privkey`, resp. `pubkey`, holds
-    a configured value. They are therefore readable with `kl.getmdl`.
+ ** `HasPrivKey`, `HasPubKey`: Booleans, recording whether `privkey`, resp. `pubkey`, holds
+    a configured value. They are stored in bits 0 and 1 of bit 2 of _StateExtension_ and are therefore readable with `kl.getmdl`.
  ** `Hedged`: Boolean, bit 2 of _StateExtension_, recording the signing mode selected on entering _Sign_Generate_.
  ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits) for ML-DSA-44/65/87, resp.
  ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits) for ML-DSA-44/65/87, resp.
@@ -4287,35 +4326,8 @@ An attempt to clear the field using `kl.restrictl` causes the locker to transiti
 
 [WARNING]
 ====
-This section is *work in progress*. The endpoint indices and the per-Machine
-constraints below are provisional and may change.
+This section is *work in progress*.
+It will contain a summary of the `kl.derive` endpoints.
 ====
-
-Each Machine that participates in `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>) defines its
-_exportable_ fields (the sources, index `i`) and its _importable_ fields (the destinations,
-index `j`); field indices start at 1, and the value 0 denotes a `kl.exec` endpoint. Unless an
-Machine states otherwise, no constraint applies to the destination CC's policies.
-
-A secret **key is never an exportable source.** Key material is moved between lockers only by
-`kl.clone` (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-clone>>), which copies the locker verbatim — the same _Machine_,
-parameters, _SCProtection_, _Locality_, _UsagePolicy_ and restrictions — after which the copy may be
-narrowed, never widened, with `kl.restrict*` (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-restrict>>). A key field is,
-however, a valid *destination*, filled with the destination locker in State _Ready_.
-
-[float="center",align="center",width="100%",cols="<40%,<30%,<30%",options="header"]
-|===
-| Machine(s) | Exportable (source `i`) | Importable (destination `j`)
-| <<KLEE-PQC-ML-KEM>> | `sharedkey` (1) | —
-| <<KLEE-ECB-mode>>, <<KLEE-keystream-modes>>, <<KLEE-GCM-mode>>, <<KLEE-GCM-SIV-mode>>, <<KLEE-CMAC-mode>>, <<KLEE-OCB-mode>>, <<KLEE-Ascon-AEAD128>>, <<KLEE-tweakable>> | — | `key` (1)
-| <<KLEE-XEX-XTS-modes>> | — | `key1` (1), `key2` (2)
-| <<KLEE-HMAC>> (NIK variant) | — | `K0` (1)
-| <<KLEE-HMAC>> (KIP variant), <<KLEE-KMAC>> | — | — (key supplied in the PI only)
-| <<KLEE-hash-functions>> (SHA-2, SHA-3, SM3, SHAKE, Ascon-XOF128/CXOF128) | `kl.exec` output (0) | `kl.exec` input into _Hash_Absorb_ (0)
-| <<KLEE-ECC>>, <<KLEE-PQC-ML-DSA>> | — | —
-|===
-
-For a variable-size `kl.exec` endpoint (index 0), the source is a repeatable output such as a XOF
-squeeze and the destination a `process_VLI` absorb state that the caller may leave open and continue
-with ordinary `kl.exec` instructions, as described in <<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>.
 
 // ////////////////////////////////////////////////////////////////////

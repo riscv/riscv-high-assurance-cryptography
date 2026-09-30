@@ -659,7 +659,7 @@ Minor: 626 reads "…entry (…), is _unconfigured_"; drop the comma.
 
 **M3 text (unpriv 157).** "a illegal-instruction" (157) should be "an illegal-instruction". See 8.4 for the substance.
 
-**Validity list.** Typos "satosfied" (753) and "it is a valid for an import operation" (756).
+**Validity list.** Typos "satisfied" (753) and "it is a valid for an import operation" (756).
 
 ### 8.3 M2 — remaining edits
 
@@ -767,7 +767,7 @@ Line numbers in this section refer to the working tree at commit `6eb5a7d` and w
 | m18 | Open | PCCC is corrected (acronyms 63). RVWMO and RVTSO, used in unpriv, are still absent from the acronyms. |
 | m19 | Open | `:csrname: envcfg` (src/Zkl.adoc 57) and `[discrete]` (111). |
 | m20 | Fixed; editorial | The truncated sentence "so the locker is never observed." (3493) remains. |
-| Other editorial items from §8 | Open | "satosfied" (753); "it is a valid for" (756); the comma in "a masked HW Binding entry (…), is _unconfigured_" (626); "a illegal-instruction" (157). |
+| Other editorial items from §8 | Open | "satisfied" (753); "it is a valid for" (756); the comma in "a masked HW Binding entry (…), is _unconfigured_" (626); "a illegal-instruction" (157). |
 
 ### 9.2 New defects introduced by 6eb5a7d
 
