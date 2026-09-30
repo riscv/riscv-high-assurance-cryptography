@@ -1028,8 +1028,8 @@ In every encoding, fields shown with fixed values must hold those values. Any de
 
 The notation `K(Xd)` denotes the CL whose index is held in GPR `Xd`.
 `Kn|K(Xn)` indicates two alternative encodings: a 5-bit immediate CL index (`Kn`) or a CL number supplied by GPR `Xn`.
-In every encoding that offers both, bit `r`, the _CL indexing mode selector_, chooses between them: `r` = 0 makes the 5-bit register field the CL index itself, `r` = 1 makes it the number of the GPR holding the index.
-
+In every encoding that offers both, bit `r`, the _CL indexing mode selector_, chooses between them,
+except `kl.load` and `kl.store`, which select with `funct3`, and `kl.derive`, which selects with field `R`: `r` = 0 makes the 5-bit register field the CL index itself, `r` = 1 makes it the number of the GPR holding the index.
 
 `%offset` denotes the sign-extended 12-bit immediate of the instruction: bits [31:20] for `kl.load` and `kl.input` (I-type), and bits [31:25] @ [11:7] for `kl.store` and `kl.output` (S-type). The base register is always in bits [19:15] (`rs1`). The effective address of a transfer is `X[rs1] + sext(%offset)`.
 For a multi-byte or resumed transfer that value is the address corresponding to the *first* byte of
@@ -2009,7 +2009,7 @@ destination CL without making them visible to software: the output of one Machin
 input, possibly a key or some other Content field, of another.
 
 There are two types of such transfer: if the data moved from the source CL to the destination CL
-can be also obtained by performed `kl.exec` instructions, then we speak of an _unrestricted transfer_;
+can be also obtained by performing `kl.exec` instructions, then we speak of an _unrestricted transfer_;
 otherwise it is a _restricted transfer_.
 
 The source and the destination CLs must be different,
@@ -2039,7 +2039,7 @@ A transfer may occur only if the architecture allows it for the given pair of en
 of the source and destination CLs,
 i.e., the Machines and States of both source and destination CLs must be compatible.
 
-An allowed endpoint pair may define a minimum transfer length or an upper limit, a granularity.
+An allowed endpoint pair may define a minimum transfer length, an upper limit, and a granularity.
 
 The exact semantics of the transfer, updates to the states of the two CLs as well as
 to `klstart`, `vstart`, and any other state of the hart are defined by the architecture
@@ -2056,9 +2056,9 @@ In what follows, “DER” means “DErivation Rule”.
 the source before the destination, and with nothing transferred on any failure:
 
 . The _State_ and _StateExtension_ of each CL must admit its endpoint, and a destination whose
-  key is written must be in State _Ready_; otherwise the offending CL, or both, transition to
-  Error State _Invalid_.
-. A destination that violates any constraint of on the data transfer
+  key is written must be in State _Ready_, and any other destination field must be written in a State that the pair lists for it;
+  otherwise the offending CL, or both, transition to Error State _Invalid_.
+. A destination that violates any constraint on the data transfer
   transitions to Error State _Invalid_.
 . A transfer whose effective length (see <<KLEE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CL to Error State _Invalid_.
 . A destination _key_ field of `dest_length` bytes requires `length` {ge} `dest_length` and a source field or output of at least `dest_length` bytes,   and receives exactly `dest_length` bytes. Otherwise the destination transitions to Error State _Invalid_ and nothing is transferred.
@@ -2072,18 +2072,17 @@ the source before the destination, and with nothing transferred on any failure:
 
 DER3:: No policy narrowing is applied in case of an _unrestricted transfer_.
 
-The policy narrowing for restricted transfers follow NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §6.2.1 (key-usage and cryptoperiod metadata protection), and NIST SP 800-108r1 cite:[nist-SP-800-108-r1] §8 (derived keys inherit the security strength and use constraints of the key-derivation key). These Recommendations expect derived material to inherit any constraint of its parent.
+The policy narrowing for restricted transfers follows NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §6.2.1 (key-usage and cryptoperiod metadata protection), and NIST SP 800-108r1 cite:[nist-SP-800-108-r1] §8 (derived keys inherit the security strength and use constraints of the key-derivation key). These Recommendations expect derived material to inherit any constraint of its parent.
 Any additional specific transfer defined by the Machines must respect these restrictions.
 
 [horizontal]
-[[KLEE-DER-SKID-no-export,DER4]]DER4:: A field configured by a SKID is _never_ exportable.
-No rule may be defined to export such a field.
+[[KLEE-DER-SKID-no-export,DER4]]DER4:: A field configured by a SKID is _never_ exportable, and a key field of a CL whose _KeyType_ is 1 is _never_ importable. No rule may be defined to export or import such a field.
 
 [[KLEE-DER-shared-secret,DER5]]DER5:: Moving a computed shared secret
 from a Machine implementing a public key agreement scheme into a field of a Machine
 implementing a symmetric key encryption scheme, or into a private key field of
 a Machine implementing a public key agreement scheme constitutes a _restricted transfer_.
-It is always allowed the following conditions are satisfied:
+It is always allowed if the following conditions are satisfied:
 
 .. The source Machine must contain an explicit shared secret.
 .. The destination Machine must be in a State which allows the configuration of a field.
@@ -2093,26 +2092,28 @@ least as long as the destination field. If the latter is `b` bytes long, exactly
 bytes are produced by the source Machine and copied into the key field of the
 target Machine.
 
-DER6:: Data that can be exported by the source Machine by repeated `kl.exec` instructions
+[[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: Data that can be exported by the source Machine by repeated `kl.exec` instructions
 can always be transferred as an _unrestricted transfer_ into a hash/MAC function implemented
 by the destination Machine.
 This case is always allowed because it is a shortcut to pairs of `kl.exec` instructions which
 produce data from the source Machine and feed it to the destination Machine.
 
-DER7:: Using a Machine implementing a DBRG to generate random data
-and feed it into a symmetric key fields of a private key of a destination Machine
-is a _restricted transfer_.
+[[KLEE-DER-DRBG-implies-restricted,DER7]]DER7:: Using a Machine implementing a DRBG to generate random data
+and feed it into a symmetric key field, or into a private key field of a destination Machine
+is allowed when the destination is in a State that admits the field (Rule <<KLEE-DER-checks>>).
+It is a _restricted transfer_.
 
 //
 
 A pair defined in <<Zkl-ISA-machines.adoc#KLEE-Machines>> may further narrow but never relax any policy.
 
-An _exportable field_ is a field of the source CC that its Machine lists as the source of a `kl.derive`. An _importable field_ is a field of the destination CC that its Machine lists as a destination. Only listed (source Machine, State, field; destination Machine, State, field) pairs are allowed. Any other pair transitions both CLs to Error State _Invalid_.
+An _exportable field_ is a field of the source CC that its Machine lists as the source of a `kl.derive`. An _importable field_ is a field of the destination CC that its Machine lists as a destination. Only listed (source Machine, State, field; destination Machine, State, field) pairs are allowed. The transfers of Rules <<KLEE-DER-shared-secret>>, <<KLEE-DER-exec-implies-unrestricted>>, and <<KLEE-DER-DRBG-implies-restricted>>,
+are listed for every pair of Machines that implement the respective schemes. Any other pair transitions both CLs to Error State _Invalid_.
 
 [horizontal]
 [[KLEE-derive-rule-both-fixed-size,DER8]]DER8:: *(Transfer Size Rule.)*
 A destination field of `dest_length` bytes receives `eff_length` = min(`length`, `dest_length`)
-bytes and is zero-filled beyond them (zero-filling does not apply to keys per the last Check above);
+bytes and is zero-filled beyond them (zero-filling does not apply to keys per Rule <<KLEE-DER-checks>>);
 any other destination receives `eff_length` = `length`
 bytes. `length` = 0 transfers nothing and, if the checks above pass, changes no state.
 +
@@ -2519,7 +2520,7 @@ For `kl.derive`, each condition is evaluated for both endpoints, the source firs
 --
 
 [[KLEE-SGR-config-instructions-partial,SGR20]]SGR20:: Instructions `kl.size`, `kl.avail`, `kl.getmd*`, `kl.getst`, `kl.setst` with the 7-bit immediate equal to `kl_state_unconfigured` or an
-Error State, `kl.clear`, and `kl.clearall`, which are configuration instructions and are not gated by Usage Control policies, are also allowed
+Error State, `kl.clear`, and `kl.clearall`, and `kl.rename` and `kl.swap`, which move a CC unchanged (<<KLEE-instruction-clone>>), which are configuration instructions and are not gated by Usage Control policies, are also allowed
 when the CL is in a _Partial_ State.
 
 [[KLEE-SGR-zkl-load-mv-allowed,SGR21]]SGR21:: `kl.load` and `kl.mv` with a destination CL
@@ -2785,6 +2786,7 @@ The _State_ is unchanged: Rule <<KLEE-SGR-usage-cr-error-state>> treats the atte
 | `kl.restrict*` | Narrows the MDH, as in any Complete State (<<KLEE-instruction-restrict>>).
 | `kl.clone`, with the CL as source | The destination receives the MDH alone (<<KLEE-instruction-clone>>).
 | `kl.clone`, with the CL as destination | The CL is cleared and receives the clone of the source (<<KLEE-instruction-clone>>).
+| `kl.rename`, `kl.swap` | The CC, reduced to its MDH, is moved or exchanged unchanged (<<KLEE-instruction-clone>>).
 | `kl.clear`, `kl.clearall` | The CL becomes _Unconfigured_ (<<KLEE-instruction-clear>>).
 |===
 

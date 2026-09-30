@@ -771,7 +771,7 @@ Line numbers in this section refer to the working tree at commit `6eb5a7d` and w
 
 ### 9.2 New defects introduced by 6eb5a7d
 
-**n1 — DER1 contradicts DER5 on the destination State (normative, minor).**
+**n1 **FIXED** — DER1 contradicts DER5 on the destination State (normative, minor).**
 * DER1 item 1 (2059–2061) says that "a destination whose key is written must be in State _Ready_".
 * DER5 (2083–2092) allows a shared secret into "a private key field of a Machine implementing a public key agreement scheme", in "a State which allows the configuration of a field", and requires _Ready_ only "if the destination field is a symmetric key".
 * A private key is a key, so DER1 forbids what DER5 permits.
@@ -779,7 +779,7 @@ Line numbers in this section refer to the working tree at commit `6eb5a7d` and w
 Resolution: in DER1 item 1, replace "a destination whose key is written must be in State _Ready_" with:
 > a destination whose symmetric key is written must be in State _Ready_, and any other destination field must be written in a State that the pair lists for it
 
-**n2 — A SKID-configured destination is not excluded (normative, minor).**
+**n2 **FIXED** — A SKID-configured destination is not excluded (normative, minor).**
 * DER4 forbids *exporting* a SKID-configured field, but nothing forbids *importing* into one.
 * A `kl.derive` into the key field of a CL with _KeyType_ = 1 overwrites the SKS key with derived material.
 * The CL is still exported as a SKID (3179), so a later import resolves the SKS key again and silently replaces the derived key. The CC is not preserved across export and import.
@@ -787,17 +787,17 @@ Resolution: in DER1 item 1, replace "a destination whose key is written must be 
 Resolution: extend DER4:
 > A field configured by a SKID is _never_ exportable, and a key field of a CL whose _KeyType_ is 1 is _never_ importable. No rule may be defined to export or import such a field.
 
-**n3 — "Always allowed" versus "only listed pairs are allowed" (editorial, minor).**
+**n3 **FIXED** — "Always allowed" versus "only listed pairs are allowed" (editorial, minor).**
 * DER5 and DER6 say "always allowed", but 2111 says "Only listed … pairs are allowed. Any other pair transitions both CLs to Error State _Invalid_."
 * Resolution: add to 2111: "The transfers of Rules DER5–DER7 are listed for every pair of Machines that implement the respective schemes."
 
-**n4 — DER7 is garbled and incomplete (minor).**
+**n4 **FIXED** — DER7 is garbled and incomplete (minor).**
 * "into a symmetric key fields of a private key of a destination Machine" should read "into a symmetric key field, or a private key field, of a destination Machine".
 * Unlike DER5, DER7 states neither that the transfer is allowed nor the destination State.
 * "DBRG" should be "DRBG" (2103).
 * Resolution: add to DER7 "It is allowed when the destination is in a State that admits the field (Rule DER1)".
 
-**n5 — Editorial.**
+**n5 **FIXED** — Editorial.**
 * 2013: "can be also obtained by performed" should read "can also be obtained by performing".
 * 2043: "a minimum transfer length or an upper limit, a granularity" should read "a minimum transfer length, an upper limit and a granularity".
 * 2062: "any constraint of on the data transfer" should read "any constraint on the data transfer".
@@ -808,7 +808,7 @@ Resolution: extend DER4:
 
 **Observation on the restricted/unrestricted split (no change needed).** DER3 skips narrowing only when the data "can also be obtained" by `kl.exec`. Such data is already visible to software under the source's _UsagePolicy_, which DER1 checks first, and software could provision it in a PI with any policy. Skipping the narrowing therefore grants nothing new. This holds only if the classification belongs to the pair and not to the caller, which 2111 now ensures, because only listed pairs exist.
 
-**n6 — General selector text (editorial).** 1032 still says "In every encoding that offers both, bit `r` … chooses between them". This is false for `kl.load`/`kl.store` (selection by `funct3`) and for `kl.derive` (two-bit `R`, 2000). Append:
+**n6 **FIXED** — General selector text (editorial).** 1032 still says "In every encoding that offers both, bit `r` … chooses between them". This is false for `kl.load`/`kl.store` (selection by `funct3`) and for `kl.derive` (two-bit `R`, 2000). Append:
 > except `kl.load` and `kl.store`, which select with `funct3`, and `kl.derive`, which selects with field `R`.
 
 ### 9.3 M3 — refined proposal
@@ -842,7 +842,7 @@ Nothing in unpriv 157 or priv 112 changed. Re-reading priv 99, 112 and 342–343
 
 The Group A item `kl_exc_emulate` (introduction 154) becomes unnecessary under (b). The TG may keep it as a fallback, or close it by adopting (b).
 
-### 9.4 M5 — remaining text
+### 9.4 M5 **FIXED** — remaining text
 
 * **IRR1 (2835):** "Instructions `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, **`kl.rename`, `kl.swap`,** non-vector `kl.mv`, `kl.size` and `kl.avail` are _uninterruptible_ …"
 * **SGR20 (2522):** after "`kl.clear`, and `kl.clearall`" insert ", and `kl.rename` and `kl.swap`, which move a CC unchanged (<<KLEE-instruction-clone>>),".
