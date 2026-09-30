@@ -545,8 +545,11 @@ for aux in (0, 2, AUX_LEN, 16):
     eq(f"AuxDataLen = {aux}: ADSDropped removes exactly Content2; Content1 stays at {48 if aux else 16}",
        (content_offset(m), content_offset(d), image_len(m) - image_len(d)),
        (48 if aux else 16,) * 2 + (16 * max(aux - 2, 0),))
-eq("kl.size: AuxDataLen = 1 -> 0; every Error State -> 16; a Valid State ECB lacks -> 0",
-   (unit.kl_size(put(base, 'AuxDataLen', 1)), {unit.kl_size(put(base, 'State', st)) for st in ERROR_STATES},
+eq("kl.size: AuxDataLen = 1 -> 0; every Error State -> 16, AuxDataLen and ADSDropped ignored; "
+   "a Valid State ECB lacks -> 0",
+   (unit.kl_size(put(base, 'AuxDataLen', 1)),
+    {unit.kl_size(put(put(put(base, 'State', st), 'AuxDataLen', a), 'ADSDropped', 1))
+     for st in ERROR_STATES for a in (1, 5)},
     unit.kl_size(put(base, 'State', 3))), (0, {16}, 0))
 check("kl.size Form B equals Form C on valid Metadata",
       all(unit.kl_size(m, 'B') == unit.kl_size(m) != 0 for m in (
@@ -754,7 +757,8 @@ for label, img, want in (("a PCCC of an import that kept its ADS completes with 
     unit.mgmt_complete(cl, mdh_i)
     eq(label, cl.snapshot(), want)
 
-section("klmanagedlocker; kl.rename and kl.swap under management (<<KLEE-instruction-clone>>)")
+section("klmanagedlocker (<<KLEE-CSR-klmanagedlocker>>); kl.rename and kl.swap under management "
+        "(<<KLEE-instruction-clone>>)")
 u, klf = new_unit(), {i: Locker(idx=i) for i in range(32)}
 mem = Mem(scc_i)
 u.mgmt_open_import(klf[3], b2v(mem.read(0, 16)))
@@ -786,8 +790,13 @@ u.mgmt_open_import(klf[7], mdh_i)
 klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
 snap1 = klf[1].snapshot()
 kl_rename(u, klf, 1, 7)
-eq("kl.rename onto the managed locker discards its import; klmanagedlocker -> 32",
+eq("kl.rename onto the managed locker discards its import (SGR3); klmanagedlocker -> 32",
    (u.klmanagedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
+u.mgmt_open_import(klf[4], mdh_i)
+u.load(klf[4], Mem(tampered(scc_i, 8 * (off1 + 6))))
+u.mgmt_complete(klf[4], mdh_i)
+eq("the managed locker transitions to an Error State (failed authentication): klmanagedlocker -> 32",
+   (klf[4].state, u.klmanagedlocker), (AUTH, 32))
 
 section("Error States (<<KLEE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))
@@ -855,18 +864,15 @@ eq("Error-State image after a failed import", img_e.hex(), REGRESSION_ERROR_IMAG
 
 spec_note("<<KLEE-SCC-AEAD>> lists three differences from AES-GCM-SIV; the clearing of AD_auth[0][47] "
           "for sep = 0 is a fourth, stated only in the SIV NOTE.")
-spec_note("S, image_end, max_admissible and ContentOffset are defined in <<KLEE-instruction-mv>>, but "
-          "<<KLEE-Memory-Alignment>>, klstart, <<KLEE-SCC-GCM-SIV-enc>>, the PCCC format, kl.mv and kl.store "
-          "cite <<KLEE-instruction-load>> for them.")
-spec_note("<<KLEE-Metadata-validity>> does not list AuxDataLen = 1, which <<KLEE-metadata-header>> calls "
-          "invalid and for which ContentOffset is undefined; modelled as invalid Metadata.")
+spec_note("S, image_size, image_end, max_admissible and ContentOffset are defined in <<KLEE-instruction-mv>>, "
+          "but <<KLEE-Memory-Alignment>>, klstart, <<KLEE-SCC-GCM-SIV-enc>>, the PCCC format, kl.mv (vector) "
+          "and kl.store (its xref and 'ContentOffset, computed as for kl.load') cite <<KLEE-instruction-load>>.")
 spec_note("<<KLEE-Metadata>> makes bits unused by a Machine zero, but <<KLEE-Metadata-validity>> checks only "
           "AuxInfo; a non-zero StateExtension on AES256_ECB is modelled as valid (then fails authentication).")
 spec_note("MachinePolicy = 0 is both 'unsupported' (combination not implemented) and 'invalid' "
           "(<<KLEE-Metadata-validity>>); modelled as invalid.")
 spec_note("Expired without Zklexpire is invalid 'in a PI, SCC, or PCCC', but the Error-State image is none of "
-          "them and its short import maps only 54/55; modelled as Invalid. <<KLEE-states-error>>: 'and if any "
-          "... PSCC' is garbled.")
+          "them and its short import maps only 54/55; modelled as Invalid.")
 spec_note("<<KLEE-import-and-DIEL>> item 4 says an oversized ADS is 'skipped or only partially loaded', but "
           "<<KLEE-SCC-import>> step 5 sets ADSDropped, so no Content2 byte is loaded.")
 done()

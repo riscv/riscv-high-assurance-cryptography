@@ -6,7 +6,8 @@ import hashlib, hmac, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, bswap, bin_, bxor, IllegalInstruction, ERROR_STATES,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
-                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID,
+                    KL_STATE_HASH_OUTPUT, KL_STATE_SET_KEY, KL_STATE_SUCCESS, KL_STATE_FAILURE,
+                    KL_STATE_INVALID,
                     section, check, control, info, spec_note, raises, done)
 
 # ---------------------------------------------------------------- FIPS 180-4
@@ -68,7 +69,6 @@ HASHES = {'SHA-224': (4, 6, 32, 512, 224), 'SHA-256': (4, 7, 32, 512, 256),
           'SHA3-224': (6, 6, None, 1152, 224), 'SHA3-256': (6, 7, None, 1088, 256),
           'SHA3-384': (6, 8, None, 832, 384), 'SHA3-512': (6, 9, None, 576, 512)}
 HL = {n: n.lower().replace('-', '_').replace('/', '_').replace('sha_', 'sha') for n in HASHES}
-KL_STATE_SET_KEY = 15  # <<KLEE-HMAC>> gives _Set_Key_ no value
 
 # ---------------------------------------------------------------- KLEE model
 
@@ -258,15 +258,22 @@ class Hmac:
         return v2b(OUT, nbytes)
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, DER6)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, DER6)
+    or NIK `K0` in _Set_Key_ (DER1 item 2), loaded through process_VLI as by kl.exec (DER8)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # SGR19
-    bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, dst.st == KL_STATE_HASH_ABSORB)) if not ok]
+    key = dst.st == KL_STATE_SET_KEY
+    bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, key or dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # DER1 item 1
-    if bad or not length:
-        return 'refused' if bad else 'noop'
-    dst.exec('B', src.exec('C', nbytes=length)[1])
+        c.reset()  # DER1 items 1-3
+    if bad:
+        return 'refused'
+    if key and min(length, (src.d - src.h.block_base) // 8) < dst.b // 8:
+        dst.reset()  # DER1 item 6
+        return 'refused'
+    if not length:
+        return 'noop'
+    dst.exec('B', src.exec('C', nbytes=dst.b // 8 if key else length)[1])
     return 'done'
 
 # ---------------------------------------------------------------- provisioner, references, drivers
@@ -449,12 +456,28 @@ r = kl_derive(dst, src, 32)
 check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb, between "prefix" and "suffix"; source _Success_',
       r == 'done' and src.st == KL_STATE_SUCCESS and run(dst, B(b'suffix'), O, C(64))[1]
       == ref_hmac('SHA-512', key7, b'prefix' + bytes.fromhex(TAGS['SHA-256', 2]) + b'suffix'))
-src, dst = fresh(key=k2), fresh(variant='NIK', key=None)
-run(src, A, B(m2), O)
-SK(dst)
-check('destination in _Set_Key_ (K0 is a destination only in _Ready_): refused, destination _Invalid_',
-      kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID
-      and (src.st, src.h.block_base) == (KL_STATE_HASH_OUTPUT, 0))
+for length in (64, 80):
+    src, dst = fresh('SHA-512', key=k2), fresh(variant='NIK', key=None)
+    tag = ref_hmac('SHA-512', k2, m2)
+    run(src, A, B(m2), O)
+    SK(dst)
+    r = kl_derive(dst, src, length)
+    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_: exactly b/8 = 64 bytes, '
+          'load complete (cumul_len = b), source _Success_; then tags under K0 = tag',
+          (r, dst.h.cumul_len, src.st) == ('done', 512, KL_STATE_SUCCESS)
+          and run(dst, A, B(data7), O, C(32))[1] == ref_hmac('SHA-256', tag, data7))
+res = []
+for label, s512, variant, ops, length in [('NIK in _Ready_', 1, 'NIK', (), 64), ('KIP in _Ready_', 1, 'KIP', (), 64),
+                                          ('length 32 < 64', 1, 'NIK', (SK,), 32),
+                                          ('32-byte HMAC-SHA-256 source', 0, 'NIK', (SK,), 64)]:
+    src = fresh('SHA-512' if s512 else 'SHA-256', key=k2)
+    dst = fresh(variant=variant, key=key7 if variant == 'KIP' else None)
+    run(src, A, B(m2), O)
+    run(dst, R, *ops)
+    res.append((kl_derive(dst, src, length), dst.st, src.st, src.h.block_base))
+check('K0 destination: NIK/KIP in _Ready_ (DER1 items 2-3), length 32 < b/8, source output 32 < b/8 '
+      '(DER1 item 6): destination _Invalid_, source untouched', None, res,
+      [('refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0)] * 4)
 
 section('Negative controls')
 key1, data1 = RFC4231[1]
@@ -463,12 +486,11 @@ control('ipad and opad swapped', tag_of('SHA-256', key1, data1, swap_pads=True) 
 control('NIK: cumul_len not zeroed on entering _Hash_Absorb_',
         tag_of('SHA-256', key1, data1, 'NIK', keep_cumul=True) != TAG1)
 
-spec_note('<<KLEE-HMAC>> gives _Set_Key_ no State value (none in <<KLEE-state-constants-symmetric>>); '
-          'the harness uses 15')
+spec_note('<<KLEE-state-constants-symmetric>> describes State 15 _Set_Key_ as "Reconfigure a ke field" (typo)')
 spec_note('SHA-2 padding under HMAC uses cumul_len, which process_VLI advances only if max_len != 0 '
           '(step 4.f); harness max_len = 2^64-1-b')
-spec_note('<<KLEE-derive-endpoints>> makes NIK K0 a destination in _Ready_, but _Ready_ -> _Set_Key_, the '
-          'only way to _Hash_Absorb_, zeroes K0: a derived K0 is never used')
+spec_note('<<KLEE-defined-derivation-endpoints>> still lists NIK K0 as a destination in _Ready_, left only through '
+          '_Set_Key_, which zeroes K0; harness follows DER1 item 2: K0 in _Set_Key_, completing the load')
 spec_note('HMAC-SHA-3: _Set_Key_ relies on cumul_len, absent from the <<KLEE-SHA-3>> Serialized Content; '
           'a completed K0 load does not survive export/import')
 info('b of HMAC-SHA-3 read as the rate of <<KLEE-SHA-3-parameters>>; KIP K0 as SKID (_KeyType_ = 1) '

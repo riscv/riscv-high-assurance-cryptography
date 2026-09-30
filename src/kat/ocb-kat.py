@@ -229,16 +229,15 @@ def derive(src, dst, length):
     """kl.derive into `key` (Ready) or `nonce` (Set_Aux_Value) from a listed source's bytes."""
     if dst.state in ERROR_STATES:
         return
-    if isinstance(src, Ocb):                           # OCB lists no source endpoint
-        src._invalid()
-        dst._invalid('pair not listed')
+    if isinstance(src, Ocb):                           # OCB defines no source endpoint
+        src._invalid('DER1 items 1, 3')
     if dst.state == SET_AUX:                           # DER8: min(length, q) bytes, zero-filled
         q = (dst.N_len + 7) // 8
         return dst.exec('B', b2v(src[:min(length, q)]), 8 * q)
     if dst.state != READY:
-        dst._invalid('no endpoint in this State')      # SGR5 for Success
+        dst._invalid('DER1 items 1, 3')                # no endpoint in this State
     if dst.skid is not None or length < len(dst.key) or len(src) < len(dst.key):
-        dst._invalid('DER4, DER1 check 4')
+        dst._invalid('DER4 (DER1 item 3), DER1 item 6')
     dst.key = src[:len(dst.key)]
 
 def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False, lay=None,
@@ -556,12 +555,12 @@ for length in (16, 32):
     check(f"`key` in Ready, length {length}, then vector 0D", True,
           run(None, N13, S40, S40, 128, cl=cl, per_exec=0), CT13)
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (DER1)", lambda: Ocb(bytes(16)), secret, 8),
-        ("length 0 into the key (DER1)", lambda: Ocb(bytes(16)), secret, 0),
-        ("12-byte source into the 16-byte key (DER1)", lambda: Ocb(bytes(16)), secret[:12], 16),
-        ("into a locker in Hash_Absorb", at_absorb, secret, 16),
-        ("into a locker in Success (SGR5)", at_end, secret, 16),
-        ("into the key of a KeyType 1 locker (DER4)", lambda: Ocb(K128, skid=7), secret, 16)]:
+        ("length 8 into the 16-byte key, no zero-fill (DER1 item 6)", lambda: Ocb(bytes(16)), secret, 8),
+        ("length 0 into the key (DER1 item 6)", lambda: Ocb(bytes(16)), secret, 0),
+        ("12-byte source into the 16-byte key (DER1 item 6)", lambda: Ocb(bytes(16)), secret[:12], 16),
+        ("into a locker in Hash_Absorb (DER1 items 1, 3)", at_absorb, secret, 16),
+        ("into a locker in Success (DER1 items 1, 3)", at_end, secret, 16),
+        ("into the key of a KeyType 1 locker (DER4, DER1 item 3)", lambda: Ocb(K128, skid=7), secret, 16)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n) and cl.key is None)
 for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
@@ -571,8 +570,8 @@ for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
     check(f"`nonce` in Set_Aux_Value, length {n} (DER8 zero-fill)", True,
           run(None, None, S40, S40, 128, cl=cl), run(K128, nv, S40, S40, 128))
 src, dst = at_crypt(), Ocb(bytes(16))
-check("OCB as a kl.derive source (none listed) -> both Invalid",
-      inval(derive, src, dst, 16) and src.state == dst.state == INVALID)
+check("OCB as a kl.derive source (no source endpoint) -> only the source Invalid",
+      inval(derive, src, dst, 16) and (src.state, dst.state) == (INVALID, READY))
 info("the `nonce` endpoint is N with dest_length = ceil(N_len/8) bytes, written as the "
      "_Set_Aux_Value_ kl.exec would be (DER8).")
 

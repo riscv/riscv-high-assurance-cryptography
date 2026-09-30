@@ -11,7 +11,7 @@ from common import (ERROR_STATES, MDH_FIELD, IllegalInstruction, check, control,
 
 (GEN, PK_OUT, PK_IN, CTX_IN, MU_IN, TR_IN, SIGN_GEN, SIGN_OUT, SIGN_VERIFY, SIGN_IN, SK_IN,
  COMPUTE_PK) = range(2, 14)
-LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Success', 47)]   # the ML-DSA State list, verbatim
+LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Failure', 47)]   # the ML-DSA State list, verbatim
 FORM_B = (CTX_IN, SIGN_GEN)                        # every other State is entered with Form A
 IN_F = {PK_IN: 'pubkey', CTX_IN: 'ctx', MU_IN: 'mu', TR_IN: 'tr', SIGN_IN: 'signature', SK_IN: 'privkey'}
 OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
@@ -20,6 +20,7 @@ mc = lambda typ, mode: typ << 4 | mode             # <<KLEE-exec-encodings>>
 MLDSA = {44: mc(11, 3), 65: mc(11, 4), 87: mc(11, 5)}
 HASHES = {mc(t, m) for t in (4, 6) for m in range(6)}   # SHA-2 and SHA-3/SHAKE, the PH FIPS 204 admits
 SHAKE256 = mc(6, 5)
+SET_SCALAR = 3                                     # ECC _Set_Scalar_
 h = bytes.fromhex
 
 class RBG:
@@ -173,11 +174,27 @@ class MLDSALocker:
         new.tr = D.H(new.pubkey, 64) if not new.flag('HasPrivKey') else new.privkey[64:128]
         return new
 
+class KeyDest:
+    """A key destination of <<KLEE-derive-endpoints>>: an ECC `Scalar` in _Set_Scalar_ or a symmetric `key`."""
+    def __init__(self, ecc=True, size=32, state=None, keytype=0):
+        self.ecc, self.size, self.keytype, self.key = ecc, size, keytype, bytes(size)
+        self.state = SET_SCALAR if ecc and state is None else state or READY
+
 def kl_derive_exec(dest, src, length):
-    """DER6 transfer of emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes)."""
+    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, DER6) or a KeyDest."""
     if src.state not in OUT_F:
-        return src.invalid()                       # DER1 item 1
+        return src.invalid()                       # DER1 items 1, 3
     name, w = OUT_F[src.state], src.use
+    if isinstance(dest, KeyDest):
+        if dest.state != (SET_SCALAR if dest.ecc else READY) or dest.keytype == 1 \
+                or length < dest.size or w + dest.size > src.size(name):
+            dest.state = INVALID                   # DER1 items 1-3; DER4; DER1 item 6
+        elif not dest.ecc:
+            src.invalid()                          # no rule admits the pair: both
+            dest.state = INVALID
+        else:                                      # unrestricted: no DER2 narrowing
+            dest.key = src.exec_C(dest.size)
+        return
     if w + length > src.size(name):
         return src.invalid()                       # MGR7
     dest += src.exec_C(length)
@@ -491,7 +508,7 @@ def t_progress():
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
 
 def t_derive():
-    section('kl.derive: emitted output into a hash (DER6)')
+    section('kl.derive: emitted output as a source (DER6, <<KLEE-derive-endpoints>>)')
     cc, absorbed = generated(), bytearray()
     cc.setst(PK_OUT)
     kl_derive_exec(absorbed, cc, 1000)
@@ -502,9 +519,31 @@ def t_derive():
     check('transfer past the field: source _Invalid_ (MGR7)', cc.state == INVALID and len(absorbed) == 1312)
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
     kl_derive_exec(bytearray(), cc, 64)
-    check('source in _privkey_Input_ (no endpoint): _Invalid_', cc.state == INVALID)
-    info('<<KLEE-derive-endpoints>> has no ML-DSA row; the DER6 output of _pubkey_Output_ and _Sign_Output_ is taken '
-         'as listed')
+    kd = KeyDest()
+    kl_derive_exec(kd, cc, 64)
+    check('source in _privkey_Input_ (no endpoint): only it becomes _Invalid_', cc.state == INVALID
+          and kd.state == SET_SCALAR and kd.key == bytes(32))
+    cc = generated()
+    cc.setst(PK_OUT)
+    kl_derive_exec(kd, cc, 64)
+    check('_pubkey_Output_ -> ECC `Scalar` in _Set_Scalar_: exactly 32 bytes, MachineUse as Form C',
+          kd.key.hex() == VECTORS['keyGen'][0]['pk'][:64] and cc.use == 32 and cc.state == PK_OUT)
+    for label, kd, n in (('ECC destination in _Ready_', KeyDest(state=READY), 64),
+                         ('ECC `Scalar` of KeyType 1 (DER4)', KeyDest(keytype=1), 64),
+                         ('length < 32 (DER1 item 6)', KeyDest(), 31)):
+        kl_derive_exec(kd, cc, n)
+        check(f'{label}: only the destination becomes _Invalid_', kd.state == INVALID and cc.state == PK_OUT
+              and cc.use == 32)
+    kd = KeyDest(ecc=False)
+    kl_derive_exec(kd, cc, 64)
+    check('_pubkey_Output_ -> AES-256 `key` (no rule admits it): both _Invalid_', kd.state == INVALID
+          and cc.state == INVALID)
+    info('<<KLEE-derive-endpoints>> has no ML-DSA row; the output of _pubkey_Output_ and _Sign_Output_ is taken as a '
+         'source: unrestricted into a hash (DER6) or, by its "non-meaningful transfers" sentence, an ECC `Scalar`')
+    info('reading: a locker without an endpoint for its role (a KeyType-1 key destination included, DER4) alone '
+         'becomes _Invalid_ (DER1 items 1, 3); both only when two endpoints meet that no rule admits')
+    spec_note('"Any other pair transitions both lockers" (<<KLEE-instruction-derive>>) vs DER1 item 3, which '
+              'invalidates only "the offending lockers"')
 
 def t_hints():
     section('FIPS 204 Algorithm 21 hint checks')

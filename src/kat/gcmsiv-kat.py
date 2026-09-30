@@ -231,7 +231,7 @@ class Siv:
         if s.state in ERROR_STATES:
             return                                       # SGR19
         if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # DER4; DER1 checks 1 and 4
+            return s._invalid()                          # DER4 (DER1 item 3); DER1 items 2-3, 6
         s.key = src[:s.k // 8]
         s._derive()                                      # MGR4
 
@@ -669,16 +669,16 @@ for i, n in ((6, 16), (6, 32), (11, 32)):
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (DER1 check 1)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is not an endpoint)', at('sav'), 12),
-                   ('in Success (DER1 check 1)', at('success'), 16),
-                   ('into a key configured by a SKID (DER4)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (DER1 check 4)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (DER1 check 4)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (DER1 check 4)', Siv.provisioned(K), 0)):
+for name, m, n in (('in Hash_Absorb (DER1 items 1, 3)', at('ha'), 16),
+                   ('in Set_Aux_Value (nonce is no endpoint, DER1 items 1, 3)', at('sav'), 12),
+                   ('in Success (DER1 items 1, 3)', at('success'), 16),
+                   ('into a key configured by a SKID (DER4, DER1 item 3)', Siv.provisioned(skid=SKID), 16),
+                   ('of 8 bytes into a 128-bit key (DER1 item 6)', Siv.provisioned(K), 8),
+                   ('of 16 bytes into a 256-bit key (DER1 item 6)', Siv.provisioned(K256), 16),
+                   ('of 0 bytes into a key (DER1 item 6)', Siv.provisioned(K), 0)):
     m.derive(src, n)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
-info("kl.derive of length 0 into `key` taken to fail DER1 check 4, not to be DER8's no-op")
+info("kl.derive of length 0 into `key` taken to fail DER1 item 6, not to be DER8's no-op")
 
 section('negative controls, spec notes')
 k2, n2, a2, p2, w2 = vec(1)

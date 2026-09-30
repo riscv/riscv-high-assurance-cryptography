@@ -158,17 +158,16 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # DER1 check 4, DER4
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # DER1 items 2-3, 6; DER4
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX lists no source endpoint."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (DER1 items 1, 3)."""
     if isinstance(src, XexLocker):
-        src.invalidate()
-        return dst.invalidate() or False
+        return src.invalidate() or False
     return dst.derive_dest(src, length)
 
 def new_xex(key1, key2, policy=POL_ENC | POL_DEC, **kw):
@@ -477,11 +476,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1)", None, src, 16),
-                        ("length 0 (DER1)", None, src, 0),
-                        ("24-byte source (DER1)", None, src[:24], 32),
-                        ("destination in Encrypt", tw, src, 32),
-                        ("KeyType 1 destination (DER4)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1 item 6)", None, src, 16),
+                        ("length 0 (DER1 item 6)", None, src, 0),
+                        ("24-byte source (DER1 item 6)", None, src[:24], 32),
+                        ("destination in Encrypt (DER1 items 2-3)", tw, src, 32),
+                        ("KeyType 1 destination (DER4, DER1 item 3)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
@@ -490,10 +489,8 @@ for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1)", None, src, 16),
         mk and mk(cl)
     check(f"{what} -> Invalid", True, (derive(s_, cl, n), cl.state, cl.key1), (False, INVALID, None))
 src_l, dst = new_xex(k1, k2), new_xex(bytes(16), bytes(16))
-check("an XEX locker as a kl.derive source (none listed) -> both Invalid", True,
-      (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, INVALID))
-spec_note("<<KLEE-defined-derivation-endpoints>> gives `key1 || key2` to Tweakable mode "
-          "(<<KLEE-tweakable>>), whose key is `key`; the harness reads the row as XEX (<<KLEE-XEX-XTS-modes>>).")
+check("an XEX locker as a kl.derive source (no source endpoint) -> only the source Invalid", True,
+      (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, READY))
 
 section("round trip over many lengths")
 rt = True

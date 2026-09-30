@@ -279,7 +279,7 @@ def kl_derive(dst, src, length, interrupt_at=None):
         return 'noop'
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # DER1 item 1 (SGR5: a SHA3-n in _Success_ admits no kl.exec)
+        c.reset()  # DER1 items 1, 3 (SGR5: a SHA3-n in _Success_ admits no kl.exec)
     pos, HART.klstart = HART.klstart, 0
     if bad or not length:
         return 'invalid' if bad else 'done'
@@ -629,6 +629,6 @@ info('DER8 source: modeled as advancing like kl.exec (unused block part kept), n
      'continued only after derives ending on a block boundary')
 spec_note('DER8 "one [basic unit] must divide the other": as rates it would exclude SHAKE128 -> SHA3-256 and '
           'SHA3-512 -> SHAKE256; harness reads the unit as the 32-bit granularity')
-spec_note('DER1 item 1 invalidates "the offending locker, or both", <<KLEE-instruction-derive>> sends "any other '
-          'pair" both to _Invalid_; harness: offending locker only')
+spec_note('DER1 item 3 invalidates "the offending lockers", but pairs include States and <<KLEE-instruction-derive>> '
+          'sends "any other pair" both to _Invalid_; harness: offending locker only')
 done()

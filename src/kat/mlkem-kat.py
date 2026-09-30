@@ -18,7 +18,7 @@ GEN, ENC, DEC, EK_IN, DK_IN, EK_OUT, CT_IN, CT_OUT = range(2, 10)
 NAME = dict(zip(range(2, 10), ('GenerateKeyPair', 'Encapsulate', 'Decapsulate', 'encapsk_Input',
                                'decapsk_Input', 'encapsk_Output', 'ciphertext_Input', 'ciphertext_Output')))
 NAME.update({READY: 'Ready', SUCCESS: 'Success', FAILURE: 'Failure', INVALID: 'Invalid'})
-LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Success', 47)]   # the ML-KEM State list, verbatim
+LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Failure', 47)]   # the ML-KEM State list, verbatim
 LONG = (GEN, ENC, DEC)
 IN_F = {EK_IN: 'encapsk', DK_IN: 'decapsk', CT_IN: 'ciphertext'}
 OUT_F = {EK_OUT: 'encapsk', CT_OUT: 'ciphertext'}
@@ -38,14 +38,15 @@ def key(bits):
     return {READY: ('key', bits)}
 
 MLKEM = {512: mc(11, 0), 768: mc(11, 1), 1024: mc(11, 2)}
-# kl.derive destination endpoints {State: (field, bits)}: <<KLEE-derive-endpoints>>; the ECC Scalar by DER5
+SET_SCALAR = 3                                     # ECC _Set_Scalar_
+# kl.derive destination endpoints {State: (field, bits)}: <<KLEE-derive-endpoints>>
 DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', {**key(192), SET_AUX: ('J0', 128)}),
         mc(0, 4): ('AES128_GCM', {**key(128), SET_AUX: ('J0', 128)}), mc(2, 1): ('AES256_CTR', key(256)),
         mc(3, 0): ('SM4_ECB', key(128)), mc(0, 7): ('AES128_CMAC', key(128)), mc(8, 0): ('Ascon-AEAD128', key(128)),
         mc(0, 3): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {READY: ('K0', 512)}),
         mc(6, 1): ('SHA3-256', {HASH_ABSORB: ('input', 0)}), mc(6, 10): ('KMAC128', {HASH_ABSORB: ('input', 0)}),
-        mc(10, 0): ('secp256r1', {READY: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {READY: ('Scalar', 384)}),
-        mc(10, 3): ('ed25519', {})}
+        mc(10, 0): ('secp256r1', {SET_SCALAR: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {SET_SCALAR: ('Scalar', 384)}),
+        mc(10, 3): ('ed25519', {SET_SCALAR: ('Scalar', 256)})}
 AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
 ALL_ONES_SKID = (1 << 64) - 1
 FILL = b'\x5a'                                     # placeholder key of a provisioned destination
@@ -109,7 +110,7 @@ class Dest(Locker):
         if keytype == 1 and skid == ALL_ONES_SKID:
             keytype = 0                            # <<KLEE-KeyType-field>>: random key, KeyType 0
         self.mdh = mdh_pack(Machine=machine, State=state, KeyType=keytype, **mdh)
-        self.key, self.absorbed = FILL * (self.eps.get(READY, ('', 0))[1] // 8), b''
+        self.key, self.absorbed = FILL * ((self.eps.get(READY) or self.eps.get(SET_SCALAR) or ('', 0))[1] // 8), b''
 
     def clear_content(self): self.key, self.absorbed = bytes(len(self.key)), b''
     hashing = property(lambda self: any(f == 'input' for f, _ in self.eps.values()))
@@ -285,10 +286,10 @@ def kl_derive(dest, src, length):
             lk.enter_error(EXPIRED)
             return 'noop'
     out = dest.hashing and src.state in OUT_F      # the DER6 output, else sharedkey
-    bad = ends if not dest.eps else [lk for lk, ok in (
+    bad = [lk for lk, ok in (
         (src, src.state in OUT_F if out else src.state not in (READY,) + LONG),     # DER5 a, MGR8
         (dest, dest.state in dest.eps)) if not ok]
-    for lk in bad:                                 # "any other pair"; DER1 item 1
+    for lk in bad:                                 # DER1 items 1-3
         lk.enter_error(INVALID)
     if bad:
         return 'retired'
@@ -303,7 +304,7 @@ def kl_derive(dest, src, length):
     n = bits // 8
     if field not in ('key', 'Scalar') or bits > 256 or dest.get('KeyType') == 1 or length < n \
             or len(src.sharedkey) < n or not der2_narrow(dest, src):
-        dest.enter_error(INVALID)                  # <<KLEE-PQC-ML-KEM>> (DER1 item 2); DER4; DER1 item 4; DER2
+        dest.enter_error(INVALID)                  # <<KLEE-PQC-ML-KEM>> (DER1 item 4); DER4; DER1 item 6; DER2
     else:
         dest.key = src.sharedkey[:n]
     return 'retired'
@@ -680,7 +681,7 @@ def t_derive():
               dest.key == ss[:n] and dest.state == READY and src.state == CT_OUT and src.sharedkey == ss
               and src.use == SIZES[ps][2])
     dest = derived(Dest(AES128_ECB), src, 33)
-    check('length above the key size: exactly dest_length bytes (DER1 item 4, DER8)',
+    check('length above the key size: exactly dest_length bytes (DER1 item 6, DER8)',
           dest.key == ss[:16] and dest.state == READY)
     for n in (15, 0):
         dest = derived(Dest(AES256_CTR), src, n)
@@ -688,17 +689,18 @@ def t_derive():
               dest.state == INVALID and dest.key == bytes(32) and src.state == CT_OUT and src.sharedkey == ss)
     for st, nm in ((ENCRYPT, 'Encrypt'), (SUCCESS, 'Success')):
         dest = derived(Dest(AES128_GCM, state=st), src)
-        check(f'destination in _{nm}_ (DER1 item 1; SGR5): _Invalid_, source untouched',
+        check(f'destination in _{nm}_ (DER1 items 1-3; SGR5): _Invalid_, source untouched',
               dest.state == INVALID and src.state == CT_OUT)
+    for code in (mc(10, 0), mc(10, 3)):
+        dest = derived(Dest(code, state=SET_SCALAR), src, 32)
+        check(f'{dest.name} in _Set_Scalar_ receives sharedkey as its private key Scalar (DER5)',
+              dest.key == ss and dest.state == SET_SCALAR)
     dest = derived(Dest(mc(10, 0)), src, 32)
-    check('secp256r1 in _Ready_ receives sharedkey as its private key Scalar (DER5)',
-          dest.key == ss and dest.state == READY)
-    dest = derived(Dest(mc(10, 1)), src, 48)
-    check('secp384r1: Scalar longer than sharedkey: destination _Invalid_ (DER1 item 4)',
+    check('secp256r1 in _Ready_ (endpoint in _Set_Scalar_): destination _Invalid_, source untouched',
+          dest.state == INVALID and src.state == CT_OUT)
+    dest = derived(Dest(mc(10, 1), state=SET_SCALAR), src, 48)
+    check('secp384r1: Scalar longer than sharedkey: destination _Invalid_ (DER1 item 6)',
           dest.state == INVALID and src.state == CT_OUT and src.sharedkey == ss)
-    spec_note('DER5 "always" allows the shared secret into a key-agreement private key, but '
-              '<<KLEE-derive-endpoints>> lists no ECC destination and <<KLEE-PQC-ML-KEM>> a symmetric one; the '
-              'model follows DER5, writing the Scalar in _Ready_ (DER1) rather than _Set_Scalar_ (DER5 b)')
     dv = vec('decaps', ps, 'valid')
     cd = decaps_ready(dv)
     cd.exec_D()
@@ -707,16 +709,16 @@ def t_derive():
         dest = derived(Dest(code, state=st), s, 64)
         check(f'{dest.name} {dest.eps[st][0]}: not one key of at most 256 bits in _Ready_: destination '
               '_Invalid_, source untouched', dest.state == INVALID and s.state in (CT_OUT, SUCCESS))
-    spec_note('<<KLEE-derive-endpoints>> admits "any combination" (also piping ML-KEM fields through a hash) '
-              'and DER5 any symmetric encryption key, but <<KLEE-PQC-ML-KEM>> requires a single-key Machine '
-              'with a key of at most 256 bits in _Ready_; the model follows <<KLEE-PQC-ML-KEM>> (DER1 item 2)')
+    spec_note('<<KLEE-derive-endpoints>> admits "any combination" (also piping ML-KEM fields through a hash), DER5 '
+              'any symmetric key or the ECC `Scalar` in _Set_Scalar_, but <<KLEE-PQC-ML-KEM>> still requires a '
+              'single-key Machine with a key of at most 256 bits in _Ready_; the model follows <<KLEE-PQC-ML-KEM>> '
+              '(DER1 item 4) except for the ECC `Scalar`')
     dest = derived(Dest(mc(6, 10)), src)
-    check('KMAC128 in _Ready_ (endpoint in _Hash_Absorb_): destination _Invalid_ (DER1 item 1)',
+    check('KMAC128 in _Ready_ (endpoint in _Hash_Absorb_): destination _Invalid_ (DER1 items 1, 3)',
           dest.state == INVALID and src.state == CT_OUT)
-    for dest in (Dest(mc(10, 3)), MLKEMLocker(ps)):
-        s2 = encapsulated()
-        check(f'{dest.name} destination (no importable field): unlisted pair, both _Invalid_',
-              derived(dest, s2, 32).state == INVALID and s2.state == INVALID)
+    s2 = encapsulated()
+    check('ML-KEM destination (no destination endpoint): only it becomes _Invalid_ (DER1 items 1, 3)',
+          derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == CT_OUT)
     dest = derived(Dest(AES128_ECB, keytype=1, skid=0x1234), src)
     check('KeyType 1 key never importable (DER4): destination _Invalid_',
           dest.state == INVALID and src.state == CT_OUT)
@@ -734,7 +736,7 @@ def t_derive():
         s2 = encapsulated()
         s2.setst(st)
         dest = derived(Dest(AES128_ECB), s2)
-        check(f'source in _{NAME[st]}_: source _Invalid_, destination untouched (DER1 item 1)',
+        check(f'source in _{NAME[st]}_: source _Invalid_, destination untouched (DER1 items 1, 3)',
               s2.state == INVALID and dest.state == READY and dest.key == ph)
     spec_note('sharedkey is a source in "any" State, but MGR8 bars kl.derive in the long-running States, _Ready_ '
               'has cleared it and no flag records whether it was produced; the model admits the other Valid States')
@@ -805,10 +807,13 @@ def t_derive():
     s7 = encapsulated()
     hl = derived(Dest(SHA3_256), s7, 32)
     check('hash destination in _Ready_: only it becomes _Invalid_', hl.state == INVALID and s7.state == CT_OUT)
-    spec_note('in _encapsk_Output_ and _ciphertext_Output_ both sharedkey and the kl.exec output (DER6) are '
-              'source endpoints and nothing selects one; the model uses the output for a hash destination')
-    spec_note('"any other pair" invalidates both lockers (listed pairs name States), DER1 item 1 only the '
-              'offender; model: both for a Machine without endpoints, the offender otherwise')
+    spec_note('in _encapsk_Output_ and _ciphertext_Output_ both sharedkey and the kl.exec output (DER6, and the ECC '
+              '`Scalar` sentence of <<KLEE-derive-endpoints>>) are sources and nothing selects one; the model uses the '
+              'output only for a hash destination')
+    info('reading: a locker without an endpoint for its role (a KeyType-1 key destination included, DER4) alone '
+         'becomes _Invalid_ (DER1 items 1, 3); both only when two endpoints meet that no rule admits')
+    spec_note('"Any other pair transitions both lockers" (<<KLEE-instruction-derive>>) vs DER1 item 3, which '
+              'invalidates only "the offending lockers"')
 
 def t_controls():
     section('Negative controls')

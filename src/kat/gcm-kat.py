@@ -285,7 +285,7 @@ class Gcm:
         if s.state == SAV:                               # DER8: consumed as a Form B kl.exec would be
             return s._exec_vli(b2v(src[:length]), 8 * length, False, None) if length else None
         if s.key_type == 1 or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # DER4; DER1 checks 1 and 4
+            return s._invalid()                          # DER4 (DER1 item 3); DER1 items 2-3, 6
         s.key = src[:s.k // 8]
         if not s.stale:
             s.auth_key = s._enc(0)                       # MGR4
@@ -743,7 +743,7 @@ for iv, n, want in ((IV60B, 60, TC6), (IV60B, 32, TC6), (IV, 12, (RC, RT))):
           finish(cl, A, P)[:2] == want)
 cl = iv_by_derive(IV60B, 0)
 check('kl.derive of 0 bytes into Set_Aux_Value changes nothing (DER8)', (cl.state, cl.cumul_len) == (SAV, 0))
-check('kl.derive of 20 bytes into a 480-bit IV (granularity b, DER1 check 3) -> Invalid',
+check('kl.derive of 20 bytes into a 480-bit IV (granularity b, DER1 item 5) -> Invalid',
       iv_by_derive(IV60B, 20).state == INV)
 info('the GCM IV/J0 endpoint is read as the IV fed to process_VLI, J0 being computed by finalize()')
 cl = Gcm.provisioned(bytes(16), J0=b2v(J0B))
@@ -752,15 +752,15 @@ check('Set IV: kl.derive into `key` in Ready; message matches REF',
       kl_encrypt(None, None, A, P, cl=cl)[:2] == ref_gcm(SRC[:16], IV, A, P))
 spec_note('<<KLEE-defined-derivation-endpoints>> omits GCM with Set IV; its `key` in Ready taken as a '
           'destination (DER5/DER7)')
-for name, cl, n in (('in Hash_Absorb (not an endpoint)', at('ha'), 16),
-                    ('in Success (DER1 check 1)', at('success'), 16),
-                    ('into a key configured by a SKID (DER4)', Gcm.provisioned(skid=SKID), 16),
-                    ('of 8 bytes into a 128-bit key (DER1 check 4)', at('ready'), 8),
-                    ('of 16 bytes into a 256-bit key (DER1 check 4)', Gcm.provisioned(bytes(32)), 16),
-                    ('of 0 bytes into a key (DER1 check 4)', at('ready'), 0)):
+for name, cl, n in (('in Hash_Absorb (DER1 items 1, 3)', at('ha'), 16),
+                    ('in Success (DER1 items 1, 3)', at('success'), 16),
+                    ('into a key configured by a SKID (DER4, DER1 item 3)', Gcm.provisioned(skid=SKID), 16),
+                    ('of 8 bytes into a 128-bit key (DER1 item 6)', at('ready'), 8),
+                    ('of 16 bytes into a 256-bit key (DER1 item 6)', Gcm.provisioned(bytes(32)), 16),
+                    ('of 0 bytes into a key (DER1 item 6)', at('ready'), 0)):
     cl.derive(SRC, n)
     check(f'kl.derive {name} -> Invalid, no key written', (cl.state, cl.key) == (INV, b''))
-info("kl.derive of length 0 into `key` taken to fail DER1 check 4, not to be DER8's no-op")
+info("kl.derive of length 0 into `key` taken to fail DER1 item 6, not to be DER8's no-op")
 
 section('negative controls')
 sw, le = [], []

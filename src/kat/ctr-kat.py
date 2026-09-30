@@ -133,13 +133,13 @@ class KsLocker:
         return out, 0
 
     def derive_key(self, src, length):
-        """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker (no listed
-        pair) or DRBG output bytes (DER7, unrestricted: no narrowing)."""
-        if isinstance(src, KsLocker):
-            return src.invalidate(), self.invalidate()
+        """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker or DRBG output bytes
+        (DER7, unrestricted: no narrowing)."""
+        if isinstance(src, KsLocker):         # keystream (DER6 source) into a key: pair not admitted
+            return src.invalidate() if src.state != OP else (src.invalidate(), self.invalidate())
         n = self.params()[0] // 8
         if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
-            return self.invalidate()          # DER1 checks 1, 2 (DER4), 4
+            return self.invalidate()          # DER1 items 2-3, DER4 (item 3), item 6
         self.key = b2v(src[:n])
         return True
 
@@ -147,7 +147,7 @@ class KsLocker:
 def derive_to_hash(cl, h, length):
     """DER6: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; DER8 discards the unused tail."""
     if cl.state != OP:
-        return cl.invalidate()                # DER1 check 1
+        return cl.invalidate()                # DER1 items 1, 3
     return h.update(keystream(cl, length)) or True
 
 def keystream(cl, nbytes, per_block=False):
@@ -385,13 +385,14 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, c0(64)), 64), PT).hex()
     return cl.state, cl.key
 
-eq("DRBG output (DER7), length 32, into the 16-byte key (DER1 check 4), then F.5.1", derived(32), (RDY, c))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (DER4)", (32, 1)),
-                    ("destination in Operate (DER1 check 1)", (32, 0, True))):
+eq("DRBG output (DER7), length 32, into the 16-byte key (DER1 item 6), then F.5.1", derived(32), (RDY, c))
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (DER4, DER1 item 3)", (32, 1)),
+                    ("destination in Operate (DER1 items 2-3)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst = ctr_cl(key, 64, 64, T1, c0(64)), ctr_cl(key, 64, 64)
 dst.derive_key(src, 16)
-eq("CTR keystream into a CTR key (no listed pair) -> both Invalid", (src.state, dst.state), (INV, INV))
+eq("CTR keystream into a CTR key (endpoints defined, pair not admitted) -> both Invalid", (src.state, dst.state),
+   (INV, INV))
 cl, h = ctr_cl(key, 64, 64, T1, c0(64)), hashlib.sha256()
 ok = derive_to_hash(cl, h, 40)
 eq("DER6: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
@@ -399,7 +400,7 @@ eq("DER6: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT;
    (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
 cl = ctr_cl(key, 64, 64)
 derive_to_hash(cl, hashlib.sha256(), 40)
-eq("DER6 with the source in Ready (not an endpoint) -> source Invalid", cl.state, INV)
-spec_note("<<KLEE-derive-endpoints>> lists no source for CTR/XCTR, yet their keystream is obtainable by "
-          "kl.exec, so DER6 admits it into a hash/MAC; this harness follows DER6.")
+eq("DER6 with the source in Ready (no source endpoint, DER1 items 1, 3) -> only the source Invalid", cl.state, INV)
+spec_note("DER6 'unconditionally exported' is undefined and <<KLEE-defined-derivation-endpoints>> lists no "
+          "CTR/XCTR source; the Operate keystream (gated by no MachinePolicy bit) is taken as a DER6 source.")
 done()

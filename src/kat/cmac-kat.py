@@ -133,15 +133,14 @@ def derive(src, dst, length):
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(c.state in ERROR_STATES for c in lockers):
         return                                    # SGR19
-    if dst.state not in (READY, ABSORB) or isinstance(src, Cmac) and src.state != OUTPUT:
-        for c in lockers[:-1]:
-            c._invalid()
-        dst._invalid('pair not listed')           # SGR5 for a Success destination
+    bad = [c for c, ok in ((src, (OUTPUT,)), (dst, (READY, ABSORB))) if c in lockers and c.state not in ok]
+    for c in bad:                                 # DER1 items 1, 3: only the offending lockers
+        c._invalid('DER1 items 1, 3' if c is bad[-1] else None)
     data = v2b(src.exec('C', klen=8 * length), length) if isinstance(src, Cmac) else src
     if dst.state == ABSORB:                       # consumed as kl.exec would be (DER8)
         return dst.exec('B', b2v(data[:length]), 8 * length)
     if dst.skid is not None or length < len(dst.key) or len(data) < len(dst.key):
-        dst._invalid('DER4, DER1 check 4')
+        dst._invalid('DER4 (DER1 item 3), DER1 item 6')
     dst.key = data[:len(dst.key)]
 
 def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, dummy=0, cl=None,
@@ -313,12 +312,12 @@ for length in (16, 32):
     check(f"`key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
 new16 = lambda: Cmac(bytes(16))
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (DER1)", new16, secret, 8),
-        ("length 0 into the key (DER1)", new16, secret, 0),
-        ("12-byte source into the 16-byte key (DER1)", new16, K128[:12], 16),
-        ("into a locker in Hash_Absorb_Last_Block (no endpoint)", last_set, secret, 16),
-        ("into a locker in Success (SGR5)", done_ok, secret, 16),
-        ("into the key of a KeyType 1 locker (DER4)", lambda: Cmac(K128, skid=7), secret, 16),
+        ("length 8 into the 16-byte key, no zero-fill (DER1 item 6)", new16, secret, 8),
+        ("length 0 into the key (DER1 item 6)", new16, secret, 0),
+        ("12-byte source into the 16-byte key (DER1 item 6)", new16, K128[:12], 16),
+        ("into a locker in Hash_Absorb_Last_Block (DER1 items 1, 3)", last_set, secret, 16),
+        ("into a locker in Success (DER1 items 1, 3)", done_ok, secret, 16),
+        ("into the key of a KeyType 1 locker (DER4, DER1 item 3)", lambda: Cmac(K128, skid=7), secret, 16),
         ("24 bytes into Hash_Absorb: short block (DER8, MGR2)", at_absorb, MSG[:24], 24)]:
     cl = mk()
     check(f"{name} -> Invalid", raises(derive, src, cl, n, exc=Invalid) and cl.key is None)
@@ -338,8 +337,8 @@ derive(src, dst, 16)
 check("CMAC tag into another CMAC's `key`: REF", True, tag(None, MSG[:40], cl=dst),
       ref_cmac(VEC[1][3], MSG[:40])[0])
 src, dst = at_absorb(), Cmac(bytes(16))
-check("CMAC in Hash_Absorb as a source (no endpoint) -> both Invalid",
-      raises(derive, src, dst, 16, exc=Invalid) and src.state == dst.state == INVALID)
+check("CMAC in Hash_Absorb as a source (no source endpoint) -> only the source Invalid",
+      raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, READY))
 info("CMAC is read as one of the MACs of the <<KLEE-defined-derivation-endpoints>> row for "
      "<<KLEE-hash-functions-MACs-XOFs>> (kl.exec input/output endpoints), which does not name it.")
 

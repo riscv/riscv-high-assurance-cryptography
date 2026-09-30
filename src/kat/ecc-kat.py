@@ -37,7 +37,7 @@ def targets(state, eddsa, sig_exit=True):
     """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, SGR4, SGR8."""
     entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
     free = entry - (set() if sig_exit else {SET_SIG})
-    ops = {SIGN_GEN, SIGN_VER} | (set() if eddsa else {POINT_MUL})
+    ops = {POINT_MUL, SIGN_GEN, SIGN_VER}
     absorb = {MSG_ABSORB} if eddsa else set()
     if state == READY:
         t = entry | ops | absorb
@@ -68,6 +68,7 @@ class Locker:
         self.scalar, self.sec, self.sig, self.hash, self.rnd = bytes(self.fw), None, None, None, None
         self.has, self.out_type, self.progress, self.bb, self.loading = set(), False, 0, 0, None
         self.msg_pass, self.ctx, self.absorb, self.pass_xs, self.r, self.kp = 0, b'', None, None, None, None
+        self.mdh = dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0, KeyType=0)
         self.state = READY
 
     # points: little-endian coordinates, all-ones sentinel for infinity
@@ -101,7 +102,7 @@ class Locker:
 
     def halt(self, progress=1, k=None):
         """Precise halt of the current long-running kl.exec (IRR4)."""
-        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 15:
+        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 13:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
             self.rnd = v2b(k, self.j // 8)
@@ -547,6 +548,13 @@ def ed_verify(c, pk, sig, msg, ctx=b''):
     return cr.state
 
 
+def ed_point_mul(c, scalar):
+    cr = load(Locker(c), SET_SCALAR, scalar)
+    cr.setst(POINT_MUL)
+    cr.exec_run()
+    return cr.output_all()
+
+
 def invalid(fn, *a, **kw):
     return raises(fn, *a, exc=Invalid, **kw)
 
@@ -610,8 +618,6 @@ for label, k in (('0', 0), ('n', P256.n), ('n+1', P256.n + 1)):
     cr = load(Locker(P256), SET_SCALAR, v2b(k, 32))
     cr.setst(POINT_MUL)
     check(f'Scalar = {label} -> Invalid', invalid(cr.exec_run))
-spec_note('<<KLEE-ECC>> _Point_Mul_ step 1 invalidates the locker if `Scalar` "does satisfy"'
-          ' 1 <= int(Scalar) < n; read as "does not".')
 for k, want in ((P256.n - 1, (P256.G[0], P256.p - P256.G[1])), (2, P256.add(P256.G, P256.G))):
     cr = load(Locker(P256), SET_SCALAR, v2b(k, 32))
     cr.setst(POINT_MUL)
@@ -649,7 +655,7 @@ section('Progress and <<KLEE-MGR-progress-discard>>')
 cr = armed()
 check('Progress zero when nothing is interrupted', cr.machine_use == 0)
 cr.halt(0x1234, K0)
-check('halt: Progress non-zero in MachineUse[15:1], RndNum kept, State unchanged',
+check('halt: Progress non-zero in MachineUse[13:1], RndNum kept, State unchanged',
       (cr.machine_use, b2v(cr.rnd), 'rnd' in cr.has, cr.state) == (0x1234 << 1, K0, True, SIGN_GEN))
 check('resume uses the held RndNum, draws nothing', None, cr.exec_run([])[:3], (R0, S0, 0))
 check('completion zeroes Progress, destroys RndNum', (cr.progress, cr.rnd, 'rnd' in cr.has) == (0, None, False))
@@ -666,15 +672,17 @@ cr.setst(SIGN_GEN)
 check('after the discard the operation draws afresh', cr.exec_run([K0])[:2] == (R0, S0))
 cr = load(Locker(P256), SET_SCALAR, D256)
 cr.setst(POINT_MUL)
-cr.halt(0x7FFF)
+cr.halt(0x1FFF)
 check('halted Point_Mul resumes to d*G, Progress zero after',
       (cr.exec_run(), cr.progress) == (P256.mul_g(V256['x']), 0))
 cr = load(Locker(P256), SET_SCALAR, D256)
 cr.setst(POINT_MUL)
-check('Progress at a halt is non-zero and fits [15:1]', invalid(cr.halt, 0) and invalid(cr.halt, 0x8000))
+check('Progress at a halt is non-zero and fits [13:1]', invalid(cr.halt, 0) and invalid(cr.halt, 0x2000))
+cr.out_type = True
+cr.halt(0x1FFF)
+check('OutputType | Progress << 1 fits the 14-bit _MachineUse_', cr.machine_use == (1 << 14) - 1)
 check('only long-running States can halt', invalid(load(Locker(P256), SET_HASH, b'').halt))
 info('Progress encoding is implementation-defined: the model only tracks zero / non-zero.')
-spec_note('<<KLEE-ECC-MachineUse>> puts Progress in bits [15:1] of _MachineUse_, which is 14 bits wide')
 
 section('State machine: entry conditions, transfers, Output')
 SIG0 = bytes(64)
@@ -720,11 +728,6 @@ cr.setst(POINT_MUL)
 cr.halt(3)
 cr.setst(POINT_MUL)
 check('same-State kl.setst admitted (SGR4), zeroes Progress (MGR8)', (cr.state, cr.progress) == (POINT_MUL, 0))
-cr = load(Locker(EC.ED25519), SET_SCALAR, bytes(range(1, 33)))
-check('ed25519: _Point_Mul_ -> Invalid', invalid(cr.setst, POINT_MUL))
-spec_note('<<KLEE-EdDSA>> removes _Point_Mul_, so the public key A of a seed held in the locker'
-          ' can never be output.')
-spec_note('the <<KLEE-ECC>> State list names both 46 and 47 _Success_; 47 is _Failure_.')
 
 
 def reach(eddsa, sig_exit=True):
@@ -798,9 +801,15 @@ check('Xs bit 6 drops the signature: Sign_Verify -> Invalid', invalid(cr.setst, 
 
 section('Ed25519 / Ed25519ph: RFC 8032 7.1, 7.3')
 c = EC.ED25519
+check('b = 256: the seed is b bits', all(len(bytes.fromhex(v[1])) * 8 == PARAMS['ed25519'][0] for v in RFC8032_ED25519))
 for name, seed, pk, msg, sig in RFC8032_ED25519:
     seed, pk, msg, sig = map(bytes.fromhex, (seed, pk, msg, sig))
-    check(f'{name}: A from the seed', load(Locker(c), SET_SCALAR, seed).keys()[2] == pk)
+    s = load(Locker(c), SET_SCALAR, seed).keys()
+    check(f'{name}: A from the seed; _Point_Mul_ of s mod L gives A', s[2] == pk
+          and ed_point_mul(c, v2b(s[0] % c.L, 32)) == pk)
+    cr = load(Locker(c), SET_SCALAR, seed)
+    cr.setst(POINT_MUL)
+    check(f'{name}: _Point_Mul_ on the seed itself (int >= L) -> Invalid', invalid(cr.exec_run))
     got, p1, cr = ed_sign(c, seed, msg, chunk=16)
     check(f'{name}: pure-mode signature', None, got.hex(), sig.hex())
     check(f'{name}: msg_pass 1 after pass 1, 0 after Sign_Generate; Success',
@@ -838,6 +847,8 @@ cr.exec_in(msg)
 cr.setst(MSG_ABSORB, 1)
 cr.exec_in(msg + b'\0')
 check('different messages in the two signing passes -> Invalid at pass 2', invalid(cr.setst, SIGN_GEN))
+spec_note('<<KLEE-EdDSA>> keeps the <<KLEE-ECC>> _Point_Mul_, int(Scalar)*P, not s*B with s from H(seed):'
+          ' A of a seed in the locker is still never output (a seed >= L is even rejected).')
 spec_note('<<KLEE-EdDSA>> leaves `msg_pass` "at 1" on a pass-2 mismatch, but SGR10 clears Content'
           ' on entering _Invalid_; the clause is unobservable.')
 _, p1, cr = ed_sign(c, seed, msg)
@@ -845,10 +856,13 @@ check('identical messages in both passes sign', (p1, cr.state, 'sig' in cr.has) 
 
 section('Ed448: RFC 8032 7.4 (dom4, ctx, 57-byte encodings)')
 c = EC.ED448
-check('b = 456: point and signature halves are 57 bytes', PARAMS['ed448'][0] // 8 == c.nbytes == 57)
+check('b = 456: seed, point and signature halves are 57 bytes',
+      PARAMS['ed448'][0] // 8 == c.nbytes == 57 == len(bytes.fromhex(RFC8032_ED448[0][1])))
 for name, seed, pk, msg, ctx, sig in RFC8032_ED448:
     seed, pk, msg, ctx, sig = map(bytes.fromhex, (seed, pk, msg, ctx, sig))
-    check(f'{name}: A from the seed', load(Locker(c), SET_SCALAR, seed, 19).keys()[2] == pk)
+    s = load(Locker(c), SET_SCALAR, seed, 19).keys()
+    check(f'{name}: A from the seed; _Point_Mul_ of s mod L gives A', s[2] == pk
+          and ed_point_mul(c, v2b(s[0] % c.L, 57)) == pk)
     check(f'{name}: pure-mode signature', None, ed_sign(c, seed, msg, ctx)[0].hex(), sig.hex())
     check(f'{name}: Sign_Verify -> Success', ed_verify(c, pk, sig, msg, ctx) == SUCCESS)
 check('ctx-bound signature under the empty ctx -> Failure', ed_verify(c, pk, sig, msg) == FAILURE)
@@ -896,41 +910,69 @@ info('Brainpool is anchored on published parameters only: RFC 5639 / 8734 give n
 
 
 class Dest:
-    """A destination of <<KLEE-derive-endpoints>>: a `key` in _Ready_ or a hash in _Hash_Absorb_."""
+    """A non-ECC destination: a `key` in _Ready_, a hash in _Hash_Absorb_, or 'none' (no destination
+    endpoint, e.g. ML-DSA)."""
     def __init__(self, kind, state=None, size=32, **mdh):
         self.kind, self.size, self.data = kind, size, b''
-        self.state = state or (READY if kind == 'key' else HASH_ABSORB)
+        self.state = state or (HASH_ABSORB if kind == 'hash' else READY)
         self.mdh = dict(dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0, KeyType=0), **mdh)
 
 
 def kl_derive(dest, src, length):
-    """ECC `SecondPt` source (any State with HasSecondPt) into a listed destination."""
-    if not isinstance(dest, Dest) or dest.kind == 'key' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='both')                                   # unlisted pair, DER4
-    if 'sec' not in src.has:                                        # DER1: source first
-        raise Invalid(who='source')
-    if dest.state != (READY if dest.kind == 'key' else HASH_ABSORB):
-        raise Invalid(who='destination')
-    if dest.kind == 'hash':                                         # DER6, DER3
-        dest.data += src.sec[:length].ljust(length, b'\0')          # DER8
+    """ECC source: `SecondPt` (HasSecondPt), else the kl.exec output of _Output_ (a signature)."""
+    ecc = isinstance(dest, Locker)
+    field = 'sec' in src.has and not (src.state == OUTPUT and src.out_type)
+    kind = 'scalar' if ecc else dest.kind
+    if not field and src.state != OUTPUT:
+        raise Invalid(who='source')                                 # DER1 items 1, 3: source first
+    if kind == 'none' or dest.state != {'scalar': SET_SCALAR, 'key': READY}.get(kind, HASH_ABSORB) \
+            or kind != 'hash' and dest.mdh['KeyType'] == 1:
+        raise Invalid(who='destination')                            # DER1 items 1-3; DER4
+    if kind == 'key' and not field:
+        raise Invalid(who='both')                                   # no rule admits the pair
+    if kind == 'hash':                                              # DER6, DER3
+        dest.data += src.sec[:length].ljust(length, b'\0') if field else src.exec_out(length)   # DER8
         return
-    s, d = src.mdh, dest.mdh                                        # DER5, DER2
-    if length < dest.size or len(src.sec) < dest.size or d['SCProtection'] < s['SCProtection']:
-        raise Invalid(who='destination')
-    d['UsagePolicy'] = (s['UsagePolicy'] | d['UsagePolicy']) & 0xF | s['UsagePolicy'] & d['UsagePolicy'] & 0x10
-    d['ExpirationDate'] = min([x for x in (s['ExpirationDate'], d['ExpirationDate']) if x] or [0])
-    dest.data = src.sec[:dest.size]
+    size = dest.fw if ecc else dest.size
+    avail = len(src.sec) if field else len(src.sig) - src.bb
+    if length < size or avail < size:
+        raise Invalid(who='destination')                            # DER1 item 6
+    if field:                                                       # DER5, DER2
+        s, d = src.mdh, dest.mdh
+        if d['SCProtection'] < s['SCProtection']:
+            raise Invalid(who='destination')
+        d['UsagePolicy'] = (s['UsagePolicy'] | d['UsagePolicy']) & 0xF | s['UsagePolicy'] & d['UsagePolicy'] & 0x10
+        d['ExpirationDate'] = min([x for x in (s['ExpirationDate'], d['ExpirationDate']) if x] or [0])
+    data = src.sec[:size] if field else src.exec_out(size)
+    if ecc:
+        dest.scalar, dest.bb = data, size                           # DER8: as a completing kl.exec
+    else:
+        dest.data = data
 
 
-section('kl.derive: ECC `SecondPt` as source (<<KLEE-derive-endpoints>>)')
+section('kl.derive: ECC endpoints (<<KLEE-derive-endpoints>>)')
 db = 0x1D5A0B2C3E4F
 
 
 def ecdh(**mdh):
     cr = locker(P256, (SET_SCALAR, D256), (SET_SECONDPT, pt(P256, P256.mul_g(db))))
-    cr.mdh = dict(dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0), **mdh)
+    cr.mdh.update(mdh)
     cr.setst(POINT_MUL)
     return cr, cr.exec_run()
+
+
+def scalar_dest(state=SET_SCALAR, **mdh):
+    cr = Locker(P256)
+    cr.mdh.update(mdh)
+    cr.setst(state)
+    return cr
+
+
+def signing(**mdh):
+    cr = armed()
+    cr.mdh.update(mdh)
+    cr.exec_run([K0])
+    return cr
 
 
 def derive_who(dest, src, length):
@@ -958,19 +1000,43 @@ k = Dest('key', UsagePolicy=0b10100, ExpirationDate=1200, SCProtection=2)
 kl_derive(k, cr, 64)
 check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH narrowed (DER5, DER2)',
       (k.data, k.mdh['UsagePolicy'], k.mdh['ExpirationDate']) == (cr.sec[:32], 0b10111, 900))
+cr, Z = ecdh(UsagePolicy=0b00011, ExpirationDate=900)
+d = scalar_dest(UsagePolicy=0b00100)
+kl_derive(d, cr, 64)
+check('SecondPt into another ECC `Scalar` in _Set_Scalar_: x(Z), field complete, MDH narrowed (DER5)',
+      (b2v(d.scalar), d.mdh['UsagePolicy'], d.mdh['ExpirationDate']) == (Z[0], 0b00111, 900)
+      and invalid(d.exec_in, b'\0'))
+d.setst(POINT_MUL)
+check('the derived Scalar drives _Point_Mul_: x(Z) * G', d.exec_run() == P256.mul_g(Z[0]))
+cr = signing(UsagePolicy=0b00011)
+d = scalar_dest()
+kl_derive(d, cr, 64)
+check('signature output into an ECC `Scalar`: r, source advanced as by Form C, not narrowed',
+      (d.scalar, cr.bb, cr.state, d.mdh['UsagePolicy']) == (cr.sig[:32], 32, OUTPUT, 0))
 for label, dest, src, n, who in (
         ('source without HasSecondPt', Dest('hash'), load(Locker(P256), SET_HASH, b''), 64, 'source'),
         ('hash destination in _Ready_', Dest('hash', READY), ecdh()[0], 64, 'destination'),
         ('key destination outside _Ready_', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
-        ('key with length < key size (DER1)', Dest('key'), ecdh()[0], 16, 'destination'),
+        ('key with length < key size (DER1 item 6)', Dest('key'), ecdh()[0], 16, 'destination'),
         ('key with lower SCProtection (DER2)', Dest('key'), ecdh(SCProtection=1)[0], 64, 'destination'),
-        ('key of KeyType 1 (DER4)', Dest('key', KeyType=1), ecdh()[0], 64, 'both'),
-        ('unlisted destination (an ECC locker)', Locker(P256), ecdh()[0], 64, 'both')):
-    check(f'{label} -> Invalid ({who}), nothing transferred',
-          derive_who(dest, src, n) == who and getattr(dest, 'data', b'') == b'')
-info('reading: SecondPt is a field source (DER8 truncation / zero-pad, source State unchanged); into a'
-     ' hash it is unrestricted (DER6), into a key it is the DER5 shared secret (restricted).')
-info('reading: a KeyType-1 key destination (DER4) makes the pair unlisted, so both lockers become _Invalid_.')
+        ('key of KeyType 1 (DER4)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('ECC Scalar of KeyType 1 (DER4)', scalar_dest(KeyType=1), ecdh()[0], 64, 'destination'),
+        ('ECC destination in _Ready_', scalar_dest(READY), ecdh()[0], 64, 'destination'),
+        ('ECC Scalar with length < b/8 (DER1 item 6)', scalar_dest(), ecdh()[0], 31, 'destination'),
+        ('Machine without a destination endpoint', Dest('none'), ecdh()[0], 64, 'destination'),
+        ('signature output into a `key` (no rule)', Dest('key'), signing(), 64, 'both')):
+    check(f'{label} -> Invalid ({who}), nothing transferred', derive_who(dest, src, n) == who
+          and not any(dest.scalar if isinstance(dest, Locker) else dest.data))
+info('reading: SecondPt is a field source (DER8 truncation / zero-pad, source State unchanged); into a hash it is'
+     ' unrestricted (DER6), into a key or ECC Scalar it is the DER5 shared secret (restricted).')
+info('reading: the _Output_ signature is an unrestricted kl.exec-output source, admitted into a hash (DER6) or an'
+     ' ECC Scalar (<<KLEE-derive-endpoints>>) only.')
+spec_note('in _Output_ of a signature with HasSecondPt both `SecondPt` and the kl.exec output are sources and'
+          ' nothing selects one; the model uses the output.')
+info('reading: a locker without an endpoint for its role (a KeyType-1 key destination included, DER4) alone becomes'
+     ' _Invalid_ (DER1 items 1, 3); both only when two endpoints meet that no rule admits.')
+spec_note('"Any other pair transitions both lockers" (<<KLEE-instruction-derive>>) vs DER1 item 3, which'
+          ' invalidates only "the offending lockers".')
 
 section('Negative controls')
 seed, pk, msg, sig = map(bytes.fromhex, RFC8032_ED25519[1][1:])

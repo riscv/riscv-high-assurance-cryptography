@@ -169,7 +169,7 @@ def kl_derive(dst, src, length):
         return 'noop'  # SGR19
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # DER1 item 1
+        c.reset()  # DER1 items 1, 3
     if bad or not length:
         return 'refused' if bad else 'noop'
     dst.exec('B', src.exec('C', nbytes=length)[1])  # DER8: each endpoint advances as kl.exec would
@@ -314,7 +314,8 @@ info('Serialized Content: block_base in bits (process_VLI unit); input_base/outp
      'serialized as 0, being reset by every kl.exec')
 info('kl.setst to _Hash_Output_ modeled as Form A (Form not stated); same-State kl.setst there '
      '(SGR4) not exercised')
-info('a State not admitting its kl.derive endpoint invalidates only the offending locker (DER1 item 1)')
+info('a State defining no kl.derive endpoint invalidates only its locker (DER1 item 3), not both as '
+     'for "any other pair" (<<KLEE-instruction-derive>>)')
 spec_note('<<KLEE-HMAC>> names SM3 as an underlying hash, but <<KLEE-exec-encodings>> has no HMAC-SM3 '
           'Machine')
 done()

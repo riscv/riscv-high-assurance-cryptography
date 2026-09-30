@@ -346,7 +346,7 @@ class Kmac:
 def derive(hart, dst, src, length):
     """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (DER6, DER8)."""
     if src.st not in ERROR_STATES and dst.st not in ERROR_STATES:
-        bad = [c for c, s in ((src, OUTPUT), (dst, ABSORB)) if c.st != s]   # DER1 check 1
+        bad = [c for c, s in ((src, OUTPUT), (dst, ABSORB)) if c.st != s]   # DER1 checks 1, 3
         for c in bad:
             c.invalidate()
         if not bad and length:

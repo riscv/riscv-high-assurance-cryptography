@@ -412,14 +412,12 @@ class CXOF(XOF):
 def kl_derive(dst, src, length):
     """kl.derive between the endpoints of <<KLEE-derive-endpoints>> under the DER rules (all unrestricted here)."""
     if src.in_error() or dst.in_error(): return                   # SGR19
-    if src.SRC is None or dst.DST is None:                        # "any other pair"
-        src.invalidate(); dst.invalidate(); return
-    states, n = dst.DST
-    bad = [c for c, ok in ((src, src.st in src.SRC), (dst, dst.st in states)) if not ok]
-    for c in bad: c.invalidate()                                  # DER1 check 1
+    states, n = dst.DST or ((), None)                             # no endpoint: offending locker only
+    bad = [c for c, ok in ((src, src.st in (src.SRC or ())), (dst, dst.st in states)) if not ok]
+    for c in bad: c.invalidate()                                  # DER1 items 1-3
     if bad: return
     if (n and (dst.key_type or length < n)) or (not n and length % (dst.GRAN // 8)):
-        return dst.invalidate()                                   # DER4; DER1 checks 3, 4
+        return dst.invalidate()                                   # DER4 + DER1 item 3; items 5, 6
     eff = n or length                                             # DER8
     if eff: dst.derive_dest(src.derive_source(eff))
 
@@ -1047,20 +1045,21 @@ for length in (16, 24):
           (st0, ct + tag, v2b(src.exec('C', 0, 64), 8)),
           ((FINALIZE, READY, stream[:16], [b2v(stream[:8]), b2v(stream[8:16])]),
            ref_aead_encrypt(stream[:16], KAT_NONCE, ad579, pt579), stream[16:24]))
-info('DER4 gives no outcome for a key destination with _KeyType_ = 1; the destination is invalidated')
+info('a locker with no endpoint for its role, or a _KeyType_ = 1 key destination (DER4), is the offending locker of '
+     'DER1 items 1, 3: only it goes _Invalid_; "any other pair" (both) is left to unadmitted endpoint combinations')
 res = []
 for dst, length in ((aead_to(ABSORB), 16), (AEAD(K, skid=SKID_A), 16), (AEAD(K), 8), (AEAD(K), 15), (AEAD(K), 0),
                     (XOF().setst(ABSORB, 'A'), 12)):
     src = at_finalize(XOF, msg)
     kl_derive(dst, src, length)
     res.append((dst.st, dst.s, src.st, v2b(src.exec('C', 0, 64), 8)))
-check('destination not in _Ready_ (DER1 check 1), _KeyType_ = 1 (DER4), length 8, 15, 0 < 16 (DER1 check 4), '
-      '12 bytes into a 64-bit-granular absorb (DER1 check 3, DER8): destination _Invalid_, nothing transferred',
+check('destination not in _Ready_ (DER1 items 2-3), _KeyType_ = 1 (DER4), length 8, 15, 0 < 16 (DER1 item 6), '
+      '12 bytes into a 64-bit-granular absorb (DER1 item 5, DER8): destination _Invalid_, nothing transferred',
       True, res, [(INVALID, [0] * 5, FINALIZE, stream[:8])] * 6)
 src, dst = AEAD(K), AEAD(0)
 kl_derive(dst, src, 16)
-check('Ascon-AEAD128 as a source (no exportable endpoint) -> both lockers _Invalid_', True, (src.st, dst.st),
-      (INVALID, INVALID))
+check('Ascon-AEAD128 as a source (no exportable endpoint, DER1 items 1, 3) -> only the source _Invalid_', True,
+      (src.st, dst.st), (INVALID, READY))
 res = []
 for cls, n in ((XOF, 16), (Hash256, 32)):
     src, dst = at_finalize(cls, msg), XOF().setst(ABSORB, 'A')

@@ -113,6 +113,9 @@ class Edwards:
         x, y = P
         return (self.a * x * x + y * y - 1 - self.d * x * x * y * y) % self.p == 0
 
+    def in_subgroup(self, P):
+        return self.is_on_curve(P) and self.mul(self.L, P) == (0, 1)
+
     def _ext(self, P):
         x, y = P
         return (x % self.p, y % self.p, 1, x * y % self.p)
