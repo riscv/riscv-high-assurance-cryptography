@@ -1,0 +1,93 @@
+---
+name: Allow release tags to deploy to Pages
+
+# One-time repository setup, run by hand.
+#
+# Enabling GitHub Pages creates the `github-pages` environment with a deployment
+# policy that admits only `main`. publish-site.yml also triggers on `v*` tag
+# pushes, so a tag cut by hand is rejected at the deploy step with
+#
+#   Tag "v0.8" is not allowed to deploy to github-pages due to environment
+#   protection rules
+#
+# (seen on riscv/riscv-performance-event-sampling, run 36657608845). Tags cut by
+# version-bot.yml are unaffected: it tags with GITHUB_TOKEN, which raises no
+# workflow event, and its release publish reaches publish-site.yml through
+# `workflow_call` on the main ref. So this rule is insurance for a hand-cut tag.
+#
+# riscv/docs-spec-template#165 documents adding the rule as a manual admin step,
+# because GITHUB_TOKEN cannot change environment settings. This workflow tries it
+# with the org-level GHTOKEN secret instead. Whether that works depends on
+# GHTOKEN's scopes: writing deployment-branch-policies needs repo admin (classic
+# `repo`, or fine-grained `administration: write`). GHTOKEN was provisioned for
+# template-sync.yml, which only needs to push workflow files, so a 403 here is an
+# expected outcome -- it means the rule must be applied by a repository admin, or
+# a separate token minted for it. Either way the answer is recorded in the run
+# log rather than guessed at.
+#
+# Safe to re-run: it checks for an existing v* tag rule before adding one. Once
+# the rule is in place this workflow has no further purpose and can be deleted.
+
+on:
+  workflow_dispatch:
+
+# Everything here authenticates as GHTOKEN; nothing is needed from GITHUB_TOKEN.
+permissions: {}
+
+jobs:
+  tag-rule:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add the v* tag rule to the github-pages environment
+        env:
+          GH_TOKEN: ${{ secrets.GHTOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GHTOKEN is not available to this repository. It is an" \
+                 "organization secret; check that riscv exposes it here."
+            exit 1
+          fi
+
+          api="repos/$REPO/environments/github-pages/deployment-branch-policies"
+
+          # Reading the policies needs only read access, so this usually succeeds
+          # even when the write below does not -- which is the informative case.
+          echo "==> Current deployment policies for github-pages"
+          if gh api "$api" > policies.json 2> list-error.log; then
+            jq -r '.branch_policies[] | "    \(.type): \(.name)"' policies.json
+            jq -r '.branch_policies[] | select(.type == "tag") | .name' policies.json > tags.txt
+          else
+            cat list-error.log
+            echo "::warning::Could not list current policies; trying the add anyway."
+            : > tags.txt
+          fi
+
+          if grep -qxF 'v*' tags.txt; then
+            echo "==> A v* tag rule already exists -- nothing to do."
+            exit 0
+          fi
+
+          echo "==> Adding tag rule v*"
+          set +e
+          response="$(gh api -X POST "$api" -f name='v*' -f type=tag 2>&1)"
+          status=$?
+          set -e
+          echo "$response"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Could not add the rule (gh exited $status). A 403 or" \
+                 "'Resource not accessible' means GHTOKEN lacks repo admin" \
+                 "(classic 'repo', or fine-grained 'administration: write')." \
+                 "Apply it as a repository admin instead: Settings -> Environments" \
+                 "-> github-pages -> Deployment branches and tags -> Add rule ->" \
+                 "Tag, pattern v*."
+            exit 1
+          fi
+
+          echo "==> Policies after the change"
+          gh api "$api" --jq '.branch_policies[] | "    \(.type): \(.name)"'
+          echo "Release tag pushes can now deploy to github-pages."
