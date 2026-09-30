@@ -542,6 +542,8 @@ Error States 54 and 55, if defined, will not necessarily have a lower priority t
 | 54, 55 | (Reserved)                     | {empty}                 | Reserved for future use.
 |===
 
+Note that State _Expired_ is defined also if `Zklexpire` is not implemented, since in this case any CL with a non-zero _ExpirationDate_ is considered expired.
+zzz
 The rules governing the behavior of the KLEE architecture when interacting with CLs or SCCs in these states are defined in <<KLEE-State-management>>.
 
 // ////////////////////////////////////////////////////////////////////
@@ -671,7 +673,7 @@ If `Zklexpire` is supported, the KLEE implementation must have access to a secur
 
 If `Zklexpire` is not supported, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metadata (see <<KLEE-Metadata-validity>>).
 
-If the secure clock cannot be read, a CL with non-zero _ExpirationDate_ is treated as expired.
+If the secure clock cannot be read, a CL with non-zero _ExpirationDate_ is treated as expired as soon as a usage-controlled instruction is executed on it.
 
 If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
 
@@ -751,20 +753,19 @@ Metadata is _unsupported_ when the combination of _Machine_, _MachinePolicy_ and
 
 A supplied MDH header is _invalid_ when at least one of the following conditions is satosfied:
 
-* A Reserved bit is non-zero;
-* _AuxDataLen_ is 1 in a provisioning operation (it is a valid for an import operation);
-* _AuxDataLen_ is non-zero in PI or in a PCCC whose Configuration State has base type `pi`;
-* _ADSDropped_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`;
-* _MachinePolicy_ is zero for a Machine that requires at least one set bit in it;
+* _Version_ is unsupported;
 * _KeyType_ is 2 or 3;
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<KLEE-Localities>>);
-* _AuxInfo_ is non-zero for a Machine that does not use it;
+* The MDH carries any type of custom value without explicitly expressing _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<KLEE-GR-custom-locality>>);
 * _ExpirationDate_ is non-zero and `Zklexpire` is not implemented;
-* _Version_ is unsupported;
 * _State_ is not _Unconfigured_ at provisioning;
 * _State_ is _Unconfigured_ or 61–63 at import (cf. <<KLEE-State-management>>);
-* _State_ is 54, 55, or any value not supported by the Machine encoded in the MDH; or
-* The MDH carries any type of custom value without explicitly expressing _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<KLEE-GR-custom-locality>>).
+* _State_ is 54, 55, or any value not supported by the Machine encoded in the MDH;
+* _AuxDataLen_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`;
+* _ADSDropped_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`;
+* _AuxInfo_ is non-zero for a Machine that does not use it;
+* _MachinePolicy_ is zero for a Machine that requires at least one set bit in it; or
+* A Reserved bit is non-zero.
 
 [horizontal]
 [[KLEE-MVR-open, Metadata Validity Rule]]Metadata Validity Rule:: A `kl.mgmt` that opens a provisioning or import on unsupported Metadata raises KLEE exception `kl_exc_unsupported`; on invalid Metadata it transitions the CL to Error State _Invalid_.
