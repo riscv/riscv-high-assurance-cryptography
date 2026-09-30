@@ -59,7 +59,7 @@ The architecture is mature in many respects:
 
 * The error architecture, gate ordering and context-switch ordering are carefully built.
 * The SCC construction matches RFC 8452 under the notation's `@` convention.
-* The `*lclstatus` lazy-save machinery is well thought out.
+* The `*llockerstatus` lazy-save machinery is well thought out.
 
 Two defects are nevertheless security-critical, and they sit in the normative core rather than in placeholder areas:
 
@@ -303,7 +303,7 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 
 ### **FIXED** M5 — `kl.rename` and `kl.swap` are underspecified
 
-**Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedlocker`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a locker.
+**Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedlocker`, lazy-save (`*llockerstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a locker.
 
 **Location.**
 
@@ -311,7 +311,7 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 * IRR1, 2755 (uninterruptible list omits both)
 * SGR20, 2446 (partial-State allowance omits both)
 * the Error-State table, 2694–2710 (omits both)
-* priv 281 (the `*lclstatus` exemption list names only `kl.clone`)
+* priv 281 (the `*llockerstatus` exemption list names only `kl.clone`)
 * unpriv 988 (`klmanagedlocker` maintenance)
 
 **Description.** The following are undefined:
@@ -653,7 +653,7 @@ Minor: 626 reads "…entry (…), is _unconfigured_"; drop the comma.
 * IRR1 (2802): add `kl.rename` and `kl.swap` to the uninterruptible list.
 * SGR20 (2489): add both to the instructions admitted on a Partial or Configuration-State locker.
 * Error-State table (2740–2757): add a row, "`kl.rename`, `kl.swap`: moved or exchanged unchanged".
-* priv 281: add "`kl.rename` as a destination access" to the `*lclstatus` exemptions.
+* priv 281: add "`kl.rename` as a destination access" to the `*llockerstatus` exemptions.
 
 **M7.** klstart item 1 (955–958) still reads "…or 0 in an implementation that selects the restart option … for `kl.load`, `kl.store`, `kl.input` and `kl.output`". IRR3 now forbids restart on synchronous exceptions, so the two texts contradict. Insert "for an asynchronous interrupt" after "or 0".
 
@@ -818,7 +818,7 @@ Nothing in unpriv 157 or priv 112 changed. Re-reading priv 99, 112 and 342–343
 **Additional defect in 157.** The text says the hardware raises "a virtual-instruction or a illegal-instruction exception … depending on the `medeleg`/`hedeleg` bits". The choice between the two causes does not depend on delegation. Per the Privileged ISA (H extension, "Traps"), it depends on the privilege mode (V=1 versus V=0) and on whether the instruction would be legal in HS-mode. Delegation only decides *where* the trap is taken. The sentence is wrong independently of M3.
 
 **Proposed text, unpriv 157** (replace from "in that case" up to "not reserved"):
-> in that case `kl.load` and `kl.store` raise `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-exceptions>>), whatever the `*lclstatus` fields of the locker they name; their encodings are nonetheless assigned, not reserved (<<KLEE-illegal-instruction-grounds>>)
+> in that case `kl.load` and `kl.store` raise `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-exceptions>>), whatever the `*llockerstatus` fields of the locker they name; their encodings are nonetheless assigned, not reserved (<<KLEE-illegal-instruction-grounds>>)
 
 **Proposed text, priv 99** (append to the `kl_exc_locker_off` row):
 > On an implementation that emulates `Zklmem`, also every `kl.load` and `kl.store`.

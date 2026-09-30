@@ -3,7 +3,7 @@
 
 This harness transcribes the *Machine-independent* rules of the Instructions chapter of the draft
 RISC-V KLEE specification (modules/ROOT/pages/Zkl-ISA-unpriv.adoc), with the exception causes
-and the *lclstatus Off gate of the Privileged Architecture chapter (modules/ROOT/pages/Zkl-ISA-priv.adoc), and checks the
+and the *llockerstatus Off gate of the Privileged Architecture chapter (modules/ROOT/pages/Zkl-ISA-priv.adoc), and checks the
 text's own invariants and worked sequences:
 
   * the 128-bit MDH layout (<<KLEE-metadata-header>>): tiling, walking ones,
@@ -41,7 +41,7 @@ text's own invariants and worked sequences:
     kl.derive (<<KLEE-instruction-derive>>);
   * the Error Handling Architecture (<<KLEE-error-architecture>>), with and
     without the Privileged Architecture, the CSK and KLS gates, and a compact
-    model of the *lclstatus Off gate (<<KLEE-CSR-lclstatus>>);
+    model of the *llockerstatus Off gate (<<KLEE-CSR-llockerstatus>>);
   * the reset state and the context save and restore order
     (<<KLEE-state-save-and-restore-order>>), run end to end with a locker whose
     import was interrupted.
@@ -763,7 +763,7 @@ class Unit:
         self.mode = "M"
         self.V = 0
         self.kls_off = False
-        self.lcr = {}                            # mlclstatus fields: 'off' / 'initial' / 'clean' / 'dirty'
+        self.lcr = {}                            # mllockerstatus fields: 'off' / 'initial' / 'clean' / 'dirty'
         self.vstart = 0
         self._rbg = 0
         self.reset()
@@ -4239,7 +4239,7 @@ def test_derive():
 
 def test_error_architecture():
     section("18. Error Handling  --  <<KLEE-error-architecture>>, <<KLEE-exception-codes>>, "
-            "<<KLEE-CSK-requirements>>, <<KLEE-CSR-lclstatus>>")
+            "<<KLEE-CSK-requirements>>, <<KLEE-CSR-llockerstatus>>")
 
     # without the Privileged Architecture (an M-mode-only hart)
     u = fresh(priv=False)
@@ -4312,7 +4312,7 @@ def test_error_architecture():
            trap_of(u.mgmt, 0, CFG_PROVISIONING, cipher_pi())], ["illegal/1"] * 3)
     check("... except the read-only identification CSRs", u.csr_read("klmimpid"), u.impid)
 
-    # the Off gate of *lclstatus, compactly (mlclstatus in effect below M-mode)
+    # the Off gate of *llockerstatus, compactly (mllockerstatus in effect below M-mode)
     u = fresh()
     ready_cipher(u, 0)
     u.mode = "S"
@@ -4353,7 +4353,7 @@ def test_error_architecture():
           (u.clearall(), u.lcr[10]), ("cleared all", "dirty"))
     u.mode = "M"
     u.lcr[0] = "off"
-    check("in M-mode no *lclstatus field is in effect", trap_of(u.getmd, 0), None)
+    check("in M-mode no *llockerstatus field is in effect", trap_of(u.getmd, 0), None)
 
 
 # =====================================================================
