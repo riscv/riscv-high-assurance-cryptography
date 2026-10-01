@@ -184,7 +184,7 @@ class Ocb:
         if st == LAST:
             s.offset ^= s.Lstar
             s.hash_A ^= s.enc(ocb_pad(INPUT, n) ^ s.offset)
-            s.last_blk_len = 0                         # a second kl.exec is not allowed
+            s.last_blk_len = 0                         # a second kl.exec is not allowed (MGR12)
             return 0
         out, tmp = 0, s.offset                         # Form D when n = 0
         if n:
@@ -225,6 +225,8 @@ class Ocb:
             setattr(new, k, f.get(k, 0))
         new.state, new.tag_len = s.state, 32 * (f['tag_len'] + 2)
         new._ladder()
+        if isinstance(new, OcbNonce) and not 6 <= new.N_len <= 120:
+            new._invalid()                             # MGR17: N_len is checked on import too
         return new
 
 def derive(src, dst, length):
@@ -566,7 +568,7 @@ cl = last_done().imported(last_done().export())
 check("Hash_Absorb_Last_Block: the kl.exec clears last_blk_len, so a second one, also after export/import, "
       "-> Invalid", cl.last_blk_len == 0 and inval(cl.exec, 'B', 0, 64) and inval(last_done().exec, 'B', 0, 64))
 
-section("OCB with Set Nonce (Mode 9, <<KLEE-OCB-with-nonce-mode>>)")
+section("OCB with Set Nonce (Mode 9, `AES*_OCB_NONCE`, <<KLEE-OCB-with-nonce-mode>>)")
 for lab, K, N, A, P, CT, t in VEC:
     ok = run(None, None, A, P, t, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == CT
     ok &= run(None, None, A, CT, t, dec=True, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == (P, True)
@@ -579,6 +581,10 @@ check("_Ready_ keeps N and N_len: the next message reuses the nonce", True,
       (cl.N_len, run(None, None, A7, P7, t7, cl=cl)), (8 * len(N7), c1))
 check("export/import after every instruction: vector 07", True,
       run(None, None, A7, P7, t7, hop=True, cl=OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7))), VEC[7][5])
+cl = OcbNonce.provisioned(bytes(16), b2v(N7), 8 * len(N7))
+derive(K7 + bytes(16), cl, 16)
+check("kl.derive into `key` in _Ready_ (<<KLEE-derive-endpoints>>), then vector 7 under the PI nonce", True,
+      run(None, None, A7, P7, t7, cl=cl), VEC[7][5])
 check("kl.setst #set_aux_value -> Invalid", bool(inval(OcbNonce.provisioned(K7, b2v(N7), 96).setst, SET_AUX, 'B', 96)))
 check("PI N_len 5 or 121 -> Invalid at provisioning", True,
       [OcbNonce.provisioned(K7, b2v(N7), n).state for n in (5, 121, 6, 120)], [INVALID, INVALID, READY, READY])

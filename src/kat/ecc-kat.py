@@ -44,9 +44,17 @@ def targets(state, eddsa, sig_exit=True):
 
 def retry_required(mode, r, s, k, n): return r == 0 or s == 0 or (mode == 'sm2' and (r + k) % n == 0)
 
+class Unsupported(Exception):
+    """kl_exc_unsupported at provisioning or import (<<KLEE-Metadata-validity>>)."""
+
 class Locker:
-    def __init__(self, c, sign=True, verify=True, sig_exit=True):
+    def __init__(self, c, sign=True, verify=True, sig_exit=True, aux_info=None, pure_impl=True):
+        """aux_info: <<KLEE-EdDSA>> _AuxInfo_ (0 pre-hash only, 1 pure as well; default 1 for EdDSA);
+        pure_impl: the implementation offers pure mode for the curve."""
         self.c, self.policy, self.sig_exit = c, (sign, verify), sig_exit
+        self.aux_info = (1 if c.edwards else 0) if aux_info is None else aux_info
+        if c.edwards and (self.aux_info > 1 or self.aux_info == 1 and not pure_impl):
+            raise Unsupported('EdDSA _AuxInfo_ reserved, or pure mode not offered')
         self.b, h, self.j, u, v = PARAMS[c.name]
         self.mode = 'eddsa' if c.edwards else 'sm2' if c is EC.SM2C else 'ecdsa'
         fw = self.fw = self.b // 8
@@ -97,6 +105,13 @@ class Locker:
             raise Invalid('transition not allowed')                   # MGR1
         if self.state == MSG_ABSORB:
             self._finalize_pass()
+        f = self.loading
+        if f and self.bb < self.size[f]:            # MGR7: a load left incomplete leaves the field unconfigured
+            if f == 'ctx':
+                self.ctx, self.size['ctx'] = b'', 0
+            else:
+                setattr(self, f, bytes(self.size[f]) if f in ('gen', 'scalar') else None)
+                self.has.discard(f)
         self.discard()
         self.bb, self.loading, self.buf = 0, None, b''
         f = SET_FIELD.get(t)
@@ -170,7 +185,7 @@ class Locker:
 
     def exec_run(self, rbg=(), bad=None, be=False):
         """Form D kl.exec; `bad(attempt)` forces a degenerate draw, `be` mis-encodes EdDSA S."""
-        # secp521r1: the zero msbs of every value used are checked again (corrupted import)
+        # secp521r1: the zero msbs of every value used are checked again (MGR16: KLF corruption)
         used = {POINT_MUL: ('scalar', 'sec' if 'sec' in self.has else 'gen'),
                 SIGN_GEN: ('scalar', 'hash', 'gen') + ('rnd',) * bool(self.progress and 'rnd' in self.has),
                 SIGN_VER: ('sig', 'hash', 'sec', 'gen')}.get(self.state, ())
@@ -179,9 +194,11 @@ class Locker:
         if self.state == POINT_MUL:
             return self._point_mul()
         if self.state == SIGN_GEN:
+            if self.mode != 'eddsa' and not self.valid(self.gen):   # MGR15; EdDSA signs over B
+                return self._fail()
             return self._eddsa_sign(be) if self.mode == 'eddsa' else self._sign(rbg, bad)
         if self.state == SIGN_VER:
-            ok = self._eddsa_verify() if self.mode == 'eddsa' else self._verify()
+            ok = self._eddsa_verify() if self.mode == 'eddsa' else self.valid(self.gen) and self._verify()
             self.discard()
             self.state = SUCCESS if ok else FAILURE
             return ok
@@ -192,13 +209,23 @@ class Locker:
         self.discard()
         self.out_type, self.bb, self.state = out_type, 0, OUTPUT
 
+    def valid(self, data):
+        """<<KLEE-ECC>> valid point: on the curve, not the point at infinity, in the prime-order subgroup."""
+        P = self.dec(data)
+        return P is not None and self.c.in_subgroup(P)
+
+    def _fail(self):                                # MGR15 data error: _Failure_, a Valid State
+        self.discard()
+        self.state = FAILURE
+
     def _point_mul(self):
         k = b2v(self.scalar)                        # <<KLEE-EdDSA>>: s from the configured seed
         if not k or self.mode != 'eddsa' and k >= self.c.n:
             raise Invalid('no configured seed / Scalar out of range')
-        P = self.dec(self.sec if 'sec' in self.has else self.gen)
-        if P is None or not self.c.in_subgroup(P):
-            raise Invalid('base point not on the curve / subgroup, or the point at infinity')
+        base = self.sec if 'sec' in self.has else self.gen
+        if not self.valid(base):                    # not a valid point: data error (MGR15)
+            return self._fail()
+        P = self.dec(base)
         R = self.c.mul(self.keys()[0] if self.mode == 'eddsa' else k, P)
         self.sec = self.enc(R)
         self._to_output(False, 'sec')
@@ -206,13 +233,16 @@ class Locker:
 
     def _sign(self, rbg, bad):
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
+        G = self.dec(self.gen)                      # the base point is `Generator`, not the curve's default
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
-            k = next(draws)
+            k = next(draws, None)
+            if k is None:                           # GR12: RBG failure
+                raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
-            x1 = c.mul_g(k)[0]
+            x1 = c.mul(k, G)[0]
             if self.mode == 'sm2':
                 r = (e + x1) % n
                 s = pow(1 + d, -1, n) * (k - r * d) % n
@@ -231,12 +261,13 @@ class Locker:
         r, s, e, Q = b2v(self.sig[:self.fw]), b2v(self.sig[self.fw:]), b2v(self.hash), self.dec(self.sec)
         if not (1 <= r < n and 1 <= s < n) or Q is None or not c.in_subgroup(Q):
             return False
+        G = self.dec(self.gen)                      # verification over `Generator` too
         if self.mode == 'sm2':
             t = (r + s) % n
-            X = c.add(c.mul_g(s), c.mul(t, Q)) if t else None
+            X = c.add(c.mul(s, G), c.mul(t, Q)) if t else None
             return X is not None and (e + X[0]) % n == r
         w = pow(s, -1, n)
-        X = c.add(c.mul_g(e * w % n), c.mul(r * w % n, Q))
+        X = c.add(c.mul(e * w % n, G), c.mul(r * w % n, Q))
         return X is not None and X[0] % n == r
 
     def exec_out(self, nbytes, pad=False):
@@ -280,6 +311,8 @@ class Locker:
         return s, hh[self.fw:2 * self.fw], self.c.encode(self.c.mul_g(s))
 
     def _enter_pass(self, xs):
+        if self.aux_info == 0:
+            raise Invalid('Msg_Absorb with _AuxInfo_ = 0 (pre-hash only)')
         if xs == 0 and self.policy[0] and any(self.scalar):
             self.msg_pass, self.absorb = 0, self.dom(0) + self.keys()[1]
         elif xs == 1 and self.msg_pass == 1:
@@ -459,13 +492,16 @@ def sign(c, d, e, ks, bad=None):
     r, s, att = cr.exec_run(ks, bad)
     return (r, s), cr.output_all(16), att, cr
 
-def verify(c, pub, e, sig, chunk=None):
-    cr = locker(c, (SET_SECONDPT, pub, chunk), hs(e, PARAMS[c.name][1] // 8), (SET_SIG, sig, chunk), to=SIGN_VER)
+def verify(c, pub, e, sig, chunk=None, gen=None):
+    pre = ((SET_GEN, gen),) if gen is not None else ()
+    cr = locker(c, *pre, (SET_SECONDPT, pub, chunk), hs(e, PARAMS[c.name][1] // 8), (SET_SIG, sig, chunk),
+                to=SIGN_VER)
     cr.exec_run()
     return cr.state
 
-def ed_sign(c, seed, msg, ctx=b'', chunk=None, be=False, msg2=None):
-    cr = locker(c, (SET_SCALAR, seed, chunk), (SET_CTX, ctx, None, len(ctx)))
+def ed_sign(c, seed, msg, ctx=b'', chunk=None, be=False, msg2=None, gen=None):
+    pre = ((SET_GEN, gen),) if gen is not None else ()
+    cr = locker(c, *pre, (SET_SCALAR, seed, chunk), (SET_CTX, ctx, None, len(ctx)))
     cr.setst(MSG_ABSORB, 0)
     cr.exec_in(msg)
     cr.setst(MSG_ABSORB, 1)
@@ -475,8 +511,9 @@ def ed_sign(c, seed, msg, ctx=b'', chunk=None, be=False, msg2=None):
     cr.exec_run(be=be)
     return cr.output_all(c.nbytes), p1, cr
 
-def ed_verify(c, pk, sig, msg, ctx=b''):
-    cr = locker(c, (SET_SECONDPT, pk), (SET_SIG, sig), (SET_CTX, ctx, None, len(ctx)))
+def ed_verify(c, pk, sig, msg, ctx=b'', gen=None):
+    pre = ((SET_GEN, gen),) if gen is not None else ()
+    cr = locker(c, *pre, (SET_SECONDPT, pk), (SET_SIG, sig), (SET_CTX, ctx, None, len(ctx)))
     cr.setst(MSG_ABSORB, 2)
     cr.exec_in(msg)
     cr.setst(SIGN_VER)
@@ -533,7 +570,7 @@ for label, st, data in (('Scalar with bit 521 set', SET_SCALAR, v2b(1 << 521, 72
                         ('all-ones SecondPt (no infinity sentinel any more)', SET_SECONDPT, b'\xff' * 144)):
     check(f'{label} -> Invalid at load', invalid(load, Locker(c), st, data))
 (r, s), sig521, _, _ = sign(c, V521, 7, [99])
-for label, st, f, loads, rbg in (               # bit 575 set as restored by a corrupted import
+for label, st, f, loads, rbg in (               # bit 575 set by a corruption of the locker file (MGR16)
         ('Point_Mul uses a Generator', POINT_MUL, 'gen', [sc(V521, 72)], ()),
         ('Sign_Generate uses a Hash', SIGN_GEN, 'hash', [sc(V521, 72), H7], [99]),
         ('a resumed Sign_Generate uses a RndNum', SIGN_GEN, 'rnd', [sc(V521, 72), H7], []),
@@ -555,10 +592,36 @@ for label, k, want in (('n-1: accepted, result -G', P256.n - 1, (P256.G[0], P256
     cr = locker(P256, sc(k), to=POINT_MUL)
     check(f'Scalar = {label}', (cr.exec_run(), cr.state) == (want, OUTPUT))
 off = v2b(P256.G[0], 32) + v2b(P256.G[1] + 1, 32)
-check('off-curve SecondPt -> Invalid', invalid(locker(P256, sc(2), (SET_SECONDPT, off), to=POINT_MUL).exec_run))
+cr = locker(P256, sc(2), (SET_SECONDPT, off), to=POINT_MUL)
+cr.exec_run()
+check('off-curve SecondPt in _Point_Mul_ -> Failure (MGR15 data error), SecondPt unchanged',
+      (cr.state, cr.sec) == (FAILURE, off))
 check('Sign_Verify with an off-curve public key -> Failure', verify(P256, off, 1, v2b(1, 32) * 2) == FAILURE)
-check('all-ones SecondPt (formerly the infinity sentinel) as base point -> Invalid',
-      invalid(locker(P256, sc(2), (SET_SECONDPT, b'\xff' * 64), to=POINT_MUL).exec_run))
+cr = locker(P256, sc(2), (SET_SECONDPT, b'\xff' * 64), to=POINT_MUL)
+cr.exec_run()
+check('all-ones SecondPt (formerly the infinity sentinel) as base point -> Failure', cr.state == FAILURE)
+cr = locker(P256, sc(2), (SET_GEN, off), to=POINT_MUL)
+cr.exec_run()
+check('off-curve Generator in _Point_Mul_ -> Failure', cr.state == FAILURE)
+cr = locker(P256, sc(2), (SET_GEN, Locker(P256).gen[:40]), to=POINT_MUL)
+cr.exec_run()
+check('Generator load left incomplete: Generator zeroed (MGR7), not a valid point: _Point_Mul_ -> Failure',
+      cr.state == FAILURE and cr.gen == bytes(64))
+cr = locker(P256, (SET_SCALAR, v2b(5, 32)[:16]), to=POINT_MUL)
+check('Scalar load left incomplete: Scalar zeroed (MGR7), _Point_Mul_ -> Invalid',
+      cr.scalar == bytes(32) and invalid(cr.exec_run))
+cr = locker(P256, (SET_SECONDPT, pt(P256, P256.mul_g(3))[:32]), to=SET_HASH)
+check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt clear (MGR7)',
+      cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
+cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
+cr.exec_run([3])
+check('RBG failure in _Sign_Generate_ -> Invalid (GR12)',
+      invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
+check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
+      (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
+pk = pt(P256, P256.mul_g(5))
+check('off-curve Generator in _Sign_Verify_ -> Failure',
+      verify(P256, pk, 7, v2b(1, 32) * 2, gen=off) == FAILURE)
 
 section('Signature retry rules')
 n = P256.n
@@ -685,6 +748,18 @@ for xs, change, label in (
                             **{f: getattr(cr, f) if f in cr.has else None for f in ('sec', 'hash', 'sig')}),
           {**BASE, **change})
 
+section('Signing and verification over a custom `Generator`')
+G2 = pt(P256, P256.mul_g(2))
+cr = locker(P256, (SET_GEN, G2), (SET_SCALAR, D256), hs(E0), to=SIGN_GEN)
+r2, s2, _ = cr.exec_run([K0])
+check('_Sign_Generate_ uses `Generator`: r = x(k * 2G) mod n', r2 == P256.mul_g(2 * K0 % P256.n)[0] % P256.n)
+sig2 = v2b(r2, 32) + v2b(s2, 32)
+Q2 = pt(P256, P256.mul_g(2 * b2v(D256) % P256.n))
+v_ok = locker(P256, (SET_GEN, G2), (SET_SECONDPT, Q2), hs(E0), (SET_SIG, sig2), to=SIGN_VER)
+v_ok.exec_run()
+check('... verifies over the same `Generator` with Q = d * 2G (Success), not over the default one (Failure)', True,
+      (v_ok.state, verify(P256, Q2, E0, sig2)), (SUCCESS, FAILURE))
+
 section('Sign and verify within one CC')
 d = 0x519b423d715f8b581f4fa8ee59f4771a5b44c8130b4e3eacca54a56dda72b464
 e = 0xa41a41a12a799548211c410c65d8133afde34d28bdd542e4b680cf2899c8a8c4
@@ -746,6 +821,23 @@ check('_Point_Mul_ without a configured seed (Scalar zero) -> Invalid', invalid(
 _, p1, cr = ed_sign(c, seed, msg)
 check('identical messages in both passes sign', (p1, cr.state, 'sig' in cr.has) == (1, SUCCESS, True))
 check('HasRndNum never set on the EdDSA path, j = 0', 'rnd' not in cr.has and PARAMS['ed25519'][2] == 0)
+_, seed1, pk1, msg1, sig1 = (x if i == 0 else bytes.fromhex(x) for i, x in enumerate(RFC8032_ED25519[0]))
+B2 = c.encode(c.mul(2, c.B))
+check('EdDSA signs and verifies over B whatever `Generator` holds (here 2B): the RFC 8032 signature, verified',
+      None, (ed_sign(c, seed1, msg1, gen=B2)[0].hex(), ed_verify(c, pk1, sig1, msg1, gen=B2)), (sig1.hex(), SUCCESS))
+cr = locker(c, (SET_CTX, b'abcd', None, 10), to=READY)
+check('ctx load left incomplete (4 of 10 bytes): ctx and ctxlen zeroed (MGR7)', (cr.ctx, cr.size['ctx']) == (b'', 0))
+check('_AuxInfo_ = 1 without pure mode, or a reserved _AuxInfo_ (2): kl_exc_unsupported at provisioning', True,
+      [raises(Locker, c, aux_info=1, pure_impl=False, exc=Unsupported), raises(Locker, c, aux_info=2, exc=Unsupported)],
+      [True, True])
+ph2, sigs = hashlib.sha512(msg).digest(), []
+for kw in ({}, dict(aux_info=0, pure_impl=False)):
+    cr = locker(c, (SET_SCALAR, seed), (SET_HASH, ph2, 32), to=SIGN_GEN, **kw)
+    cr.exec_run()
+    sigs.append(cr.output_all())
+cr = locker(c, (SET_SCALAR, seed), aux_info=0, pure_impl=False)
+check('_AuxInfo_ = 0 (pre-hash only), also without pure mode in the implementation: provisioned, '
+      'the same pre-hash signature; _Msg_Absorb_ -> Invalid', sigs[0] == sigs[1] and invalid(cr.setst, MSG_ABSORB, 0))
 
 section('Ed448: RFC 8032 7.4 (dom4, ctx, 57-byte encodings)')
 c = EC.ED448
@@ -837,6 +929,8 @@ def kl_derive(dest, src, length):
         return
     data = src.sec[:size] if field else src.exec_out(size, pad=True)
     if ecc:
+        if not dest.repr_ok(data):                                  # MGR17: checked when written
+            raise Invalid('Scalar violates the b-bit representation', who='destination')
         dest.scalar, dest.bb = data, size                           # DER8: as a completing kl.exec
     else:
         dest.data = data
@@ -933,6 +1027,12 @@ d, k = scalar_dest(), Dest('key')
 kl_derive(d, HashSrc(dg, UsagePolicy=0b10011), 64)
 kl_derive(k, HashSrc(hashlib.sha512(dg).digest(), UsagePolicy=0b10011), 40)
 d.setst(POINT_MUL)
+d521, ok521 = locker(EC.P521, to=SET_SCALAR), locker(EC.P521, to=SET_SCALAR)
+top, fine = bytes(71) + b'\x02', v2b(12345, 72)                 # bit 569 set / a 14-bit value
+check('MGR17: a kl.derive into a secp521r1 `Scalar` with a top bit set: destination _Invalid_; a value with the '
+      '55 msbs zero is accepted', True,
+      (derive_who(d521, HashSrc(top), 72), derive_who(ok521, HashSrc(fine), 72), ok521.scalar),
+      ('destination', None, fine))
 check('DER6 key derivation: SHA-256 output -> ECC `Scalar` in _Set_Scalar_ (b/8 bytes), SHA-512 output -> AES-256 '
       '`key` (first 32 B); unrestricted, not narrowed; the Scalar drives _Point_Mul_', True,
       (d.mdh['UsagePolicy'], k.data, k.mdh['UsagePolicy'], d.exec_run()),

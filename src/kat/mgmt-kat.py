@@ -223,7 +223,7 @@ def custom_value(m):                                                # GR9
 # ---------------------------------------------------------------- toy Machines
 
 MAX_ADL, ADS_BLOCKS, SC_ORDER, VERSIONS = 6, 4, (0, 1, 2, 6), (0,)
-M_CIPHER, M_XOF, M_SIG, M_KEX, M_CUSTOM, M_ABSENT = 0x011, 0x021, 0x031, 0x041, 0xC05, 0x777
+M_CIPHER, M_XOF, M_SIG, M_KEX, M_CUSTOM, M_ABSENT, M_HASH = 0x011, 0x021, 0x031, 0x041, 0xC05, 0x777, 0x051
 
 def sc_rank(v):
     return SC_ORDER.index(v) if v in SC_ORDER else -1
@@ -339,8 +339,13 @@ class ToyKex(Machine):
             return True
         return False
 
+class ToyHash(Machine):
+    """A keyless Machine: its PI carries no key field (R7: _KeyType_ 1 is invalid Metadata)."""
+    kind, policies, sc_levels, key_len, state_len, clf_base = 'ext', {0}, {0}, 0, 32, 64
+    states, stx = frozenset({2}), frozenset({0})
+
 MACHINES = {m.ident: m for m in (ToyCipher(M_CIPHER), ToyXof(M_XOF), ToySig(M_SIG), ToyCustom(M_CUSTOM),
-                                 ToyKex(M_KEX))}
+                                 ToyKex(M_KEX), ToyHash(M_HASH))}
 # toy kl.derive endpoints, shaped as <<KLEE-derive-endpoints>>
 SRC_EP = {M_XOF: ({SUCCESS}, True), M_KEX: ({ToyKex.SHARED}, False)}    # (States, kl.exec-obtainable)
 DST_EP = {M_CIPHER: ('key', {READY}), M_XOF: ('absorb', {READY, ToyXof.ABSORB}), M_SIG: ('key', {ToySig.SET_SCALAR})}
@@ -447,6 +452,7 @@ class Unit:
     def unsupported(self, m):
         mach = MACHINES.get(m['Machine'])
         if mach is None or m['MachineExtension'] or m['SCProtection'] not in mach.sc_levels: return True
+        if m['KeyType'] == 1 and not self.sks: return True              # no SKID support (R7)
         return m['MachinePolicy'] not in mach.policies and not (mach.kind == 'ops' and m['MachinePolicy'] == 0)
     def invalid(self, m, ctx, low=False):
         """ctx: 'provision', 'import' or 'size'; low: only bits [63:0] are examined."""
@@ -455,7 +461,7 @@ class Unit:
         bad = [m['res'] & (MASK64 if low else MASK128), m['AuxDataLen'] == 1,
                pi and (m['AuxDataLen'] or m['ADSDropped']),
                mach and mach.kind == 'ops' and m['MachinePolicy'] == 0,
-               m['KeyType'] > 1,
+               m['KeyType'] > 1, mach and not mach.key_len and m['KeyType'] == 1,   # R7: no key field
                ctx == 'provision' and st != UNCONF, ctx == 'import' and (st == UNCONF or st > 60),
                st in (54, 55) or (mach and 2 <= st <= 45 and st not in mach.states),
                mach and st in VALID and not mach.stx_ok(st, m['StateExtension']),
@@ -595,6 +601,12 @@ class Unit:
         if imm not in (PROV, EXP, IMP, END) or form == 'B' or (form == 'C' and (not self.zklv or vec_bits < 128)):
             raise Trap('illegal', 1)
         k = self._idx(k)
+        if self.kls_off: raise Trap('illegal', 1)               # first group: klstart untouched
+        try:
+            return self._mgmt(k, imm, ml, form)
+        finally:
+            self.klstart = 0                                     # cleared even if kl.mgmt traps (A26)
+    def _mgmt(self, k, imm, ml, form):
         self._pre()
         opening = imm in (PROV, IMP)
         self._off(k, exempt=opening)
@@ -745,7 +757,7 @@ class Unit:
         if g: return g
         cl = self.lockers[k]
         m = cl.mdh
-        if imm == CLEAR_ADS:
+        if imm == CLEAR_ADS:                                        # SGR23: in every Valid State
             m.update(AuxDataLen=0, ADSDropped=0)
             cl.c2 = b''
             self._dirty(k)
@@ -882,6 +894,8 @@ class Unit:
             bad.append(not self.zklexpire or (m['ExpirationDate'] and req > m['ExpirationDate']))
             new['ExpirationDate'] = req
         if any(bad):
+            if st in ERROR_STATES:                  # the original Error State is kept (SGR16)
+                return 'noop'
             self._enter_error(k, INVALID)
             return 'invalid'
         if st not in ERROR_STATES:
@@ -1292,6 +1306,14 @@ def t_validity():
         rows.append((u.mgmt(3, PROV, cipher(**kw)), pack(u.getmd(3)), u.lockers[3].alloc, u.klmanagedlocker, u.klstart))
     eq('14 invalid PIs -> Invalid, other fields zero, no capacity, klmanagedlocker 32, klstart 0', rows,
        [('invalid', pack(md(State=INVALID)), 0, NONE, 0)] * 14)
+    eq('R7: KeyType 1 for a Machine without a key field is invalid; KeyType 0 provisions it',
+       [rc(3).mgmt(3, PROV, md(Machine=M_HASH, KeyType=1)), rc(3).mgmt(3, PROV, md(Machine=M_HASH))],
+       ['invalid', 'opened'])
+    nosks = rc(3)
+    nosks.sks = {}
+    eq('R7: KeyType 1 without SKID support -> kl_exc_unsupported, kl.avail 0',
+       [trap_of(nosks.mgmt, 3, PROV, cipher(KeyType=1)), nosks.avail('C', m=cipher(KeyType=1))],
+       ['unsupported', 0])
     eq('ExpirationDate without Zklexpire, unresolvable Locality -> Invalid',
        [fresh(zklexpire=False).mgmt(0, PROV, cipher(ExpirationDate=9)),
         fresh(hw_missing=(0, 1, 2)).mgmt(0, PROV, cipher(Locality=loc(hw1=1)))], ['invalid'] * 2)
@@ -1309,8 +1331,8 @@ def t_validity():
               xof(MachinePolicy=2), md(Machine=M_ABSENT, State=5)):
         u = rc(5).csrs(klstart=32)
         rows.append((trap_of(u.mgmt, 5, PROV, m), pack(u.getmd(5)), u.klstart))
-    eq('unsupported (also if invalid) -> kl_exc_unsupported, locker zeroized, klstart kept', rows,
-       [('unsupported', 0, 32)] * 5)
+    eq('unsupported (also if invalid) -> kl_exc_unsupported, locker zeroized, klstart cleared', rows,
+       [('unsupported', 0, 0)] * 5)
     eq('import of unsupported Metadata -> kl_exc_unsupported',
        trap_of(fresh().mgmt, 0, IMP, md(Machine=M_ABSENT, State=2)), 'unsupported')
     got = {st: fresh().mgmt(0, IMP, cipher(State=st)) for st in (0, 61, 62, 63, 4, 7, 45, 1, 2, 3, 46, 47, 56, 57, 58,
@@ -1329,8 +1351,9 @@ def t_validity():
        [(fresh().mgmt(0, IMP, m), fresh().size('B', lo=pack(m) & MASK64) > 0) for m in stx],
        [('opened', True)] * 4 + [('invalid', False)] * 4)
     u = opened(m=cipher(StateExtension=0xF, MachineUse=0xBEEF))
-    eq('provisioning zeroes StateExtension and MachineUse',
-       (u.getmd(0)['StateExtension'], u.getmd(0)['MachineUse'], u.getst(0)), (0, 0, PROV))
+    eq('a PI StateExtension is ignored (not examined for validity, kl.size > 0); provisioning zeroes it and MachineUse',
+       (u.getmd(0)['StateExtension'], u.getmd(0)['MachineUse'], u.getst(0),
+        fresh().size('B', lo=pack(cipher(StateExtension=0xF)) & MASK64) > 0), (0, 0, PROV, True))
     need = MACHINES[M_CIPHER].clf_capacity(cipher())
     u = fresh(clf_total=need - 1).csrs(klmanagedlocker=0)
     eq('no KLF capacity: kl_exc_out_of_memory, Unconfigured, klmanagedlocker 32',
@@ -1512,10 +1535,10 @@ def t_restrict():
        (r0, trap_of(u.restrict, 0, md(UsagePolicy=1))), (('noop', 0), 'privilege_violation'))
     u = pv(fresh(), 0, cipher(ExpirationDate=10))
     u.setst(0, EXPIRED)
-    eq('Error State: narrows, SCProtection allocates nothing, widening -> Invalid',
+    eq('Error State: narrows, SCProtection allocates nothing, widening is a no-op keeping the Error State (A23)',
        [u.restrict(0, md(UsagePolicy=8, ExpirationDate=9)), u.getmd(0)['UsagePolicy'], u.getmd(0)['ExpirationDate'],
         u.getst(0), u.restrict(0, md(SCProtection=2)), u.lockers[0].alloc, u.restrict(0, md(ExpirationDate=99)),
-        u.getst(0)], ['ok', 8, 9, EXPIRED, 'ok', 0, 'invalid', INVALID])
+        u.getst(0)], ['ok', 8, 9, EXPIRED, 'ok', 0, 'noop', EXPIRED])
     u = pv(fresh(clock=5000), 0, cipher(ExpirationDate=10))
     eq('kl.restrict* is not an ExpirationDate evaluation point', (u.restrict(0, md(ExpirationDate=9)), u.getst(0)),
        ('ok', READY))
@@ -1683,9 +1706,15 @@ def t_mgmt():
        (trap_of(w.mgmt, 0, END, form='A'), w2.mgmt(0, END, form='A'), w2.mgmt(0, EXP, form='A')),
        ('illegal/2', 'completed', 'opened'))
     w = opened(IMP, cipher(State=1)).csrs(klstart=16)
-    eq('an exception inside a management operation keeps State, klmanagedlocker, klstart',
+    u = rc().csrs(klstart=16)
+    r = [trap_of(u.mgmt, 0, PROV, cipher(), form='B'), u.klstart]
+    u.csrs(klmanagedlocker=3)
+    r += [trap_of(u.mgmt, 0, EXP), u.klstart]
+    eq('A26: a first-group rejection (Form B) keeps klstart; a second-group one (klmanagedlocker names another '
+       'locker) clears it', r, ['illegal/1', 16, 'illegal/2', 0])
+    eq('an exception inside a management operation keeps State and klmanagedlocker, clears klstart',
        (trap_of(w.mgmt, 0, END, form='A'), w.getst(0), w.klmanagedlocker, w.klstart),
-       ('unconfigured_buffer', IMP, 0, 16))
+       ('unconfigured_buffer', IMP, 0, 0))
     eq('Form B reserved; Form C GR6; export of Unconfigured, end with none open illegal/2',
        [trap_of(w.mgmt, 0, PROV, cipher(), form='B'), trap_of(w.mgmt, 0, PROV, cipher(), form='C', vec_bits=64),
         trap_of(fresh().mgmt, 0, EXP), trap_of(rc().mgmt, 0, END, md(State=1)),
@@ -1853,7 +1882,7 @@ def t_ads():
         big.lockers[0].c1, big.getmd(0)['ADSDropped']),
        (1, 'done', (48 + c1) // 16, 'completed', ToyCipher.ENCRYPT, u.lockers[0].c1, 0))
     w = rc(SCProtection=1)
-    eq('kl.clearads: ADS fields 0, State kept, ADS-free SCC; the next use regenerates the ADS',
+    eq('kl.clearads in _Encrypt_ (SGR23): ADS fields 0, State kept, ADS-free SCC; the next use regenerates the ADS',
        (w.setst(0, CLEAR_ADS), w.getmd(0)['AuxDataLen'], w.lockers[0].c2, w.getst(0), len(export(w, 0)), ex(w, 0),
         w.getmd(0)['AuxDataLen']), ('ads cleared', 0, b'', ToyCipher.ENCRYPT, 32 + c1, 'done', ADS_BLOCKS))
 
@@ -2089,6 +2118,11 @@ def t_sgr():
                                         lambda: w.rename(2, 1), lambda: w.swap(1, 2),
                                         lambda: w.setst(0, ToyCipher.ENCRYPT, 1))]
     eq('getmd, size, avail, restrict, clone, rename, swap, setst leave klstart', ks, [16] * 8)
+    w = rc()
+    w.setst(0, PRIV)
+    eq('kl.restrict* in an Error State: a widening request is a no-op and keeps the Error State; a narrowing applies',
+       [w.restrict(0, md(MachineUse=1)), w.getst(0), w.restrict(0, md(UsagePolicy=1)), w.getst(0),
+        w.getmd(0)['UsagePolicy'] & 1], ['noop', PRIV, 'ok', PRIV, 1])
 
 def t_exec():
     section('kl.exec and klstart  <<KLEE-CSR-klstart>>, <<KLEE-resumability>>')

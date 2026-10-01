@@ -240,6 +240,7 @@ class Hmac:
         h = s.h
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP',
+                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # SGR4: restarts the load
                    (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): h.cumul_len == s.b,  # K0 loaded
                    (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR11)
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
@@ -251,7 +252,9 @@ class Hmac:
             raise IllegalInstruction  # SGR12
         elif s.st in ERROR_STATES:
             pass
-        elif immed == KL_STATE_READY:  # K0 kept
+        elif immed == KL_STATE_READY:  # K0 kept, unless its load was left incomplete (MGR7)
+            if s.st == KL_STATE_SET_KEY and h.cumul_len < s.b:
+                s.K0 = 0
             h.ready()
             s.st = KL_STATE_READY
         elif form != 'A' or not allowed.get((s.st, immed)):  # Form A: max_len set by the Machine
@@ -466,7 +469,6 @@ for label, variant, ops in [
         ('KIP kl.setst to _Set_Key_ (cannot be re-keyed)', 'KIP', (SK,)),
         ('NIK _Ready_ -> _Hash_Absorb_', 'NIK', (A,)),
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
-        ('NIK same-State kl.setst to _Set_Key_', 'NIK', (SK, SK)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
         ('NIK kl.exec after K0 is complete (MGR7)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
         ('kl.exec in _Ready_ (SGR2)', 'KIP', (B(data7),)),
@@ -496,6 +498,13 @@ check('NIK K0 + 16 excess bytes: load ends at cumul_len = b, excess ignored (ste
 cl = fresh(variant='NIK', key=b'first key', ops=(A, B(b'ignored'), R))
 load_key(cl, K0_7, parts=5)
 check('NIK _Ready_ -> _Set_Key_ replaces K0 (entry zeroes it)', None, run(cl, A, B(data7), O, C(32))[1], TAG7)
+cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
+check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MGR7)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
+cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
+run(cl, SK)
+check('NIK same-State kl.setst to _Set_Key_ restarts the load (SGR4): K0 and cumul_len zeroed',
+      (cl.st, cl.K0, cl.h.cumul_len) == (KL_STATE_SET_KEY, 0, 0))
+check('... and a full reload gives the RFC 4231 tag', None, run(cl, B(K0_7), A, B(data7), O, C(32))[1], TAG7)
 cl = fresh(key=key7)
 check('KLLEN > d: tag, excess bits cleared, _Success_', None,
       (run(cl, A, B(data7), O, C(40))[1], cl.st), (TAG7 + bytes(8), KL_STATE_SUCCESS))

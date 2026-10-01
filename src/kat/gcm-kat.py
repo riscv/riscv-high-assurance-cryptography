@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """GCM and GCM with Set IV (<<KLEE-GCM-mode>>, <<KLEE-GCM-with-IV-mode>>) through a model locker,
 against McGrew-Viega / SP 800-38D test cases 1-6 and 13-18 and a byte-string SP 800-38D reference."""
-import os, sys
+import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bswap, bxor, MASK128, aes_encrypt, gmul_ghash, kl_galoismul,
                     selftest, ERROR_STATES, section, check, control, info, spec_note, done,
@@ -154,8 +154,8 @@ class Gcm:
         if st in ERROR_STATES:
             return                                       # SGR16
         if immed == READY and form == 'A':               # SGR6, SGR8
-            if st == SAV:
-                s._finalize()                            # process_VLI: finalize() before leaving
+            if st == SAV:                                # IV left incomplete: discarded, no finalize() (MGR7)
+                s.tag = s.J0 = s.len = s.block_base = s.cumul_len = 0
             s.state = READY
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
@@ -178,7 +178,7 @@ class Gcm:
         elif immed == HV:
             immed = SUCC if aux & MASK128 == s.tag else FAIL
         elif st == SAV:
-            return s._finalize()
+            return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MGR14)
         s.state = immed
 
     def _finalize(s):
@@ -241,8 +241,8 @@ class Gcm:
 
     def _exec_last(s, INPUT, KLLEN):
         lbl = s.last_blk_len
-        if lbl == 0:
-            return 0
+        if lbl == 0:                                   # MGR12: the final block was already processed
+            return s._invalid()
         ctr = s._next_ctr()
         if ctr is None:
             return s._invalid()
@@ -481,16 +481,19 @@ check(f'Xs in {bad} -> Invalid', all(at('ready').setst(SAV, 'B', x) == 0 for x i
 cl = at('ready')
 cl.setst(SAV, 'B', 160)
 cl.exec('B', b2v(bytes(range(16))), 128)
+c2 = copy.copy(cl)
 cl.setst(HA)
-check('kl.setst Hash_Absorb part-way runs finalize() on the IV absorbed so far', cl.state == HA and
-      v2b(cl.J0, 16) == ghash(aes_encrypt(K, bytes(16)), bytes(range(16)) + bytes(8) + be64(160)))
+check('kl.setst Hash_Absorb part-way: _Invalid_, since Hash_Absorb needs a complete IV (MGR14)', cl.state == INV)
+c2.setst(READY)
+check('kl.setst Ready part-way: the partial IV discarded, no finalize(): tag, J0, len, block_base, cumul_len zero (MGR7)',
+      (c2.state, c2.tag, c2.J0, c2.len, c2.block_base, c2.cumul_len) == (READY, 0, 0, 0, 0, 0))
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:16]), 128)
 cl.setst(READY)
 check('SGR8: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
       kl_encrypt(K, IV60B, A, P, cl=cl)[:2] == TC6)
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MGR2); '
-     'kl.setst out of the state runs finalize() first')
+     'kl.setst out of the state part-way discards the IV (MGR7)')
 
 section('multi-block kl.exec, IRR6/IRR7')
 for n in (2, 3):
@@ -546,9 +549,12 @@ for where, last in (('enc', ELB), ('dec', DLB)):
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
 first = cl.exec('A', b2v(P[:12]), 96)
-snap = (cl.tag, cl.J0)
-check('second kl.exec in Enc_Last_Block: no operation, zeros written',
-      first and cl.exec('A', b2v(P[:12]), 96) == 0 and (cl.tag, cl.J0, cl.state) == snap + (ELB,))
+check('second kl.exec in Enc_Last_Block (MGR12): _Invalid_, output zeroed',
+      first and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
+cl = at('dec')
+cl.setst(DLB, 'B', 96)
+check('second kl.exec in Dec_Last_Block (MGR12): _Invalid_, output zeroed',
+      cl.exec('A', b2v(P[:12]), 96) and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
 check('Enc_Last_Block with KLLEN = 256: one block, excess ignored (MGR3, MGR6)',

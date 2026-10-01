@@ -41,7 +41,7 @@ IMPORTANT: We propose that machine discovery uses the `kl.avail` instruction rat
 | 0    | 6    | `AES128_GCM_SIV`
 | 0    | 7    | `AES128_CMAC`
 | 0    | 8    | `AES128_OCB`
-| 0    | 9    | `AES128_OCB_IV`
+| 0    | 9    | `AES128_OCB_NONCE`
 //
 | 1    | 0    | `AES192_ECB`
 | 1    | 1--5, 7--9 1+| _Analogues to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
@@ -127,7 +127,7 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 0    | 6    | `AES128_GCM_SIV`                            | `Zklaes128pgcmsivm`
 | 0    | 7    | `AES128_CMAC`                               | `Zklaes128pcmacm`
 | 0    | 8    | `AES128_OCB`                                | `Zklaes128pocbm`
-| 0    | 9    | `AES128_OCB_IV`                             | `Zklaes128pocbm`
+| 0    | 9    | `AES128_OCB_NONCE`                          | `Zklaes128pocbm`
 //
 | 1    | 0    | `AES192_ECB`                                | `Zklaes192p`
 | 1    | 1--5, 7--9 2+| _Analogues to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
@@ -136,7 +136,7 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 2    | 1--9 2+| _Analogues to Modes 1--9 for `AES128`, but with 256 replacing 128._
 //
 | 3    | 0    | `SM4_ECB`                                   | `Zklsm4p`
-| 3    | 1--7 2+| Analogues to Modes 1--7 for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`.
+| 3    | 1--5, 7 2+| Analogues to the corresponding Modes for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`. There is no Mode 6: SM4-GCM-SIV is not standardized.
 //
 | 4    | 0     | `SHA2-224`                                 | `Zklesha2h`
 | 4    | 1     | `SHA2-256`                                 | `Zklesha2h`
@@ -216,7 +216,7 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 0    | 6    | `AES128_GCM_SIV`                            | `Zklaes128p` and `Zklgcmsivm`
 | 0    | 7    | `AES128_CMAC`                               | `Zklaes128p` and `Zklcmacm`
 | 0    | 8    | `AES128_OCB`                                | `Zklaes128p` and `Zklocbm`
-| 0    | 9    | `AES128_OCB_IV`                             | `Zklaes128p` and `Zklocbm`
+| 0    | 9    | `AES128_OCB_NONCE`                          | `Zklaes128p` and `Zklocbm`
 //
 | 1    | 0    | `AES192_ECB`                                | `Zklaes192p`
 | 1    | 1--5, 7--9 2+| _Analogues to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
@@ -225,7 +225,7 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 2    | 1--9 2+| _Analogues to Modes 1--9 for `AES128`, but with 256 replacing 128._
 //
 | 3    | 0    | `SM4_ECB`                                   | `Zklsm4p`
-| 3    | 1--7 2+| Analogues to Modes 1--7 for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`.
+| 3    | 1--5, 7 2+| Analogues to the corresponding Modes for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`. There is no Mode 6: SM4-GCM-SIV is not standardized.
 //
 | 4    | 0     | `SHA2-224`                                 | `Zklesha2h`
 | 4    | 1     | `SHA2-256`                                 | `Zklesha2h`
@@ -330,6 +330,7 @@ Information maintained in the internal state of a CC.
 Field ordering is unspecified, and field lengths may differ from those listed—for example, in masked, threshold, or fault-tolerant implementations.
 This information is necessary to define the Machines and their semantics, and must exist internally, though not necessarily in a prescribed format.
 The Internal State always contains the MDH.
+A key field of the Internal State holds the key itself, also when the PI or the SCC carries a System Key Identifier in its place (Rule MGR9 in <<KLEE-rules-system-keys>>).
 
 . *Serialized Content*:
 The plaintext of the `Content1` of the SCC.
@@ -402,6 +403,7 @@ MGR means “Machine General Rules”.
 [[KLEE-MGR-not-allowed-instructions,MGR1]]MGR1:: If any usage instruction, or Form thereof, that may modify the state of a locker is
 issued, which is not explicitly allowed by the current state of the Machine
 encoded in the same locker, then the locker transitions to Error State _Invalid_.
+`kl.clearads` is allowed in every Valid State (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-clearads>>).
 +
 An illegal-instruction exception is raised instead only where the Form is unavailable to the
 implementation at all, or is a KLIOBUF substitution that <<Zkl-ISA-unpriv.adoc#KLEE-usage-input-output>> forbids, rather than merely wrong for the state.
@@ -415,7 +417,8 @@ in that order, it consumes `INPUT[i+b-1:i]` (if it consumes inputs) and produces
 taken and produced from the least significant position upwards, here and throughout this
 specification, and `KLLEN` = `b` is the single-block case. The states that a Machine describes
 as processing one block — its last-block, finalize, verify and output states — are excluded, and
-process exactly one block whatever `KLLEN` is.
+process exactly one block whatever `KLLEN` is; a further `kl.exec` in a last-block state is governed by
+Rule <<KLEE-MGR-single-last-block>>.
 +
 This rule applies to all places where `kl.exec` is used in Machine descriptions, unless it is explicitly mentioned that `kl.exec` consumes only one block.
 
@@ -425,7 +428,7 @@ completes, that is by the `kl.mgmt` with `#kl_cfg_management_end`, and again whe
 is modified, for instance when a key field is overwritten by `kl.derive` or regenerated by some explicit operation of the Machine. A Machine states only the derivation itself, and marks such a field “(derived)” where it lists it in
 its *Internal State*.
 
-MGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
+[[KLEE-MGR-fixed-width-input,MGR5]]MGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
 operand it is defined over — a `KLLEN` greater than that width is truncated: only that many least
 significant bits of `INPUT` are considered, and the rest are ignored; a smaller `KLLEN` violates
 the granularity of the state (Rule <<KLEE-MGR-granularity>>). The width is not necessarily the block size `b`.
@@ -450,11 +453,24 @@ Where the loading is performed by `process_VLI`
 (<<KLEE-process-VLI>>), it is invoked with `block` = `state` = the field, `max_len` = `b` = `n` = its
 size, `cumul_len` = _W_, `mode` = `assign`, and `process_block` and `finalize` both equal to `None`.
 +
-Once _W_ reaches the size of the field, the transfer is complete. Unless State _X_ defines a
-transition of its own at that point, no further `kl.exec` is allowed in it and issuing one
-transitions the locker to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
+Once _W_ reaches the size of the field, the transfer is complete. A State that emits a field then
+transitions to _Success_, unless the Machine defines another transition at that point. In a loading State,
+unless State _X_ defines a transition of its own at that point, no further `kl.exec` is allowed in it and
+issuing one transitions the locker to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
 emitting `kl.exec` that would carry _W_ past the field size invalidates the locker. Where _W_ is a
 field of the MDH, `kl.restrict*` may not write it (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-restrict>>).
++
+A `kl.setst` that leaves a loading State _X_ before _W_ reaches the size of the field leaves the field
+unconfigured: the field, and any length of it that the Machine set on entering _X_, are zeroed, and the flag,
+if any, that records that the field holds a value stays clear. A same-State `kl.setst`, which restarts the load
+(Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>>), and `kl.clearads`, which leaves the _State_ unchanged, do not
+leave _X_. A Machine whose next State needs the field states this as an entry condition (Rule <<KLEE-MGR-policy-gate>>).
++
+A Machine may keep in _StateExtension_ a flag per loaded field, recording that the field holds a configured value,
+such as the `Has` flags of the ECC, ML-KEM and ML-DSA Machines. Unless the Machine states otherwise, such a flag is
+cleared on entering the loading State of its field, set when the load completes and passes the checks of Rule
+<<KLEE-MGR-check-on-write>>, and also set by an operation of the Machine that computes the field; it is readable with
+`kl.getstx`. Each Machine lists its flags, their bit positions, and any departure from this pattern.
 
 [[KLEE-MGR-progress-discard,MGR8]]MGR8:: _Interrupted long-running operations._
 A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>> admits, besides `kl.setst`, only that one instruction Form.
@@ -468,6 +484,61 @@ Every random value and every intermediate value kept for the operation, in a sta
 _P_ is zeroed, and that material destroyed, on every transition of the locker's _State_, including a same-State `kl.setst`, a transition to _Ready_ or to an Error State, on completion of the operation, by `kl.clearads`, and by an import that discards the ADS; it is not changed by an interrupt, by export, import or `kl.clone`, or by re-execution of the instruction.
 +
 The instruction issued in such a State resumes the interrupted operation if _P_ is non-zero and starts a new one, drawing fresh random values, if it is zero.
+
+[[KLEE-MGR-single-last-block,MGR12]]MGR12:: _Single final block._
+A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_,
+admits exactly one `kl.exec`, which processes that block (Rule <<KLEE-MGR-one-klexec-per-block>>).
+Unless the Machine defines a transition of its own on completion of that `kl.exec`, the locker remains in the State,
+and any further `kl.exec` issued in it transitions the locker to Error State _Invalid_, its output window being zeroed
+(Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-usage-locker-error-state>>): a second final block is not a continuation of the input
+but an attempt to manipulate the internal state of the Machine.
+
+[[KLEE-MGR-policy-gate,MGR14]]MGR14:: _Policy gate and entry conditions._
+Each Machine states which bit of _MachinePolicy_, if any, enables the operation of each of its States, and the conditions
+that must hold on entering a State.
+A `kl.setst` into a State whose operation _MachinePolicy_ disables, or whose stated entry conditions are not met,
+transitions the locker to Error State _Invalid_.
+Where a Machine says that a transition is possible "if encryption is allowed", resp. "if decryption is allowed", the operation
+is enabled by _MachinePolicy_[0], resp. _MachinePolicy_[1]; where encryption and decryption are the same operation, as in
+<<KLEE-keystream-modes>>, either bit enables it. A signature Machine is gated by _MachinePolicy_[0] for signature
+generation and _MachinePolicy_[1] for verification, and a MAC Machine that verifies a tag internally, such as
+<<KLEE-CMAC-mode>>, by _MachinePolicy_[0] for the output of the tag and _MachinePolicy_[1] for its verification
+(<<Zkl-ISA-unpriv.adoc#KLEE-Machine-field>>).
+A condition that the Machine checks when an instruction executes, rather than on entering the State, is stated with
+that instruction, and its violation also transitions the locker to Error State _Invalid_, unless it is a data error
+(Rule <<KLEE-MGR-config-data-error>>).
+
+[[KLEE-MGR-config-data-error,MGR15]]MGR15:: _Configuration errors and data errors._
+A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard
+rejects, such as a malformed private key, or a value whose encoding violates a constraint of its representation, such as the
+zero most significant bits of secp521r1 (<<KLEE-ECC>>). It transitions the locker to Error State _Invalid_, and the CC
+must be reconfigured before it can be used.
+A _data error_ is a ciphertext, tag, signature, message representative or public key that is malformed or does not
+verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses — a peer's point,
+a public key or a generator — that is not a valid point of the curve.
+It transitions the state machine to _Failure_, which is a Valid State.
+Each Machine states which of its checks are of which kind.
+
+[[KLEE-MGR-check-on-read,MGR16]]MGR16:: _Checks when a field is read._
+When an operation reads a field, it performs the checks that depend on the operation or on more than one field
+— for instance the validity of a point in the role the operation gives it, the range of `Scalar` against the group
+order, or the consistency of a public key with a private key — before it changes any state. A failure is classified
+by Rule <<KLEE-MGR-config-data-error>>: a data error leads to _Failure_, a configuration error to Error State _Invalid_.
+A check that depends only on the field itself is made when the field is written (Rule <<KLEE-MGR-check-on-write>>) and need not be
+repeated when it is read, since the KLF guarantees the integrity of the locker (<<Zkl-ISA-unpriv.adoc#KLEE-KLF>>);
+a Machine may nevertheless require a repeat as a means to detect a corruption of the KLF, as secp521r1 does
+(<<KLEE-ECC>>), and a repeated check that fails transitions the locker to Error State _Invalid_.
+
+[[KLEE-MGR-check-on-write,MGR17]]MGR17:: _Checks when a field is written._
+A check that a Machine attaches to a field and that depends on that field alone — such as the zero most significant
+bits of secp521r1, the well-formedness of an ML-DSA `privkey`, or the input checks of cite:[nist-fips-203] on an
+ML-KEM key — is performed whenever the field is written: at the completion of its load (Rule <<KLEE-MGR-load-long-field>>),
+of a `kl.derive` into it, of the provisioning that carries it, and of an import that restores it. A failure is
+classified by Rule <<KLEE-MGR-config-data-error>>: for a private key or another configuring field it is a configuration error, and the
+locker transitions to Error State _Invalid_; for a public key it is a data error, and the state machine transitions
+to _Failure_.
+The validity of a curve point is not checked when the point is written: it depends on the role that an operation gives
+the point, and is checked when the point is read (Rule <<KLEE-MGR-check-on-read>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -496,6 +567,13 @@ Cryptographic inputs are normally supplied through GPRs or vector registers in w
 This occurs, for instance, with the `last_blk_len` parameters in <<KLEE-GCM-mode>>, <<KLEE-GCM-SIV-mode>>, <<KLEE-OCB-mode>>, <<KLEE-Ascon-AEAD128>>, and <<KLEE-hash-functions-MACs-XOFs>>. Such a parameter specifies a truncation of the passed input, not its length; a `KLLEN` smaller than `last_blk_len` violates the granularity of the state (Rule <<KLEE-MGR-granularity>>). Procedure `process_VLI` receives field lengths in bits, but what is received through the `kl.exec` instructions is always at byte granularity, and the last input may be internally truncated.
 
 Where a standard's formula requires a bit count, it is obtained by multiplying the byte count by 8, as with the length block of GHASH in <<KLEE-GCM-mode>>.
+
+[horizontal]
+[[KLEE-MGR-last-blk-len,MGR13]]MGR13:: A `last_blk_len`, or any other parameter giving the bit length of a final input piece, is a multiple of 8,
+unless the Machine states that its referenced standard orders the bits within a byte as <<Zkl-notation.adoc#KLEE-Notation>> does,
+so that a truncation of the last byte to its least significant bits is the bit string that the standard defines (as for <<KLEE-Ascon-AEAD128>>).
+A value that the Machine does not admit transitions the locker to Error State _Invalid_.
+Whether zero is admissible depends on the Machine.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -564,14 +642,29 @@ Start and initialize a hash function of the tag/MAC part of a Machine and start 
 |===
 
 [horizontal]
-[[KLEE-MGR-no-hash-output-repeat,MGR11]]MGR11:: Notwithstanding Rule SGR4, a `kl.setst` naming _Hash_Output_ or _Hash_Finalize_ issued while
+[[KLEE-MGR-no-hash-output-repeat,MGR11]]MGR11:: As Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>> provides, a `kl.setst` naming _Hash_Output_ or _Hash_Finalize_ issued while
 the locker is in that same State transitions the locker to Error State _Invalid_: the operations performed on entering
 the State, such as `finalize()`, the padding of the last block, or the setting of a countdown, would otherwise be repeated.
 
-We deliberately choose to not limit the number of blocks the CC can process in the various modes supported by KLEE.
+[[KLEE-operation-immediates]]
+A Machine may declare a `kl.setst` naming one of the constants of <<KLEE-state-constants-symmetric>> an _operation_: it
+performs the stated action and leaves _State_ and _StateExtension_ unchanged. Such a `kl.setst` is not a transition for
+Rules <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>>, <<KLEE-MGR-progress-discard>> and <<KLEE-MGR-no-hash-output-repeat>>.
+The Machine states the States in which the operation is allowed and its Form; in any other State the immediate names a
+State, as the table defines it. For instance, _Set_Aux_Value_ is an operation in <<KLEE-keystream-modes>>,
+<<KLEE-tweakable>> and <<KLEE-Ascon-AEAD128>>, and a State in <<KLEE-GCM-mode>>, <<KLEE-GCM-SIV-mode>> and <<KLEE-OCB-mode>>.
+
+We deliberately choose to not limit the number of blocks the CC can process across messages in the various modes supported by KLEE.
 The main reasons are: the limits are very large and impractical to reach in normal software usage, they are hygiene for
 the caller in order to limit the number of times a key is used, and enforcing them would complicate the state machines.
-The exception is OCB (<<KLEE-OCB-mode>>), since a hard limit is necessary to limit the memory usage for the internal array of values `L~i~`.
+The exceptions are the per-message limits that a mode needs for correctness: those set by the 32-bit counters of GCM (<<KLEE-GCM-mode>>)
+and GCM-SIV (<<KLEE-GCM-SIV-mode>>), and that of OCB (<<KLEE-OCB-mode>>), which bounds the memory used for the internal array of values `L~i~`.
+
+[[KLEE-nonce-reuse]]
+_This paragraph is informative._ No Machine prevents the reuse of a nonce, IV, counter or tag mask, whether by the
+re-import of an earlier SCC, by a `kl.clone`, or by a return to _Ready_; a malicious caller could always save the
+initial locker and reuse it. The Machines with a set IV or nonce protect its confidentiality only. Keystream and
+nonce discipline therefore remains the caller's responsibility, as in the referenced standards.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -625,8 +718,8 @@ State Machine:::
  ** _Decrypt_: Decrypting blocks of input.
 
 * *Allowed State Transitions:*
- ** From any valid state to _Encrypt_, if encryption is allowed.
- ** From any valid state to _Decrypt_, if decryption is allowed.
+ ** From any valid state to _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ ** From any valid state to _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
 
 * *Behavior:*
  ** In States _Encrypt_ or _Decrypt_, (multi-block) Form A `kl.exec` instructions can be issued, i.e.,
@@ -705,7 +798,7 @@ State Machine:::
   ** _Operate_: In this state the CC will produce a keystream.
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Operate_.
+ ** _Ready_ -> _Operate_, if encryption or decryption is allowed (Rule <<KLEE-MGR-policy-gate>>): the keystream serves both.
  ** _Operate_ -> _Ready_.
 
 * *Behavior:*
@@ -714,8 +807,7 @@ State Machine:::
 
  ** To transition to State _Operate_, a Form C ``kl.setst`` instruction is expected.
   *** This sets the value of `IV` to `INPUT`.
-  *** If `KLLEN` > `n`, only the `n` least significant bits of `INPUT` are
-      considered. The bound is `n`, the width of the `IV` field, and not `b`: in the
+  *** `INPUT` is truncated to its `n` least significant bits (Rule <<KLEE-MGR-fixed-width-input>>). The bound is `n`, the width of the `IV` field, and not `b`: in the
       non-X modes `b` = `n` + `j`, so the IV is narrower than a block and the remaining
       `j` bits of the counter block are supplied by `ctr`, not by `INPUT`. In the X modes
       `n` = `b` and the two readings coincide.
@@ -738,15 +830,10 @@ State Machine:::
     ``kl.setst Kn|K(Xn), \#kl_state_set_aux_value, Xs`` sets the initial
     counter: `ctr` {leftarrow} `bin(Xs, j)`. This is the “set initial counter”
     capability of the CTR and XCTR Machines; it supports random access into a
-    keystream, for example to resume an interrupted stream. The _State_ field
-    is unchanged: setting the counter is an _operation_, not a state, exactly
-    as setting the tweak is in <<KLEE-tweakable>>.
+    keystream, for example to resume an interrupted stream. Setting the counter is an
+    operation, not a State (<<KLEE-operation-immediates>>).
 
-NOTE: There is no check on `ctr` wrapping around to its initial value, since a
-malicious user could always save the initial locker and reuse it to simulate
-a wraparound of the `ctr` even if this were prevented by the Machine.
-Keystream-reuse discipline for CTR and XCTR remains thus the caller's
-responsibility, as in cite:[nist-SP-800-38A-1].
+NOTE: There is no check on `ctr` wrapping around to its initial value (<<KLEE-nonce-reuse>>).
 
 If `kl.setst` is issued to return to State _Ready_, the CC can be reused with a new IV.
 
@@ -789,7 +876,7 @@ Data Structures:::
 
 * *Internal State*:
  ** `key1`: `k` bits.
- ** `key2`: `k` bits -- omitted if both keys come from an entry in the SKS.
+ ** `key2`: `k` bits.
  ** `mask`: `b` bits.
 
 * *Serialized Content*:
@@ -836,8 +923,8 @@ State Machine:::
 * *States:* _Ready_, _Encrypt_, and _Decrypt_ (defined as before, cf. <<KLEE-ECB-mode>>).
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Encrypt_, if encryption is allowed.
- ** _Ready_ -> _Decrypt_, if decryption is allowed.
+ ** _Ready_ -> _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ ** _Ready_ -> _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** _Encrypt_, _Decrypt_ -> _Ready_.
 
 * *Behavior:*
@@ -845,7 +932,7 @@ State Machine:::
   *** The `mask` field is set to zero.
  ** The ``kl.setst`` instruction to transition to either _Encrypt_ or _Decrypt_ is expected to be of Form C.
     It sets the tweak, and the `mask` field is used to store it: `mask <- INPUT`.
-  *** If `KLLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+  *** `INPUT` is truncated to its `b` least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
   *** Then, the following operations are performed:
   . `mask <- enc_blk(key2, mask)`
 +
@@ -984,21 +1071,19 @@ State Machine:::
 
 * *States:* _Ready_, _Encrypt_, and _Decrypt_, defined as before.
 
-This Machine has no state of its own. Setting the tweak is an _operation_, not a state:
-it is requested with the `kl_state_set_aux_value` immediate but never becomes the value
-of the _State_ field, which therefore only ever holds _Ready_, _Encrypt_, _Decrypt_, or
-one of the states common to all Machines.
+This Machine has no state of its own. Setting the tweak is an operation, not a State (<<KLEE-operation-immediates>>):
+the _State_ field therefore only ever holds _Ready_, _Encrypt_, _Decrypt_, or one of the states common to all Machines.
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Encrypt_, if encryption is allowed.
- ** _Ready_ -> _Decrypt_, if decryption is allowed.
+ ** _Ready_ -> _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ ** _Ready_ -> _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** _Encrypt_ -> _Decrypt_ and _Decrypt_ -> _Encrypt_, subject to the same conditions.
- ** Any of _Ready_, _Encrypt_ and _Decrypt_ to itself, by the set-tweak operation below.
+ ** In each of _Ready_, _Encrypt_ and _Decrypt_, the set-tweak operation below, which is not a transition (<<KLEE-operation-immediates>>).
 
  * *Behavior:*
   ** In State _Ready_:
    *** Upon entering the state, the `tweak` field is cleared.
-  ** In each of States _Ready_, _Encrypt_ and _Decrypt_, a Form C `kl.setst` can be issued.  `kl.setst Kn|K(Xn), #kl_state_set_aux_value, INPUT` performs `tweak <- INPUT` and leaves the _State_ field unchanged. If `KLLEN` > `t`, only the `t` least significant bits of `INPUT` are considered.
+  ** In each of States _Ready_, _Encrypt_ and _Decrypt_, a Form C `kl.setst` can be issued.  `kl.setst Kn|K(Xn), #kl_state_set_aux_value, INPUT` performs `tweak <- INPUT` and leaves the _State_ field unchanged. `INPUT` is truncated to its `t` least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
   ** In State _Encrypt_, respectively _Decrypt_, (multi-block) `kl.exec` instructions must be of Form A, where “``kl.exec OUTPUT, Kn|K(Xn), INPUT``” encrypts, resp., decrypts, `INPUT` into `OUTPUT`.
   ** This Machine does not automatically update the tweak value: the same `tweak` applies to every block until the set-tweak operation is issued again.
 
@@ -1127,8 +1212,9 @@ Beside `max_len`, `block`, and `state`, which are fixed for the duration of the 
 --
 +
 
-** If the caller transitions to a different state, `finalize()` is performed before transitioning, unless `finalize` = `None`.
-   Transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so causes the locker to transition to Error State _Invalid_.
+** If the caller transitions to a different state, `finalize()` is performed before transitioning, unless `finalize` = `None`
+   or the Machine states otherwise.
+   Unless the State loads a field under Rule <<KLEE-MGR-load-long-field>>, or the Machine states otherwise, transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so causes the locker to transition to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1261,8 +1347,8 @@ caller:
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Set_Aux_Value_ -> _Hash_Absorb_.
- ** _Hash_Absorb_ -> _Encrypt_, if encryption is allowed.
- ** _Hash_Absorb_ -> _Decrypt_, if decryption is allowed.
+ ** _Hash_Absorb_ -> _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ ** _Hash_Absorb_ -> _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** _Encrypt_ -> { _Enc_Last_Block_ -> } _Enc_Tag_Finalize_ -> _Success_.
  ** _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Hash_Verify_ -> _Success_ or _Failure_.
 
@@ -1304,6 +1390,12 @@ The value of `J0` is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sec
       value `GHASH` requires and does not inherit the hash of the IV.
     . Transitions to state _Hash_Absorb_.
 
+  ** A `kl.setst` that leaves _Set_Aux_Value_ before the IV is complete does not perform `finalize()`: as Rule
+     <<KLEE-MGR-load-long-field>> prescribes for a load left incomplete, the partial IV is discarded, and `tag`, `J0`,
+     `len`, `block_base` and `cumul_len` are zeroed. Entering _Hash_Absorb_ requires a complete IV
+     (Rule <<KLEE-MGR-policy-gate>>): _Hash_Absorb_ is reached only through `finalize()`, and a `kl.setst` naming it
+     in _Set_Aux_Value_ transitions the locker to Error State _Invalid_.
+
 [NOTE]
 ====
 The IV is absorbed into `tag`, not into `J0`, and only the finished value is copied to `J0`.
@@ -1340,7 +1432,7 @@ part-way through a non-96-bit IV could not resume.
 ** To transition to State _Enc_Last_Block_, a Form B `kl.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
 A value of zero, larger than 127, or not a multiple of 8, causes the locker to transition to Error State _Invalid_.
-Although cite:[nist-SP-800-38D] admits any bit length, inputs reach a Machine as byte strings and a partial byte has no defined mapping to a value (cf. <<KLEE-truncation-vs-length>>), so `last_blk_len` is restricted to multiples of 8.
+Although cite:[nist-SP-800-38D] admits any bit length, it numbers the bits of a byte from the most significant, which does not map onto a truncation to the least significant bits, so `last_blk_len` is restricted to multiples of 8 (Rule <<KLEE-MGR-last-blk-len>>).
 Any excess bits provided by the following Form A ``kl.exec`` are ignored.
 
 ** In State _Enc_Last_Block_, a single Form A ``kl.exec`` instruction can be issued.
@@ -1352,7 +1444,7 @@ Any excess bits provided by the following Form A ``kl.exec`` are ignored.
   * `local tmp : bits(b)`
 
 []
-  . If `last_blk_len = 0`, then: terminate the instruction.
+  . If `last_blk_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-single-last-block>>).
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
@@ -1377,7 +1469,7 @@ The authentication tag is then computed and retained internally, as follows:
 . `absorb(INPUT)`.
   . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
 
-If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+`INPUT` is truncated to its 128 least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 --
 
 ** {empty}
@@ -1418,7 +1510,7 @@ A value of zero, larger than 127, or not a multiple of 8, causes the locker to t
   * `local tmp : bits(b)`
 
 []
-  . If `last_blk_len = 0`, then: terminate the instruction.
+  . If `last_blk_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-single-last-block>>).
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
@@ -1443,7 +1535,7 @@ The authentication tag is computed as follows:
   . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
 --
 +
-If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+`INPUT` is truncated to its 128 least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 
 ** To transition to State _Hash_Verify_, a Form C ``kl.setst`` instruction
    is expected, to provide the value against which the internally computed tag
@@ -1523,8 +1615,7 @@ The differences with respect to GCM are:
 //    does not survive.
 --
 
-NOTE: This Machine protects IV confidentiality, not against reuse.
-Preventing IV reuse (e.g., by restoring older SCC copies) is the caller's responsibility.
+NOTE: This Machine protects the confidentiality of the IV, not against its reuse (<<KLEE-nonce-reuse>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1646,9 +1737,9 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
  ** _Set_Aux_Value_ -> _Set_Aux_Value_2_ or _Hash_Absorb_.
  ** _Set_Aux_Value_2_ -> _Hash_Absorb_.
  ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_ { -> _Enc_Last_Block_ }.
-  *** Transition to _Enc_Tag_Finalize_ possible only if encryption is allowed.
+  *** Transition to _Enc_Tag_Finalize_ possible only if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
-  *** Transition to _Decrypt_ possible only if decryption is allowed.
+  *** Transition to _Decrypt_ possible only if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
 
 * *Behavior:*
 ** In State _Ready_ :
@@ -1716,7 +1807,7 @@ Then, “``kl.exec``” finalizes the SIV computation by performing:
   . The state transitions to _Encrypt_.
 --
 +
-If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+`INPUT` is truncated to its 128 least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 
 ** In State _Encrypt_, (multi-block) Form A ``kl.exec`` instructions are expected.
       Issuing “``kl.exec OUTPUT, Kn|K(Xn), INPUT``,” encrypts `INPUT` into `OUTPUT`
@@ -1729,7 +1820,7 @@ If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 --
 ** To transition to State _Enc_Last_Block_, a Form B `kl.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
-Note that cite:[RFC8452] expresses this length in bytes and therefore `last_blk_len` must be a multiple of 8.
+Note that cite:[RFC8452] expresses this length in bytes and therefore `last_blk_len` must be a multiple of 8 (Rule <<KLEE-MGR-last-blk-len>>).
 A value of zero, larger than 120, or not a multiple of 8, causes the locker to transition to Error State _Invalid_.
 
 ** In State _Enc_Last_Block_, a single Form A ``kl.exec`` instruction is expected.
@@ -1737,7 +1828,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the locker to t
       as follows:
 +
 --
-. If `last_blk_len = 0`, then: terminate the instruction.
+. If `last_blk_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-single-last-block>>).
 . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
     . ``OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_blk_len-1:0]),``
     . `ctr <- ctr + 1`.
@@ -1762,7 +1853,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the locker to t
       absorbs the zero-padded plaintext into the partial tag, as follows:
 +
 --
-. If `last_blk_len = 0`, then: terminate the instruction.
+. If `last_blk_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-single-last-block>>).
 . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
     . ``OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_blk_len-1:0]),``
     . `absorb(OUTPUT)`.
@@ -1790,7 +1881,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the locker to t
     ..  `State <- kl_state_failure`
 --
 +
-If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+`INPUT` is truncated to its 128 least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 
 ** `enc_key` and `auth_key` are derived fields (Rule <<KLEE-MGR-recomputed-fields>>):
 (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(k, key, nonce)`.
@@ -1839,7 +1930,7 @@ Data Structures:::
  ** `N_len`: 7 bits. Bit length of the nonce. It cannot exceed 120.
  ** `L*`, `offset`, `hash_A`, `checksum_P` : 128 bits each. The derived values `L$` and `L[0]` (cf. Behavior) may be cached or recomputed.
  ** `tag_len`: 8 bits. Bit length of the tag. Currently, the allowed values are 64, 96, and 128.
- ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings. A value that is not a multiple of 8, or that exceeds 120, causes the locker to transition to Error State _Invalid_.
+ ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings (Rule <<KLEE-MGR-last-blk-len>>). A value that is not a multiple of 8, or that exceeds 120, causes the locker to transition to Error State _Invalid_.
  ** `index`: 49 bits, corresponding to `i` in the loops in RFC{nbsp}7253. It ranges from 0 to `MAX_BLOCKS` + 1 = 2^48^ + 1.
  **  `L~i~` (derived): array of 128 bit values, with `i` up to `floor(log_2(MAX_BLOCKS))`. Rule <<KLEE-MGR-recomputed-fields>> applies.
 
@@ -1921,8 +2012,8 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode ma
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Set_Aux_Value_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_
- ** _Hash_Absorb_Last_Block_ -> _Encrypt_, if encryption is allowed.
- ** _Hash_Absorb_Last_Block_ -> _Decrypt_, if decryption is allowed.
+ ** _Hash_Absorb_Last_Block_ -> _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ ** _Hash_Absorb_Last_Block_ -> _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** _Encrypt_ -> _Enc_Last_Block_ -> _Enc_Tag_Finalize_ -> _Success_.
  ** _Decrypt_ -> _Dec_Last_Block_ -> _Hash_Verify_ -> _Success_ or _Failure_.
 
@@ -2153,7 +2244,7 @@ Data Structures:::
 Same as for OCB.
 
 Upon provisioning, `N_len` is set from the PI, and `N` is set from the PI as the _Set_Aux_Value_ `kl.exec` of <<KLEE-OCB-mode>> sets it from its `INPUT`.
-An `N_len` outside [6, 120] causes the locker to transition to Error State _Invalid_.
+An `N_len` outside [6, 120] causes the locker to transition to Error State _Invalid_ (Rule <<KLEE-MGR-check-on-write>>).
 --
 
 * *Serialized Content*: {empty}
@@ -2179,8 +2270,7 @@ The differences with respect to OCB are:
  ** Entering State _Ready_ does not clear `N` and `N_len`: a later message uses the same nonce. Software that needs another nonce provisions another locker.
 --
 
-NOTE: This Machine protects the confidentiality of the nonce, not against its reuse.
-Preventing nonce reuse (e.g., by restoring older SCC copies, or by returning to _Ready_) is the caller's responsibility.
+NOTE: This Machine protects the confidentiality of the nonce, not against its reuse (<<KLEE-nonce-reuse>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2215,6 +2305,11 @@ Data Structures:::
   ** `key`: `k` bits.
  ** `hash`: `b` bits.
  ** `last_blk_len`: an integer in the range 0 to `b`, serialized on 32 bits.
+
+* *MachinePolicy*: _MachinePolicy_[0] enables the output of the CMAC, by the Form C `kl.exec` in State _Hash_Output_,
+  and _MachinePolicy_[1] its verification, by the `kl.setst` into _Hash_Verify_ (Rule <<KLEE-MGR-policy-gate>>).
+  A CC with _MachinePolicy_ = 0b10 can verify a CMAC but never disclose one. A _MachinePolicy_ of 0 is admissible,
+  but makes no sense, since the locker can then neither output nor verify a CMAC (<<Zkl-ISA-unpriv.adoc#KLEE-Machine-field>>).
 
 * *Serialized Content*:
 +
@@ -2255,7 +2350,7 @@ State Machine:::
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_ -> _Hash_Output_ -> _Success_.
  ** _Hash_Output_ -> _Failure_ (via the verification operation below).
- ** From any valid state to State _Ready_.
+ ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-to-ready>>).
 * *Behavior:*
  ** In State _Ready_:
   *** `last_blk_len <- 0`
@@ -2271,11 +2366,11 @@ State Machine:::
 --
  ** Upon issuing a Form B “``kl.setst Kn|K(Xn), #kl_state_hash_last_block, Xs``” where `Xs` contains the bit length of the last block, the following happens:
    . if `Xs > b`, or if `Xs` is not a multiple of 8, then the locker transitions to Error State _Invalid_.
-     The multiple-of-8 requirement is what makes the position of the padding bit below
+     The multiple-of-8 requirement (Rule <<KLEE-MGR-last-blk-len>>) is what makes the position of the padding bit below
      well-defined; `Xs` = 0 is admissible and is the empty-message case.
    . `last_blk_len <- Xs`.
 
- ** In State _Hash_Absorb_Last_Block_, only a single ``kl.exec`` instruction of Form B may be issued, i.e., “`kl.exec Kn|K(Xn), INPUT`”, to absorb the data block `INPUT`. If `KLLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
+ ** In State _Hash_Absorb_Last_Block_, only a single ``kl.exec`` instruction of Form B may be issued, i.e., “`kl.exec Kn|K(Xn), INPUT`”, to absorb the data block `INPUT`. `INPUT` is truncated to its `b` least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 +
 --
   . `(K1, K2) <- gen_subkeys(key)`.
@@ -2290,11 +2385,11 @@ State Machine:::
 
 ** In State _Hash_Output_, there are two options:
 
-. A single ``kl.exec`` instruction of Form C can be issued, i.e., “``kl.exec OUTPUT, Kn|K(Xn)``”, to output the hash into `OUTPUT`.
+. If _MachinePolicy_[0] is set, a single ``kl.exec`` instruction of Form C can be issued, i.e., “``kl.exec OUTPUT, Kn|K(Xn)``”, to output the hash into `OUTPUT`.
    Bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _Success_.
 
- . Alternatively, a Form C ``kl.setst Kn|K(Xn), #kl_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
+ . Alternatively, if _MachinePolicy_[1] is set, a Form C ``kl.setst Kn|K(Xn), #kl_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
 
 //
 
@@ -2331,7 +2426,8 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 | Pos. | Size (Bits)             | Field
-|  ii  | If keyed: `k`, else 64  | `key` or System Key Identifier
+.2+|  ii  | If keyed: `k` or 64  | `key` or System Key Identifier
+<|          If unkeyed: 0          | none: the Provisioning Input is the MDH only
 |===
 --
 
@@ -2393,7 +2489,7 @@ State Machine:::
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> { _Hash_Absorb_Last_Block_ -> } _Hash_Output_ -> _Success_.
  ** If the Machine is a XOF, there is no transition from _Hash_Output_ to _Success_.
- ** From any valid state to State _Ready_.
+ ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-to-ready>>).
 
 * *Behavior:*
  ** In State _Ready_:
@@ -2415,6 +2511,7 @@ where `max_len` is the Machine-defined maximum length of the data to be absorbed
  . if `block_base` != 0, then the locker transitions to Error State _Invalid_. (The previous block is not complete.)
  . if `Xs > b`, then the locker transitions to Error State _Invalid_.
  . if `Xs = 0`, then the locker transitions to Error State _Invalid_.
+ . if `Xs` is not a multiple of 8, then the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-last-blk-len>>).
  . `last_blk_len <- Xs`.
 --
 +
@@ -2520,7 +2617,7 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Output_ -> _Success_.
- ** From any valid state to State _Ready_.
+ ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-to-ready>>).
 
 * *Behavior:*
  ** In State _Ready_, `state` is set to the initial hash value of the selected function
@@ -2588,7 +2685,7 @@ Data Structures:::
 * *Provisioning Input*:
 +
 --
-The Machines implementing HMAC algorithms exist in two variants, distinguished by a different encoding in the `mode` field.
+The Machines implementing HMAC algorithms exist in two variants, distinguished by their encoding in the _Machine_ field (<<KLEE-exec-encodings>>): by _Type_ for the SHA-2 and SHA-3 HMACs, and by _Mode_ for `SM3_HMAC`.
 
 The PI of the variant that starts with “No Initial Key” (NIK) contains only the MDH.
 
@@ -2639,17 +2736,19 @@ In the KIP variant, `K0` is carried in the Provisioning Input.
 The key may be given by value or, with _KeyType_ = 1, as an SKID, which includes a randomly generated value.
 A KIP CC cannot be re-keyed.
 
-In the NIK variant, the Provisioning Input carries no key. `K0` must be explicitly loaded in State _Set_Key_ before _Hash_Absorb_ can be entered.
+In the NIK variant, the Provisioning Input carries no key. `K0` must be explicitly loaded in State _Set_Key_ before _Hash_Absorb_ can be entered:
+entering _Hash_Absorb_ from _Set_Key_ requires `cumul_len` = `b` (Rule <<KLEE-MGR-policy-gate>>), and leaving _Set_Key_ before `K0` is complete zeroes it (Rule <<KLEE-MGR-load-long-field>>).
 --
 +
 * *Allowed State Transitions:*
  ** For the NIK variant: _Ready_ -> _Set_Key_ -> _Hash_Absorb_ -> and the rest as in the underlying hash function
  ** For the KIP variant: _Ready_ -> _Hash_Absorb_ -> and the rest as in the underlying hash function
- ** From any valid state to State _Ready_.
+ ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-to-ready>>).
 
 * *Behavior:*
  ** Upon entering State _Set_Key_, `K0` is zeroed and `input_base`, `block_base` and
-    `cumul_len` are set to zero. Re-entering _Set_Key_ therefore replaces the key rather than
+    `cumul_len` are set to zero. Re-entering _Set_Key_, including by a same-State `kl.setst`
+    (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>>), therefore restarts the load and replaces the key rather than
     combining the new value with the old one.
 
  ** Once in State _Set_Key_ the `b`-bit value `K0` is loaded by one or more Form B
@@ -2769,7 +2868,7 @@ State Machine::: {empty}
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Output_ -> _Success_.
- ** From any valid state to State _Ready_.
+ ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-to-ready>>).
 
 * *Behavior:*
  ** In State _Ready_, `state` is zeroed.
@@ -2836,6 +2935,14 @@ where `bytepad`, `encode_string` and `left_encode` are as defined in cite:[nist-
 
 A provisioner presented with a longer key must reduce it beforehand; this specification
 does not define how, since cite:[nist-SP-800-185] does not.
+
+With _KeyType_ = 1, the PI and the SCC carry a System Key Identifier in place of `key_block` (Rule MGR9).
+The System Key Store returns the key `K`, and the KLEE unit forms `key_block` = `bytepad(encode_string(K), b/8)` from it;
+a `K` longer than the maximum in the table above is a SKID that the System Key Store may not resolve, and the
+locker transitions to Error State _Invalid_ (<<Zkl-ISA-unpriv.adoc#KLEE-system-keys>>).
+With the all-ones SKID (<<Zkl-ISA-unpriv.adoc#KLEE-KeyType-field>>), `K` is a random value of `c`/2 bits,
+from which `key_block` is formed in the same way.
+`cshake_block` is always carried by value.
 --
 +
 * *Provisioning Input*:
@@ -2845,7 +2952,7 @@ does not define how, since cite:[nist-SP-800-185] does not.
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `b`           | `cshake_block`
-| iii  | `b`           | `key_block`
+| iii  | `b` or 64     | `key_block` or System Key Identifier
 |===
 --
 
@@ -2864,7 +2971,7 @@ does not define how, since cite:[nist-SP-800-185] does not.
 |  ii  | 16          | `block_base`
 | iii  | 48          | Padding
 |  iv  | `b`         | `cshake_block`
-|   v  | `b`         | `key_block`
+|   v  | `b` or 64   | `key_block` or System Key Identifier
 |  vi  | 32          | `L`
 |===
 --
@@ -2954,7 +3061,7 @@ Data Structures:::
 --
 
 * *Internal State*:
-  ** `key`: 128 bits, or 64 bits if it is a System Key Identifier.
+  ** `key`: 128 bits.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits as int.
  ** `last_blk_len`: 9 bits as int.
@@ -2999,8 +3106,8 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_.
- **  _Hash_Absorb_ -> _Encrypt_, if encryption is allowed.
- **  _Hash_Absorb_ -> _Decrypt_, if decryption is allowed.
+ **  _Hash_Absorb_ -> _Encrypt_, if encryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
+ **  _Hash_Absorb_ -> _Decrypt_, if decryption is allowed (Rule <<KLEE-MGR-policy-gate>>).
  ** _Encrypt_ -> { _Enc_Last_Block_ -> } _Hash_Output_ -> _Success_.
  ** _Decrypt_ -> { _Dec_Last_Block_ -> } _Hash_Verify_ -> _Success_ or _Failure_.
 
@@ -3018,8 +3125,7 @@ State Machine:::
    `tag_len` {leftarrow} `Xs`. Admissible values satisfy 64 {le} `Xs` {le} 128; any other
    value causes the locker to transition to Error State _Invalid_
    (cite:[nist-SP-800-232] {sect}4.3 admits 32 to 63 bits only after a risk analysis, which KLEE does not provide for).
-   The _State_ field is unchanged: setting the tag
-   length is an _operation_, not a state.
+   Setting the tag length is an operation, not a State (<<KLEE-operation-immediates>>).
 
 ** [[KLEE-Ascon-AEAD128-nonce-setup]]To transition to State _Hash_Absorb_, a Form C ``kl.setst`` is expected, whose `INPUT` sets the nonce as follows:
 +
@@ -3031,7 +3137,7 @@ State Machine:::
     . `state[4] <- state[4] xor key[127:64]`
 --
 +
-If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+`INPUT` is truncated to its 128 least significant bits (Rule <<KLEE-MGR-fixed-width-input>>).
 
 ** In State _Hash_Absorb_, only (multi-block) ``kl.exec`` instructions of Form B are expected.
 “``kl.exec Kn|K(Xn), INPUT``” absorbs a data block into the state, i.e.:
@@ -3049,7 +3155,7 @@ If the associated data is empty, the caller must issue no ``kl.exec`` instructio
  . `state[4] <- state[4] xor (1 << 63)`
 
 ** A same-State `kl.setst` into _Hash_Absorb_, _Encrypt_ or _Decrypt_ transitions the locker to Error State
-   _Invalid_, notwithstanding Rule SGR4: repeating the operations performed on entering these States (the nonce
+   _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-same-state>>): repeating the operations performed on entering these States (the nonce
    setup and the domain separation) would create internal states that cite:[nist-SP-800-232] does not define.
    This applies to every variant of this Machine.
 
@@ -3062,7 +3168,8 @@ If the associated data is empty, the caller must issue no ``kl.exec`` instructio
  . `ASCON(8)`
 --
 ** To transition to State _Enc_Last_Block_, a Form B ``kl.setst`` instruction must be issued, whose
-auxiliary argument `Xs` is the bit length of the final block. It performs:
+auxiliary argument `Xs` is the bit length of the final block. `Xs` need not be a multiple of 8 (Rule <<KLEE-MGR-last-blk-len>>):
+cite:[nist-SP-800-232] is written in little-endian bit order, so `pad` places the terminating `1` at bit position `Xs` for any `Xs`. It performs:
 +
 --
 . If `Xs` > 127, then: the locker transitions to Error State _Invalid_.
@@ -3124,7 +3231,8 @@ In this state only one 128-bit block is processed.
 --
 
 ** To transition to State _Dec_Last_Block_, a Form B ``kl.setst`` instruction must be issued, whose
-auxiliary argument `Xs` is the bit length of the final block. It performs:
+auxiliary argument `Xs` is the bit length of the final block. `Xs` need not be a multiple of 8 (Rule <<KLEE-MGR-last-blk-len>>):
+cite:[nist-SP-800-232] is written in little-endian bit order, so `pad` places the terminating `1` at bit position `Xs` for any `Xs`. It performs:
 +
 --
 . If `Xs` > 127, then: the locker transitions to Error State _Invalid_.
@@ -3249,10 +3357,7 @@ The difference with respect to Ascon-AEAD128 is
   . `state[4] <- state[4] xor key[127:64]`
 --
 
-NOTE: The rules do not forbid keeping an older copy of the SCC in memory to restart the
-state machine and thus create many-time pads. It is the responsibility of
-the caller to make sure that the SCC is not abused. This Machine only protects the
-confidentiality of the nonce, not against its reuse.
+NOTE: This Machine protects the confidentiality of the nonce, not against its reuse (<<KLEE-nonce-reuse>>).
 
 Everything else is as for Ascon-AEAD128.
 
@@ -3277,8 +3382,8 @@ Data Structures:::
 --
 
 * *Internal State*:
-  ** `K1`: 128 bits, or 64 bits if it is a System Key Identifier.
- ** `K2`: 128 bits, omitted if a System Key is used.
+  ** `K1`: 128 bits.
+ ** `K2`: 128 bits.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits.
  ** `last_blk_len`: 9 bits as int, as in <<KLEE-Ascon-AEAD128>>, whose
@@ -3504,11 +3609,17 @@ these curves do not use `RndNum` (cf. <<KLEE-EdDSA>>).
 
 All curves specified here are defined over prime fields.
 For secp521r1 the 55 most significant bits of each coordinate of `Generator` and `SecondPt`, of `Scalar`,
-of each component of `Signature`, of `Hash`, and of `RndNum` must be zero. A load of one of these fields that completes with any of those bits set causes the locker to
-transition to Error State _Invalid_. The check is repeated when _Point_Mul_, _Sign_Generate_ or _Sign_Verify_
-uses a value, and a violation then also causes the locker to transition to Error State _Invalid_: a value can reach
-the locker without a load, for instance through the import of a corrupted SCC or as a resumed `RndNum`, and this
-check is one of the ways a corruption of the locker file is detected.
+of each component of `Signature`, of `Hash`, and of `RndNum` must be zero. A write of one of these fields with any of those bits set causes the locker to
+transition to Error State _Invalid_ (Rule <<KLEE-MGR-check-on-write>>). The check is repeated when _Point_Mul_, _Sign_Generate_ or _Sign_Verify_
+uses a value, and a violation then also causes the locker to transition to Error State _Invalid_ (Rule <<KLEE-MGR-check-on-read>>):
+a value can reach the locker without a check, for instance as a resumed `RndNum`, and this check is one of the ways a
+corruption of the locker file is detected.
+
+A point is _valid_ if it is a point of the curve other than the point at infinity and, where the cofactor is not 1, of the
+prime-order subgroup; for the Edwards curves, its encoding must also decode as cite:[RFC8032] {sect}5.1.3, resp. {sect}5.2.3,
+prescribes. Whenever _Point_Mul_, _Sign_Generate_ or _Sign_Verify_ uses `Generator` (for the Edwards curves, only _Point_Mul_ does, <<KLEE-EdDSA>>) or `SecondPt` and the point is not
+valid, the state transitions to _Failure_: this is a data error (Rule <<KLEE-MGR-config-data-error>>), not a configuration error, whether the
+point is a peer's point, a public key or a generator. The check is made when the point is read (Rule <<KLEE-MGR-check-on-read>>).
 --
 
 //
@@ -3541,7 +3652,7 @@ The Elliptic Curve Machines use the _MachineUse_ field as follows:
 |  [13:1] | `Progress`      |   Used by the implementation to track the progress of long-running operations such as scalar multiplications in a non-portable way; the unit is implementation-dependent. In this case, whenever it has a non-zero value, a non-empty, implementation-specific SCC section must be defined. When resuming, the importing implementation will then force a restart of the operation if there is an implementation version mismatch.
 |===
 
-For ECC Machines, the flags in _MachinePolicy_ enable signature generation (_MachinePolicy_[0]) and verification (_MachinePolicy_[1]), where all four combinations are admissible. Entering _Sign_Generate_ without _MachinePolicy_[0], or _Sign_Verify_ without _MachinePolicy_[1], causes the locker to transition to Error State _Invalid_.
+For ECC Machines, the flags in _MachinePolicy_ enable signature generation (_MachinePolicy_[0]) and verification (_MachinePolicy_[1]), where all four combinations are admissible, and gate _Sign_Generate_ and _Sign_Verify_, respectively (Rule <<KLEE-MGR-policy-gate>>).
 --
 
 Data Structures:::
@@ -3651,13 +3762,11 @@ _Set_Signature_ are collectively termed the _Set_ states.
  ** One can freely transition between any two _Set_ states, and from a _Set_ state to
     itself. Re-entering a _Set_ state erases the field it sets and clears the
     corresponding ``Has``__Var__ flag, so a value may be replaced by loading it again.
- ** From _Ready_ or from any _Set_ state -> one of:
+ ** From _Ready_ or from any _Set_ state -> one of the following, whose conditions are entry conditions (Rule <<KLEE-MGR-policy-gate>>):
   *** _Point_Mul_;
   *** _Sign_Generate_ only if `HasHash` holds *and* `Scalar` holds a
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
       of the group. A freshly provisioned CC has `Scalar` = 0 and so does not qualify.
-      Attempting to enter State _Sign_Generate_ via `kl.setst` without a configured private key
-      causes the locker to transition to Error State _Invalid_.
     (For the EdDSA curves, <<KLEE-EdDSA>>, the behavior is different.)
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_ -> _Success_.
@@ -3668,12 +3777,12 @@ _Set_Signature_ are collectively termed the _Set_ states.
 * In State _Set_Generator_ we can set a group generator, or a default one.
 * In State _Set_Scalar_ we can either set a scalar for scalar multiplication or private key.
 * For each __Var__ {in} {`SecondPt`, `Signature`, `Hash`, `RndNum`},
-the Boolean variable ``Has``__Var__ is set when all operations required in the corresponding
-_Set_ state have been successfully executed, and is held in the _StateExtension_ field as
+the Boolean variable ``Has``__Var__ follows the pattern of Rule <<KLEE-MGR-load-long-field>>, and is held in the _StateExtension_ field as
 given in <<KLEE-ECC-StateExtension>>. There is no such flag for `Generator` or for `Scalar`:
-`Generator` always holds a value, the curve's default one from
-provisioning onwards, and `Scalar` is zero until set, which is not a legal private key and
-therefore needs no flag.
+`Generator` holds the curve's default value from provisioning onwards, until it is replaced, and `Scalar`
+is zero until set, which is not a legal private key and therefore needs no flag. A load of either that is left
+incomplete zeroes the field (Rule <<KLEE-MGR-load-long-field>>): a zero `Generator` is not a valid point, and a zero `Scalar` not a
+configured private key.
 --
 
 * *Behavior:*
@@ -3702,7 +3811,7 @@ therefore needs no flag.
       Rule <<KLEE-MGR-load-long-field>>, and ``Has``_X_ is set once the field is complete, where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `kl.setst` with a non-zero value in the GPR.
-    In this case, a random value is set, no further
+    In this case, a random value is set (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> applies if the RBG fails), no further
     `kl.exec` is issued, and the generated value is never disclosed: it leaves
     the locker only as part of an SCC.
 
@@ -3721,14 +3830,13 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
  ** In State _Point_Mul_, a single Form D ``kl.exec Kn|K(Xn)`` performs a scalar
     multiplication:
 
-  . If `Scalar` does not satisfy `1` {le} `int(Scalar)` < `n`, the locker
+  . If `Scalar` does not satisfy `1` {le} `int(Scalar)` < `n` (Rule <<KLEE-MGR-check-on-read>>), the locker
     transitions to Error State _Invalid_.
   . The base point `P` is `SecondPt` if `HasSecondPt` is set (multiplication by an
     unknown point, e.g., a Diffie-Hellman peer value), and `Generator` otherwise
     (multiplication of the known base, e.g., public-key generation).
-  . The implementation must verify that `P` is a point of the curve other than the point at
-    infinity, and, where the cofactor is not 1, of the prime-order subgroup; if not, the locker
-    transitions to Error State _Invalid_.
+  . The implementation must verify that `P` is a valid point (see below); if not, the state
+    transitions to _Failure_.
   . `SecondPt` {leftarrow} `int(Scalar)` {interpunct} `P`, encoded as in <<KLEE-ECC>>, and
     `HasSecondPt` is set.
   . `OutputType` {leftarrow} False, and the state transitions to _Output_.
@@ -3737,10 +3845,11 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     signature over the base point `Generator`, with private key `d` = `int(Scalar)`
     and message value `e` = `int(Hash)`:
 
+  . If `Generator` is not a valid point, the state transitions to _Failure_.
   . For the NIST and Brainpool curves, the signature (`r`, `s`) is computed as
     specified in cite:[nist-fips-186-5] {sect}6.4.1; for SM2, as specified in
     cite:[GMT-0003-2-2012]. If `Progress` is zero, the per-signature secret `k` is drawn from the RBG
-    (<<Zkl-ISA-unpriv.adoc#KLEE-RBG>>) into `RndNum`, with `HasRndNum` set for the duration of the
+    (<<Zkl-ISA-unpriv.adoc#KLEE-RBG>>, Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>) into `RndNum`, with `HasRndNum` set for the duration of the
     operation; otherwise the interrupted operation is resumed with the `RndNum` held (Rule <<KLEE-MGR-progress-discard>>). The retry rules above apply.
   . On completion, `Signature` {leftarrow} (`r`, `s`) and `HasSignature` is set;
     `RndNum` is destroyed and `HasRndNum` cleared.
@@ -3751,7 +3860,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     `e` = `int(Hash)`, as specified in cite:[nist-fips-186-5] {sect}6.4.2 for the
     NIST and Brainpool curves and in cite:[GMT-0003-2-2012] for SM2. All checks
     those specifications require — the ranges of `r` and `s`, and the validity of
-    the public key as a curve point — are performed; if any fails, or the signature
+    the public key, and of `Generator`, as points — are performed; if any fails, or the signature
     equation does not hold, the state transitions to _Failure_, else to _Success_.
 
  ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed, the state transitions to _Output_ and:
@@ -3760,7 +3869,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      *** If `OutputType` = False, the output is in `SecondPt`.
      *** If `OutputType` = True, the output is in `Signature`.
    . In State _Output_, the result is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLEE-MGR-load-long-field>>.
-     . Once the output is complete the state transitions to _Success_; this is the transition of its own that Rule <<KLEE-MGR-load-long-field>> admits.
+     . Once the output is complete the state transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>).
 
  ** Upon returning to State _Ready_:
   *** If a Form B `kl.setst` is used, the parameter `Xs` determines which of the fields
@@ -3835,8 +3944,17 @@ offers depends on the hash extensions it provides:
 
 The curve extension alone must provide enough of `H` to hash the fixed-size inputs above,
 which are a few hundred bytes at most. Absorbing a message of arbitrary length is what
-requires the general hashing machinery, and hence `Zklesha2h` or `Zklesha3h`, respectively. Requesting
-pure mode on an implementation that lacks it transitions the locker to Error State `kl_state_unsupported`.
+requires the general hashing machinery, and hence `Zklesha2h` or `Zklesha3h`, respectively.
+
+The _AuxInfo_ field of the MDH (<<Zkl-ISA-unpriv.adoc#KLEE-MachineUse>>) records the modes a CC may use:
+with _AuxInfo_ = 0 only pre-hash mode is available, and with _AuxInfo_ = 1 pure mode is available as well.
+Every other value is reserved.
+At provisioning and at import, an _AuxInfo_ of 1 on an implementation that does not offer pure mode for the curve,
+or a reserved value, is unsupported Metadata, and raises `kl_exc_unsupported` (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>).
+This allows an M-mode handler to emulate pure mode where the hardware does not offer it
+(<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>); a handler that cannot resolve the exception transitions the locker
+to an Error State, which is _Invalid_ for a reserved value.
+_AuxInfo_ is not changed by provisioning or by a transition to _Ready_.
 --
 
 Data Structures:::
@@ -3907,6 +4025,11 @@ State Machine:::
    `SecondPt` {leftarrow} `s` {interpunct} `P`. With `HasSecondPt` clear and the default
    `Generator`, `SecondPt` thus receives the public key `A`.
 
+** Signature generation and verification always use the base point `B` of cite:[RFC8032] {sect}5.1, resp. {sect}5.2,
+   whatever `Generator` holds: `R` {leftarrow} `r` {interpunct} `B`, the public key `A` derived from the seed is
+   `s` {interpunct} `B`, and verification checks its equation over `B`. `Generator` is used only by _Point_Mul_, so
+   the check of its validity (<<KLEE-ECC>>) applies only there.
+
 ** Signature generation requires *two* passes over the message, and verification one.
    This is inherent to EdDSA, whose second hash takes `R`, which is not known until the
    first pass has completed. `msg_pass` records the completed passes; `msg_pass` and `r` are
@@ -3919,9 +4042,10 @@ State Machine:::
 If `ctxlen` {ne} 0, the `ctx` value is then loaded with
    (multi-block) Form B `kl.exec` instructions, following Rule <<KLEE-MGR-load-long-field>>
    as the _Set_ states of <<KLEE-ECC>> do, with the progress recorded in `block_base`.
+   Leaving _Set_Ctx_ before `ctx` is complete zeroes `ctx` and `ctxlen` (Rule <<KLEE-MGR-load-long-field>>).
 
 ** To enter State _Msg_Absorb_ (pure mode only), a Form B `kl.setst` is used whose auxiliary
-   argument `Xs` selects the pass:
+   argument `Xs` selects the pass. Entering the State requires _AuxInfo_ = 1, and each pass has the entry conditions below (Rule <<KLEE-MGR-policy-gate>>).
 
   . `Xs` = 0, *signing pass 1*: requires that signature generation be allowed and that
     `Scalar` hold a configured seed; `msg_pass` {leftarrow} 0, and `H` is initialized
@@ -3935,8 +4059,7 @@ If `ctxlen` {ne} 0, the `ctx` value is then loaded with
     that `HasSignature` and `HasSecondPt` hold; `msg_pass` {leftarrow} 0, and `H` is
     initialized with `dom {vvert} R {vvert} A`, with `R` from `Signature` and
     `A` = `SecondPt`.
-  . Any other value of `Xs`, or an unmet precondition for the three values above,
-    causes the locker to transition to Error State _Invalid_.
+  . Any other value of `Xs` causes the locker to transition to Error State _Invalid_.
 
 ** In State _Msg_Absorb_, Form B ``kl.exec`` instructions absorb message bytes into `H` — and,
    in signing pass 2, into `H'` — through Procedure `process_VLI`
@@ -4047,7 +4170,9 @@ Data Structures:::
  ** `encapsk`: 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes). It is not stored separately: it is the `ek` sub-field of `decapsk`,
  at byte offset 384·`k` (768 / 1152 / 1536). When only an encapsulation key is held, the other bytes of `decapsk` are zero.
  ** `HasEncapsk`, `HasDecapsk`: Booleans, recording whether `encapsk`, resp. a complete `decapsk`, holds a configured value.
- They are bits 0 and 1 of _StateExtension_, resp., and are therefore readable with `kl.getmdl`. `HasDecapsk` implies `HasEncapsk`.
+ They are bits 0 and 1 of _StateExtension_, resp., and follow the pattern of Rule <<KLEE-MGR-load-long-field>>, with the departures stated below. `HasDecapsk` implies `HasEncapsk`.
+ ** `HasCiphertext`: Boolean, bit 2 of _StateExtension_, recording whether `ciphertext` holds a complete value, loaded and
+ checked, or computed by _Encapsulate_. It follows the pattern of Rule <<KLEE-MGR-load-long-field>>.
  ** `ciphertext`: 6144 / 8704 / 12544 bits (768 / 1088 / 1568 bytes).
  ** `sharedkey` 256 bits.
 
@@ -4056,8 +4181,8 @@ Data Structures:::
 The ML-KEM Machines use the _MachineUse_ field of the metadata header to record how many
 bytes of a long field have been transferred so far: read from memory in the _encapsk_Input_,
 _decapsk_Input_, and _ciphertext_Input_ states, or written to memory in the
-_encapsk_Output_ and _ciphertext_Output_ states. This is similar to what is done in the
-hashing and Elliptic Curve Machines.
+_encapsk_Output_ and _ciphertext_Output_ states. This is the transfer counter _W_ of Rule <<KLEE-MGR-load-long-field>>,
+which the ECC Machines keep in `block_base` instead (<<KLEE-ECC>>).
 
 The size of the internal state of the three variants is 2432, 3520, and 4768 bytes, excluding metadata.
 --
@@ -4109,13 +4234,13 @@ ML-KEM Machines define:
 --
 
 * *Allowed State Transitions:*
- ** State transitions are allowed between any two valid states, subject to the restrictions in Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-setst-in-success-failure>>.
+ ** State transitions are allowed between any two valid states, subject to the restrictions in Rules <<Zkl-ISA-unpriv.adoc#KLEE-SGR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLEE-SGR-success-failure-cannot-be-set-directly>>.
 
 * *Behavior:*
 
-** Upon provisioning, the fields `decapsk` (and with it `encapsk`), `ciphertext` and `sharedkey` are cleared, and so are `HasEncapsk` and `HasDecapsk`.
+** Upon provisioning, the fields `decapsk` (and with it `encapsk`), `ciphertext` and `sharedkey` are cleared, and so are `HasEncapsk`, `HasDecapsk` and `HasCiphertext`.
 
-** Upon transitioning to State _Ready_, the field `sharedkey` is cleared, while `decapsk` (and with it `encapsk`), `ciphertext`, `HasEncapsk` and `HasDecapsk` are kept,
+** Upon transitioning to State _Ready_, the field `sharedkey` is cleared, while `decapsk` (and with it `encapsk`), `ciphertext`, `HasEncapsk`, `HasDecapsk` and `HasCiphertext` are kept,
 so that a key pair survives a return to _Ready_, in particular from _Success_ and _Failure_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-setst-in-success-failure>>),
 and a ciphertext that passed its type check (see below) remains available to _Decapsulate_.
 
@@ -4123,15 +4248,16 @@ and a ciphertext that passed its type check (see below) remains available to _De
 
 ** Upon entering State _encapsk_Input_, the whole `decapsk` field is zeroed and `HasEncapsk` and `HasDecapsk` are cleared; the loaded value is written into the `encapsk` sub-field, so that the locker then holds an encapsulation key only.
 Upon entering State _decapsk_Input_, `HasEncapsk` and `HasDecapsk` are cleared.
-Upon entering State _ciphertext_Input_, `sharedkey` is cleared together with `ciphertext`, since it belongs to the ciphertext being replaced.
-When a load completes and passes its check (see below), `HasEncapsk` is set for an `encapsk`, and both flags are set for a `decapsk`.
+Upon entering State _ciphertext_Input_, `sharedkey` is cleared together with `ciphertext`, since it belongs to the ciphertext being replaced, and `HasCiphertext` is cleared.
+When a load completes and passes its check (see below), `HasEncapsk` is set for an `encapsk`, both key flags are set for a `decapsk`, and `HasCiphertext` is set for a `ciphertext`.
 
  ** All uses of `kl.setst` do not require an auxiliary parameter.
 
- ** Apart from `HasEncapsk` and `HasDecapsk`, the ML-KEM Machines do not carry state information as to whether
- `ciphertext` and `sharedkey` have been assigned values.
+ ** Apart from `HasEncapsk`, `HasDecapsk` and `HasCiphertext`, the ML-KEM Machines do not carry state information as to whether
+ `sharedkey` has been assigned a value.
    The input checks that cite:[nist-fips-203] {sect}7.2 and {sect}7.3 require are
-   performed when a field finishes loading, and are split according to what a failure means:
+   performed when a field is written (Rule <<KLEE-MGR-check-on-write>>): when its load finishes, and when an import restores a key
+   that `HasEncapsk` or `HasDecapsk` marks as configured. They are split according to what a failure means:
 +
 --
  . Upon completion of State _encapsk_Input_, the *encapsulation key check* of
@@ -4142,17 +4268,15 @@ When a load completes and passes its check (see below), `HasEncapsk` is set for 
      cite:[nist-fips-203] {sect}7.3 is performed: the type check and the hash check (the copy of
      `H(encapsk)` embedded in `decapsk` matches the embedded `encapsk`).
  . A `kl.setst` that leaves State _encapsk_Input_, _decapsk_Input_ or _ciphertext_Input_ before the
-     field is complete, including when nothing has been loaded, for a State other than _Ready_,
-     _Unconfigured_ or an Error State, is a failure of that field's type check, handled as below in place
-     of the requested transition. A same-State `kl.setst` does not leave the State: it restarts the load,
-     zeroing the field and its progress as on entering the State (Rule <<KLEE-MGR-load-long-field>>).
-     Nor does a `kl.setst` with `#immed7` = `kl_cfg_clear_ads`, which leaves the _State_ unchanged.
- . Leaving State _ciphertext_Input_ for _Ready_ before the field is complete, and a failure of the
-     ciphertext type check, zero `ciphertext`, so that _Ready_ never keeps a partly loaded ciphertext.
-     A partly loaded key needs no such rule, since `HasEncapsk` and `HasDecapsk` are set only when its
-     load completes.
- . A failure of either key check is a *configuration* error: the locker transitions to Error State
+     field is complete zeroes the field, as in every Machine (Rule <<KLEE-MGR-load-long-field>>): `HasEncapsk` and
+     `HasDecapsk`, resp. `HasCiphertext`, stay clear, so that no partly loaded key or ciphertext can be used
+     (Rule <<KLEE-MGR-policy-gate>>). A failure of the ciphertext type check zeroes `ciphertext` as well, and leaves
+     `HasCiphertext` clear.
+ . A failure of the decapsulation key check is a *configuration* error: the locker transitions to Error State
      _Invalid_, and the CC must be reconfigured before it can be used.
+ . A failure of the encapsulation key check is a *data* error (Rule <<KLEE-MGR-config-data-error>>): `encapsk` is a public key, usually
+     a peer's. The whole `decapsk` field is zeroed, `HasEncapsk` and `HasDecapsk` stay clear, and the state machine
+     transitions to State _Failure_, which is a valid state.
  . Upon completion of State _ciphertext_Input_, the *ciphertext type check* of
      cite:[nist-fips-203] {sect}7.3 is performed. A failure is a *data* error: the state machine
      transitions to State _Failure_, which is a valid state. If the check passes, the state machine
@@ -4167,20 +4291,21 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 
  ** In State _GenerateKeyPair_, Form D ``kl.exec Kn|K(Xn)`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19).
 
-`ML-KEM.KeyGen` fails only if the random bit generator fails (cite:[nist-fips-203] Algorithm 19); the state machine
-then transitions to State _Failure_, and no field or flag is changed.
+`ML-KEM.KeyGen` fails only if the random bit generator fails (cite:[nist-fips-203] Algorithm 19); the locker
+then transitions to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>).
 Otherwise `decapsk` (and with it `encapsk`) receives the new key pair,
 `HasEncapsk` and `HasDecapsk` are set, and the state machine transitions to State _Ready_, which keeps them.
 The caller then transitions to a State that uses the key pair, for instance _encapsk_Output_ or _Decapsulate_.
 
-** In State _Encapsulate_, Form D ``kl.exec Kn|K(Xn)`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20), applied to the `encapsk` state field, which must have been set—by `_encapsk_Input_`, `_decapsk_Input_` or `_GenerateKeyPair_`. If `HasEncapsk` is false, this `kl.exec` transitions the locker to Error State _Invalid_. The procedure draws a random value internally and derives from it *both* the shared key and the ciphertext, which are stored in the `sharedkey` and `ciphertext` state fields, respectively; the shared key is not drawn independently of the ciphertext.
+** In State _Encapsulate_, Form D ``kl.exec Kn|K(Xn)`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20), applied to the `encapsk` state field, which must have been set—by `_encapsk_Input_`, `_decapsk_Input_` or `_GenerateKeyPair_`. If `HasEncapsk` is false, this `kl.exec` transitions the locker to Error State _Invalid_. The procedure draws a random value internally and derives from it *both* the shared key and the ciphertext, which are stored in the `sharedkey` and `ciphertext` state fields, respectively, and `HasCiphertext` is set; the shared key is not drawn independently of the ciphertext.
 
 `ML-KEM.Encaps` fails only if the random bit generator fails (cite:[nist-fips-203] Algorithm 20), since `encapsk` was either
-generated by `ML-KEM.KeyGen` or checked when it was loaded; the state machine then transitions to State _Failure_, and no field
-is changed. Otherwise the state machine transitions to state _ciphertext_Output_.
+generated by `ML-KEM.KeyGen` or checked when it was loaded; the locker then transitions to Error State _Invalid_
+(Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>). Otherwise the state machine transitions to state _ciphertext_Output_.
 
 ** In State _Decapsulate_, Form D ``kl.exec Kn|K(Xn)`` decapsulates the ciphertext using procedure `ML-KEM.Decaps` of cite:[nist-fips-203] (Algorithm 21).
-If `HasDecapsk` is false, this `kl.exec` transitions the locker to Error State _Invalid_.
+Entering _Decapsulate_ requires `HasCiphertext` (Rule <<KLEE-MGR-policy-gate>>), so that `ML-KEM.Decaps` never runs on a partly loaded
+or unchecked ciphertext. If `HasDecapsk` is false, this `kl.exec` transitions the locker to Error State _Invalid_.
 `ML-KEM.Decaps` is executed unconditionally. The shared key, either derived from the ciphertext or returned via “implicit rejection” is placed in the `sharedkey` state field, and the state machine transitions to state `_Success_`. The caller cannot distinguish the two cases.
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
@@ -4193,8 +4318,9 @@ the state and no variable is needed to hold it.
 ** In States _encapsk_Output_ and _ciphertext_Output_, the fields `encapsk` and `ciphertext` are
 emitted using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-MGR-load-long-field>>, with the
 progress recorded in _MachineUse_. Both fields are public, so no restriction applies to where they
-are written.
-Entering _encapsk_Output_ while `HasEncapsk` is false causes the locker to transition to Error State _Invalid_.
+are written. Once the field has been completely emitted, the state machine transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>):
+after _Encapsulate_, the `sharedkey` is then moved by `kl.derive` from _Success_, as after _Decapsulate_.
+Entering _encapsk_Output_ requires `HasEncapsk` (Rule <<KLEE-MGR-policy-gate>>).
 
 ** `sharedkey` is emitted by no `kl.exec`. It is the only exportable field of an ML-KEM locker, moved by `kl.derive`
 (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>) as Rule <<Zkl-ISA-unpriv.adoc#KLEE-DER-shared-secret>> specifies,
@@ -4206,16 +4332,19 @@ starts loading a replacement, or the locker enters an Error State.
 
 [[KLEE-ML-KEM-field-lifetime]]
 .Zeroing of the ML-KEM fields and flags
-[%autowidth,float="center",align="center",cols="<1,^1,^1,^1,^1",options="header"]
+[%autowidth,float="center",align="center",cols="<1,^1,^1,^1,^1,^1",options="header"]
 |===
-| Event | `decapsk` / `encapsk` | `ciphertext` | `sharedkey` | `HasEncapsk` / `HasDecapsk`
-| Provisioning | zeroed | zeroed | zeroed | cleared
-| Entering _Ready_ | kept | kept | zeroed | kept
-| Entering _encapsk_Input_ | the whole `decapsk` zeroed | kept | kept | cleared
-| Entering _decapsk_Input_ | zeroed (Rule <<KLEE-MGR-load-long-field>>) | kept | kept | cleared
-| Entering _ciphertext_Input_ | kept | zeroed (Rule <<KLEE-MGR-load-long-field>>) | zeroed | kept
-| Leaving _ciphertext_Input_ incomplete for _Ready_, or a failed ciphertext type check | kept | zeroed | kept | kept
-| Entering an Error State 3+^| cleared, with the rest of the Content (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-clear-locker-content-error-state>>) | kept in the MDH
+| Event | `decapsk` / `encapsk` | `ciphertext` | `sharedkey` | `HasEncapsk` / `HasDecapsk` | `HasCiphertext`
+| Provisioning | zeroed | zeroed | zeroed | cleared | cleared
+| Entering _Ready_ | kept | kept | zeroed | kept | kept
+| Entering _encapsk_Input_ | the whole `decapsk` zeroed | kept | kept | cleared | kept
+| Entering _decapsk_Input_ | zeroed (Rule <<KLEE-MGR-load-long-field>>) | kept | kept | cleared | kept
+| Entering _ciphertext_Input_ | kept | zeroed (Rule <<KLEE-MGR-load-long-field>>) | zeroed | kept | cleared
+| _Encapsulate_ completes | kept | computed | computed | kept | set
+| Leaving _encapsk_Input_ or _decapsk_Input_ incomplete | zeroed (Rule <<KLEE-MGR-load-long-field>>) | kept | kept | cleared | kept
+| A failed encapsulation key check (_Failure_) | the whole `decapsk` zeroed | kept | kept | cleared | kept
+| Leaving _ciphertext_Input_ incomplete, or a failed ciphertext type check | kept | zeroed | kept | kept | clear
+| Entering an Error State 3+^| cleared, with the rest of the Content (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-clear-locker-content-error-state>>) 2+^| kept in the MDH
 |===
 
 //
@@ -4243,15 +4372,42 @@ The principal functions offered by ML-DSA are:
 * `HashML-DSA.Sign`:   Generates a digital signature for a given pre-hashed message.
 * `HashML-DSA.Verify`: Verifies a digital signature for a given pre-hashed message.
 
-The KLEE ML-DSA Machines execute the core lattice operations of signing and verification, specifically `ML-DSA.Sign_internal` and `ML-DSA.Verify_internal` as defined in cite:[nist-fips-204] (Algorithms 7 and 8).
+The KLEE ML-DSA Machines execute the core lattice operations of signing and verification, specifically `ML-DSA.Sign_internal` and `ML-DSA.Verify_internal` as defined in cite:[nist-fips-204] (Algorithms 7 and 8), with an _external_ message representative μ:
+the caller supplies μ in State _mu_Input_, and the steps of these algorithms that compute μ from `tr` and the formatted message `M'`
+are not performed. Consequently the Machine never sees the message, the context string `ctx` or `tr` as separate values.
 
 Message hashing and domain formatting (cite:[nist-fips-204] {sect}5) are structured as follows:
 
 * *Pure ML-DSA:* The caller formats the domain-separated message string `M' = 0x00 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} M` and computes the 64-byte message representative `mu = SHAKE256(tr {vvert} M', 64)`, which is supplied to the KLEE unit via State _mu_Input_.
 * *HashML-DSA (Pre-Hash):* The caller pre-hashes message `M` with the hash function `PH` specified in the _AuxInfo_ field of the MDH, constructs `M' = 0x01 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} OID(PH) {vvert} PH(M)`, and computes `mu = SHAKE256(tr {vvert} M', 64)` to be loaded into State _mu_Input_.
 For FIPS conformance, cite:[nist-fips-204] requires `PH(M)` to be computed within a FIPS-140-validated cryptographic module, which may be the KLEE unit itself if it is required to be FIPS-140-validated.
-* *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)` is computed inside the KLEE unit upon key generation (`_GenerateKeyPair_`) or public key derivation (`_compute_pubKey_`), or loaded via State _tr_Input_ when configuring a CC for verification only.
-* *Context String (`ctx`):* The context string `ctx` (up to 255 bytes) and its length `ctxlen` are maintained in the CC to bind the context of the protocol to the hardware session. In implementations supporting internal message absorption, `ctx` and `tr` are used internally to derive `mu`; when `mu` is supplied directly by the caller, `ctx` and `ctxlen` attest that bound in the serialized SCC.
+* *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)`. It is embedded in `privkey` (cite:[nist-fips-204] Algorithm 24), where `ML-DSA.KeyGen` places it; the caller computes it from the public key.
+
+[NOTE]
+====
+*Formation of μ, and the caller's duties.*
+Following cite:[nist-fips-204] {sect}5.2 to 5.4 and Algorithms 2 to 5, 7 and 8, the message representative is
+
+`{fournbsp}{fournbsp}` μ = `SHAKE256(tr {vvert} M', 64)`, where `tr` = `SHAKE256(pk, 64)` and
+
+* for pure ML-DSA, `M'` = `0x00 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} M`;
+* for HashML-DSA, `M'` = `0x01 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} OID(PH) {vvert} PH(M)`, with `PH` the function that _AuxInfo_ records.
+
+Here `ctx` is a context string of at most 255 bytes, chosen by the protocol, and `|ctx|` is its length in bytes.
+The caller is expected to:
+
+. obtain the public key `pk` of the CC: for verification, the key it has loaded in State _pubkey_Input_; for signing, the key
+  emitted in State _pubkey_Output_ after _GenerateKeyPair_ or _compute_pubKey_, or a copy of it from an authenticated source,
+  such as a certificate;
+. compute `tr` from `pk` once, and keep it with the CC;
+. for each message, choose the mode that _AuxInfo_ selects (pure if _AuxInfo_ = 0), form `M'` with the context string that the
+  protocol prescribes, compute μ, and load it in State _mu_Input_, before entering _Sign_Generate_ or _Sign_Verify_;
+. use, when verifying, the same `ctx` and mode as the signer; and
+. compute `PH(M)` for HashML-DSA within a cryptographic module of the required validation level (see above).
+
+The Machine cannot check any of these steps: a μ formed with a wrong `tr`, `ctx` or mode yields a signature that the
+intended verifier rejects, or a verification that fails, but it never discloses or weakens the private key.
+====
 
 
 Machine-Specific Functions:::
@@ -4273,7 +4429,7 @@ Data Structures:::
 . _MachinePolicy_[0] is set to 1 if the Machine can generate signatures, and
 . _MachinePolicy_[1] is set to 1 if the Machine can verify signatures.
 . A _MachinePolicy_ of 0 is admissible, but makes no sense, since the locker can then neither generate nor verify signatures (<<Zkl-ISA-unpriv.adoc#KLEE-Machine-field>>).
-. Entering _Sign_Generate_ without _MachinePolicy_[0], or _Sign_Verify_ without _MachinePolicy_[1], causes the locker to transition to Error State _Invalid_.
+. _MachinePolicy_[0] gates _Sign_Generate_, and _MachinePolicy_[1] gates _Sign_Verify_ (Rule <<KLEE-MGR-policy-gate>>).
 
 ** The _AuxInfo_ field is zero for pure `ML-DSA`. For `HashML-DSA` it records the pre-hash function
 `PH`, in the format of bits [15:0] of the MDH (_Machine_, _MachinePolicy_ and _MachineExtension_);
@@ -4295,19 +4451,16 @@ which is _Invalid_ if the value encodes no such hash function.
 ** In the Metadata Header, the field _MachineUse_ is used to keep track of input and output of long fields in an architecturally defined way and to track
   long-running operations in an implementation-specific way.
  ** `HasPrivKey`, `HasPubKey`: Booleans, recording whether `privkey`, resp. `pubkey`, holds
-    a configured value. They are bits 0 and 1 of _StateExtension_, resp., and are therefore readable with `kl.getmdl`.
+    a configured value. They are bits 0 and 1 of _StateExtension_, resp., and follow the pattern of Rule <<KLEE-MGR-load-long-field>>, with the departures stated below.
  ** `Hedged`: Boolean, bit 2 of _StateExtension_, recording the signing mode selected on entering _Sign_Generate_.
  ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits) for ML-DSA-44/65/87, resp.
  ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits) for ML-DSA-44/65/87, resp.
  ** `signature`: 2420/3309/4627  bytes (19360/26472/37016 bits) for ML-DSA-44/65/87, resp.
- ** `ctxlen`: 1 byte (8 bits)
- ** `ctx`: 255 bytes (2040 bits)
- ** `mu`: 64 bytes (512 bits), contains the hashed formatted message
- ** `tr` (derived): 64 bytes (512 bits), contains the hash of the public key
+ ** `mu`: 64 bytes (512 bits), the external message representative μ
  ** `rnd`: 32 bytes (256 bits), the random value of hedged signing; it is non-zero only while a hedged signing operation is interrupted (Rule <<KLEE-MGR-progress-discard>>), and zero otherwise, including for deterministic signing.
 
 [none]
-* The ML-DSA Machine does not hash the message: the caller computes _μ_ as described above.
+* The ML-DSA Machine does not hash the message: the caller computes μ as described above.
 
 * Besides `rnd`, the internal state may contain several additional variables, for instance intermediate values of the computation of the NTT.
 The definition of all these values is implementation dependent, as is their occupancy.
@@ -4324,22 +4477,21 @@ for ML-DSA-44/65/87 | Field
 |   i   | 20480 / 32256 / 39168            | `privkey` (contains `tr`)
 |  ii   | 10496 / 15616 / 20736            | `pubkey`
 |  iii  | 19360 / 26472 / 37016            | `signature`
-|  iv   | 8                                | `ctxlen`
-|   v   | 2040                             | `ctx`
-|  vi   | 512                              | `mu`
-|  vii  | 256                              | `rnd`
+|  iv   | 512                              | `mu`
+|   v   | 256                              | `rnd`
 |===
 
 These contexts are large: for ML-DSA-44, ML-DSA-65 and ML-DSA-87 the serialized content is
-6656, 9648 and 12480 bytes, that is 416, 603 and 780 blocks of 128 bits, padding included.
+6400, 9392 and 12224 bytes, that is 400, 587 and 764 blocks of 128 bits, padding included.
 
 Apart from `HasPrivKey`, `HasPubKey` and `Hedged` (which are stored in _StateExtension_)
-the ML-DSA Machines do not carry state information as to whether `signature`,
-`ctxlen`, `ctx`, `mu` and `tr` have been assigned values.
+the ML-DSA Machines do not carry state information as to whether `signature`
+and `mu` have been assigned values.
 A `privkey` whose `s1` or `s2` has a coefficient outside [−η, η] (cite:[nist-fips-204] Algorithm 25)
-is malformed: this is a configuration error, and the locker transitions to Error State _Invalid_ when the load of `privkey` completes.
+is malformed: this is a configuration error, and the locker transitions to Error State _Invalid_ when `privkey` is written,
+that is when its load completes or an import restores it with `HasPrivKey` set (Rule <<KLEE-MGR-check-on-write>>).
 Every `pubkey` of the correct length is well formed (cite:[nist-fips-204] Algorithm 23).
-A `signature`, `mu`, `ctx` or `ctxlen` that is malformed or does not verify is a data error and
+A `signature` or `mu` that is malformed or does not verify is a data error and
 transitions the state machine to State _Failure_, which is a valid state.
 --
 
@@ -4353,13 +4505,11 @@ Besides
 _Ready_ (1),
 _Success_ (46),
 _Failure_ (47),
-ML-DSA Machines define:
+ML-DSA Machines define (States 5 and 7 are not used):
  ** _GenerateKeyPair_ (2)
  ** _pubkey_Output_ (3)
  ** _pubkey_Input_ (4)
- ** _ctx_Input_ (5)
  ** _mu_Input_ (6)
- ** _tr_Input_ (7)
  ** _Sign_Generate_ (8)
  ** _Sign_Output_ (9)
  ** _Sign_Verify_ (10)
@@ -4369,21 +4519,21 @@ ML-DSA Machines define:
 
 * *Allowed State Transitions:*
 
-** State transitions are allowed between any two valid states, subject to the restrictions in Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-setst-in-success-failure>>.
+** State transitions are allowed between any two valid states, subject to the restrictions in Rules <<Zkl-ISA-unpriv.adoc#KLEE-SGR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLEE-SGR-success-failure-cannot-be-set-directly>>.
 
 * *Behavior:*
 
 ** Upon provisioning, fields `privkey` and `pubkey` are cleared, both flags `HasPrivKey` and `HasPubKey` are false, and the state machine transitions to State _Ready_.
 
-** To transition to any one of the states _Ready_, _GenerateKeyPair_, _privkey_Input_, _pubkey_Input_, _mu_Input_, _tr_Input_, _Sign_Input_, _pubkey_Output_, _compute_pubKey_, _Sign_Verify_, _Sign_Output_, a Form A `kl.setst` instruction must be used.
+** To transition to any one of the states _Ready_, _GenerateKeyPair_, _privkey_Input_, _pubkey_Input_, _mu_Input_, _Sign_Input_, _pubkey_Output_, _compute_pubKey_, _Sign_Verify_, _Sign_Output_, a Form A `kl.setst` instruction must be used.
 
-** Upon transitioning to _Ready_, the fields `signature`, `ctxlen`, `ctx`, `mu`, and `rnd` are cleared.
+** Upon transitioning to _Ready_, the fields `signature`, `mu`, and `rnd` are cleared.
 
 ** _MachineUse_ is set to zero upon provisioning and upon transitioning to State _Ready_.
    Note that the fields `privkey` and `pubkey` are not changed, nor the flags `HasPrivKey` and `HasPubKey`.
 
-** In State _GenerateKeyPair_, Form D ``kl.exec Kn|K(Xn)`` generates a new key pair, replacing `privkey`, `pubkey`, and `tr`, and setting both `HasPrivKey` and `HasPubKey` using procedure `ML-DSA.KeyGen` of cite:[nist-fips-204] (Algorithm 1).
-The locker remains in _GenerateKeyPair_: a further Form D `kl.exec` only generates another key pair, which is harmless.
+** In State _GenerateKeyPair_, Form D ``kl.exec Kn|K(Xn)`` generates a new key pair, replacing `privkey` (which embeds `tr`) and `pubkey`, and setting both `HasPrivKey` and `HasPubKey` using procedure `ML-DSA.KeyGen` of cite:[nist-fips-204] (Algorithm 1), with a seed `xi` drawn from the RBG (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>).
+On completion the state machine transitions to State _Ready_, which keeps the key pair, as for ML-KEM (<<KLEE-PQC-ML-KEM>>). The caller then transitions to a State that uses it, for instance _pubkey_Output_ or _Sign_Generate_.
 
 ** Upon entering State _privkey_Input_, `HasPrivKey` is set to false, and `pubkey` is
 erased and `HasPubKey` set to false: This is done to prevent that
@@ -4397,16 +4547,8 @@ When the loaded value is complete, `HasPrivKey` is set to true.
     is complete, it is set to true. `privkey` and `HasPrivKey` are not affected: loading a
     public key alone is the normal way to configure a CC for verification only.
 
-** Upon import completion, if `HasPrivKey` is false, the KLEE unit recomputes `tr` {leftarrow} `SHAKE256(pubkey, 64)`.
-//    `tr` is never serialized on its own: in a CC that holds a private key it is embedded
-//    in `privkey`, and in a verification-only CC it is derivable from `pubkey`. This costs nothing
-//    architecturally, because `ML-DSA.Verify_internal` does not consume `tr` — the caller uses it to
-//    form _μ_ — so a verification-only CC is fully functional immediately after import.
-
-** To transition to state _ctx_Input_, a Form B `kl.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value causes the locker to transition to Error State _Invalid_.
-
-** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
-the fields `privkey`, `pubkey`, `ctx`, `mu`, `tr` and `signature`, respectively, are loaded using
+** In States _privkey_Input_, _pubkey_Input_, _mu_Input_, and _Sign_Input_,
+the fields `privkey`, `pubkey`, `mu` and `signature`, respectively, are loaded using
 (multi-block) `kl.exec` instructions of Form B, following Rule <<KLEE-MGR-load-long-field>>,
 with the progress recorded in _MachineUse_, in bytes.
 
@@ -4414,20 +4556,20 @@ with the progress recorded in _MachineUse_, in bytes.
 
 . If `HasPrivKey` is false, the locker transitions to Error State _Invalid_.
 . Derive `pubkey` from `privkey`: decode it with skDecode (cite:[nist-fips-204] Algorithm 25) and apply steps 3, 5, 6 and 8 of Algorithm 6.
-. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the locker transitions to Error State _Invalid_.
+. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the locker transitions to Error State _Invalid_ (Rule <<KLEE-MGR-check-on-read>>).
 . Write the derived public key into `pubkey` and set `HasPubKey`.
 
-The locker remains in _compute_pubKey_: a further Form D `kl.exec` only recomputes the same public key, which is harmless.
+On completion the state machine transitions to State _Ready_, which keeps the key pair.
 
 ** To transition to State _Sign_Generate_, a Form B `kl.setst` is
    used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
 
-. If `HasPrivKey` is false, the locker transitions to Error State _Invalid_.
+. Entering the State requires `HasPrivKey` (Rule <<KLEE-MGR-policy-gate>>).
 . If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected and `Hedged` is set.
 . If `Xs` is non-zero, then *deterministic* signing is selected and `Hedged` is cleared.
 
 ** In State _Sign_Generate_, Form D ``kl.exec Kn|K(Xn)`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
-The operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-MGR-progress-discard>>. If it is zero, `rnd` is drawn from an approved random bit generator when `Hedged` is set and is `zeros(256)` otherwise; if it is non-zero, the interrupted operation is resumed with the `rnd` held. On completion `rnd` is destroyed.
+The operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-MGR-progress-discard>>. If it is zero, `rnd` is drawn from an approved random bit generator (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>) when `Hedged` is set and is `zeros(256)` otherwise; if it is non-zero, the interrupted operation is resumed with the `rnd` held. On completion `rnd` is destroyed.
 If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature` and the locker transitions to _Sign_Output_; otherwise, the locker transitions to Error State _Invalid_.
 
 ** In State _Sign_Verify_, Form D ``kl.exec Kn|K(Xn)`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
@@ -4439,8 +4581,9 @@ only, so nothing is written to `signature` on this path.
 
 ** In States _pubkey_Output_ and _Sign_Output_, the fields `pubkey` and `signature` are emitted
 using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-MGR-load-long-field>>,
-with the progress recorded in _MachineUse_, in bytes.
-Entering _pubkey_Output_ while `HasPubKey` is false causes the locker to transition to Error State _Invalid_.
+with the progress recorded in _MachineUse_, in bytes. Once the field has been completely emitted, the state machine
+transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>).
+Entering _pubkey_Output_ requires `HasPubKey` (Rule <<KLEE-MGR-policy-gate>>).
 
 ** _MachinePolicy_ can be modified using `kl.restrictl`.
 --
@@ -4458,7 +4601,7 @@ For the Machines defined in this Chapter, the architected `kl.derive` endpoints 
 |===
 | Machine(s) | Field/Operation | Role  |  State
 
-| ECB mode (<<KLEE-ECB-mode>>), Keystream generation (<<KLEE-keystream-modes>>), GCM mode (<<KLEE-GCM-mode>>), GCM with Set IV (<<KLEE-GCM-with-IV-mode>>), GCM-SIV mode (<<KLEE-GCM-SIV-mode>>), CMAC mode (<<KLEE-CMAC-mode>>), OCB mode (<<KLEE-OCB-mode>>), Ascon-AEAD128 (<<KLEE-Ascon-AEAD128>>), Ascon-AEAD128 with set Nonce (<<KLEE-Ascon-AEAD128-wsn>>) | `key` | destination | _Ready_
+| ECB mode (<<KLEE-ECB-mode>>), Keystream generation (<<KLEE-keystream-modes>>), GCM mode (<<KLEE-GCM-mode>>), GCM with Set IV (<<KLEE-GCM-with-IV-mode>>), GCM-SIV mode (<<KLEE-GCM-SIV-mode>>), CMAC mode (<<KLEE-CMAC-mode>>), OCB mode (<<KLEE-OCB-mode>>), OCB with Set Nonce (<<KLEE-OCB-with-nonce-mode>>), Ascon-AEAD128 (<<KLEE-Ascon-AEAD128>>), Ascon-AEAD128 with set Nonce (<<KLEE-Ascon-AEAD128-wsn>>) | `key` | destination | _Ready_
 
 | XEX/XTS modes (<<KLEE-XEX-XTS-modes>>) | `key1 {vvert} key2`    | destination | _Ready_
 
@@ -4478,7 +4621,7 @@ as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XO
 | `SecondPt` | source      | any State in which `HasSecondPt` is set, except _Output_ with `OutputType` = True
 | `Scalar`   | destination | _Set_Scalar_
 
-| ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | _Success_, _Failure_, _encapsk_Input_ and _decapsk_Input_, if non-zero
+| ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | _Success_, if non-zero
 
 | Any Machine | `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLEE-DER-exec-implies-unrestricted>>) | source | any State in which Form C `kl.exec` emits output and no field of the Machine is a source, except the tag of an AEAD Machine, such as _Hash_Output_ of the hash functions, MACs and XOFs, _Hash_Finalize_ of the Ascon hash functions and XOFs, _Operate_ of Keystream generation, _Output_ of ECC, and the Output States of ML-KEM and ML-DSA (<<KLEE-PQC-ML-DSA>>)
 |===

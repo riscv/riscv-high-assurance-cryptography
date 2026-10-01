@@ -203,8 +203,8 @@ class Siv:
             return s.SIV & ((1 << KLLEN) - 1)            # MGR6
         if st in (ELB, DLB):
             lbl = s.last_blk_len
-            if lbl == 0:
-                return 0
+            if lbl == 0:                                 # MGR12: the final block was already processed
+                return s._invalid()
             if s.ctr == 2**32:                           # one block more than P_MAX
                 return s._invalid()
             o = (INPUT ^ s._ks()) & ((1 << lbl) - 1)
@@ -570,10 +570,9 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     m = at(where)
     m.setst(last, 'B', 64)
     first = m.exec('A', b2v(bytes(range(1, 17))), 128)
-    snap = (m.ctr, m.tmp)
     check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MGR6); '
-          'a second kl.exec writes zeros and changes nothing',
-          first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and (m.ctr, m.tmp) == snap)
+          'a second kl.exec -> _Invalid_, output zeroed (MGR12)',
+          first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
 m.exec('B', b2v(p10), 384, None, 2)

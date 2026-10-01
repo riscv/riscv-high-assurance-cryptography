@@ -166,14 +166,14 @@ def pack(fields):
     return v
 
 
-def scc_len(b):                          # Serialized Content, zero-padded to 128 bits
-    return -(-(1696 + 2 * b) // 128) * 16
+def scc_len(b, kt=0):                    # Serialized Content, zero-padded to 128 bits
+    return -(-(1696 + b + (64 if kt else b)) // 128) * 16
 
 
-def kl_size(state, b):                   # <<KLEE-instruction-size>>, AuxDataLen = 0
+def kl_size(state, b, kt=0):             # <<KLEE-instruction-size>>, AuxDataLen = 0
     if state in (UNCONF, KL_CFG_PROVISIONING):
-        return 16 + 2 * b // 8
-    return 16 if state in ERROR_STATES else 32 + scc_len(b)
+        return 16 + -(-(b + (64 if kt else b)) // 128) * 16
+    return 16 if state in ERROR_STATES else 32 + scc_len(b, kt)
 
 
 def provision_blocks(sec, K, S):
@@ -184,9 +184,15 @@ def provision_blocks(sec, K, S):
     return cb, kb
 
 
-def make_pi(sec, xof, K, S):
-    cb, kb = provision_blocks(sec, K, S)
-    return v2b(mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF), 16) + cb + kb
+def make_pi(sec, xof, K, S, skid=None):
+    """PI; with a SKID (_KeyType_ = 1, MGR9) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
+    cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
+    mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
+    return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
+
+
+ALL_ONES = (1 << 64) - 1
+SKS = {0x0123456789ABCDEF: bytes(range(32)), 0x1111: bytes(164)}   # the second exceeds the KMAC128 maximum
 
 
 class Hart:
@@ -198,6 +204,7 @@ class Kmac:
 
     def __init__(self, hart, bad=()):
         self.hart, self.bad, self.st, self.b = hart, set(bad), UNCONF, 0
+        self.keytype = self.skid = 0
         self._clear()
 
     def _machine(self, machine):
@@ -213,33 +220,53 @@ class Kmac:
         self.st = INVALID
         self._clear()
 
+    def _resolve(self, skid):
+        """<<KLEE-KMAC>>: the SKS returns K and the unit forms key_block; all-ones: random K of c/2 bits."""
+        K = os.urandom(self.sec // 8) if skid == ALL_ONES else SKS.get(skid)
+        try:
+            self.kb = b2v(provision_blocks(self.sec, K, b'')[1]) if K is not None else None
+        except ValueError:                                               # K longer than the maximum
+            self.kb = None
+        if self.kb is None:
+            return self.invalidate()                                     # <<KLEE-system-keys>>
+        self.keytype, self.skid = (0, 0) if skid == ALL_ONES else (1, skid)
+        return True
+
     def provision(self, pi):
         f = mdh_unpack(b2v(pi[:16]))
         self._machine(f['Machine'])
-        w = self.b // 8
-        assert f['State'] == UNCONF and len(pi) == 16 + 2 * w
-        self.cb, self.kb = b2v(pi[16:16 + w]), b2v(pi[16 + w:])
+        w, kt = self.b // 8, f['KeyType']
+        assert f['State'] == UNCONF and len(pi) == kl_size(UNCONF, self.b, kt)
+        self.cb = b2v(pi[16:16 + w])
+        if kt == 0:
+            self.kb = b2v(pi[16 + w:])
+        elif not self._resolve(b2v(pi[16 + w:16 + w + 8])):
+            return
         self.ready()
 
     def fields(self):
         return [(self.state, 1600), (self.block_base, 16), (0, 48), (self.cb, self.b),
-                (self.kb, self.b), (self.L, 32)]
+                (self.skid, 64) if self.keytype else (self.kb, self.b), (self.L, 32)]
 
     def export(self, at=False):
         """(MDH, Serialized Content); at=True is the negative control that orders with `@`."""
         v = cat(*self.fields()) if at else pack(self.fields())
-        return mdh_pack(Machine=self.machine, State=self.st), v2b(v, scc_len(self.b))
+        return mdh_pack(Machine=self.machine, State=self.st, KeyType=self.keytype), v2b(v, scc_len(self.b, self.keytype))
 
     def import_(self, mdh, content):
         f = mdh_unpack(mdh)
         self._machine(f['Machine'])
-        self.st, v = f['State'], b2v(content)
+        self.st, v, self.keytype = f['State'], b2v(content), f['KeyType']
         vals = []
         for _, w in self.fields():
             vals.append(v & ((1 << w) - 1))
             v >>= w
-        self.state, self.block_base, _, self.cb, self.kb, self.L = vals
-        if self.block_base >= self.b:        # inconsistent image (only the negative control)
+        self.state, self.block_base, _, self.cb, key, self.L = vals
+        if self.keytype:
+            self._resolve(key)                                           # MGR9: SKID resolved after import
+        else:
+            self.kb = key
+        if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
             self.invalidate()
         return self
 
@@ -606,7 +633,33 @@ for s in (READY, ABSORB):
 c.exec(inp=DATA200)
 to_output(c, 0)
 check('_Hash_Absorb_ -> _Ready_ restarts KMACXOF256 (#5)', True, bytes(squeeze(c, 64)[0][1]), WANT[10])
-info('_KeyType_ = 1: <<KLEE-KMAC>> gives no SKID layout for its key blocks; not exercised')
+section('System Key Identifier (_KeyType_ = 1)')
+SK = 0x0123456789ABCDEF
+for sec in (128, 256):
+    c = Kmac(Hart())
+    c.provision(pi := make_pi(sec, False, None, TAG, SK))
+    w = RATE[sec]
+    check(f'KMAC{sec} PI with a SKID: MDH, cshake_block, SKID ({len(pi)} B = kl.size)', True,
+          (len(pi), kl_size(UNCONF, 8 * w, 1), b2v(pi[16 + w:])), (16 + w + 8, 16 + w + 8, SK))
+    c.setst(ABSORB)
+    c.exec(inp=DATA4)
+    to_output(c, 256)
+    check(f'KMAC{sec}: the SKS returns K, the unit forms key_block: tag = KMAC under K', True,
+          bytes(squeeze(c, 32)[0][1]), ref_kmac(sec, SKS[SK], DATA4, 256, TAG))
+    mdh, img = c.export()
+    check(f'KMAC{sec} Content1 with a SKID: key_block replaced by the 64-bit SKID (Pos. v), KeyType kept', True,
+          (len(img), mdh_unpack(mdh)['KeyType'], sl(b2v(img), 1664 + 8 * w + 63, 1664 + 8 * w)),
+          (scc_len(8 * w, 1), 1, SK))
+    c2 = Kmac(Hart()).import_(mdh, img)
+    check(f'KMAC{sec}: import resolves the SKID again, same key_block', True, (c2.kb, c2.st), (c.kb, c.st))
+c = Kmac(Hart())
+c.provision(make_pi(128, False, None, TAG, ALL_ONES))
+check('all-ones SKID: random K of c/2 = 128 bits forms key_block; _KeyType_ becomes 0, exported by value', True,
+      (c.st, c.keytype, len(c.export()[1]) == scc_len(1344)), (READY, 0, True))
+for label, skid in (('unresolved SKID', 0x42), ('SKS key longer than the 163-byte maximum', 0x1111)):
+    c = Kmac(Hart())
+    c.provision(make_pi(128, False, None, TAG, skid))
+    check(f'KMAC128 {label}: _Invalid_ (<<KLEE-system-keys>>)', True, c.st, INVALID)
 
 section('Provisioning Input and Serialized Content')
 for sec, kmax, smax in ((128, 163, 157), (256, 131, 125)):

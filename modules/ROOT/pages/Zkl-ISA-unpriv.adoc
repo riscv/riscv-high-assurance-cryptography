@@ -93,6 +93,7 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*llockerstatus`` 
 
 In certain cases either the KLEE unit or the Machines implemented in it require an RBG.
 The RBG must use an entropy source and a DRBG satisfying the requirements described in the `Zkr` specification cite:[RISCV-ISA-Unpriv].
+Rule <<KLEE-GR-rbg-failure>> states what happens when the RBG fails.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -196,18 +197,18 @@ enables the following operations:
 `kl.getstx`)               | `Zkl` common    2+<| Available
 | `kl.getmdv`              | `Zklv`             | Available    | —
 | `kl.restrictl`,
-`kl.restricth`             | `Zkl` common   2+<| Available
-| `kl.restrictv`           | `Zklv`            | Available    | —
+`kl.restricth`             | `Zkl` common    2+<| Available
+| `kl.restrictv`           | `Zklv`             | Available    | —
 | `kl.clone`, `kl.rename`, `kl.swap`  | `Zkl` common   2+<| Available
-| `kl.derive`              | `Zkl` common   2+<| Available
+| `kl.derive`              | `Zkl` common    2+<| Available
 | `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present: in hardware, or by trap-and-emulate, as per the conformance requirements above
-| `kl.input`, `kl.output`  | `Zklio`          | —           | Available
+| `kl.input`, `kl.output`  | `Zklio`            | —           | Available
 | `klmvendorid`, `klmarchid`, `klmimpid`,
-`klmaxiobuflen`            | `Zkl` common  2+<| Always present
+`klmaxiobuflen`            | `Zkl` common    2+<| Always present
 | `kliobuflen`,
-`kliobuftop`               | `Zklio`          | —           | Available
-| `klstart`                | `Zkl` common  2+<| Always present
-| `klmanagedlocker`            | `Zkl` common  2+<| Always present
+`kliobuftop`               | `Zklio`            | —           | Available
+| `klstart`                | `Zkl` common    2+<| Always present
+| `klmanagedlocker`        | `Zkl` common    2+<| Always present
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -266,7 +267,7 @@ However, side-channel-protected implementations of the Machines provided by the 
 It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Machine.
 
 NOTE: While the KLF, as a memory device, must resist rollback attacks, individual lockers do not have to resist rollback via export and import, and cannot.
-While re-importing previous CC states may allow multi-time pad attacks on modes such as CTR, XCTR, and GCM, exploiting this would require a level of control over the target software that typically also implies access to plaintext.
+While re-importing previous CC states may allow multi-time pad attacks on modes such as CTR, XCTR, and GCM (<<Zkl-ISA-machines.adoc#KLEE-nonce-reuse>>), exploiting this would require a level of control over the target software that typically also implies access to plaintext.
 Reuse of an internal random value through re-import or cloning is excluded by Rule <<KLEE-GR-atomic-randomness>>.
 Re-importing a previous CC state is also desirable, however. For instance, it allows restarting an operation that failed because a payload was corrupted in transit. Adding and enforcing policies to control resumability and cover every legitimate case would overcomplicate the feature.
 
@@ -302,7 +303,7 @@ They are zeroized by a KLEE unit reset, by `kl.clearall`, and by a `kl.mgmt` tha
 The 128 or 384 bits used to hold `SIV`, `IMPQUAL`, and `SIV2` are allocated per hart and not per locker to reduce their hardware cost.
 This prevents concurrent non-clearing management operations in the same code: starting a second operation may overwrite the first operation's in-flight `SIV`, `IMPQUAL`, and `SIV2` values.
 In a single process space, multiple such operations require careful coordination such as lightweight threads with KLEE context-switching support or serialization using a mutex.
-Clearing and provisioning a locker do not touch `SIV`, `IMPQUAL`, and `SIV2` and are thus not subject to these restrictions.
+`kl.clear` and provisioning do not touch `SIV`, `IMPQUAL`, and `SIV2` and are thus not subject to these restrictions; `kl.clearall` zeroizes them.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -389,14 +390,14 @@ Its fields are summarized in <<KLEE-metadata-header>>.
 |   [45:32] |  14  | _AuxDataLen_       | Zero if no ADS is present; otherwise, its length as a number of 128-bit blocks. When _ADSDropped_ = 1, this is the length before `Content2` was dropped. The value 1 is invalid.
 |   [46:46] |   1  | Reserved           | Reserved for future use.
 |   [47:47] |   1  | _ADSDropped_       | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<KLEE-Auxiliary-Data-Section>>.
-|   [61:48] |  14  | _MachineUse_       | Machine-specific auxiliary information. Currently used only by ML-KEM and ML-DSA.
+|   [61:48] |  14  | _MachineUse_       | Machine-specific auxiliary information. See <<KLEE-MachineUse>> for the Machines that use it.
 When not used architecturally by a Machine, it can be used by an implementation of a Machine.
 |   [63:62] |   2  | _Version_          | MDH format version.
 
 |   [68:64] |   5  | _UsagePolicy_      | Usage (Control) Policy. Determines which modes are allowed to use the locker.
 |   [77:69] |   9  | _Locality_         | Zero, or a value determining one or more Locality Secrets. See <<KLEE-Localities>>.
 |   [79:78] |   2  | Reserved           | Reserved for future use.
-|   [95:80] |  16  | _AuxInfo_          | Machine-specific auxiliary information. Currently used only by ML-DSA.
+|   [95:80] |  16  | _AuxInfo_          | Machine-specific auxiliary information. See <<KLEE-MachineUse>> for the Machines that use it.
 When not used architecturally by a Machine, it can be used by an implementation of a Machine.
 
 |  [115:96] |  20  | _ExpirationDate_   | If non-zero, the expiration date of this CC. See <<KLEE-Metadata-expiration-date>>.
@@ -417,10 +418,14 @@ The remaining values are available for custom Machines.
 
 For encryption/decryption primitives and modes, the _MachinePolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
 
+For a MAC that verifies a tag internally, such as CMAC, the lower bit permits the output of the tag and the upper bit its verification. Both bits may be zero: as for a Machine that can only generate and verify signatures, this makes no sense, since the locker can then neither output nor verify a tag, but the value is not invalid.
+
 For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification. In this case, both bits may be zero.
 For a Machine that can perform other operations as well, such as the ECC Machines, a zero field still leaves those operations available. For a Machine that can only generate and verify signatures, such as ML-DSA, it makes no sense to clear both bits, since the locker can then perform neither operation; the value is nevertheless not invalid.
 
 For other primitives, the _MachinePolicy_ field may encode additional Machine identifiers to expand the effective encoding space of the _Machine_ field.
+
+How _MachinePolicy_ gates the States of a Machine is stated by Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-policy-gate>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -481,7 +486,7 @@ If the value is 0, keys are provisioned, exported, and imported by value.
 
 If the value is 1, keys are provisioned, exported, and imported as a System Key Identifier (SKID), except for the all-ones (i.e., `ones(64)`) SKID value.
 
-If the SKID is the all-ones value, the key material is randomly generated when provisioning completes, and the locker's _KeyType_ field is then set to 0, so that the key is thereafter exported by value.
+If the SKID is the all-ones value, the key material is randomly generated when provisioning completes, and the locker's _KeyType_ field is then set to 0, so that the key is thereafter exported by value. If the RBG fails, Rule <<KLEE-GR-rbg-failure>> applies.
 Unless otherwise specified, random generation applies to all keys in a Machine at once.
 
 NOTE: A system key identifier may refer to keys with unrelated purposes on different devices; see <<KLEE-system-keys>>.
@@ -719,6 +724,13 @@ The evaluation of _ExpirationDate_ is performed as follows:
 ==== _MachineUse_ and _AuxInfo_ Fields
 
 The _MachineUse_ and _AuxInfo_ fields can be used by a Machine to store additional information.
+Of the Machines of <<Zkl-ISA-machines.adoc#KLEE-Machines>>:
+
+* the ECC Machines (<<Zkl-ISA-machines.adoc#KLEE-ECC>>) use _MachineUse_ for `OutputType` and for the progress of their long-running operations;
+* Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128 (<<Zkl-ISA-machines.adoc#KLEE-Ascon-Hash256>>) use _MachineUse_ for the `countdown` of their output phase;
+* the ML-KEM and ML-DSA Machines (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-KEM>>, <<Zkl-ISA-machines.adoc#KLEE-PQC-ML-DSA>>) use _MachineUse_ for the transfer counter of Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-load-long-field>> and for the progress field of Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>>; and
+* the ML-DSA Machines (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-DSA>>) use _AuxInfo_ for the pre-hash function, and the EdDSA Machines (<<Zkl-ISA-machines.adoc#KLEE-EdDSA>>) for the modes, pure or pre-hash, that a CC may use.
+
 If a field is not used by the Machine, the implementation may use it.
 An implementation that does so includes an ADS (<<KLEE-Auxiliary-Data-Section>>) in every SCC it exports with such an implementation-specific value, with a possibly empty `Content2`, that is with _AuxDataLen_ {ge} 2, and _AuxDataLen_ = 2 when `Content2` is empty:
 this makes the importing implementation check `IMPQUAL`, and so recognize a value that only the originating implementation can interpret.
@@ -743,7 +755,7 @@ Additional version information must be encoded in other fields of the MDH.
 
 If _Version_ = 3, the format is system-specific.
 System-specific formats are allowed only for import operations.
-Import of a system-specific format opens with an MDH whose _Version_ is 3 and whose other fields are those of a KLEE-format MDH (the _declared MDH_). At completion the locker's MDH is the declared MDH narrowed, as in <<KLEE-system-keys>>, by any policy the format carries. The format can only narrow the declared MDH, never widen it. _Version_ is then set to 0 (or 1 in a future version of this specification).
+Import of a system-specific format opens with an MDH whose _Version_ is 3 and whose other fields are those of a KLEE-format MDH (the _declared MDH_). At completion the locker's MDH is the declared MDH narrowed by any policy the format carries (Metadata Narrowing Rule <<KLEE-MNR>>). The format can only narrow the declared MDH, never widen it. _Version_ is then set to 0 (or 1 in a future version of this specification).
 
 Support for loading system-specific formats is optional.
 The resulting lockers can be exported only in the KLEE-specified format.
@@ -762,19 +774,27 @@ is invalid Metadata (cf. <<KLEE-Metadata-validity>>).
 [[KLEE-Metadata-validity]]
 ==== Validity of Metadata
 
-All _reserved_ bits, as well as bits unused by a given Machine, are zero, unless the implementation uses them as stated for _MachineUse_ and _AuxInfo_ (<<KLEE-MachineUse>>).
+Software keeps all _reserved_ bits, and all bits that the Machine does not use, zero. A non-zero value in them is handled as follows:
 
-Metadata is _unsupported_ when the combination of _Machine_, _MachinePolicy_ and _SCProtection_, or a non-zero _MachineExtension_, is not implemented, or when it holds a value that a Machine specification declares unsupported if the implementation does not implement it, such as the _AuxInfo_ of ML-DSA (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-DSA>>); a _MachinePolicy_ that the conditions below reject makes it invalid, not unsupported.
+* a Reserved bit makes the Metadata invalid (see below);
+* a _MachinePolicy_ or _MachineExtension_ value that the implementation does not implement for the Machine makes it unsupported;
+* the _StateExtension_ and _MachineUse_ of a PI are ignored, and zeroed upon provisioning (<<KLEE-locker-management>>);
+* outside a PI, a _State_ {vvert} _StateExtension_ value that the Machine does not support makes it invalid (see below); and
+* otherwise, _MachineUse_ and _AuxInfo_ are not checked by the conditions below: they are subject to the rules of the Machine,
+  and to their use by the implementation (<<KLEE-MachineUse>>).
+
+Metadata is _unsupported_ when the combination of _Machine_, _MachinePolicy_ and _SCProtection_, or a non-zero _MachineExtension_, is not implemented, when _KeyType_ is 1 and the implementation does not support System Key Identifiers, including the all-ones SKID, for the Machine (<<KLEE-KeyType-field>>, <<KLEE-system-keys>>), or when it holds a value that a Machine specification declares unsupported if the implementation does not implement it, such as the _AuxInfo_ of ML-DSA (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-DSA>>) or of EdDSA (<<Zkl-ISA-machines.adoc#KLEE-EdDSA>>); a _MachinePolicy_ that the conditions below reject makes it invalid, not unsupported.
 
 A supplied MDH is _invalid_ when at least one of the following conditions is satisfied:
 
 * _Version_ is unsupported;
 * _KeyType_ is 2 or 3;
+* _KeyType_ is 1 for a Machine whose Provisioning Input has no key field, for instance the hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<KLEE-Localities>>);
 * The MDH carries any type of custom value without explicitly expressing _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<KLEE-GR-custom-locality>>);
 * _State_ is not _Unconfigured_ at provisioning;
 * _State_ is _Unconfigured_ or 61–63 at import (cf. <<KLEE-State-management>>);
-* _State_ is 54 or 55, or _State_ {vvert} _StateExtension_ is any value not supported by the Machine encoded in the MDH; for this condition, every Machine supports the Configuration States 56–60 with any _StateExtension_;
+* _State_ is 54 or 55, or _State_ {vvert} _StateExtension_ is any value not supported by the Machine encoded in the MDH; for this condition, every Machine supports the Configuration States 56–60 with any _StateExtension_, and the _StateExtension_ of a PI is not examined: it is ignored, and zeroed upon provisioning (<<KLEE-locker-management>>);
 * _State_ is _Expired_ in a PI, SCC, or PCCC when `Zklexpire` is not implemented;
 * _ExpirationDate_ is non-zero and `Zklexpire` is not implemented;
 * _AuxDataLen_ = 1;
@@ -787,6 +807,26 @@ A supplied MDH is _invalid_ when at least one of the following conditions is sat
 [[KLEE-MVR-open, Metadata Validity Rule]]Metadata Validity Rule:: A `kl.mgmt` that opens a provisioning or import on unsupported Metadata raises KLEE exception `kl_exc_unsupported`; on invalid Metadata it transitions the locker to Error State _Invalid_.
 These checks are not applied to the short import of an Error-State MDH (<<KLEE-error-state-transfer>>).
 The locker also transitions to Error State _Invalid_ when, at completion of provisioning, import or export, the System Key Store does not resolve a SKID other than the all-ones value, or the `Content1` of an SCC whose restored _State_ is a Complete State carries the all-ones SKID.
+
+[[KLEE-Metadata-narrowing]]
+==== Narrowing of Metadata
+
+Several operations narrow the policies of a CC by those of another source: the resolution of a SKID (<<KLEE-system-keys>>),
+a restricted `kl.derive` (Rule <<KLEE-DER-narrowing>>), the import of a system-specific format (<<KLEE-Machine-version>>),
+and, as a request of software, `kl.restrict*` (<<KLEE-instruction-restrict>>). They all follow one rule.
+
+[horizontal]
+[[KLEE-MNR, Metadata Narrowing Rule]]Metadata Narrowing Rule:: The _narrowing_ of an MDH _A_ by the policies of a source _B_ (an MDH, the
+policies the System Key Store associates with a key, or those a system-specific format carries) yields _A_ with the following
+fields replaced; a policy field that _B_ does not carry leaves that field of _A_ unchanged, and no other field is changed:
++
+* _UsagePolicy_: bits 0–3 become the OR of both, and bit 4 the AND of both, so that the set of modes that may use the CC is the intersection of both.
+* _Locality_ (<<KLEE-locality-indexes>>): each HW Binding subfield (bits [1:0] and [3:2]) takes the larger of the two values, that is the stricter entry of its chain, zero meaning no binding; the Boot Session subfield (bits [5:4]) takes the non-zero value if only one is non-zero; and bits 6–8 are OR-ed.
+* _ExpirationDate_, if `Zklexpire` is implemented: the smaller non-zero of the two values, or 0 if both are 0.
++
+The narrowing fails, and the locker transitions to Error State _Invalid_, if the two Boot Session subfields are non-zero and differ,
+or the resulting _Locality_ names an unconfigured entry (<<KLEE-Localities>>).
+Narrowing never changes _SCProtection_; an operation that must also compare side-channel protection levels states so.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -821,10 +861,10 @@ KLEE provides a number of unprivileged CSRs.
 [float="center",options="header"]
 |===
 |  Address         | Privilege    | Field                      | Description
-|  0xXXX           |  RO/MRW/HRW  | `klmvendorid`              | Manufacturer of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
-|  0xXXX           |  RO/MRW/HRW  | `klmarchid`                | Architecture version, per vendor, of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
-|  0xXXX           |  RO/MRW/HRW  | `klmimpid`                 | Implementation, per vendor, of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
-|  0xXXX           |  RO/MRW/HRW  | `klmaxiobuflen`            | KLEE maximum input/output buffer length in bytes. Read only.
+|  0xXXX           |  URO/MRW/HRW | `klmvendorid`              | Manufacturer of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
+|  0xXXX           |  URO/MRW/HRW | `klmarchid`                | Architecture version, per vendor, of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
+|  0xXXX           |  URO/MRW/HRW | `klmimpid`                 | Implementation, per vendor, of the KLEE unit. See <<KLEE-CSR-impl-ids>>.
+|  0xXXX           |  URO/MRW/HRW | `klmaxiobuflen`            | KLEE maximum input/output buffer length in bytes. See <<KLEE-CSR-klmaxiobuflen>>.
 |  0xXXX           |    URW       | `kliobuflen`               | KLEE input/output buffer length in bytes.
 |  0xXXX           |    URW       | `kliobuftop`               | KLEE input/output buffer limit for current transfers in bytes.
 |  0xXXX           |    URW       | `klstart`                  | KLEE start byte index.
@@ -846,6 +886,7 @@ Where `Smstateen` is implemented, the KLEE bit of the `*stateen0` CSRs (<<Zkl-IS
 The WARL policy of a KLEE CSR that has a maximum is uniform: writing a value larger than the maximum
 sets the register to the maximum, so software must read the register back after writing it. Each
 such register is given its maximum in its own description below.
+`klmanagedlocker` has no maximum in this sense: a write of a reserved value leaves it unchanged (<<KLEE-CSR-klmanagedlocker>>).
 
 The RW CSRs constitute state that must be saved and restored at context switches, following the same software convention as `vstart`:
 
@@ -864,18 +905,19 @@ The RW CSRs constitute state that must be saved and restored at context switches
 (((CSR, `klmimpid`)))
 `klmvendorid`, `klmarchid`, and `klmimpid` identify the version of the KLEE unit, analogously to the `mvendorid`, `marchid`, and `mimpid` CSRs for the hart.
 
-. Their values out of KLEE unit reset identify the version of the KLEE unit. Software cannot modify these values.
+. Their values out of KLEE unit reset identify the version of the KLEE unit.
+They are read-only to software in every other privilege mode: M-mode, resp. HS-mode, may write these CSRs only to present an emulated, resp. virtual, KLEE unit to lower privilege modes; the values are then those reported in `IMPQUAL` (<<KLEE-Auxiliary-Data-Section>>).
 
-. The `klmvendorid` CSR is a 32-bit read-only register providing the JEDEC manufacturer ID of the provider of the KLEE unit (or 0 if not commercial)
+. The `klmvendorid` CSR is a 32-bit register, read-only as stated above, providing the JEDEC manufacturer ID of the provider of the KLEE unit (or 0 if not commercial)
 following the same JEDEC bank/offset encoding used for `mvendorid` in the Privileged ISA.
 //(<<machine.adoc#norm:mvendorid_enc>>).
 
-. The `klmarchid` CSR is a 32-bit read-only register encoding the base microarchitecture of the KLEE unit.
+. The `klmarchid` CSR is a 32-bit register, read-only as stated above, encoding the base microarchitecture of the KLEE unit.
 Non-commercial IDs are allocated globally by RVI exactly as for the `marchid` values, while commercial IDs are specific to the `klmvendorid`.
 It follows the same encoding as `marchid` in the Privileged ISA.
 //(<<machine.adoc#norm:marchid_sz_acc_op>>).
 
-. The `klmimpid` CSR is a 32-bit read-only register that provides a unique encoding of the version of the KLEE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The implementation value should reflect the design of the KLEE unit itself and not any surrounding system. An implementation that produces an ADS must report a non-zero `klmimpid`.
+. The `klmimpid` CSR is a 32-bit register, read-only as stated above, that provides a unique encoding of the version of the KLEE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The implementation value should reflect the design of the KLEE unit itself and not any surrounding system. An implementation that produces an ADS must report a non-zero `klmimpid`.
 It follows the same encoding as `mimpid` in the Privileged ISA.
 //(<<machine.adoc#norm:mimpid_op>>).
 
@@ -888,8 +930,9 @@ These three CSRs, together, form the _Implementation Qualifier_ (see <<KLEE-Auxi
 
 {empty}
 (((CSR, `klmaxiobuflen`)))
-`klmaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the KLIOBUF in bytes.
-The value is hardwired and specific to the implementation of the KLEE unit.
+`klmaxiobuflen` is an XLEN-bit CSR that reports the maximum configurable length of the KLIOBUF in bytes.
+It is read-only, and M-mode, resp. HS-mode, may write it, as they may the CSRs of <<KLEE-CSR-impl-ids>>, only to present an emulated, resp. virtual, KLEE unit.
+Its value out of KLEE unit reset is hardwired and specific to the implementation of the KLEE unit, and is the maximum of the CSR: a larger value written to it sets it to that maximum.
 
 If `Zklio` is implemented, `klmaxiobuflen` must be at least 16 bytes and at least as large as the largest basic processing unit (granularity) of any implemented Machine.
 
@@ -1081,10 +1124,10 @@ NOTE: For Forms A–C of `kl.exec` the hardware raises an illegal-instruction ex
 +
 NOTE: The uninterruptible vector-form instructions (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size` and `kl.avail`, `kl.setst`, and `kl.mgmt`) do not produce `vstart` values and therefore do not consume one (Rule <<KLEE-GR-vector-legality>>).
 
-GR4:: The _UsagePolicy_ of the MDH determines whether a certain instruction can be issued, and sometimes when, in a given privilege mode.
+[[KLEE-GR-usage-policy,GR4]]GR4:: The _UsagePolicy_ of the MDH determines whether a certain instruction can be issued, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the locker.
-For all instructions, the authoritative table for these two properties is <<KLEE-instruction-properties>>.
-No instruction description restates them.
+For all instructions, the authoritative table for these two properties is <<KLEE-instruction-properties>>;
+instruction descriptions refer to this Rule.
 +
 [[KLEE-instruction-properties]]
 .State modification and usage control, per instruction
@@ -1136,12 +1179,22 @@ Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires;
 +
 NOTE: If the KLEE unit is implemented through emulation, different versions of KLEE firmware may have different features while running on the same hardware, and a hardware-fixed locality will not be able to distinguish them. Rule <<KLEE-GR-custom-locality>> is, however, a first line of protection against accidental abuse.
 
-[[KLEE-GR-atomic-randomness,GR10]]GR10:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction.
+[[KLEE-GR-atomic-randomness,GR10]]GR10:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction; if the RBG cannot supply it, Rule <<KLEE-GR-rbg-failure>> applies.
 No State from which the locker can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> of <<Zkl-ISA-machines.adoc#KLEE-Machines>>. Rule <<KLEE-GR-opening-locker-when>> is not relaxed to obtain this.
 
 [[KLEE-GR-GPR-indirect, GR11]]GR11:: _Use of a GPR as indirect locker index:_
 An indirect locker index outside [0..31] raises an illegal-instruction exception.
-Using `X0` as an indirect locker index raises an illegal-instruction exception.
+Using `X0` as an indirect locker index raises an illegal-instruction exception, except in the encoding of `kl.clearall` (<<KLEE-instruction-clearall>>).
+Without `Zklind`, an encoding that selects indirect locker addressing — `r` = 1, `R` {ne} `00`, or `funct3` = 7 — is a reserved
+encoding and raises an illegal-instruction exception, except for `kl.clone`, `kl.rename` and `kl.swap`, for which indirect
+addressing is always available (<<KLEE-instruction-clone>>), and for the encoding of `kl.clearall`.
+
+[[KLEE-GR-rbg-failure,GR12]]GR12:: _Failure of the random bit generator:_
+If an operation needs random bits from the RBG (<<KLEE-RBG>>) — for instance to generate a key, a key pair, a signing
+nonce or the per-encapsulation randomness of a KEM, or the key of an all-ones SKID when provisioning completes — and the RBG
+fails to supply them, the operation is not performed and the locker transitions to Error State _Invalid_, which clears its
+Content (Rule <<KLEE-SGR-clear-locker-content-error-state>>). An RBG failure is never reported as _Failure_, which is reserved
+for the outcome of an operation that a Machine has performed.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1241,7 +1294,7 @@ Bit 25, `q`, selects the instruction: `q` = 0 is `kl.size`, `q` = 1 is `kl.avail
 The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size/availability from a context given as `Ks`.
-* `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K(Xs)`. Only if `Zklind` is present, otherwise this is an illegal instruction.
+* `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K(Xs)` (Rule <<KLEE-GR-GPR-indirect>>).
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
 --
@@ -1334,7 +1387,7 @@ For the four Forms A–D above, the encodings are:
 
 The locker operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved, except for encodings assigned to those fields by `Zklmv` (<<KLEE-instruction-mv>>).
 
-`r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 --
 
 _Description_::
@@ -1359,7 +1412,7 @@ extract outputs from `kl.exec`, as described in <<KLEE-usage-input-output>>.
 
 // The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a locker.
 // The instructions in this extension are encoded as new forms of `kl.exec`:
-// `r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+// `r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 _Mnemonics_::
 +
@@ -1391,7 +1444,7 @@ corresponding Form of `kl.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 In Forms III and IV, `rd` specifies the destination GPR or vector register.
 For Forms II and IV, the vector length must be a multiple of 16 bytes.
 
-`r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 --
 //
 // In the mnemonics of variants A and B the locker is written first because it is the
@@ -1528,7 +1581,7 @@ The encodings whose `#immed7`[6:3] is `0b0111` are those of `kl.mgmt` (<<KLEE-in
 ]}
 ....
 
-`r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction except when encoding `kl.clearall` (<<KLEE-instruction-clearall>>).
+`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 When `r` = 1 and the locker register is `X0`: Form A with `#immed7` = 0 is `kl.clearall` (<<KLEE-instruction-clear>>); every other combination of Form and `#immed7` is reserved.
 
@@ -1608,6 +1661,7 @@ This instruction is used when exporting a locker for use by some other target, p
 _AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different KLEE unit may have to drop anyway.
 Exporting a locker into an SCC in this state will result in an ADS-free SCC being generated.
 The first usage instruction that needs to access the ADS regenerates it.
+`kl.clearads` is permitted in every Valid State, and may cause an interrupted operation to restart (Rule <<KLEE-SGR-clearads>>).
 
 [[KLEE-instruction-mgmt]]
 === kl.mgmt
@@ -1703,7 +1757,7 @@ _Encoding_::
 ]}
 ....
 
-`r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 If bit `h` (bit 28) is 0, the instruction is `kl.getmdl`; if `h` is 1, it is `kl.getmd`.
 
@@ -1803,7 +1857,7 @@ The encoding shares opcode and `funct3` with `kl.exec`, but `funct2` (i.e., the 
 ]}
 ....
 
-`r` is the locker indexing mode selector. Indirect locker addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 If bit `h` (bit 28) is 0, the instruction is `kl.restrictl`; if `h` is 1, it is `kl.restricth`.
 
@@ -1819,7 +1873,9 @@ _Description_::
 --
 The instructions narrow the policies of the CC in locker `Kd` or `K(Xd)`, with Metadata Header `md`,
 as requested by the operand `Xs1` (`Vs1` for `kl.restrictv`), which has the same format as an
-MDH. `kl.restrictl` takes bits [63:0] of that format and may change _MachinePolicy_ and
+MDH. For _Locality_, _UsagePolicy_ and _ExpirationDate_ the result is the narrowing of `md` by `Xs1`
+(Metadata Narrowing Rule <<KLEE-MNR>>), except that a request which a narrowing would silently override, because it is
+weaker than `md`, transitions the locker to _Invalid_, as the rules below state field by field. `kl.restrictl` takes bits [63:0] of that format and may change _MachinePolicy_ and
 _SCProtection_; `kl.restricth` takes bits [127:64] and may change _Locality_, _UsagePolicy_,
 and _ExpirationDate_; `kl.restrictv` takes both halves and applies both sets of
 rules as a single instruction.
@@ -1862,13 +1918,14 @@ The rules for each non-zero field of `Xs1` are:
 * _ExpirationDate_: if `md`._ExpirationDate_ is zero or `Xs1`._ExpirationDate_ {le}
   `md`._ExpirationDate_, the value in `Xs1` replaces it; otherwise the locker transitions to _Invalid_.
 
-The instructions may be issued in any Complete State; in the _Unconfigured_ State they perform no
+The instructions may be issued in any Complete State; in an Error State a request that would transition
+the locker to _Invalid_ performs no operation instead, and leaves the Error State unchanged; in the _Unconfigured_ State they perform no
 operation, and in a Configuration State Rule <<KLEE-SGR-usage-locker-config-state>> applies. They are
-not usage-controlled because every change narrows the CC — policies are only removed,
+not usage-controlled (Rule <<KLEE-GR-usage-policy>>) because every change narrows the CC — policies are only removed,
 side-channel protection only strengthened, Localities only tightened, and an expiration date only
 brought forward — so they cannot give a mode that the _UsagePolicy_ excludes any capability it did
-not already have; likewise `kl.clear` (<<KLEE-instruction-clear>>), a strictly stronger denial
-primitive, is not usage-controlled.
+not already have; the same reasoning applies to `kl.clear` (<<KLEE-instruction-clear>>), a strictly stronger denial
+primitive.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2012,7 +2069,7 @@ The instruction is an R-type instruction.
 ....
 
 Bits [26:25], i.e., field `R`, are encoded as for `kl.clone` (<<KLEE-instruction-clone>>).
-For this instruction, indirect locker addressing is only available when `Zklind` is present. Otherwise, `R` {ne} `00` is an illegal instruction.
+Unlike `kl.clone`, indirect locker addressing is available for this instruction only with `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
 
 The auxiliary input is always a GPR: `kl.derive` has no form without one and no vector form.
 --
@@ -2033,11 +2090,8 @@ otherwise an illegal-instruction exception is raised.
 
 The auxiliary GPR carries `length`.
 
-`kl.derive` is a usage-controlled operation of both source and destination lockers.
-Therefore, the _UsagePolicy_ fields of both endpoints are verified
-before any state change or transfer operation is performed.
-If usage is not allowed in the current privilege mode for either the source or destination locker,
-KLEE exception `kl_exc_privilege_violation` is raised per Rule <<KLEE-SGR-usage-policy>>.
+Usage control applies to both the source and the destination locker (Rule <<KLEE-GR-usage-policy>>), and both are checked
+before any state change or transfer, as Rule <<KLEE-DER-checks>> orders.
 
 Both source and destination lockers must be in specific states, as defined by the
 _State_ and _StateExtension_ metadata fields.
@@ -2077,12 +2131,8 @@ The following checks are then made in order. A check that fails transitions the 
 . The effective length (Rule <<KLEE-derive-rule-both-fixed-size>>) must meet the minimum, upper limit and granularity of the pair, and the transferred data any other constraint of the destination. Otherwise the destination transitions.
 . A destination key field of `dest_length` bytes requires `length` {ge} `dest_length` and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes. Otherwise the destination transitions. The key field receives exactly `dest_length` bytes, which complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
 
-[[KLEE-DER-narrowing,DER2]]DER2:: Before any _restricted transfer_ is performed, the policies in the MDH of the destination locker are narrowed by the policies in the MDH of the source locker exactly as a SKID resolution narrows them (<<KLEE-system-keys>>):
-
-* _UsagePolicy_ bits 0–3 of the destination become the OR of both, and bit 4 the AND of both.
-* The destination _Locality_ becomes the union of both _Localities_: each HW Binding subfield (bits [1:0] and [3:2]) takes the larger of the two values, that is the stricter entry of its chain (<<KLEE-Localities>>), and bits 6–8 are OR-ed. If the two Boot Session entries are non-zero and differ, or the result names an unconfigured entry (<<KLEE-Localities>>), the destination transitions to Error State _Invalid_ and nothing is transferred.
-* If `Zklexpire` is implemented, the destination _ExpirationDate_ becomes the smaller non-zero of the two values, or 0 if both are 0.
-* If the destination _SCProtection_ is lower, in the ordering of <<KLEE-SC-protection-levels>>, than that of the source, the destination transitions to Error State _Invalid_ and nothing is transferred.
+[[KLEE-DER-narrowing,DER2]]DER2:: Before any _restricted transfer_ is performed, the MDH of the destination locker is narrowed by the MDH of the source locker (Metadata Narrowing Rule <<KLEE-MNR>>); if the narrowing fails, the destination transitions to Error State _Invalid_ and nothing is transferred.
+In addition, if the destination _SCProtection_ is lower, in the ordering of <<KLEE-SC-protection-levels>>, than that of the source, the destination transitions to Error State _Invalid_ and nothing is transferred.
 
 [[KLEE-DER-unrestricted,DER3]]DER3:: No policy narrowing is applied in case of an _unrestricted transfer_.
 
@@ -2108,7 +2158,7 @@ This is the reason such transfers are allowed.
 _Key derivation._ The `kl.exec` output of a hash function, MAC or XOF can also be moved, as an _unrestricted transfer_, into a key field of a symmetric Machine or into a private key field of a public-key Machine, in a State in which Rule <<KLEE-DER-checks>> item 2 admits that field.
 The key field receives the first `dest_length` bytes of the output (Rule <<KLEE-DER-checks>> item 5).
 
-[[KLEE-DER-DRBG-implies-unrestricted,DER7]]DER7:: Using a Machine implementing a DRBG to generate random data
+[[KLEE-DER-DRBG-implies-unrestricted,DER7]]DER7:: Using a Machine implementing a DRBG (no such Machine is currently architected) to generate random data
 and feed it into a symmetric key field, or into a private key field of a destination Machine
 is allowed when the destination is in a State that admits the field (Rule <<KLEE-DER-checks>>).
 It is an _unrestricted transfer_, since the output of a DRBG is required to not predictably repeat
@@ -2177,7 +2227,7 @@ _Encoding_::
 ....
 +
 `funct3` = 6 selects the immediate locker index in the `context` field and `funct3` = 7 selects the locker indexed by the GPR named by that field.
-Indirect locker addressing requires `Zklind`. Otherwise, `funct3` = 0x7 is an illegal instruction.
+Indirect locker addressing requires `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
 
 _Mnemonics_::
 `kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xs1)`
@@ -2224,7 +2274,7 @@ _Encoding_::
 ....
 +
 `funct3` = 6 selects the immediate locker index in the `context` field and `funct3` = 7 selects the locker indexed by the GPR named by that field.
-Indirect locker addressing requires `Zklind`. Otherwise, `funct3` = 0x7 is an illegal instruction.
+Indirect locker addressing requires `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
 
 _Mnemonic_::
 `kl.store %offset(Xs1), Ks2|K(Xs2)`
@@ -2454,31 +2504,32 @@ Issuing one otherwise transitions the locker to Error State _Invalid_ (Rule <<Zk
 
 SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, `kl.clearall`, an Error State-setting `kl.setst`, a `kl.clone` naming the locker as destination, or a `kl.rename` or `kl.swap` naming it as source or destination.
 
-SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be issued with the immediate of the current State.
-When the Machine needs to prevent this, it transitions to a different State upon completing the instruction.
+[[KLEE-SGR-same-state,SGR4]]SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be issued with the immediate of the current State.
+Unless the Machine states otherwise, it performs again the operations of entering that State; in a State that loads a field, this restarts the load (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-load-long-field>>).
+Where repeating the entry operations would produce an internal state that the referenced standard does not define, the Machine declares the same-State `kl.setst` not allowed, and it transitions the locker to Error State _Invalid_ (for instance Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-no-hash-output-repeat>>).
 
 [[KLEE-SGR-success-failure,SGR5]]SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.rename`, `kl.swap`, `kl.restrict*`, and `kl.derive`.
 A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the locker to Error State _Invalid_ (cf. Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-not-allowed-instructions>> in <<Zkl-ISA-machines.adoc#KLEE-Machines>>).
 +
-In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF.
+In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF (no Machine architected in this specification uses it).
 Also permitted is `kl.derive` in the following two cases: where the source endpoint is one of its exportable fields (<<KLEE-instruction-derive>>); and under the conditions of use of `kl.exec`.
 +
 A locker in State _Success_ or _Failure_ may not be the *destination* of a `kl.derive`.
 +
-NOTE: `ML-KEM.Decaps` (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-KEM>>) is the motivating case for this `kl.derive` behavior:
-it leaves the shared secret in `sharedkey` and
-transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
+NOTE: ML-KEM (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-KEM>>) is the motivating case for this `kl.derive` behavior:
+`ML-KEM.Decaps`, and `ML-KEM.Encaps` once its ciphertext has been emitted, leave the shared secret in `sharedkey` and
+transition to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
 `sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
 be used for its stated purpose.
 
 [[KLEE-SGR-setst-in-success-failure,SGR6]]SGR6:: In States _Success_ and _Failure_, `kl.setst` is permitted to transition to _Ready_, to _Unconfigured_ using `#immed7` = `kl_state_unconfigured`, or to an explicitly given Error State.
-It is also permitted with `#immed7` = `kl_cfg_clear_ads` (<<KLEE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged, when this does not violate usage-control policy.
+It is also permitted with `#immed7` = `kl_cfg_clear_ads` (<<KLEE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged, when this does not violate usage-control policy (Rule <<KLEE-SGR-clearads>>).
 +
-NOTE: Machines such as GCM with a set IV (not GCM-SIV) and Ascon-AEAD128 with a set Nonce could forbid transitions back to _Ready_ to prevent nonce misuse. However, software could bypass this restriction by reloading a saved copy of the original SCC. The architecture therefore does not prohibit transitions back to _Ready_ for simplicity. Returning to _Ready_ may nevertheless erase session-bound internal state, such as randomly generated nonces, as specified in the Machine description.
+NOTE: Machines such as GCM with a set IV (not GCM-SIV) and Ascon-AEAD128 with a set Nonce could forbid transitions back to _Ready_ to prevent nonce misuse. However, software could bypass this restriction by reloading a saved copy of the original SCC. The architecture therefore does not prohibit transitions back to _Ready_ for simplicity (<<Zkl-ISA-machines.adoc#KLEE-nonce-reuse>>). Returning to _Ready_ may nevertheless erase session-bound internal state, such as randomly generated nonces, as specified in the Machine description.
 
-SGR7:: States _Success_ and _Failure_ cannot be set directly using `kl.setst`: the immediates 46 and 47 are reserved (<<KLEE-illegal-instruction-grounds>>).
+[[KLEE-SGR-success-failure-cannot-be-set-directly,SGR7]]SGR7:: States _Success_ and _Failure_ cannot be set directly using `kl.setst`: the immediates 46 and 47 are reserved (<<KLEE-illegal-instruction-grounds>>).
 
-SGR8:: A transition from any valid state to _Ready_ using instruction `kl.setst` is always permitted, unless the Machine explicitly forbids it.
+[[KLEE-SGR-to-ready,SGR8]]SGR8:: A transition from any valid state to _Ready_ using instruction `kl.setst` is always permitted, unless the Machine explicitly forbids it.
 // NOTE: Since a locker can always be restored from a backup SCC, preventing transitions to _Ready_--as "GCM with Set IV" (<<KLEE-GCM-with-IV-mode>>) does--is not an effective mitigation against the attacks that would be enabled by transitioning to _Ready_.
 
 SGR9:: The locker state after `kl.setst` completes does not always match the instruction's immediate operand.
@@ -2495,8 +2546,8 @@ A locker in an Error State then retains only the MDH.
 Requesting its size (<<KLEE-instruction-size>>) returns 16 bytes.
 
 [[KLEE-SGR-transition-to-from-unconfigured,SGR12]]SGR12:: Transitions from _Unconfigured_ to any Complete State may only result from a configuration instruction.
-Any usage-controlled instruction (<<KLEE-instruction-properties>>) in State _Unconfigured_ raises an illegal-instruction exception.
-Transitions from an Error State to _Unconfigured_ result from explicitly clearing the locker, or from re-opening it for provisioning or import.
+Any usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in State _Unconfigured_ raises an illegal-instruction exception.
+Transitions from an Error State to _Unconfigured_ result from `kl.clear` or `kl.clearall`, from a `kl.rename` naming the locker as its source (<<KLEE-instruction-clone>>), or from re-opening it for provisioning or import.
 
 SGR13:: The MDH of a locker in the _Unconfigured_ State can be read using `kl.getmd*` (<<KLEE-instruction-getmd>>), returning all zero values.
 
@@ -2519,7 +2570,7 @@ A usage instruction with an output operand that performs no operation under this
 Any attempt to do so raises KLEE exception `kl_exc_privilege_violation`.
 For a locker in a Configuration State used as the destination of a `kl.clone`, or named as both its source and its destination, see <<KLEE-instruction-clone>>.
 
-[[KLEE-SGR-gate-order,SGR19]]SGR19:: For a usage-controlled instruction (<<KLEE-instruction-properties>>), after the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>, the conditions on a locker are evaluated in this order, and the first that applies decides the outcome:
+[[KLEE-SGR-gate-order,SGR19]]SGR19:: For a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), after the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>, the conditions on a locker are evaluated in this order, and the first that applies decides the outcome:
 +
 --
 . _Unconfigured_: illegal-instruction exception (Rule <<KLEE-SGR-transition-to-from-unconfigured>>);
@@ -2546,6 +2597,13 @@ In State `kl_cfg_importing` the locker must additionally be the one named by `kl
 [[KLEE-SGR-zkl-store-mv-allowed,SGR22]]SGR22:: `kl.store` and `kl.mv` with a source locker
 are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`.
 In State `kl_cfg_exporting` the locker must additionally be the one named by `klmanagedlocker`.
+
+[[KLEE-SGR-clearads,SGR23]]SGR23:: `kl.clearads` (<<KLEE-instruction-clearads>>) is permitted in every Valid State of every Machine, and is not subject to Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-not-allowed-instructions>>.
+It leaves _State_ and _StateExtension_ unchanged, and it is subject to Usage Control (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>).
+Removing the ADS discards any intermediate state of an interrupted long-running operation that the implementation keeps in it:
+in a State of Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> it zeroes the progress field _P_, and the operation restarts
+when its instruction is next issued, exactly as if the SCC exported before the `kl.clearads` had been imported on a different
+implementation of KLEE (Rule <<KLEE-IRR-long-running-no-data>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2596,9 +2654,11 @@ exceptions.
 
 [horizontal]
 State change rule for exceptions:: An illegal- or virtual-instruction exception, or a KLEE
-exception other than `kl_exc_fatal`, makes no change to KLEE state, except the zeroizing of the
-target locker by an opening `kl.mgmt`, which is performed even if the instruction later raises an
-exception (<<KLEE-locker-management>>). `kl_exc_fatal` resets the KLEE state (_Fatal Conditions_ below).
+exception other than `kl_exc_fatal`, makes no change to KLEE state, except the following changes made by
+`kl.mgmt`, which are performed even if the instruction later raises an exception (<<KLEE-locker-management>>):
+the zeroizing of the target locker by an opening `kl.mgmt`, with the write of 32 to `klmanagedlocker` that
+accompanies it, and the clearing of `klstart` by any `kl.mgmt` not rejected on a ground of the first group of
+<<KLEE-illegal-instruction-grounds>>. `kl_exc_fatal` resets the KLEE state (_Fatal Conditions_ below).
 
 === Categories of Error Conditions
 
@@ -2660,7 +2720,7 @@ The grounds for an illegal- or virtual-instruction exception form two groups:
   `kl_exc_no_csk` and the _Off_ gate, once the locker is loaded or by the emulator, and only if no
   fatal condition is pending, `kl_exc_fatal` being raised otherwise:
 
-. A usage-controlled instruction issued on a locker in State _Unconfigured_ (Rule <<KLEE-SGR-transition-to-from-unconfigured>>), including `kl.derive` with an _Unconfigured_ endpoint.
+. A usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) issued on a locker in State _Unconfigured_ (Rule <<KLEE-SGR-transition-to-from-unconfigured>>), including `kl.derive` with an _Unconfigured_ endpoint.
 . `kl.load`, `kl.store` or `kl.mv` on a locker whose _State_ does not admit the transfer, or with an inconsistent `klstart` (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>).
 . `kl.mgmt` when `klmanagedlocker` names another locker, when opening an export on an _Unconfigured_ locker, when completing with an `ml`._State_ inconsistent with the locker's Configuration State, or when `kl_cfg_management_end` is issued with no management operation open (<<KLEE-locker-management>>).
 . A KLIOBUF substitution that <<KLEE-usage-input-output>> forbids, such as a Form B or C `kl.exec` issued where Form A is expected, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the locker's State defines.
@@ -2715,7 +2775,7 @@ Privileged Architecture, the KLEE exceptions among them are replaced as
 . *Locker marked _Off_.* `kl_exc_locker_off`, on any access to the locker that <<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>> does not
   exempt, before any condition that depends on its contents. M-mode resolves it or forwards it to
   the mode that owns the _Off_ field.
-. *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction in a mode that
+. *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in a mode that
   the _UsagePolicy_ excludes (Rule <<KLEE-SGR-usage-policy>>), and for any use, cloning or
   restriction of a locker in a Configuration State (Rule <<KLEE-SGR-usage-locker-config-state>>).
 . *Insufficient KLF capacity.* `kl_exc_out_of_memory`, for a `kl.mgmt` opening a provisioning or
@@ -2745,12 +2805,13 @@ so are the conditions that <<KLEE-exception-error-correspondence>> maps to an Er
   <<KLEE-SGR-no-exec-in-ready>> and <<KLEE-SGR-success-failure>>, <<KLEE-instruction-setst>>), and for
   a `kl.derive` that fails its checks (<<KLEE-instruction-derive>>).
 . *Invalid length.* _Invalid_, for an operand whose transfer-window length (`kliobuftop`, or `VL` {times} `SEW` / 8) the Machine does not accept (<<KLEE-CSR-klstart>>, <<KLEE-usage-input-output>>).
-. *Expiration.* _Expired_, for a usage-controlled instruction on an expired locker, which then performs
+. *Expiration.* _Expired_, for a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) on an expired locker, which then performs
   no operation (<<KLEE-Metadata-expiration-date>>).
 . *Use of a locker in an Error State.* No operation, and the _State_ is unchanged (Rule
   <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-error-state-instructions>>).
 . *Explicit Error State.* The Error State that a `kl.setst` immediate names
   (<<KLEE-instruction-setst>>).
+. *RBG failure.* _Invalid_, for an operation that cannot obtain the random bits it needs (Rule <<KLEE-GR-rbg-failure>>).
 . *Unusable ADS.* Dropped at import, without rejecting the SCC (<<KLEE-SCC-import>>).
 --
 
@@ -2764,7 +2825,8 @@ Algorithmic errors may occur:
   (<<KLEE-mgmt-completes-export>>); software therefore checks the _State_ after completing an export
   as well as after completing an import;
 . in the Machines themselves, which may transition the locker to Error State _Invalid_ or to another
-  Error State, as the Machine specifies.
+  Error State, as the Machine specifies. Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-config-data-error>> distinguishes these
+  configuration errors from the data errors, which transition the state machine to _Failure_.
 
 The verification of an authentication tag by an AEAD scheme (_not_ by the SCC export and import
 procedures), or of a signature, is _not_ an algorithmic error, whether it succeeds or fails: the
@@ -2777,7 +2839,7 @@ A locker in an Error State holds only its MDH (Rules <<KLEE-SGR-clear-locker-con
 
 The illegal-instruction grounds of the first group (<<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk`, `kl_exc_locker_off` if a `*llockerstatus` field in effect for the locker is _Off_ (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and, for Forms A–C of `kl.exec`, the `klstart`/`vstart` check of <<KLEE-CSR-klstart>> are evaluated before the _State_ of the locker is considered (Rule <<KLEE-SGR-gate-order>>).
 
-An instruction that uses the locker, that is `kl.exec`, `kl.derive`, or a usage-controlled `kl.setst`, performs no operation and raises no exception.
+An instruction that uses the locker, that is `kl.exec`, `kl.derive`, or a usage-controlled `kl.setst` (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), performs no operation and raises no exception.
 The Error State is the second condition that Rule <<KLEE-SGR-gate-order>> evaluates, right after _Unconfigured_, so the _UsagePolicy_ is not evaluated, and neither is the _ExpirationDate_, which is evaluated only in a Valid State (<<KLEE-Metadata-expiration-date>>).
 The _State_ is unchanged: Rule <<KLEE-SGR-usage-locker-error-state>> treats the attempt as one that would cause Error State _Invalid_, and leaves the original Error State visible to software.
 
@@ -2791,13 +2853,13 @@ The _State_ is unchanged: Rule <<KLEE-SGR-usage-locker-error-state>> treats the 
 | `kl.size` | Returns 16 (<<KLEE-instruction-size>>).
 | `kl.avail`, Form A | Evaluates the MDH fields that identify the Machine (<<KLEE-instruction-size>>).
 | `kl.load`, `kl.store`, `kl.mv` | Illegal-instruction exception (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>).
-| Usage-controlled instructions: `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-locker-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
+| Usage-controlled instructions (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>): `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-locker-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
 | `kl.setst` with an Error-State immediate | The locker transitions to that Error State without an exception, a reserved one to _Invalid_ (<<KLEE-instruction-setst>>).
 | `kl.mgmt` opening a provisioning or an import | The locker is zeroized and reconfigured (Rule <<KLEE-GR-opening-locker-when>>, <<KLEE-locker-management>>).
 | `kl.mgmt` opening an export | The locker is left unchanged and no management operation is opened (<<KLEE-locker-management>>).
 | `kl.mgmt` with `kl_cfg_management_end` | Illegal-instruction exception, since no management operation is open (<<KLEE-locker-management>>).
 | `kl.getmd*`, `kl.getst` | Return the retained MDH (<<KLEE-instruction-getmd>>).
-| `kl.restrict*` | Narrows the MDH, as in any Complete State (<<KLEE-instruction-restrict>>).
+| `kl.restrict*` | Narrows the MDH, as in any Complete State; a request that would transition the locker to _Invalid_ performs no operation instead, so that the original Error State is kept (Rule <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-instruction-restrict>>).
 | `kl.clone`, with the locker as source | The destination receives the MDH alone (<<KLEE-instruction-clone>>).
 | `kl.clone`, with the locker as destination | The locker is cleared and receives the clone of the source (<<KLEE-instruction-clone>>).
 | `kl.rename`, `kl.swap` | The CC, reduced to its MDH, is moved or exchanged unchanged (<<KLEE-instruction-clone>>).
@@ -2968,7 +3030,7 @@ A substitution fails as follows:
   substitution raises an illegal-instruction exception.
 * If the KLIOBUF is not enabled or `kliobuflen` is zero, KLEE exception
   `kl_exc_unconfigured_buffer` is raised.
-* If `kliobuflen` is non-zero but `kliobuftop` is a length invalid for the Machine, the locker transitions to Error State _Invalid_, whether the KLIOBUF is used as an input or only as an output (<<KLEE-CSR-klstart>>).
+* If `kliobuflen` is non-zero but `kliobuftop` is a length invalid for the Machine, the locker transitions to Error State _Invalid_, whether the KLIOBUF is used as an input or only as an output (<<KLEE-CSR-klstart>>), except for an MDH operand, for which `kliobuftop` < 16 raises an illegal-instruction exception (Rule <<KLEE-GR-vector-MDH-operand>>).
 
 In <<Zkl-ISA-machines.adoc#KLEE-Machines>>, when a Form of `kl.exec`, `kl.setst`, or `kl.mgmt` is
 _expected_ (rather than _required_ or _the only Form allowed_), the substitutions above apply
@@ -3181,7 +3243,7 @@ The current privilege mode does not affect whether the SKS may resolve a given S
 
 A SKID other than the all-ones value that it does not or is not allowed to resolve transitions the locker to Error State _Invalid_ (see <<KLEE-Metadata-validity>>).
 
-Whenever a SKID is resolved, the _UsagePolicy_ of the locker becomes the intersection of the permissions already encoded in the PI or SCC and those of the key (bits 0–3 or-ed, bit 4 and-ed), and its _Locality_ the union of the Localities in the PI or SCC and those of the key (each HW Binding subfield taking the larger value, bits 6–8 or-ed); if the two Boot Session entries are non-zero and differ, or the resulting _Locality_ names an unconfigured entry (<<KLEE-Localities>>), the locker transitions to Error State _Invalid_, as it does for a supplied MDH at provisioning.
+Whenever a SKID is resolved, the MDH of the locker is narrowed by the policies that the System Key Store associates with the key (Metadata Narrowing Rule <<KLEE-MNR>>); if the narrowing fails, the locker transitions to Error State _Invalid_, as it does for a supplied MDH at provisioning.
 
 The all-ones SKID (<<KLEE-KeyType-field>>) is not resolved by the SKS.
 A SKID carried in an SCC is resolved only after the SCC has been authenticated.
@@ -3226,7 +3288,7 @@ Three steps are common to every operation below and are not repeated in the desc
 .. if that _State_ is a Configuration State, it writes the target locker's number to `klmanagedlocker`;
 .. if that _State_ is a Complete State, including any Error State, it writes 32 to `klmanagedlocker`; and
 .. if the instruction raises an exception without leaving the target locker in an Error State, `klmanagedlocker` is left unchanged, or set to 32 if the zeroizing step has left the target locker _Unconfigured_: the handler either resolves the condition or sets `klmanagedlocker` to 32 itself (<<KLEE-CSR-klmanagedlocker>>).
-. `kl.mgmt` also clears `klstart` (it is the duty of software to restore `klstart` to allow interrupted management operations to be resumed).
+. `kl.mgmt` also clears `klstart`, even if it then raises an exception, unless it is rejected on a ground of the first group of <<KLEE-illegal-instruction-grounds>> (it is the duty of software to restore `klstart` to allow interrupted management operations to be resumed).
 
 Now we consider the specific semantics of `kl.mgmt` for each of the four operations it supports:
 
@@ -3334,7 +3396,7 @@ Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if loc
 
 The operation makes the provisioned locker available to software by
 
-... For _KeyType_ = 1, generating the key for the all-ones SKID (<<KLEE-KeyType-field>>) or applying the SKID resolution of <<KLEE-system-keys>>;
+... For _KeyType_ = 1, generating the key for the all-ones SKID (<<KLEE-KeyType-field>>, Rule <<KLEE-GR-rbg-failure>>) or applying the SKID resolution of <<KLEE-system-keys>>;
 ... Performing any necessary readjustment of the locker's content to turn it into the format internally consumed by the KLEE unit; and
 ... Setting _State_ to _Ready_, and _StateExtension_ and _MachineUse_ to 0.
 

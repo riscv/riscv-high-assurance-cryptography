@@ -369,7 +369,7 @@ cl = KsLocker(SKS)
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
 eq("all-ones SKID: random key, KeyType 0, Content1 32 B",
    (cl.state, cl.keytype, len(cl.content1())), (RDY, 0, 32))
-info("<<KLEE-keystream-modes>> gates no transition on MachinePolicy; the PIs here set both bits.")
+info("_Operate_ is enabled by either MachinePolicy bit (MGR14), and one must be set: the gate always passes.")
 
 section("kl.derive (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>)")
 drbg = key + H("5a" * 16)

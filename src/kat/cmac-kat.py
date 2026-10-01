@@ -54,8 +54,9 @@ def unpack(data, lay):
     return out
 
 class Cmac:
-    def __init__(s, key, skid=None, **nc):
-        s.key, s.skid, s.state = key, skid, READY
+    def __init__(s, key, skid=None, policy=3, **nc):
+        """policy: _MachinePolicy_, bit 0 tag output, bit 1 verification (<<KLEE-CMAC-mode>>, MGR14)."""
+        s.key, s.skid, s.state, s.policy = key, skid, READY, policy
         s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False), **nc)
         if skid is not None:
             SKS[skid] = key
@@ -82,6 +83,8 @@ class Cmac:
             return
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MGR1, SGR6
+        if immed == VERIFY and not s.policy & 2:
+            s._invalid('MachinePolicy[1] clear')  # MGR14
         if immed == LAST:
             if aux > B or aux % 8:
                 s._invalid('Xs')
@@ -101,6 +104,8 @@ class Cmac:
                 s.hash = s.enc(s.hash ^ sl(INPUT, i + B - 1, i))
             return 0
         if st == OUTPUT:
+            if not s.policy & 1:
+                s._invalid('MachinePolicy[0] clear')  # MGR14
             s.state = SUCCESS
             return s.hash & ((1 << klen) - 1)     # MGR6
         n = s.last_blk_len
@@ -122,7 +127,7 @@ class Cmac:
     def imported(s, c1, lay=None):
         """A fresh locker with this locker's MDH, loaded from Content1."""
         f = unpack(c1, lay or s.lay())
-        new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, **s.nc)
+        new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, s.policy, **s.nc)
         new.state, new.hash = s.state, f.get('hash', 0)
         new.last_blk_len = f['last_blk_len']
         return new
@@ -274,6 +279,12 @@ INVALID_CASES = [
     ("kl.setst #hash_absorb in Failure (SGR6)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
     ("MGR11: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
+INVALID_CASES += [
+    ("tag output with MachinePolicy = 0b10 (MGR14)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=2)),
+     lambda c: c.exec('C')),
+    ("kl.setst #hash_verify with MachinePolicy = 0b01 (MGR14)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=1)),
+     lambda c: c.setst(VERIFY, 'C', b2v(W4))),
+]
 for name, mk, act in INVALID_CASES:
     cl = mk()
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
@@ -286,6 +297,14 @@ cl = run(K128, MSG[:40], subst=True)
 cl.setst(VERIFY, 'A', b2v(W4))
 check("Form D kl.exec, Form A kl.setst #hash_verify substitutions: all vectors",
       subst and cl.state == SUCCESS)
+vcl = run(K128, MSG[:40], cl=Cmac(K128, policy=2))
+vcl.setst(VERIFY, 'C', b2v(W4))
+z_out, z_ver = run(K128, MSG[:40], cl=Cmac(K128, policy=0)), run(K128, MSG[:40], cl=Cmac(K128, policy=0))
+check("MachinePolicy = 0b10 verifies, 0b01 emits the tag; MachinePolicy = 0 is admissible but useless: "
+      "provisioned and absorbs, then both output and verification -> Invalid (MGR14)", True,
+      (vcl.state, tag(None, MSG[:40], cl=Cmac(K128, policy=1)), z_out.state,
+       raises(z_out.exec, 'C', exc=Invalid), raises(z_ver.setst, VERIFY, 'C', b2v(W4), exc=Invalid)),
+      (SUCCESS, W4, OUTPUT, True, True))
 check("truncated 64-bit tag -> Failure (all b bits compared)", True,
       done_ok(b2v(W4[:8])).state, FAILURE)
 for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
