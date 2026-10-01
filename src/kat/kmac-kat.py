@@ -207,7 +207,7 @@ class Kmac:
         self.D = (1, 1, 1, 1) if 'suffix' in self.bad else (0, 0)       # cSHAKE suffix
 
     def _clear(self):                                                    # SGR10
-        self.state = self.block_base = self.cb = self.kb = self.L = self.out_bits = 0
+        self.state = self.block_base = self.cb = self.kb = self.L = 0
 
     def invalidate(self):
         self.st = INVALID
@@ -230,7 +230,7 @@ class Kmac:
         v = cat(*self.fields()) if at else pack(self.fields())
         return mdh_pack(Machine=self.machine, State=self.st), v2b(v, scc_len(self.b))
 
-    def import_(self, mdh, content, out_bits=None):
+    def import_(self, mdh, content):
         f = mdh_unpack(mdh)
         self._machine(f['Machine'])
         self.st, v = f['State'], b2v(content)
@@ -239,7 +239,6 @@ class Kmac:
             vals.append(v & ((1 << w) - 1))
             v >>= w
         self.state, self.block_base, _, self.cb, self.kb, self.L = vals
-        self.out_bits = self.block_base if out_bits is None else out_bits   # no field records it
         if self.block_base >= self.b:        # inconsistent image (only the negative control)
             self.invalidate()
         return self
@@ -259,8 +258,7 @@ class Kmac:
             self.st = ABSORB
             return
         if immed == OUTPUT and self.st == ABSORB and form == ('A' if self.xof else 'B'):
-            if self.xof or aux:
-                assert aux is None or aux < 1 << 32
+            if self.xof or 0 < aux < 1 << 32:                         # 0 < L < 2^32
                 self.L = aux or 0
                 return self._to_output()
         self.invalidate()
@@ -275,7 +273,9 @@ class Kmac:
         self.state = keccak(self.state ^ (S & ((1 << room) - 1)) << self.block_base)
         if n > room:
             self.state = keccak(self.state ^ S >> room)
-        self.st, self.block_base, self.out_bits = OUTPUT, 0, 0
+        self.st, self.block_base = OUTPUT, 0
+        if 'raw_last_byte' in self.bad and not self.xof:
+            self.L = 8 * -(-self.L // 8)
 
     def _end(self, status, out=None):
         if out is not None and status in ('invalid', 'noop'):             # SGR16
@@ -291,11 +291,11 @@ class Kmac:
             return self._end('noop', out)
         if self.st == ABSORB and inp is not None and out is None and (sew or 32) >= 32:  # MGR1, MGR2
             p, top = self.hart.klstart, len(inp)
-            if not (p in (0, top) or (p < top and self.block_base == 0)):
+            if p >= top:
+                return self._end('empty')                                # empty window: only klstart = 0
+            if p and self.block_base:                                    # not an interruption point
                 self.invalidate()
                 return self._end('invalid')
-            if p == top:
-                return self._end('noop')
             st = self._vli(b2v(inp), 8 * top, 8 * p, halt, literal)
             return st if st == 'interrupted' else self._end(st)
         if self.st == OUTPUT and inp is None and out is not None:
@@ -317,19 +317,22 @@ class Kmac:
 
     def _squeeze(self, out, halt):
         p, top = self.hart.klstart, len(out)
-        if p >= top or (p and self.block_base):                          # output-only: no operation
-            return self._end('done')
-        limit = (None if self.xof else 8 * -(-self.L // 8) if 'raw_last_byte' in self.bad
-                 else self.L)
+        if p >= top:
+            return self._end('empty')                                    # empty window: only klstart = 0
+        if p and self.block_base:                                        # not an interruption point
+            self.invalidate()
+            return self._end('invalid', out)
         OUT, ob = b2v(out), 8 * p
         while ob < 8 * top:
             amt = min(8 * top - ob, self.t - self.block_base)
-            if limit is not None:
-                amt = min(amt, limit - self.out_bits)
+            if not self.xof:                                             # L counts the bits left
+                amt = min(amt, self.L)
             chunk = sl(self.state, self.block_base + amt - 1, self.block_base)
             OUT = OUT & ~(((1 << amt) - 1) << ob) | chunk << ob
-            ob, self.block_base, self.out_bits = ob + amt, self.block_base + amt, self.out_bits + amt
-            if self.out_bits == limit:                                   # exactly L bits, then MGR6
+            ob, self.block_base = ob + amt, self.block_base + amt
+            if not self.xof:
+                self.L -= amt
+            if not self.xof and self.L == 0:                             # then MGR6
                 out[:] = v2b(OUT & ((1 << ob) - 1), top)
                 self.st = SUCCESS
                 return self._end('success')
@@ -343,13 +346,27 @@ class Kmac:
         return self._end('done')
 
 
+class KeyDest:
+    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLEE-derive-endpoints>>); only the key is modelled."""
+    def __init__(self, n): self.st, self.n, self.key = READY, n, None
+    def invalidate(self): self.st, self.key = INVALID, None
+
+
 def derive(hart, dst, src, length):
-    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (DER6, DER8)."""
+    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (DER6, DER8), or into a
+    KeyDest (DER6 key derivation, unrestricted)."""
     if src.st not in ERROR_STATES and dst.st not in ERROR_STATES:
-        bad = [c for c, s in ((src, OUTPUT), (dst, ABSORB)) if c.st != s]   # DER1 checks 1, 3
+        key = isinstance(dst, KeyDest)
+        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # DER1 items 1-2
         for c in bad:
             c.invalidate()
-        if not bad and length:
+        if not bad and key:
+            if length < dst.n or not src.xof and src.L < 8 * dst.n:
+                dst.invalidate()                                         # DER1 item 5
+            else:
+                dst.key = bytearray(dst.n)
+                src.exec(out=dst.key)
+        elif not bad and length:
             buf = bytearray(length)
             src.exec(out=buf)
             dst.exec(inp=bytes(buf))
@@ -464,10 +481,12 @@ check('KMAC256: halt at klstart = 96 (block edge), export, clear, import, resume
       (st, ks, bytes(squeeze(c2, 64)[0][1])), ('interrupted', 96, WANT[5]))
 h = Hart()
 c = absorbing(128, DATA4, hart=h)
+h.klstart, snap = 300, (c.st, c.state, c.block_base)
+check('input klstart = 300 > KLLEN/8: empty window, only klstart = 0', True,
+      (c.exec(inp=DATA200), (c.st, c.state, c.block_base) == snap, h.klstart), ('empty', True, 0))
 h.klstart = 100
-st = c.exec(inp=DATA200)
 check('input klstart = 100 with block_base = 32 -> _Invalid_, Content cleared, klstart = 0', True,
-      (st, c.st, c.state, c.kb, h.klstart), ('invalid', INVALID, 0, 0, 0))
+      (c.exec(inp=DATA200), c.st, c.state, c.kb, h.klstart), ('invalid', INVALID, 0, 0, 0))
 
 section('right_encode(L) and the <<KLEE-SHA-3>> padding on entering _Hash_Output_')
 c = absorbing(128, DATA200)
@@ -489,8 +508,6 @@ for L in (255, 250, 257, 1000, 1001):
     got, c = kl_kmac(128, DATA4, L, TAG)
     check(f'KMAC128 L={L}: ceil(L/8) B, last byte zero-padded, _Success_', True, (got, c.st),
           (ref_kmac(128, KEY, DATA4, L, TAG), SUCCESS))
-spec_note('<<KLEE-KMAC>>: "the last byte may be zero-padded in its significant bits" contradicts '
-          '"exactly L bits ... the last one zero-padded"; the harness follows the latter')
 c = squeezing(128, DATA4, 250)
 (st, o), = squeeze(c, 40, fill=0xEE)
 check('KMAC128 L=250 into 40 B: _Success_, OUTPUT bits [319:250] cleared (MGR6)', True,
@@ -518,10 +535,10 @@ check('KMAC256 L=4097 in two 300-B execs, the first halted at klstart = 272 and 
 ca, cb = squeezing(256, DATA200, 4096), squeezing(256, DATA200, 4096)
 squeeze(ca, 137)
 squeeze(cb, 273)
-same = ca.export()[1][200:] == cb.export()[1][200:]
-check('two KMAC256 L=4096 exports 1088 bits apart differ only in `state`', same)
-spec_note('<<KLEE-KMAC>>: neither Internal State nor Serialized Content counts the output bits '
-          'made available, so L > t cannot stop at L after an import; the harness carries it out of band')
+ea, eb, w2 = ca.export()[1], cb.export()[1], 2 * RATE[256]
+check('two KMAC256 L=4096 exports 1088 bits apart differ only in `state` and `L` (4096 - 1096, 4096 - 2184)', True,
+      (ea[200:208 + w2] == eb[200:208 + w2], b2v(ea[208 + w2:212 + w2]), b2v(eb[208 + w2:212 + w2]),
+       ea[212 + w2:] == eb[212 + w2:]), (True, 4096 - 1096, 4096 - 2184, True))
 
 section('KMACXOF: unlimited output (<<KLEE-hash-functions-MACs-XOFs>>)')
 want = ref_kmac(128, KEY, DATA200, 0, TAG, True, 600)
@@ -538,12 +555,23 @@ st2 = c.exec(out=o)
 check('KMACXOF128 squeeze halted at klstart = 168 (bytes beyond unwritten), resumed == reference',
       True, (st1, ks, unwritten, st2, h.klstart, bytes(o)),
       ('interrupted', 168, b'\xee' * 232, 'done', 0, want[:400]))
-spec_note('<<KLEE-KMAC>> and <<KLEE-Ascon-XOF128>>: "producing `XLLEN` for each `ace.exec` call" '
-          'should read KLLEN and kl.exec')
+c = squeezing(128, DATA200, 0, xof=True, hart=h)
+c.exec(out=bytearray(10))
+o, snap, res = bytearray(b'\xee' * 64), (c.st, c.state, c.block_base), []
+for ks in (64, 70):
+    h.klstart = ks
+    res.append((c.exec(out=o), h.klstart, bytes(o), (c.st, c.state, c.block_base) == snap))
+check('output only, klstart >= KLLEN/8 (64, 70): empty window, only klstart = 0', True, res,
+      [('empty', 0, b'\xee' * 64, True)] * 2)
+h.klstart = 5
+check('block_base = 80, output only, klstart = 5 -> _Invalid_, [5, 64) zeroed', True,
+      (c.exec(out=o), c.st, h.klstart, bytes(o)), ('invalid', INVALID, 0, b'\xee' * 5 + bytes(59)))
+spec_note('<<KLEE-Ascon-XOF128>>: "producing `XLLEN` for each `ace.exec` call" should read KLLEN and kl.exec')
 
 section('States, transitions and expected Forms')
 for label, c, act in (
         ('KMAC128 Form B kl.setst with L = 0', absorbing(128, DATA4), lambda c: c.setst(OUTPUT, 'B', 0)),
+        ('KMAC128 Form B kl.setst with L = 2^32', absorbing(128, DATA4), lambda c: c.setst(OUTPUT, 'B', 1 << 32)),
         ('KMAC128 Form A kl.setst to _Hash_Output_', absorbing(128, DATA4), lambda c: c.setst(OUTPUT)),
         ('KMACXOF256 Form B kl.setst to _Hash_Output_', absorbing(256, DATA4, True),
          lambda c: c.setst(OUTPUT, 'B', 512)),
@@ -552,7 +580,11 @@ for label, c, act in (
         ('same-State kl.setst in _Hash_Absorb_ (<<KLEE-process-VLI>>)', absorbing(128, DATA4),
          lambda c: c.setst(ABSORB)),
         ('Form B kl.exec in _Hash_Output_ (MGR1)', squeezing(128, DATA4, 256),
-         lambda c: c.exec(inp=DATA4))):
+         lambda c: c.exec(inp=DATA4)),
+        ('KMAC128 same-State kl.setst to _Hash_Output_ (MGR11)', squeezing(128, DATA4, 256),
+         lambda c: c.setst(OUTPUT, 'B', 256)),
+        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (MGR11)', squeezing(256, DATA4, 0, True),
+         lambda c: c.setst(OUTPUT))):
     act(c)
     check(f'{label} -> _Invalid_', True, c.st, INVALID)
 c = squeezing(128, DATA4, 256)
@@ -574,7 +606,6 @@ for s in (READY, ABSORB):
 c.exec(inp=DATA200)
 to_output(c, 0)
 check('_Hash_Absorb_ -> _Ready_ restarts KMACXOF256 (#5)', True, bytes(squeeze(c, 64)[0][1]), WANT[10])
-info('Form B L >= 2^32 (XLEN-bit operand, 32-bit field): truncation or rejection unstated; not exercised')
 info('_KeyType_ = 1: <<KLEE-KMAC>> gives no SKID layout for its key blocks; not exercised')
 
 section('Provisioning Input and Serialized Content')
@@ -601,10 +632,10 @@ for sec, pi_len, c1_len in ((128, 352, 560), (256, 288, 496)):
     squeeze(c, 8)
     ct = c.export()[1]
     check(f'KMAC{sec} Content1: state, block_base = 64, 48-bit padding, cshake_block, key_block, '
-          f'L = 1234, zero padding', True,
+          f'L = 1234 - 64 bits left, zero padding', True,
           (ct[:200], ct[200:202], ct[202:208], ct[208:208 + w], ct[208 + w:208 + 2 * w],
            ct[208 + 2 * w:212 + 2 * w], ct[212 + 2 * w:]),
-          (v2b(c.state, 200), v2b(64, 2), bytes(6), cbk, kbk, v2b(1234, 4), bytes(c1_len - 212 - 2 * w)))
+          (v2b(c.state, 200), v2b(64, 2), bytes(6), cbk, kbk, v2b(1234 - 64, 4), bytes(c1_len - 212 - 2 * w)))
 xof256 = ref_kmac(256, KEY, DATA200, 0, TAG, True, 300)
 for label, sec, xof, n_abs, L, n_out, want in (
         ('KMAC128 in _Ready_', 128, False, None, None, None, WANT[2]),
@@ -628,13 +659,12 @@ for label, sec, xof, n_abs, L, n_out, want in (
           head + bytes(squeeze(c2, len(want) - len(head))[0][1]), want)
 c = squeezing(256, DATA200, 4096)
 (_, o1), = squeeze(c, 300)
-c2 = Kmac(Hart()).import_(*c.export(), out_bits=c.out_bits)
+c2 = Kmac(Hart()).import_(*c.export())
 (st, o2), = squeeze(c2, 212)
-check('round trip, KMAC256 L = 4096 after 2 update()s (counter out of band), then _Success_', True,
+check('round trip, KMAC256 L = 4096 after 2 update()s (L counts down in the Serialized Content), then _Success_', True,
       (bytes(o1 + o2), st, c2.st), (ref_kmac(256, KEY, DATA200, 4096, TAG), 'success', SUCCESS))
 
 section('kl.derive between kl.exec endpoints (<<KLEE-derive-endpoints>>, DER6)')
-info('KMAC is taken to be a MAC of the hash/MAC/XOF row of <<KLEE-derive-endpoints>>, which does not name it')
 h = Hart()
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
@@ -662,6 +692,16 @@ snap = (src.state, src.block_base, dst.state, dst.block_base)
 derive(h, dst, src, 0)
 check('length = 0 changes no state (DER8)', True,
       (src.state, src.block_base, dst.state, dst.block_base), snap)
+
+src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)
+s2, d2 = squeezing(256, DATA4, 512, hart=h), KeyDest(32)
+s3, d3 = squeezing(128, DATA4, 128, hart=h), KeyDest(32)
+for d, s_ in ((dst, src), (d2, s2), (d3, s3)):
+    derive(h, d, s_, 32)
+check('DER6 key derivation: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
+      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (DER1 item 5): destination _Invalid_', True,
+      (bytes(dst.key), bytes(squeeze(src, 16)[0][1]), bytes(d2.key), s2.st, d3.st, s3.st),
+      (stream[:16], stream[16:32], WANT[3][:32], OUTPUT, INVALID, OUTPUT))
 
 section('Negative controls')
 control('left_encode(L) in place of right_encode(L) (#2, #6)',

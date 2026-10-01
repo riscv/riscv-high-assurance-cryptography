@@ -12,9 +12,9 @@ from common import (b2v, v2b, sl, cat, bswap, bin_, bxor, aes_encrypt, aes_decry
                     KL_STATE_ENC_TAG_FINALIZE as TAG_FIN, KL_STATE_SET_AUX_VALUE as SET_AUX,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE,
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, spec_note, raises, done)
+                    section, check, control, info, raises, done)
 
-B, ONES48 = 128, (1 << 48) - 1
+B, MAXB = 128, 1 << 48                                # MAX_BLOCKS
 JUNK = b2v(bytes([0x5A, 0xC3]) * 32)
 junk_above = lambda n, w=B: (JUNK << n) & ((1 << w) - 1)
 ntz = lambda n: (n & -n).bit_length() - 1
@@ -65,7 +65,7 @@ class Invalid(Exception): pass                         # args: (why, OUTPUT as l
 
 SKS = {}
 LAYOUT = [('N', 120), ('N_len', 7), ('pad', 1), ('Lstar', 128), ('offset', 128), ('hash_A', 128),
-          ('checksum_P', 128), ('index', 48), ('tag_len', 2), ('last_blk_len', 7)]
+          ('checksum_P', 128), ('index', 49), ('tag_len', 2), ('last_blk_len', 7)]
 
 def pack(vals, lay):
     """Rows from bit 0 upwards, zero-padded to a multiple of 128 bits."""
@@ -95,7 +95,7 @@ class Ocb:
         if skid is not None:
             SKS[skid] = key
         s.Lstar = s.offset = s.last_blk_len = s.Ldollar = 0
-        s.tag_len, s.L, s.ad_done = None, [], False    # ad_done: see the SPEC-NOTE below
+        s.tag_len, s.L = None, []
         s._ready()
     def _ready(s):
         s.N = s.N_len = s.hash_A = s.checksum_P = s.index = 0
@@ -137,7 +137,7 @@ class Ocb:
         elif immed in (LAST, ENC_LAST, DEC_LAST):
             if aux % 8 or aux > 120:
                 s._invalid('last_blk_len')
-            s.last_blk_len, s.ad_done = aux, False
+            s.last_blk_len = aux
         elif immed in (ENCRYPT, DECRYPT):
             s._setup()
         elif immed == VERIFY:
@@ -145,6 +145,9 @@ class Ocb:
             s.state = SUCCESS if sl(aux, t - 1, 0) == sl(s.checksum_P, t - 1, 0) else FAILURE
             return
         s.state = immed
+    def _set_N(s, INPUT):                              # clear the pad bits of byte q-1
+        q, pad = (s.N_len + 7) // 8, -s.N_len % 8
+        s.N = sl(INPUT, 8 * q - 1, 0) & ~(((1 << pad) - 1) << (0 if s.nc['pad_byte0'] else 8 * q - 8))
     def _setup(s):
         n = s.N_len
         s.Nonce_be = cat((bin_(s.tag_len % 128, 7), 7), (0, 120 - n), (1, 1), (nonce_be(s.N, n), n))
@@ -159,16 +162,15 @@ class Ocb:
         st, n = s.state, s.last_blk_len
         if st in ERROR_STATES:                         # SGR16
             return 0
-        want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B' if n and not s.ad_done else '',
+        want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B' if n else '',
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
                 DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C'}.get(st, '')
         if want == 'A' and form in 'BC':               # <<KLEE-usage-input-output>>: no mixing
             raise IllegalInstruction(form)
         if not want or form not in (want, 'D'):
             s._invalid('Form')                         # MGR1, SGR2, SGR5
-        if st == SET_AUX:                              # clear the pad bits of byte q-1
-            q, pad = (s.N_len + 7) // 8, -s.N_len % 8
-            s.N = sl(INPUT, 8 * q - 1, 0) & ~(((1 << pad) - 1) << (0 if s.nc['pad_byte0'] else 8 * q - 8))
+        if st == SET_AUX:
+            s._set_N(INPUT)
             return 0
         if st in (ABSORB, ENCRYPT, DECRYPT):
             return s._blocks(st, INPUT, klen)
@@ -177,12 +179,12 @@ class Ocb:
             return cat((0, B - t), (sl(s.checksum_P, t - 1, 0), t)) & ((1 << klen) - 1)
         if klen < n:
             s._invalid('KLLEN < last_blk_len')
-        if n and s.index == ONES48:
-            s._invalid('index = ones(48)')
+        if n and s.index > MAXB:
+            s._invalid('index > MAX_BLOCKS')
         if st == LAST:
             s.offset ^= s.Lstar
             s.hash_A ^= s.enc(ocb_pad(INPUT, n) ^ s.offset)
-            s.ad_done = True
+            s.last_blk_len = 0                         # a second kl.exec is not allowed
             return 0
         out, tmp = 0, s.offset                         # Form D when n = 0
         if n:
@@ -197,8 +199,8 @@ class Ocb:
             s._invalid('MGR2')
         out, pos = 0, range(0, klen, B)                # MGR3
         for i in (reversed(pos) if s.nc['msb_first'] else pos):
-            if s.index == ONES48:
-                s._invalid('index = ones(48)', out)
+            if s.index > MAXB:
+                s._invalid('index > MAX_BLOCKS', out)
             blk = sl(INPUT, i + B - 1, i)
             s.offset ^= s.Li(ntz(s.index))
             if st == ABSORB:
@@ -218,7 +220,7 @@ class Ocb:
     def imported(s, c1, lay=None):
         """A fresh locker with this locker's MDH, loaded from Content1; derived L$, L[i] recomputed (MGR4)."""
         f = unpack(c1, lay or s.lay())
-        new = Ocb(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.policy, s.skid, **s.nc)
+        new = type(s)(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.policy, s.skid, **s.nc)
         for k in ('N', 'N_len', 'Lstar', 'offset', 'hash_A', 'checksum_P', 'index', 'last_blk_len'):
             setattr(new, k, f.get(k, 0))
         new.state, new.tag_len = s.state, 32 * (f['tag_len'] + 2)
@@ -226,18 +228,18 @@ class Ocb:
         return new
 
 def derive(src, dst, length):
-    """kl.derive into `key` (Ready) or `nonce` (Set_Aux_Value) from a listed source's bytes."""
+    """kl.derive into `key` (Ready; DER5/DER7 source) or `N` (Set_Aux_Value) from a listed source's bytes."""
     if dst.state in ERROR_STATES:
         return
     if isinstance(src, Ocb):                           # OCB defines no source endpoint
-        src._invalid('DER1 items 1, 3')
+        src._invalid('DER1 items 1-2')
     if dst.state == SET_AUX:                           # DER8: min(length, q) bytes, zero-filled
         q = (dst.N_len + 7) // 8
         return dst.exec('B', b2v(src[:min(length, q)]), 8 * q)
     if dst.state != READY:
-        dst._invalid('DER1 items 1, 3')                # no endpoint in this State
+        dst._invalid('DER1 items 1-2')                # no endpoint in this State
     if dst.skid is not None or length < len(dst.key) or len(src) < len(dst.key):
-        dst._invalid('DER4 (DER1 item 3), DER1 item 6')
+        dst._invalid('DER4 (DER1 item 2), DER1 item 5')
     dst.key = src[:len(dst.key)]
 
 def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False, lay=None,
@@ -286,6 +288,29 @@ def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False,
     if trace is not None:
         trace['tag'] = tag
     return C + v2b(tag, 16)[:t // 8]
+
+class OcbNonce(Ocb):
+    """<<KLEE-OCB-with-nonce-mode>>: N, N_len from the PI; no _Set_Aux_Value_; _Ready_ keeps them."""
+    SETST = {k: tuple(READY if st == SET_AUX else st for st in v) for k, v in Ocb.SETST.items() if k[0] != SET_AUX}
+    PI = [('N', 120), ('N_len', 7), ('pad', 1)]
+    @classmethod
+    def provisioned(cls, K, N, N_len, **kw):
+        f = unpack(pack(dict(key=b2v(K), N=N, N_len=N_len, pad=0), [('key', 8 * len(K))] + cls.PI),
+                   [('key', 8 * len(K))] + cls.PI)
+        s = cls(v2b(f['key'], len(K)), **kw)
+        if 6 <= f['N_len'] <= 120:
+            s.N_len = f['N_len']
+            s._set_N(f['N'])
+        else:
+            s._invalid()
+        return s
+    def _ready(s):
+        keep = getattr(s, 'N', 0), getattr(s, 'N_len', 0)
+        super()._ready()
+        s.N, s.N_len = keep
+    def _invalid(s, why=None, out=0):
+        s.N = s.N_len = 0
+        super()._invalid(why, out)
 
 def inval(fn, *a):
     try:
@@ -394,7 +419,7 @@ check("iterated test output", True,
 section("Serialized Content")
 info("<<KLEE-OCB-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
 FITS, fits = ('N', 'N_len', 'tag_len', 'index', 'last_blk_len', 'Lstar', 'offset', 'hash_A'), True
-for vals in ((0, 120, 128, ONES48, 120), (ONES48 >> 1, 6, 64, 1, 0), (1 << 119, 7, 96, ONES48 - 1, 8)):
+for vals in ((0, 120, 128, MAXB + 1, 120), ((1 << 47) - 1, 6, 64, 1, 0), (1 << 119, 7, 96, MAXB, 8)):
     cl = Ocb(K128)
     vars(cl).update(zip(FITS, vals + (MASK128,) * 3), checksum_P=MASK128)
     fits &= all(getattr(cl.imported(cl.export()), k) == getattr(cl, k) for k in FITS)
@@ -443,6 +468,10 @@ INVALID_CASES = [
     ("second kl.exec in Hash_Absorb_Last_Block", last_done, lambda c: c.exec('B', 0, 64)),
     ("kl.setst #enc_tag_finalize from Encrypt", at_crypt, lambda c: c.setst(TAG_FIN, 'A')),
     ("kl.exec Form A in Enc_Last_Block, last_blk_len = 0", lambda: at_last(n=0)[0], lambda c: c.exec('A')),
+    ("second kl.exec in Enc_Last_Block (now Enc_Tag_Finalize)", lambda: at_last(finish=True)[0],
+     lambda c: c.exec('A', b2v(S40[32:40]), 64)),
+    ("second kl.exec in Dec_Last_Block (now Hash_Verify)", lambda: at_last(True, finish=True)[0],
+     lambda c: c.exec('A', b2v(CT13[32:40]), 64)),
     ("kl.setst #hash_verify in Decrypt", lambda: at_crypt(True), lambda c: c.setst(VERIFY, 'C')),
     ("kl.setst #hash_verify in Enc_Tag_Finalize", lambda: at_last(finish=True)[0],
      lambda c: c.setst(VERIFY, 'C')),
@@ -466,8 +495,6 @@ for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
     check(f"kl.exec Form {form} where Form A is expected -> illegal instruction, State kept",
           raises(cl.exec, form, 0) and cl.state == (DECRYPT if dec else ENCRYPT))
-spec_note("MGR1 raises illegal-instruction only for a Form unavailable at all; "
-          "<<KLEE-usage-input-output>> raises it for a Form B/C kl.exec replacing Form A: the harness follows the latter.")
 check("Form D kl.exec, Form A kl.setst substitutions: all vectors, both directions",
       all(run(*v[1:5], v[6], subst=True) == v[5] and run(*v[1:3], v[3], v[5], v[6], dec=True, subst=True)
           == (v[4], True) for v in VEC))
@@ -479,8 +506,6 @@ for name, mk in (("Success", at_end), ("Failure", lambda: at_end(True)), ("Encry
 cl = at_crypt()
 e = inval(cl.exec, 'A', b2v(S40[:16]) | 1 << 140, 144)
 check("KLLEN = 144 in Encrypt -> Invalid, OUTPUT zero (MGR2)", e and e.args[1] == 0 and cl.state == INVALID)
-info("<<KLEE-truncation-vs-length>> states KLLEN >= last_blk_len without a consequence; "
-     "the harness applies MGR2 (Invalid).")
 cl = at_last()[0]
 out = cl.exec('A', b2v(S40[32:]) | junk_above(64, 256), 256)
 check("Enc_Last_Block, Enc_Tag_Finalize with KLLEN 256: one block, rest of OUTPUT zero (MGR3, MGR6)",
@@ -510,42 +535,58 @@ for pol, st in ((0b10, ENCRYPT), (0b01, DECRYPT), (0b10, DECRYPT), (0b01, ENCRYP
     check(f"_MachinePolicy_ {pol:02b}: kl.setst #{'encrypt' if st == ENCRYPT else 'decrypt'} "
           f"{'accepted' if ok else '-> Invalid'}", True,
           (inval(cl.setst, st, 'A') is None, cl.state), (ok, st if ok else INVALID))
-info("no kl.setst Form is named for entering _Encrypt_/_Decrypt_; Form A is used, as in "
-     "<<KLEE-pseudocode-OCB-encryption>>.")
 
-section("index = ones(48)")
+section("index > MAX_BLOCKS = 2^48")
 def with_index(cl, idx):
     f = unpack(cl.export(), cl.lay())
     f['index'] = idx
     return cl.imported(pack(f, cl.lay()))
-cl = with_index(at_crypt(), ONES48 - 2)
+cl = with_index(at_crypt(), MAXB - 1)
 e = inval(cl.exec, 'A', b2v(S40[:16]) * (1 + (1 << 128) + (1 << 256)), 384)
-check("Encrypt at ones(48)-2, 3 blocks: 2 written, then Invalid, third OUTPUT block zero",
+check("Encrypt at index 2^48-1, 3 blocks: blocks 2^48-1 and 2^48 written, then Invalid, third OUTPUT block zero",
       e and sl(e.args[1], 383, 256) == 0 and sl(e.args[1], 255, 128) and sl(e.args[1], 127, 0))
-cl = with_index(at_crypt(dec=True), ONES48 - 1)
+cl = with_index(at_crypt(dec=True), MAXB)
 cl.exec('A', 0)
-check("Decrypt: block at ones(48)-1 passes, the next -> Invalid", inval(cl.exec, 'A', 0))
-for name, cl, args in (("Hash_Absorb", with_index(at_absorb(), ONES48), ('B', 0)),
-                       ("Hash_Absorb_Last_Block", with_index(last_set(), ONES48), ('B', 0, 64)),
-                       ("Enc_Last_Block", with_index(at_last()[0], ONES48), ('A', 0, 64)),
-                       ("Dec_Last_Block", with_index(at_last(True)[0], ONES48), ('A', 0, 64))):
-    check(f"{name} at ones(48) -> Invalid", inval(cl.exec, *args))
-cl = with_index(at_last()[0], ONES48)
+check("Decrypt: block 2^48 passes (L[48]), the next -> Invalid", cl.index == MAXB + 1 and inval(cl.exec, 'A', 0))
+for name, mk, args in (("Hash_Absorb", at_absorb, ('B', 0)),
+                       ("Hash_Absorb_Last_Block", last_set, ('B', 0, 64)),
+                       ("Enc_Last_Block", lambda: at_last()[0], ('A', 0, 64)),
+                       ("Dec_Last_Block", lambda: at_last(True)[0], ('A', 0, 64))):
+    ok = with_index(mk(), MAXB)
+    ok.exec(*args)
+    check(f"{name}: a block at index 2^48 passes, at 2^48+1 -> Invalid",
+          ok.state not in ERROR_STATES and inval(with_index(mk(), MAXB + 1).exec, *args))
+cl = with_index(at_last()[0], MAXB + 1)
 cl.setst(ENC_LAST, 'B', 0)
 cl.exec('D')
 check("Enc_Last_Block Form D (last_blk_len = 0) has no index guard", True, cl.state, TAG_FIN)
-check("largest L index of an admissible block: ntz(2^47) = 47 < 48", True,
-      max(ntz(i) for i in (1 << 47, ONES48 - 1, 3 << 46)), 47)
-spec_note("<<KLEE-OCB-mode>> MAX_BLOCKS is 2^48 under Parameters but 2^48-1 under `index`; "
-          "with index from 1 and the guard index = ones(48), a section holds 2^48-2 blocks.")
+check("largest L index of an admissible block: ntz(2^48) = 48", True,
+      max(ntz(i) for i in (1 << 47, MAXB - 1, MAXB, 3 << 46)), 48)
 cl = last_done().imported(last_done().export())
-spec_note("<<KLEE-OCB-mode>> _Hash_Absorb_Last_Block_ admits a single kl.exec but no state field "
-          "records it: after export/import a second one is "
-          f"{'rejected' if inval(cl.exec, 'B', 0, 64) else 'accepted'} (the harness uses a private flag).")
-spec_note("\"Definition of a Machine in KLEE\" names \"Form C kl.setst\" as the alternative Form; "
-          "<<KLEE-usage-input-output>> substitutes Form A for Form C, which the harness applies.")
-spec_note("<<KLEE-exec-encodings>> assigns Mode 9 (`AES128_OCB_IV`, ...) but no Machine section "
-          "describes it; only Mode 8, <<KLEE-OCB-mode>>, is modelled.")
+check("Hash_Absorb_Last_Block: the kl.exec clears last_blk_len, so a second one, also after export/import, "
+      "-> Invalid", cl.last_blk_len == 0 and inval(cl.exec, 'B', 0, 64) and inval(last_done().exec, 'B', 0, 64))
+
+section("OCB with Set Nonce (Mode 9, <<KLEE-OCB-with-nonce-mode>>)")
+for lab, K, N, A, P, CT, t in VEC:
+    ok = run(None, None, A, P, t, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == CT
+    ok &= run(None, None, A, CT, t, dec=True, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == (P, True)
+    check(f"vector {lab}: nonce from the PI, encrypt and decrypt", ok)
+K7, N7, A7, P7, t7 = E7
+cl = OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7))
+c1 = run(None, None, A7, P7, t7, cl=cl)
+cl.setst(READY)
+check("_Ready_ keeps N and N_len: the next message reuses the nonce", True,
+      (cl.N_len, run(None, None, A7, P7, t7, cl=cl)), (8 * len(N7), c1))
+check("export/import after every instruction: vector 07", True,
+      run(None, None, A7, P7, t7, hop=True, cl=OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7))), VEC[7][5])
+check("kl.setst #set_aux_value -> Invalid", bool(inval(OcbNonce.provisioned(K7, b2v(N7), 96).setst, SET_AUX, 'B', 96)))
+check("PI N_len 5 or 121 -> Invalid at provisioning", True,
+      [OcbNonce.provisioned(K7, b2v(N7), n).state for n in (5, 121, 6, 120)], [INVALID, INVALID, READY, READY])
+ref = Ocb(K7)
+ref.setst(SET_AUX, 'B', 100)
+ref.exec('B', (1 << 120) - 1)
+check("PI N, N_len = 100: pad bits cleared as by the Set_Aux_Value kl.exec", True,
+      OcbNonce.provisioned(K7, (1 << 120) - 1, 100).N, ref.N)
 
 section("kl.derive")
 secret = K128 + bytes(range(0xF0, 0x100))
@@ -555,25 +596,29 @@ for length in (16, 32):
     check(f"`key` in Ready, length {length}, then vector 0D", True,
           run(None, N13, S40, S40, 128, cl=cl, per_exec=0), CT13)
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (DER1 item 6)", lambda: Ocb(bytes(16)), secret, 8),
-        ("length 0 into the key (DER1 item 6)", lambda: Ocb(bytes(16)), secret, 0),
-        ("12-byte source into the 16-byte key (DER1 item 6)", lambda: Ocb(bytes(16)), secret[:12], 16),
-        ("into a locker in Hash_Absorb (DER1 items 1, 3)", at_absorb, secret, 16),
-        ("into a locker in Success (DER1 items 1, 3)", at_end, secret, 16),
-        ("into the key of a KeyType 1 locker (DER4, DER1 item 3)", lambda: Ocb(K128, skid=7), secret, 16)]:
+        ("length 8 into the 16-byte key, no zero-fill (DER1 item 5)", lambda: Ocb(bytes(16)), secret, 8),
+        ("length 0 into the key (DER1 item 5)", lambda: Ocb(bytes(16)), secret, 0),
+        ("12-byte source into the 16-byte key (DER1 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
+        ("into a locker in Hash_Absorb (DER1 items 1-2)", at_absorb, secret, 16),
+        ("into a locker in Success (DER1 items 1-2)", at_end, secret, 16),
+        ("into the key of a KeyType 1 locker (DER4, DER1 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n) and cl.key is None)
 for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
     cl = Ocb(K128)
     cl.setst(SET_AUX, 'B', 96)
     derive(N13 + bytes(4), cl, n)
-    check(f"`nonce` in Set_Aux_Value, length {n} (DER8 zero-fill)", True,
+    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (DER8 zero-fill)", True,
           run(None, None, S40, S40, 128, cl=cl), run(K128, nv, S40, S40, 128))
-src, dst = at_crypt(), Ocb(bytes(16))
-check("OCB as a kl.derive source (no source endpoint) -> only the source Invalid",
-      inval(derive, src, dst, 16) and (src.state, dst.state) == (INVALID, READY))
-info("the `nonce` endpoint is N with dest_length = ceil(N_len/8) bytes, written as the "
-     "_Set_Aux_Value_ kl.exec would be (DER8).")
+cl, src = Ocb(K128), bytes(0xA5 ^ i for i in range(16))
+cl.setst(SET_AUX, 'B', 61)
+derive(src, cl, 16)
+check("`N` in Set_Aux_Value, N_len = 61, length 16: ceil(61/8) = 8 bytes, pad bits of byte 7 ignored", True,
+      run(None, None, S40, S40, 128, cl=cl), run(K128, src[:7] + bytes([src[7] & 0xF8]), S40, S40, 128, n_len=61))
+for where, src in (("Encrypt", at_crypt()), ("Enc_Tag_Finalize", at_last(finish=True)[0])):
+    dst = Ocb(bytes(16))
+    check(f"OCB in {where} as a kl.derive source (no source endpoint; an AEAD tag is none, DER6) -> only the "
+          "source Invalid", inval(derive, src, dst, 16) and (src.state, dst.state, dst.key) == (INVALID, READY, bytes(16)))
 
 section("nonces of any bit length 6..120 (REF on bit strings)")
 Am, Pm = bytes(range(24)), bytes(range(40))

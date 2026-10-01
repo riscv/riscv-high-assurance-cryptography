@@ -8,7 +8,7 @@ from common import (b2v, v2b, sl, cat, bxor, aes_encrypt, update_mask, double_oc
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_HASH_OUTPUT as OUTPUT, KL_STATE_SUCCESS as SUCCESS,
                     KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, spec_note, raises, done)
+                    section, check, control, info, raises, done)
 
 B = 128
 JUNK = b2v(bytes([0x5A, 0xC3]) * 32)
@@ -36,7 +36,7 @@ class Invalid(Exception): pass
 SKS = {}
 
 def layout(kbits):
-    return [('key', kbits), ('hash', B), ('last_blk_len', 32), ('block_base', 32)]
+    return [('key', kbits), ('hash', B), ('last_blk_len', 32)]
 
 def pack(vals, lay):
     """Rows from bit 0 upwards, zero-padded to a multiple of 128 bits."""
@@ -59,10 +59,10 @@ class Cmac:
         s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False), **nc)
         if skid is not None:
             SKS[skid] = key
-        s.hash = s.last_blk_len = s.block_base = 0
+        s.hash = s.last_blk_len = 0
     def _invalid(s, why=None):
         s.state, s.key, s.skid = INVALID, None, None   # SGR10
-        s.hash = s.last_blk_len = s.block_base = 0
+        s.hash = s.last_blk_len = 0
         if why:
             raise Invalid(why)
     def enc(s, v):
@@ -71,20 +71,20 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L)
         return L, K1, s.nc['dbl'](K1)
-    # (immed, Form) -> States it is allowed from; VERIFY Form A is the KLIOBUF substitution
-    SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST), (OUTPUT, 'A'): (OUTPUT,),
+    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MGR11); VERIFY Form A: KLIOBUF substitution
+    SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
              (VERIFY, 'C'): (OUTPUT,), (VERIFY, 'A'): (OUTPUT,)}
     def setst(s, immed, form='A', aux=0):
         if s.state in ERROR_STATES:               # SGR16
             return
         if immed == READY:                        # SGR8
-            s.state, s.hash, s.last_blk_len, s.block_base = READY, 0, 0, 0
+            s.state, s.hash, s.last_blk_len = READY, 0, 0
             return
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MGR1, SGR6
         if immed == LAST:
-            if s.block_base or aux > B or aux % 8:
-                s._invalid('block_base or Xs')
+            if aux > B or aux % 8:
+                s._invalid('Xs')
             s.last_blk_len = aux
         s.state = immed if immed != VERIFY else SUCCESS if sl(aux, B - 1, 0) == s.hash else FAILURE
     def exec(s, form, INPUT=0, klen=B):
@@ -118,29 +118,32 @@ class Cmac:
         return layout(64 if s.skid is not None else 8 * len(s.key))
     def export(s, lay=None):
         return pack(dict(key=s.skid if s.skid is not None else b2v(s.key), hash=s.hash,
-                         last_blk_len=s.last_blk_len, block_base=s.block_base), lay or s.lay())
+                         last_blk_len=s.last_blk_len), lay or s.lay())
     def imported(s, c1, lay=None):
         """A fresh locker with this locker's MDH, loaded from Content1."""
         f = unpack(c1, lay or s.lay())
         new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, **s.nc)
         new.state, new.hash = s.state, f.get('hash', 0)
-        new.last_blk_len, new.block_base = f['last_blk_len'], f['block_base']
+        new.last_blk_len = f['last_blk_len']
         return new
 
 def derive(src, dst, length):
-    """kl.derive; src is a Cmac locker or the bytes of another listed source endpoint.
-    Endpoints: output in Hash_Output (source); `key` in Ready, input in Hash_Absorb (destination)."""
+    """kl.derive; src is a Cmac locker or the bytes of a DER5/DER7 source.
+    Endpoints: output in Hash_Output (DER6 source); `key` in Ready, input in Hash_Absorb (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(c.state in ERROR_STATES for c in lockers):
         return                                    # SGR19
-    bad = [c for c, ok in ((src, (OUTPUT,)), (dst, (READY, ABSORB))) if c in lockers and c.state not in ok]
-    for c in bad:                                 # DER1 items 1, 3: only the offending lockers
-        c._invalid('DER1 items 1, 3' if c is bad[-1] else None)
+    bad = [c for c, ok in ((src, src.state == OUTPUT) if isinstance(src, Cmac) else (src, True),
+                           (dst, dst.state == ABSORB or (dst.state == READY and dst.skid is None))) if not ok]
+    for c in bad:                                 # DER1 items 1-2 (DER4): only the offending lockers
+        c._invalid('DER1 items 1-2' if c is bad[-1] else None)
+    # DER1 item 3 holds: DER5/DER7 sources, and DER6 (a MAC tag into a key is key derivation, unrestricted)
+    avail = B // 8 if isinstance(src, Cmac) else len(src)
+    if dst.state == READY and (length < len(dst.key) or avail < len(dst.key)):
+        dst._invalid('DER1 item 5')
     data = v2b(src.exec('C', klen=8 * length), length) if isinstance(src, Cmac) else src
     if dst.state == ABSORB:                       # consumed as kl.exec would be (DER8)
         return dst.exec('B', b2v(data[:length]), 8 * length)
-    if dst.skid is not None or length < len(dst.key) or len(data) < len(dst.key):
-        dst._invalid('DER4 (DER1 item 3), DER1 item 6')
     dst.key = data[:len(dst.key)]
 
 def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, dummy=0, cl=None,
@@ -233,21 +236,13 @@ for Xs, bad in [(x, True) for x in (136, 129, 4, 12, 127)] + [(x, False) for x i
     cl = at_absorb()
     check(f"Xs = {Xs} {'-> Invalid' if bad else 'admissible'}", True,
           (raises(cl.setst, LAST, 'B', Xs, exc=Invalid), cl.state), (bad, INVALID if bad else LAST))
-cl = at_absorb()
-f = unpack(cl.export(), layout(128))
-f['block_base'] = 8
-cl = cl.imported(pack(f, layout(128)))
-check("block_base != 0 -> Invalid", raises(cl.setst, LAST, 'B', 64, exc=Invalid))
-spec_note("<<KLEE-CMAC-mode>> `block_base` can never become non-zero: _Hash_Absorb_ takes whole "
-          "blocks (MGR2) and a kl.derive is consumed as kl.exec would be (DER8); only an imported "
-          "CC reaches the check.")
 
 section("Serialized Content")
 info("<<KLEE-CMAC-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
 fits = True
-for vals in ((MASK128, B, 0), (0, 0, B - 8), (1, 8, 0)):
+for vals in ((MASK128, B), (0, 0), (1, B - 8)):
     cl = Cmac(K128)
-    cl.hash, cl.last_blk_len, cl.block_base = vals
+    cl.hash, cl.last_blk_len = vals
     fits &= vars(cl.imported(cl.export())) == vars(cl)
 check("every admissible value fits its row", fits)
 check("export/import after every instruction, 64-bit SKID key: ex4", True,
@@ -277,12 +272,11 @@ INVALID_CASES = [
     ("second tag kl.exec, in Success (SGR5)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (SGR6)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (SGR6)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
+    ("MGR11: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
 for name, mk, act in INVALID_CASES:
     cl = mk()
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
-info("<<KLEE-truncation-vs-length>> states KLLEN >= last_blk_len without a consequence; "
-     "the harness applies MGR2 (Invalid).")
 cl = Cmac(K128)
 raises(cl.exec, 'B', exc=Invalid)
 check("Error State: Content cleared (SGR10); kl.exec no operation, OUTPUT 0 (SGR16)", True,
@@ -299,25 +293,21 @@ for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
     cl = mk()
     cl.setst(READY)
     check(f"kl.setst #ready from {name}, then ex4 (SGR8)", True, tag(None, MSG[:40], cl=cl), W4)
-info("no kl.setst Form is named for _Ready_ -> _Hash_Absorb_; Form A is used, as in "
-     "<<KLEE-pseudocode-CMAC>>.")
-spec_note("\"Definition of a Machine in KLEE\" names \"Form C kl.setst\" as the alternative Form; "
-          "<<KLEE-usage-input-output>> substitutes Form A for Form C, which the harness applies.")
 
 section("kl.derive")
 secret = K128 + bytes(range(0xF0, 0x100))
 for length in (16, 32):
     cl = Cmac(bytes(16))
     derive(secret, cl, length)
-    check(f"`key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
+    check(f"shared secret (DER5) into `key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
 new16 = lambda: Cmac(bytes(16))
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (DER1 item 6)", new16, secret, 8),
-        ("length 0 into the key (DER1 item 6)", new16, secret, 0),
-        ("12-byte source into the 16-byte key (DER1 item 6)", new16, K128[:12], 16),
-        ("into a locker in Hash_Absorb_Last_Block (DER1 items 1, 3)", last_set, secret, 16),
-        ("into a locker in Success (DER1 items 1, 3)", done_ok, secret, 16),
-        ("into the key of a KeyType 1 locker (DER4, DER1 item 3)", lambda: Cmac(K128, skid=7), secret, 16),
+        ("length 8 into the 16-byte key, no zero-fill (DER1 item 5)", new16, secret, 8),
+        ("length 0 into the key (DER1 item 5)", new16, secret, 0),
+        ("12-byte source into the 16-byte key (DER1 item 5)", new16, K128[:12], 16),
+        ("into a locker in Hash_Absorb_Last_Block (DER1 items 1-2)", last_set, secret, 16),
+        ("into a locker in Success (DER1 items 1-2)", done_ok, secret, 16),
+        ("into the key of a KeyType 1 locker (DER4, DER1 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
         ("24 bytes into Hash_Absorb: short block (DER8, MGR2)", at_absorb, MSG[:24], 24)]:
     cl = mk()
     check(f"{name} -> Invalid", raises(derive, src, cl, n, exc=Invalid) and cl.key is None)
@@ -334,13 +324,15 @@ check("CMAC tag (Hash_Output) into another CMAC's Hash_Absorb: REF; source in Su
       (v2b(dst.exec('C'), 16), src.state), (ref_cmac(K256, VEC[1][3] + MSG[:8])[0], SUCCESS))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
 derive(src, dst, 16)
-check("CMAC tag into another CMAC's `key`: REF", True, tag(None, MSG[:40], cl=dst),
-      ref_cmac(VEC[1][3], MSG[:40])[0])
+check("CMAC tag into another CMAC's `key` in Ready (DER6 key derivation, unrestricted), then MSG[:40]: REF",
+      True, (src.state, dst.state, dst.key, tag(None, MSG[:40], cl=dst)),
+      (SUCCESS, READY, VEC[1][3], ref_cmac(VEC[1][3], MSG[:40])[0]))
+src, dst = run(K128, MSG[:16]), Cmac(bytes(32))
+check("16-byte CMAC tag into a 32-byte `key` (DER1 item 5) -> only the destination Invalid",
+      raises(derive, src, dst, 32, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = at_absorb(), Cmac(bytes(16))
 check("CMAC in Hash_Absorb as a source (no source endpoint) -> only the source Invalid",
       raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, READY))
-info("CMAC is read as one of the MACs of the <<KLEE-defined-derivation-endpoints>> row for "
-     "<<KLEE-hash-functions-MACs-XOFs>> (kl.exec input/output endpoints), which does not name it.")
 
 section("negative controls")
 control("K2 for a full final block", all(tag(K, M, k2full=True) != W for _, K, M, W in VEC

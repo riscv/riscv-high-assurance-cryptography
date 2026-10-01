@@ -102,7 +102,7 @@ class Gcm:
         if s.state in ERROR_STATES:
             return 0, 0                                  # SGR11
         kb = 64 if s.key_type else s.k
-        slot = (cat((s.cumul_len, 48), (s.block_base, 16), (s.input_base, 16), (s.len, 16))
+        slot = (cat((s.cumul_len, 48), (s.block_base, 16), (0, 16), (s.len, 16))   # ii.b padding, ii.e J0_padding
                 if s.state == SAV else s.J0)
         return (cat((s.last_blk_len, 16), (s.start_ctr, 32), (s.tag, 128), (slot, 128),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 304))
@@ -113,8 +113,7 @@ class Gcm:
         kb = s._load_key(v, k, key_type)
         slot = sl(v, kb + 127, kb)
         if state == SAV:
-            s.len, s.input_base, s.block_base, s.cumul_len = (
-                sl(slot, 15, 0), sl(slot, 31, 16), sl(slot, 47, 32), sl(slot, 95, 48))
+            s.len, s.block_base, s.cumul_len = sl(slot, 15, 0), sl(slot, 47, 32), sl(slot, 95, 48)
         else:
             s.J0 = slot
         s.tag, s.start_ctr, s.last_blk_len = (
@@ -199,8 +198,16 @@ class Gcm:
             return 0                                     # SGR16
         if {SAV: 'B', HA: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C'}.get(s.state) != form:
             return s._invalid()                          # SGR2, SGR5, MGR1
+        if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
+                KLLEN < s.last_blk_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
+            return s._invalid()                          # MGR2, <<KLEE-truncation-vs-length>>: length first
         if start is not None:
             s.klstart = start
+            if 8 * start >= KLLEN:
+                s.klstart = 0                            # empty window: only klstart = 0 (<<KLEE-CSR-klstart>>)
+                return 0
+            if start % 16 or start and s.state in (ELB, DLB, ETF):
+                return s._invalid()                      # not an interruption point
         if s.state == SAV:
             return s._exec_vli(INPUT, KLLEN, start is not None, stop)
         if s.state in (ELB, DLB):
@@ -209,8 +216,6 @@ class Gcm:
             s.state = SUCC
             return s.tag & ((1 << KLLEN) - 1)
         first = s.klstart // 16 if start is not None else 0
-        if KLLEN % 128 or s.klstart % 16 and start is not None:
-            return s._invalid()                          # MGR2; not an interruption point
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
@@ -238,8 +243,6 @@ class Gcm:
         lbl = s.last_blk_len
         if lbl == 0:
             return 0
-        if KLLEN < lbl:
-            return s._invalid()                          # <<KLEE-truncation-vs-length>>
         ctr = s._next_ctr()
         if ctr is None:
             return s._invalid()
@@ -253,8 +256,8 @@ class Gcm:
     def _exec_vli(s, INPUT, KLLEN, resuming, stop):
         """process_VLI(len, tag, b, tag, b, input_base, block_base, 0, cumul_len, ..., xor_accumulate, b)."""
         if KLLEN % 128 and s.cumul_len + KLLEN < s.len:
-            return s._invalid()                          # MGR2: granularity b
-        if s.cumul_len >= s.len or resuming and s.klstart % 16:
+            return s._invalid()                          # MGR2: granularity b (kl.derive)
+        if s.cumul_len >= s.len:
             return s._invalid()
         s.input_base, it = 8 * s.klstart if resuming else 0, 0
         while s.input_base < KLLEN:
@@ -279,13 +282,16 @@ class Gcm:
         return 0
 
     def derive(s, src, length):
-        """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready, the IV in Set_Aux_Value."""
-        if s.state in ERROR_STATES:
+        """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready (DER5/DER7 source), the IV
+        (`kl.exec` input) in Set_Aux_Value."""
+        if s.state in ERROR_STATES or isinstance(src, Gcm) and src.state in ERROR_STATES:
             return                                       # SGR19
+        if isinstance(src, Gcm):                         # DER1 item 1: no source endpoint (the tag is none, DER6)
+            return src._invalid()
         if s.state == SAV:                               # DER8: consumed as a Form B kl.exec would be
             return s._exec_vli(b2v(src[:length]), 8 * length, False, None) if length else None
         if s.key_type == 1 or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # DER4 (DER1 item 3); DER1 items 2-3, 6
+            return s._invalid()                          # DER4 (DER1 item 2); DER1 items 2, 5
         s.key = src[:s.k // 8]
         if not s.stale:
             s.auth_key = s._enc(0)                       # MGR4
@@ -612,7 +618,6 @@ c2 = kl_encrypt(None, None, A, P, cl=cl)[:2]
 check('SGR6/SGR8: Success -> Ready allowed, tag cleared', back and c1 == (RC, RT))
 check('the next message continues the counter under the same tag mask',
       c2 == ref_gcm(K, IV, A, P, J0B, inc32(J0B, -(-len(P) // 16) + 1)))
-info('Set IV: Ready does not re-initialise J0, so a message after Ready continues the keystream')
 states = []
 for c0 in (2**32 - 2, 2**32 - 1):
     cl = at('setiv')
@@ -628,8 +633,8 @@ B16 = b2v(P[:16])
 for name, where, ops, *kw in [
         ('process_VLI: kl.setst to Set_Aux_Value in it', 'sav', [('setst', SAV, 'B', 480)]),
         ('MGR2: short IV transfer that is not the last', 'sav', [('exec', 'B', 0, 96)]),
-        ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),
         ('MGR1: Form A kl.exec in Set_Aux_Value', 'sav', [('exec', 'A', 0, 128)]),
+        ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 384, 8)]),
         ('KLLEN (96) < last_blk_len (104)', 'enc', [('setst', ELB, 'B', 104), ('exec', 'A', 0, 96)]),
         ('SGR2: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
@@ -653,6 +658,12 @@ for name, where, ops, *kw in [
     cl = at(where, **(kw[0] if kw else {}))
     outs = [getattr(cl, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', cl.state == INV and not any(outs))
+cl = at('enc')
+snap = dict(vars(cl))
+check('klstart >= KLLEN/8 in Encrypt (16 of 128, 64 of 384): empty window, only klstart = 0',
+      [(cl.exec('A', B16, kl, ks), vars(cl) == snap) for kl, ks in ((128, 16), (384, 64))] == [(0, True)] * 2)
+check('KLLEN = 120, klstart = 15 in Encrypt: invalid length first, Invalid', (cl.exec('A', B16, 120, 15), cl.state)
+      == (0, INV))
 cl = at('success')
 cl.setst(READY)
 check('SGR6/SGR8: Success -> Ready; the same locker reproduces tc5',
@@ -700,11 +711,9 @@ check('export in Encrypt, import (auth_key recomputed): tc4 completes',
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:32]), 256)
 v, n = cl.export()
-check("Set_Aux_Value overlay in J0's slot: len, input_base, block_base, cumul_len; hash in tag",
-      (sl(v, 143, 128), sl(v, 159, 144), sl(v, 175, 160), sl(v, 223, 176), sl(v, 383, 256), n)
-      == (480, 256, 0, 256, cl.tag, 512))
-info("Set_Aux_Value overlay: 96 bits in J0's 128-bit slot, the other 32 taken as J0_padding "
-     "(<<KLEE-length-rule>>)")
+check("Set_Aux_Value overlay in J0's slot: len, padding, block_base, cumul_len, J0_padding; hash in tag",
+      (sl(v, 143, 128), sl(v, 159, 144), sl(v, 175, 160), sl(v, 223, 176), sl(v, 255, 224), sl(v, 383, 256), n)
+      == (480, 0, 0, 256, 0, cl.tag, 512))
 res = {}
 for ctl in (False, True):
     for mid in (16, 32, 48):
@@ -743,24 +752,26 @@ for iv, n, want in ((IV60B, 60, TC6), (IV60B, 32, TC6), (IV, 12, (RC, RT))):
           finish(cl, A, P)[:2] == want)
 cl = iv_by_derive(IV60B, 0)
 check('kl.derive of 0 bytes into Set_Aux_Value changes nothing (DER8)', (cl.state, cl.cumul_len) == (SAV, 0))
-check('kl.derive of 20 bytes into a 480-bit IV (granularity b, DER1 item 5) -> Invalid',
+check('kl.derive of 20 bytes into a 480-bit IV (granularity b, DER1 item 4) -> Invalid',
       iv_by_derive(IV60B, 20).state == INV)
-info('the GCM IV/J0 endpoint is read as the IV fed to process_VLI, J0 being computed by finalize()')
 cl = Gcm.provisioned(bytes(16), J0=b2v(J0B))
 cl.derive(SRC, 16)
-check('Set IV: kl.derive into `key` in Ready; message matches REF',
+check('GCM with Set IV: kl.derive into `key` in Ready; message matches REF',
       kl_encrypt(None, None, A, P, cl=cl)[:2] == ref_gcm(SRC[:16], IV, A, P))
-spec_note('<<KLEE-defined-derivation-endpoints>> omits GCM with Set IV; its `key` in Ready taken as a '
-          'destination (DER5/DER7)')
-for name, cl, n in (('in Hash_Absorb (DER1 items 1, 3)', at('ha'), 16),
-                    ('in Success (DER1 items 1, 3)', at('success'), 16),
-                    ('into a key configured by a SKID (DER4, DER1 item 3)', Gcm.provisioned(skid=SKID), 16),
-                    ('of 8 bytes into a 128-bit key (DER1 item 6)', at('ready'), 8),
-                    ('of 16 bytes into a 256-bit key (DER1 item 6)', Gcm.provisioned(bytes(32)), 16),
-                    ('of 0 bytes into a key (DER1 item 6)', at('ready'), 0)):
+for name, cl, n in (('in Hash_Absorb (DER1 items 1-2)', at('ha'), 16),
+                    ('in Success (DER1 items 1-2)', at('success'), 16),
+                    ('into a key configured by a SKID (DER4, DER1 item 2)', Gcm.provisioned(skid=SKID), 16),
+                    ('of 8 bytes into a 128-bit key (DER1 item 5)', at('ready'), 8),
+                    ('of 16 bytes into a 256-bit key (DER1 item 5)', Gcm.provisioned(bytes(32)), 16),
+                    ('of 0 bytes into a key (DER1 item 5)', at('ready'), 0)):
     cl.derive(SRC, n)
     check(f'kl.derive {name} -> Invalid, no key written', (cl.state, cl.key) == (INV, b''))
-info("kl.derive of length 0 into `key` taken to fail DER1 item 6, not to be DER8's no-op")
+src, dst = at('enc'), at('ready')
+crypt(src, P, 1)
+src.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))
+dst.derive(src, 16)
+check('the tag in Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, DER6; DER1 item 1) -> only '
+      'the source Invalid', True, (src.state, dst.state, dst.key), (INV, READY, K))
 
 section('negative controls')
 sw, le = [], []
@@ -775,8 +786,4 @@ control(f'little-endian counter ({len(le)} vectors)', len(le) >= 4 and all(le))
 control('IV accumulated in J0, export/import in Set_Aux_Value', not any(res[True, m] for m in (16, 32, 48)))
 control('auth_key not re-derived after kl.derive into `key`', not any(stale))
 
-spec_note('GCM Serialized Content: the Set_Aux_Value overlay rows are numbered iii.a-iii.d, but J0 is Pos. ii')
-spec_note("GCM overlay: the input_base row's second sentence ('Each time this value reaches b') describes block_base")
-spec_note('GCM Enc_Tag_Finalize: the Form C INPUT is typeset with a doubled @ across the line break')
-spec_note('GCM Internal State: "Procedure _KLEE-process-VLI_" names the anchor, not process_VLI')
 done()

@@ -4,7 +4,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bin_, bxor, MASK128, montmul, aes_encrypt, selftest,
-                    ERROR_STATES, section, check, control, info, spec_note, done,
+                    ERROR_STATES, section, check, control, info, done,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
                     KL_STATE_ENC_LAST_BLOCK as ELB, KL_STATE_DEC_LAST_BLOCK as DLB,
@@ -135,7 +135,7 @@ class Siv:
         if s.state in ERROR_STATES:
             return 0, 0                                  # SGR11
         kb = 64 if s.key_type else s.k
-        return (cat((s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr, 32), (s.nonce, 96),
+        return (cat((s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr % 2**32, 32), (s.nonce, 96),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 400))
 
     @classmethod
@@ -183,8 +183,15 @@ class Siv:
             return 0                                     # SGR16
         if {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st) != form:
             return s._invalid()                          # SGR2, SGR5, MGR1
+        if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
+            return s._invalid()                          # MGR2: length first (<<KLEE-CSR-klstart>>)
         if start is not None:
             s.klstart = start
+            if 8 * start >= KLLEN:
+                s.klstart = 0                            # empty window: only klstart = 0 (<<KLEE-CSR-klstart>>)
+                return 0
+            if start % 16 or start and s.state in (ELB, DLB, ETF, DTF):
+                return s._invalid()                      # not an interruption point
         if st in (ETF, DTF):
             s._absorb(INPUT & MASK128)                   # MGR5
             s.probe = s.tmp
@@ -198,15 +205,13 @@ class Siv:
             lbl = s.last_blk_len
             if lbl == 0:
                 return 0
-            if KLLEN < lbl or s.ctr == M32:
+            if s.ctr == 2**32:                           # one block more than P_MAX
                 return s._invalid()
             o = (INPUT ^ s._ks()) & ((1 << lbl) - 1)
             if st == DLB:
                 s._absorb(o)
             s.ctr, s.last_blk_len = s.ctr + 1, 0
             return o
-        if KLLEN % 128 or start is not None and s.klstart % 16:
-            return s._invalid()                          # MGR2; not an interruption point
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
@@ -216,7 +221,7 @@ class Siv:
             if st == HA:
                 s._absorb(blk)
                 continue
-            if s.ctr == M32:
+            if s.ctr == 2**32:
                 s._invalid()
                 return out                               # IRR6
             o = blk ^ s._ks()
@@ -228,10 +233,12 @@ class Siv:
 
     def derive(s, src, length):
         """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready."""
-        if s.state in ERROR_STATES:
+        if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
             return                                       # SGR19
+        if isinstance(src, Siv):                         # DER1 item 1: no source endpoint (the tag is none, DER6)
+            return src._invalid()
         if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # DER4 (DER1 item 3); DER1 items 2-3, 6
+            return s._invalid()                          # DER4 (DER1 item 2); DER1 items 2, 5
         s.key = src[:s.k // 8]
         s._derive()                                      # MGR4
 
@@ -530,23 +537,30 @@ info('the encryption path ends in Encrypt or Enc_Last_Block, never in Success; s
 section('counter, last blocks, interruption')
 for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
     m = at(where)
-    m.ctr = M32 - 1
+    m.ctr = M32
     m.exec('A', 0, 128)
-    st1 = m.state
+    st1, c1 = m.state, m.ctr
     m.exec('A', 0, 128)
     m2 = at(where)
     m2.ctr = M32
     m2.setst(last, 'B', 8)
     m2.exec('A', 0x5A, 8)
-    check(f'{where}: ctr = 2^32-2 processed, ctr = 2^32-1 -> Invalid, also in the last block',
-          (st1, m.state, m2.state) == (path, INV, INV))
+    m3 = at(where)
+    m3.ctr = 2**32
+    m3.setst(last, 'B', 8)
+    m3.exec('A', 0x5A, 8)
+    check(f'{where}: block 2^32 (ctr = 2^32-1) processed, also as the last block; ctr = 2^32 -> Invalid',
+          (st1, c1, m.state, m2.state, m3.state) == (path, 2**32, INV, last, INV))
 m, ref = at('enc'), at('enc')
-m.ctr = ref.ctr = M32 - 2
+m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('IRR6/SGR16/SGR10: ctr = 2^32-1 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('IRR6/SGR16/SGR10: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
-spec_note('the counter rule (ctr = 2^32-1 -> Invalid) admits 2^32 - 1 blocks per message, '
-          "one fewer than RFC 8452's P_MAX = 2^36 bytes")
+m = at('dec')
+m.ctr = 2**32
+v, _ = m.export()
+check('ctr = 2^32 is serialized as bin(ctr mod 2^32, 32): imported with ctr = 0',
+      Siv.imported(DEC, v, m.k).ctr == 0)
 bad = (0, 4, 12, 121, 128)
 for where, last in (('enc', ELB), ('dec', DLB)):
     nm = 'Enc' if last == ELB else 'Dec'
@@ -602,7 +616,12 @@ for name, where, ops, *kw in [
     m = at(where, **(kw[0] if kw else {}))
     outs = [getattr(m, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
-info('a kl.setst naming Encrypt in Encrypt is taken as invalid: the Machine rule overrides SGR4')
+m = at('enc')
+snap = dict(vars(m))
+check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',
+      [(m.exec('A', 1, kl, ks), vars(m) == snap) for kl, ks in ((256, 32), (256, 48))] == [(0, True)] * 2)
+check('KLLEN = 120, klstart = 15 in Encrypt: invalid length first, Invalid', (m.exec('A', 1, 120, 15), m.state)
+      == (0, INV))
 check('MachinePolicy decrypt-only: decryption works', kl_decrypt(k5, n5, a5, w5, m=Siv.provisioned(k5, policy=2))[0] == SUCC)
 m = at('enc')
 m.setst(EXPIRED)
@@ -669,22 +688,22 @@ for i, n in ((6, 16), (6, 32), (11, 32)):
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (DER1 items 1, 3)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is no endpoint, DER1 items 1, 3)', at('sav'), 12),
-                   ('in Success (DER1 items 1, 3)', at('success'), 16),
-                   ('into a key configured by a SKID (DER4, DER1 item 3)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (DER1 item 6)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (DER1 item 6)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (DER1 item 6)', Siv.provisioned(K), 0)):
+for name, m, n in (('in Hash_Absorb (DER1 items 1-2)', at('ha'), 16),
+                   ('in Set_Aux_Value (nonce is no endpoint, DER1 items 1-2)', at('sav'), 12),
+                   ('in Success (DER1 items 1-2)', at('success'), 16),
+                   ('into a key configured by a SKID (DER4, DER1 item 2)', Siv.provisioned(skid=SKID), 16),
+                   ('of 8 bytes into a 128-bit key (DER1 item 5)', Siv.provisioned(K), 8),
+                   ('of 16 bytes into a 256-bit key (DER1 item 5)', Siv.provisioned(K256), 16),
+                   ('of 0 bytes into a key (DER1 item 5)', Siv.provisioned(K), 0)):
     m.derive(src, n)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
-info("kl.derive of length 0 into `key` taken to fail DER1 item 6, not to be DER8's no-op")
+s_, m = at('etf'), Siv.provisioned(K)
+m.derive(s_, 16)
+check('Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, DER6; DER1 item 1) -> only the source '
+      'Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
 section('negative controls, spec notes')
 k2, n2, a2, p2, w2 = vec(1)
 control('big-endian (GCM-style) length block', kl_encrypt(k2, n2, a2, p2, lb=len_block(a2, p2, be=True))[0] != w2)
 control('enc_key/auth_key not re-derived on import (MGR4)', not any(resumed(w, True) for w in WHERE))
-spec_note('GCM-SIV Dec_Tag_Finalize: "If `tmp` = SIV match" should read "If `tmp` = SIV"')
-spec_note('GCM-SIV Enc_/Dec_Last_Block: INPUT xor enc_blk(...) mixes a KLLEN-bit and a 128-bit operand; '
-          'INPUT[last_blk_len-1:0] xor enc_blk(...)[last_blk_len-1:0] would not')
 done()

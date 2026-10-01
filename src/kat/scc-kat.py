@@ -11,7 +11,7 @@ from common import (b2v, v2b, sl, cat, bin_, montmul, mulx_polyval, aes_encrypt,
                     KL_STATE_EXPIRED as EXPIRED, ERROR_STATES, KL_CFG_PROVISIONING,
                     KL_CFG_EXPORTING as EXPORTING, KL_CFG_IMPORTING as IMPORTING, KL_CFG_PPI_EXPORTING,
                     KL_CFG_PPI_IMPORTING,
-                    section, check, control, info, spec_note, raises, done)
+                    section, check, control, info, raises, done)
 
 M32 = (1 << 32) - 1
 
@@ -195,9 +195,10 @@ class Unit:
         custom = fld(M, 'Machine') >= 3072 or fld(M, 'SCProtection') >= 6 or fld(M, 'Version') == 3
         invalid = (any(sl(M, hi, lo) for hi, lo in RESERVED if hi < 64) or fld(M, 'AuxDataLen') == 1
                    or base == 'pi' and (fld(M, 'ADSDropped') or fld(M, 'AuxDataLen'))
-                   or fld(M, 'MachinePolicy') == 0 or fld(M, 'KeyType') >= 2 or fld(M, 'AuxInfo')
+                   or fld(M, 'MachinePolicy') == 0 or fld(M, 'KeyType') >= 2
                    or fld(M, 'Version') not in self.VERSIONS or st in (54, 55)
-                   or is_valid(st) and st not in ECB_STATES or at_import and st in (0, 61, 62, 63))
+                   or is_valid(st) and (st not in ECB_STATES or fld(M, 'StateExtension'))   # ECB uses none
+                   or at_import and st in (0, 61, 62, 63))
         if not low_only:
             invalid = invalid or (any(sl(M, hi, lo) for hi, lo in RESERVED if hi >= 64) or sl(loc, 5, 4) == 3
                                   or any(self._substitute(j) is None for j in localities_of(M))
@@ -555,10 +556,12 @@ check("kl.size Form B equals Form C on valid Metadata",
       all(unit.kl_size(m, 'B') == unit.kl_size(m) != 0 for m in (
       base, make_mdh(), put(base, 'ADSDropped', 1), make_mdh(KeyType=1), put(base, 'State', IMPORTING))))
 lean = new_unit(LST_NO_SLOC, zklexpire=False)
-check("kl.size Form B ignores reserved bits, Locality, AuxInfo and ExpirationDate in [127:64]; Form C reports 0",
+check("kl.size Form B ignores reserved bits, Locality and ExpirationDate in [127:64]; Form C reports 0",
       all(lean.kl_size(m) == 0 and lean.kl_size(m, 'B') == lean.kl_size(m & (1 << 64) - 1) != 0 for m in (
           base | 1 << 116, base | 2 << 78, put(base, 'Locality', 0b110000), make_mdh((10,)),
-          make_mdh(ExpirationDate=5), put(base, 'AuxInfo', 1))))
+          make_mdh(ExpirationDate=5))))
+eq("kl.size: MachineUse and AuxInfo are not checked (<<KLEE-MachineUse>>)",
+   {unit.kl_size(put(put(base, 'MachineUse', 0x2EEF), 'AuxInfo', 7), f) for f in 'BC'}, {unit.kl_size(base)})
 eq("kl.size Form B reports 0 for an unsupported Version",
    unit.kl_size(put(base, 'Version', 1), 'B'), 0)
 
@@ -591,16 +594,18 @@ for bit in (b for b in range(128) if b != 47):
     value = sl(b2v(img[:16]), hi, lo)
     if name in ('Machine', 'MachineExtension') or name == 'SCProtection' and value not in Unit.SC_LEVELS:
         want = ('kl_exc_unsupported', (0, (), None))
-    elif (name in ('Reserved', 'AuxInfo', 'Version') or name == 'MachinePolicy' and value == 0
+    elif (name in ('Reserved', 'Version') or name == 'MachinePolicy' and value == 0
           or name == 'KeyType' and value >= 2 or name == 'AuxDataLen' and value == 1
-          or name == 'Locality' and sl(value, 5, 4) == 3 or name == 'State' and value not in ECB_STATES):
+          or name == 'Locality' and sl(value, 5, 4) == 3 or name == 'State' and value not in ECB_STATES
+          or name == 'StateExtension'):
         want = (INV_MD, (put(0, 'State', INVALID), (), None))
     else:
         want = (AUTH_F, (err_mdh(b2v(img[:16]), AUTH), (), None))
     if (res, cl.snapshot()) != want:
         wrong.append((bit, name, res))
 eq("each single-bit MDH change (bit 47 aside) yields unsupported, invalid Metadata or Authentication "
-   "Failed, as its field requires", wrong, [])
+   "Failed, as its field requires (StateExtension: invalid; MachineUse, AuxInfo: Authentication Failed)",
+   wrong, [])
 img = tampered(scc, 47)
 eq("MDH bit 47 with AuxDataLen = 0 is ignored: working ADSDropped 0, the same locker imported",
    (fld(open_and_load(unit, img).mdh, 'ADSDropped'), imp(unit, img),
@@ -613,6 +618,11 @@ eq("an SCC exported in Encrypt imports in Encrypt; Decrypt substituted fails aut
    (import_image(unit, Mem(scc_enc))[0].state, imp(unit, v2b(put(m_enc, 'State', DECRYPT), 16) + scc_enc[16:]),
     imp(unit, v2b(put(m_enc, 'State', KL_STATE_SUCCESS), 16) + scc_enc[16:])),
    (ENCRYPT, AUTH_F, INV_MD))
+eq("a StateExtension ECB does not support is invalid Metadata at open, in Ready and in Encrypt, and kl.size "
+   "(Forms B and C) reports 0",
+   {(imp(unit, v2b(put(m, 'State', st), 16) + scc_enc[16:]), unit.kl_size(put(m, 'State', st), f))
+    for m in (put(m_enc, 'StateExtension', x) for x in (1, 8, 0xF)) for st in (READY, ENCRYPT) for f in 'BC'},
+   {(INV_MD, 0)})
 exp_unit = new_unit(zklexpire=False)
 eq("without Zklexpire a non-zero ExpirationDate is invalid Metadata",
    {imp(exp_unit, tampered(scc, b)) for b in (96, 105, 115)}, {INV_MD})
@@ -862,17 +872,4 @@ eq("SCC with an ADS", {'MDH': scc_i[:16].hex(), 'SIV': scc_i[16:32].hex(), 'IMPQ
                        'SIV2': scc_i[48:64].hex(), 'C2[0]': scc_i[off2:off2 + 16].hex()}, REGRESSION_ADS)
 eq("Error-State image after a failed import", img_e.hex(), REGRESSION_ERROR_IMAGE)
 
-spec_note("<<KLEE-SCC-AEAD>> lists three differences from AES-GCM-SIV; the clearing of AD_auth[0][47] "
-          "for sep = 0 is a fourth, stated only in the SIV NOTE.")
-spec_note("S, image_size, image_end, max_admissible and ContentOffset are defined in <<KLEE-instruction-mv>>, "
-          "but <<KLEE-Memory-Alignment>>, klstart, <<KLEE-SCC-GCM-SIV-enc>>, the PCCC format, kl.mv (vector) "
-          "and kl.store (its xref and 'ContentOffset, computed as for kl.load') cite <<KLEE-instruction-load>>.")
-spec_note("<<KLEE-Metadata>> makes bits unused by a Machine zero, but <<KLEE-Metadata-validity>> checks only "
-          "AuxInfo; a non-zero StateExtension on AES256_ECB is modelled as valid (then fails authentication).")
-spec_note("MachinePolicy = 0 is both 'unsupported' (combination not implemented) and 'invalid' "
-          "(<<KLEE-Metadata-validity>>); modelled as invalid.")
-spec_note("Expired without Zklexpire is invalid 'in a PI, SCC, or PCCC', but the Error-State image is none of "
-          "them and its short import maps only 54/55; modelled as Invalid.")
-spec_note("<<KLEE-import-and-DIEL>> item 4 says an oversized ADS is 'skipped or only partially loaded', but "
-          "<<KLEE-SCC-import>> step 5 sets ADSDropped, so no Content2 byte is loaded.")
 done()

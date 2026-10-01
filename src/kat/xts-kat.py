@@ -8,7 +8,7 @@ from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, 
                     KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, spec_note, done)
+                    section, check, control, info, done)
 
 B, ONES64 = 128, (1 << 64) - 1
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLEE-Machine-field>>
@@ -127,12 +127,12 @@ class XexLocker:
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
             return out & ~window, 0               # SGR16
-        if lo % B:                                # input klstart not an interruption point
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # SGR2, MGR1; MGR2 (<<KLEE-CSR-klstart>>: length first)
             s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
-            return out, klstart                   # empty window
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # SGR2, MGR1, MGR2
+            return out, 0                         # empty window: only klstart = 0
+        if lo % B:                                # not an interruption point
             s.invalidate()
             return out & ~window, 0
         f, key1 = aes_encrypt if s.state == ENCRYPT else aes_decrypt, v2b(s.key1, s.k // 8)
@@ -158,14 +158,14 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # DER1 items 2-3, 6; DER4
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # DER1 items 2, 5; DER4
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX defines no source endpoint (DER1 items 1, 3)."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (DER1 items 1-2)."""
     if isinstance(src, XexLocker):
         return src.invalidate() or False
     return dst.derive_dest(src, length)
@@ -364,10 +364,6 @@ for name, k1, k2, i, p, c in CTS:
     check(f"{name}: encrypt, decrypt (kl.clone + discarded kl.exec, fed zeros or ones)", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, c, False, discard=MASK128)),
           (c, p, p))
-spec_note("<<KLEE-XTS-from-XEX>>: \"the `j`-th `kl.exec` ... operates at mask index `j`\" holds only "
-          "for single-block kl.exec (MGR3); read as the `j`-th block.")
-spec_note("<<KLEE-XTS-from-XEX>>: \"the first `s` bytes of the string\" should be the first `s`/8 "
-          "bytes, `s` being in bits; the harness uses the latter.")
 
 section("kl.clone")
 k1, k2, i = CTS[0][1:4]
@@ -419,12 +415,14 @@ check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MGR5)", True
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'A/iobuf', v2b(bin_(i, B), 16))
 check("Form A kl.setst and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
-for kl_, ks, want, what in ((136, 0, (INVALID, 0), "KLLEN = 136 (MGR2): Invalid, window zeroed"),
-                            (256, 8, (INVALID, b2v(data[:8])), "klstart = 8, no interruption point: Invalid"),
-                            (256, 32, (ENCRYPT, b2v(data)), "klstart = KLLEN/8: empty window, no operation")):
+for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MGR2): Invalid, window zeroed"),
+                            (256, 8, (INVALID, b2v(data[:8]), 0), "klstart = 8, no interruption point: Invalid"),
+                            (256, 32, (ENCRYPT, b2v(data), 0), "klstart = KLLEN/8: empty window, only klstart = 0"),
+                            (256, 48, (ENCRYPT, b2v(data), 0), "klstart = 48 > KLLEN/8: empty window"),
+                            (136, 17, (INVALID, b2v(data[:17]), 0), "KLLEN = 136, klstart = 17: invalid length first")):
     cl = tw(new_xex(k1, k2))
-    res = cl.exec(b2v(data[:kl_ // 8]), kl_, ks)[0]
-    check(what, True, (cl.state, res), want)
+    res = cl.exec(b2v(data[:kl_ // 8]), kl_, ks)
+    check(what, True, (cl.state, *res), want)
 _, k41, k42, i4, p4, c4 = FULL[4]                 # vector 4: 32 blocks
 for q in (1, 7, 31):
     cl = tw(new_xex(k41, k42), t=i4)
@@ -476,11 +474,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1 item 6)", None, src, 16),
-                        ("length 0 (DER1 item 6)", None, src, 0),
-                        ("24-byte source (DER1 item 6)", None, src[:24], 32),
-                        ("destination in Encrypt (DER1 items 2-3)", tw, src, 32),
-                        ("KeyType 1 destination (DER4, DER1 item 3)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (DER1 item 5)", None, src, 16),
+                        ("length 0 (DER1 item 5)", None, src, 0),
+                        ("24-byte source (DER1 item 5)", None, src[:24], 32),
+                        ("destination in Encrypt (DER1 item 2)", tw, src, 32),
+                        ("KeyType 1 destination (DER4, DER1 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))

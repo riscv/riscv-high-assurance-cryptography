@@ -120,8 +120,8 @@ class EcbLocker:
 
     def import_scc(self, mdh, c1):
         self.mdh, self.key, self.skid = mdh, None, None
-        if self.state not in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT):
-            return self.invalidate()
+        if self.state not in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or fld(mdh, 'StateExtension'):
+            return self.invalidate()          # <<KLEE-Metadata-validity>>: ECB uses no StateExtension
         self._install(sl(b2v(c1), self.key_width - 1, 0), True)
 
     def setst(self, immed):
@@ -140,10 +140,13 @@ class EcbLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if lo >= KLLEN and lo % B == 0:
-            return out, klstart               # <<KLEE-CSR-klstart>>: empty window
-        if lo % B or self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # klstart, SGR2, MGR2
+        if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
+            self.invalidate()                 # SGR2; MGR2 (<<KLEE-CSR-klstart>>: length first)
+            return out & ~window, 0
+        if lo >= KLLEN:
+            return out, 0                     # empty window: only klstart = 0
+        if lo % B:
+            self.invalidate()                 # not an interruption point
             return out & ~window, 0
         enc, dec, k = self.cipher
         f, key = enc if self.state == KL_STATE_ENCRYPT else dec, v2b(self.key, k // 8)
@@ -157,20 +160,20 @@ class EcbLocker:
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>);
         `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (DER5) or 'drbg' (DER7)."""
-        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: DER1 items 1, 3
+        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: DER1 items 1-2
             return src.invalidate()
         kind, data, src_mdh = src
         n = self.cipher[2] // 8
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # DER1 items 2-3, DER4 (item 3), item 6
+            return self.invalidate()          # DER1 item 2 (DER4), item 5
         if kind == 'shared':                  # restricted: DER2; DRBG is unrestricted: DER3
             m = narrow(self.mdh, src_mdh)
             if m is None:
                 return self.invalidate()
             self.mdh = m
-        self.key = b2v(data[:n])              # exactly dest_length bytes (DER1 item 6, DER8)
+        self.key = b2v(data[:n])              # exactly dest_length bytes (DER1 item 5, DER8)
         return True
 
 def blocks_value(data):                       # cat() lists the most significant block first
@@ -311,10 +314,12 @@ for q in (1, 2, 3):                           # <<KLEE-IRR-block-iterated-instru
     eq(f"halt after {q} block(s), resume at klstart = {16 * q}", (ks, v2b(res, 64).hex(), ks2),
        (16 * q, c, 0))
 cl = new_cl(ci, k, state=ENC)
+eq("klstart >= KLLEN/8 (64, 80 of 512): empty window, only klstart = 0; 17 of 136: invalid length first, Invalid",
+   (cl.exec(v, 512, klstart=64), cl.exec(v, 512, klstart=80), cl.state, cl.exec(b2v(pt[:17]), 136, klstart=17),
+    cl.state), ((v, 0), (v, 0), ENC, (b2v(pt[:17]), 0), INV))
+cl = new_cl(ci, k, state=ENC)
 eq("input klstart = 8 (no interruption point): Invalid, window from klstart zeroed",
    (cl.exec(v, 512, klstart=8)[0], cl.state), (b2v(pt[:8]), INV))
-cl = new_cl(ci, k, state=ENC)
-eq("klstart = KLLEN/8: empty window, no operation", (cl.exec(v, 512, klstart=64)[0], cl.state), (v, ENC))
 
 section("PI and Serialized Content (sizes by hand, AuxDataLen = 0)")
 SKID = 0x0123456789abcdef
@@ -349,6 +354,8 @@ cl.provision(build_pi('AES-128', b2v(H(SP38A_F1[0][2])), policy=0))
 eq("PI with MachinePolicy = 0 -> Invalid", cl.state, INV)
 cl.import_scc(put(put(m192, 'KeyType', 0), 'State', KL_STATE_OPERATE), H(SP38A_F1[1][2]))
 eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, None))
+cl.import_scc(put(put(put(m192, 'KeyType', 0), 'State', ENC), 'StateExtension', 1), H(SP38A_F1[1][2]))
+eq("SCC in Encrypt with a StateExtension ECB does not use -> Invalid", (cl.state, cl.key), (INV, None))
 
 section("kl.derive into `key` (destination in Ready; DER1-DER5, DER7, DER8)")
 _, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
@@ -373,11 +380,11 @@ eq("shared secret (restricted, DER2): UsagePolicy, Locality, ExpirationDate narr
    narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
 eq("DRBG output (unrestricted, DER3): destination MDH not narrowed",
    narrowed(derived('drbg')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
-for label, kw in (("length 16 < 24 (DER1 item 6, no zero-fill)", dict(length=16)),
-                  ("length 0 (DER1 item 6 fails before DER8)", dict(length=0)),
-                  ("source field of 16 bytes < 24 (DER1 item 6)", dict(data=secret[:16])),
-                  ("destination in Encrypt (DER1 items 2-3)", dict(state=ENC)),
-                  ("KeyType 1 destination (DER4, DER1 item 3)", dict(keytype=1)),
+for label, kw in (("length 16 < 24 (DER1 item 5, no zero-fill)", dict(length=16)),
+                  ("length 0 (DER1 item 5 fails before DER8)", dict(length=0)),
+                  ("source field of 16 bytes < 24 (DER1 item 5)", dict(data=secret[:16])),
+                  ("destination in Encrypt (DER1 item 2)", dict(state=ENC)),
+                  ("KeyType 1 destination (DER4, DER1 item 2)", dict(keytype=1)),
                   ("source SCProtection above destination (DER2)", dict(src=put(SRC, 'SCProtection', 2))),
                   ("differing Boot Session entries (DER2)", dict(src=put(SRC, 'Locality', 0b0_10_00_00)))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
@@ -386,8 +393,6 @@ dst_cl.derive_key(src_cl, 24)
 eq("ECB locker as source (no source endpoint) -> only the source Invalid", (src_cl.state, dst_cl.state),
    (INV, KL_STATE_READY))
 info("kl.derive into `key`: byte t of the transfer is byte t of the key.")
-info("DER1 items 1, 3: a locker defining no endpoint for its role, or a KeyType-1 key destination (DER4), "
-     "alone goes to Invalid; 'Any other pair' (both Invalid) is read as two defined endpoints not admitted.")
 
 section("<<KLEE-pseudocode-ECB-encryption>> [informative]: its Error State test")
 eq("'48 <= X1 <= 55' passes every Valid State and catches every Error State",
