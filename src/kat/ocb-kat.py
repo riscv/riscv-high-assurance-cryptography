@@ -184,7 +184,7 @@ class Ocb:
         if st == LAST:
             s.offset ^= s.Lstar
             s.hash_A ^= s.enc(ocb_pad(INPUT, n) ^ s.offset)
-            s.last_blk_len = 0                         # a second kl.exec is not allowed (MGR12)
+            s.last_blk_len = 0                         # a second kl.exec is not allowed (MGR9)
             return 0
         out, tmp = 0, s.offset                         # Form D when n = 0
         if n:
@@ -226,7 +226,7 @@ class Ocb:
         new.state, new.tag_len = s.state, 32 * (f['tag_len'] + 2)
         new._ladder()
         if isinstance(new, OcbNonce) and not 6 <= new.N_len <= 120:
-            new._invalid()                             # MGR17: N_len is checked on import too
+            new._invalid()                             # MGR13: N_len is checked on import too
         return new
 
 def derive(src, dst, length):

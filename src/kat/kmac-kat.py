@@ -185,7 +185,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None):
-    """PI; with a SKID (_KeyType_ = 1, MGR9) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
+    """PI; with a SKID (_KeyType_ = 1, MGR15) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
     cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
     mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
     return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
@@ -263,7 +263,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # MGR9: SKID resolved after import
+            self._resolve(key)                                           # MGR15: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -608,9 +608,9 @@ for label, c, act in (
          lambda c: c.setst(ABSORB)),
         ('Form B kl.exec in _Hash_Output_ (MGR1)', squeezing(128, DATA4, 256),
          lambda c: c.exec(inp=DATA4)),
-        ('KMAC128 same-State kl.setst to _Hash_Output_ (MGR11)', squeezing(128, DATA4, 256),
+        ('KMAC128 same-State kl.setst to _Hash_Output_ (MGR18)', squeezing(128, DATA4, 256),
          lambda c: c.setst(OUTPUT, 'B', 256)),
-        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (MGR11)', squeezing(256, DATA4, 0, True),
+        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (MGR18)', squeezing(256, DATA4, 0, True),
          lambda c: c.setst(OUTPUT))):
     act(c)
     check(f'{label} -> _Invalid_', True, c.st, INVALID)

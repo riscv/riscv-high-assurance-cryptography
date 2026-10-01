@@ -190,7 +190,7 @@ class Sha3:
         elif form == 'A' and (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT):
             s.enter_output()
         else:
-            s.reset()  # MGR1, SGR5, MGR11, <<KLEE-process-VLI>> same-State rule
+            s.reset()  # MGR1, SGR5, MGR18, <<KLEE-process-VLI>> same-State rule
         return s.st
 
     def fail(s, out, status='invalid'):
@@ -537,7 +537,7 @@ for label, name, prep, act in [
         ('Form A kl.exec in _Hash_Absorb_ (MGR1)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
         ('Form B kl.exec in _Hash_Output_ (MGR1)', 'SHAKE256', out_, lambda c: c.exec('B', inp=MSG_ABC)),
-        ('same-State kl.setst to _Hash_Output_ (MGR11)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
+        ('same-State kl.setst to _Hash_Output_ (MGR18)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('_Hash_Output_ -> _Hash_Absorb_', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
         ('_Success_ -> _Hash_Absorb_ (SGR5, SGR6)', 'SHA3-224', out_,
          lambda c: (squeeze(c, 28), c.setst(KL_STATE_HASH_ABSORB)))]:

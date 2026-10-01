@@ -1282,7 +1282,7 @@ def t_mdh():
 def t_states():
     section('States  <<KLEE-State-field>>, <<KLEE-SC-sealing-status>>')
     parts = [{0}, set(VALID), set(ERROR_STATES), set(PARTIAL)]
-    eq('Unconfigured, Valid, Error, Partial partition State; Complete = Valid + Error; Configuration in Partial',
+    eq('Unconfigured, Valid, Error, Configuration (56-63) partition State; Complete = Valid + Error; 56-60 used, 61-63 reserved',
        (sum(map(len, parts)), set().union(*parts), set(COMPLETE), set(CONFIG) <= parts[3]),
        (64, set(range(64)), parts[1] | parts[2], True))
     eq('Ready, Success, Failure, Error States 48-53, Configuration base types',
@@ -2085,7 +2085,7 @@ def t_sgr():
                   trap_of(w.swap, 1, 0), trap_of(w.rename, 0, 1), trap_of(w.setst, 0, EXPIRED)],
                  [trap_of(p.setst, 0, 0), trap_of(p.clearall)] + [None] * 5]
     w = opened()
-    eq('SGR20: size, avail, getmd*, getst, swap, rename, Error/clear kl.setst, kl.clearall in Partial States',
+    eq('SGR20: size, avail, getmd*, getst, swap, rename, Error/clear kl.setst, kl.clearall in Configuration States',
        (rows, w.setst(0, INVALID), w.klmanagedlocker), ([[None] * 7] * 10, 'error state', 32))
     w, z = rc().csrs(klstart=32, klmanagedlocker=0), fresh(zklind=True)
     r = [w.setst(0, 0, aux=5, form='B'), w.klstart, w.klmanagedlocker, w.clf_free() == w.clf_total]
@@ -2512,11 +2512,17 @@ def t_rename_swap():
     r += [u.swap(1, 6), (u.getmd(1), u.getmd(6)) == (b, a), u.lockers[1].alloc, trap_of(u.clone, 1, 9), u.rename(1, 9),
           u.getst(1)]
     t = rc(0, rc(1, fresh(clf_total=2 * cap), SCProtection=1), SCProtection=1)
-    eq('rename moves, frees the destination; Ks = Kd no-op; swap exchanges; no capacity checks',
+    eq('rename moves, frees the destination; Ks = Kd no-op; swap exchanges; no capacity checks; '
+       'an Unconfigured source (K9): rename clears Kd, where clone traps',
        r + [t.clf_free(), t.swap(0, 1), t.rename(2, 0), trap_of(t.clone, 3, 1)],
        ['renamed', True, 0, 0, 'renamed', True, cap, 'noop', 'noop', True, 'swapped', True, cap, 'illegal/2',
         'renamed', 0,
         0, 'swapped', 'renamed', 'out_of_memory'])
+    e = rc()
+    e.setst(0, EXPIRED)
+    eq('SGR12: a locker in an Error State becomes _Unconfigured_ as the destination of kl.rename from an '
+       'Unconfigured source (acts as kl.clear Kd)', [e.getst(0), e.rename(0, 9), e.getst(0), e.getst(9)],
+       [EXPIRED, 'renamed', 0, 0])
     u = fresh()
     src, ml, mem, _ = interrupted_import(u, 2, 48)
     regs, w = (u.siv, u.impqual, u.siv2), rc(4)

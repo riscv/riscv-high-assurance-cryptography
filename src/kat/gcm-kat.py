@@ -72,7 +72,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (MGR9)
+    def _load_key(s, v, k, key_type):                    # key or SKID (MGR15)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -144,7 +144,7 @@ class Gcm:
         if s.set_iv:
             t[READY, HA] = 'A'
         else:
-            t.update({(READY, SAV): 'B', (SAV, HA): 'A'})
+            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (SGR4, MGR7)
         return t.get((st, immed))
 
     def setst(s, immed, form='A', aux=0):
@@ -178,7 +178,7 @@ class Gcm:
         elif immed == HV:
             immed = SUCC if aux & MASK128 == s.tag else FAIL
         elif st == SAV:
-            return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MGR14)
+            return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MGR10)
         s.state = immed
 
     def _finalize(s):
@@ -241,7 +241,7 @@ class Gcm:
 
     def _exec_last(s, INPUT, KLLEN):
         lbl = s.last_blk_len
-        if lbl == 0:                                   # MGR12: the final block was already processed
+        if lbl == 0:                                   # MGR9: the final block was already processed
             return s._invalid()
         ctr = s._next_ctr()
         if ctr is None:
@@ -452,7 +452,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (MGR9): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (MGR15): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 for n in (1, 8, 15, 21):
     check(f'{n}-byte plaintext matches REF', kl_encrypt(K, IV, A, P[:n])[:2] == ref_gcm(K, IV, A, P[:n]))
 
@@ -483,10 +483,16 @@ cl.setst(SAV, 'B', 160)
 cl.exec('B', b2v(bytes(range(16))), 128)
 c2 = copy.copy(cl)
 cl.setst(HA)
-check('kl.setst Hash_Absorb part-way: _Invalid_, since Hash_Absorb needs a complete IV (MGR14)', cl.state == INV)
+check('kl.setst Hash_Absorb part-way: _Invalid_, since Hash_Absorb needs a complete IV (MGR10)', cl.state == INV)
 c2.setst(READY)
 check('kl.setst Ready part-way: the partial IV discarded, no finalize(): tag, J0, len, block_base, cumul_len zero (MGR7)',
       (c2.state, c2.tag, c2.J0, c2.len, c2.block_base, c2.cumul_len) == (READY, 0, 0, 0, 0, 0))
+c3 = Gcm.provisioned(K)
+c3.setst(SAV, 'B', 160)
+c3.exec('B', b2v(bytes(range(16))), 128)
+c3.setst(SAV, 'B', 8 * len(IV))                         # same-State kl.setst: restarts the IV (SGR4, MGR7)
+feed(c3, IV)
+check('same-State kl.setst into Set_Aux_Value part-way restarts the IV with the new len: tc4', finish(c3, A, P)[:2] == (RC, RT))
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:16]), 128)
 cl.setst(READY)
@@ -549,11 +555,11 @@ for where, last in (('enc', ELB), ('dec', DLB)):
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
 first = cl.exec('A', b2v(P[:12]), 96)
-check('second kl.exec in Enc_Last_Block (MGR12): _Invalid_, output zeroed',
+check('second kl.exec in Enc_Last_Block (MGR9): _Invalid_, output zeroed',
       first and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 cl = at('dec')
 cl.setst(DLB, 'B', 96)
-check('second kl.exec in Dec_Last_Block (MGR12): _Invalid_, output zeroed',
+check('second kl.exec in Dec_Last_Block (MGR9): _Invalid_, output zeroed',
       cl.exec('A', b2v(P[:12]), 96) and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
@@ -637,7 +643,7 @@ check('Set IV: counter rule applies (ctr wrapping to start_ctr - 1 = 0 -> Invali
 section('general rules')
 B16 = b2v(P[:16])
 for name, where, ops, *kw in [
-        ('process_VLI: kl.setst to Set_Aux_Value in it', 'sav', [('setst', SAV, 'B', 480)]),
+        ('MGR1: same-State kl.setst into Set_Aux_Value in Form A (Form B required)', 'sav', [('setst', SAV, 'A', 0)]),
         ('MGR2: short IV transfer that is not the last', 'sav', [('exec', 'B', 0, 96)]),
         ('MGR1: Form A kl.exec in Set_Aux_Value', 'sav', [('exec', 'A', 0, 128)]),
         ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),

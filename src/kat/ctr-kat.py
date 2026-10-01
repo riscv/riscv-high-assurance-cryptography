@@ -59,8 +59,9 @@ class KsLocker:
         self.mdh = put(self.mdh, 'State', INV)
         self.key = self.skid = self.IV = self.ctr = None
 
-    def enter_ready(self):                    # "Upon entering State Ready, the ctr and IV fields are set to 0"
-        self.mdh, self.IV, self.ctr = put(self.mdh, 'State', RDY), 0, 0
+    def enter_ready(self):                    # Ready: IV = 0; ctr = 0 in CTR mode, 1 in XCTR mode (as in HCTR2)
+        self.mdh, self.IV = put(self.mdh, 'State', RDY), 0
+        self.ctr = 1 if self.mdh and KIND.get(fld(self.mdh, 'Machine'), (None, None))[1] == 'XCTR' else 0
 
     def _install(self, field, importing):
         if self.keytype == 0:
@@ -278,14 +279,14 @@ eq("Form B in Ready (State stays 1), then Form C: ctr survives the transition, F
 cl.setst(AUX, 'B', C0)
 eq("Form B in Operate leaves State 2", cl.state, OP)
 
-section("XCTR [reference-implementation anchor: google/hctr2; Form B sets HCTR2's initial ctr = 1]")
+section("XCTR [reference-implementation anchor: google/hctr2; Ready sets HCTR2's initial ctr = 1]")
 for name, xk, xiv, xp, xc in HCTR2_XCTR:
-    eq(f"{name} reference / locker encrypt / locker decrypt",
-       (ref_xctr(H(xk), H(xiv), 1, H(xp)).hex(), kl_xctr(H(xk), b2v(H(xiv)), H(xp), 1).hex(),
-        kl_xctr(H(xk), b2v(H(xiv)), H(xc), 1).hex()), (xc, xc, xp))
+    eq(f"{name} reference / locker encrypt / locker decrypt, ctr = 1 as left by Ready",
+       (ref_xctr(H(xk), H(xiv), 1, H(xp)).hex(), kl_xctr(H(xk), b2v(H(xiv)), H(xp)).hex(),
+        kl_xctr(H(xk), b2v(H(xiv)), H(xc)).hex()), (xc, xc, xp))
 iv, m64 = bytes(range(16)), bytes(range(64))
-eq("XCTR with ctr = 0 as left by Ready matches the reference", kl_xctr(key, b2v(iv), m64),
-   ref_xctr(key, iv, 0, m64))
+eq("XCTR with ctr = 1 as left by Ready matches the reference", kl_xctr(key, b2v(iv), m64),
+   ref_xctr(key, iv, 1, m64))
 eq("XCTR streams with ctr = 0 and ctr = 1 differ",
    kl_xctr(key, b2v(iv), m64, 0) != kl_xctr(key, b2v(iv), m64, 1), True)
 eq("XCTR Form B: bin(Xs, 128) zero-extends the 64-bit Xs",
@@ -369,7 +370,7 @@ cl = KsLocker(SKS)
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
 eq("all-ones SKID: random key, KeyType 0, Content1 32 B",
    (cl.state, cl.keytype, len(cl.content1())), (RDY, 0, 32))
-info("_Operate_ is enabled by either MachinePolicy bit (MGR14), and one must be set: the gate always passes.")
+info("_Operate_ is enabled by either MachinePolicy bit (MGR10), and one must be set: the gate always passes.")
 
 section("kl.derive (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>)")
 drbg = key + H("5a" * 16)

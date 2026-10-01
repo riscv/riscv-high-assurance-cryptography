@@ -203,7 +203,7 @@ class Siv:
             return s.SIV & ((1 << KLLEN) - 1)            # MGR6
         if st in (ELB, DLB):
             lbl = s.last_blk_len
-            if lbl == 0:                                 # MGR12: the final block was already processed
+            if lbl == 0:                                 # MGR9: the final block was already processed
                 return s._invalid()
             if s.ctr == 2**32:                           # one block more than P_MAX
                 return s._invalid()
@@ -571,7 +571,7 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     m.setst(last, 'B', 64)
     first = m.exec('A', b2v(bytes(range(1, 17))), 128)
     check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MGR6); '
-          'a second kl.exec -> _Invalid_, output zeroed (MGR12)',
+          'a second kl.exec -> _Invalid_, output zeroed (MGR9)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
@@ -642,7 +642,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (MGR9): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (MGR15): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)

@@ -203,7 +203,7 @@ class Hmac:
         s.reset(KL_STATE_UNCONFIGURED)
 
     def reset(s, st=KL_STATE_INVALID):  # SGR10 for an Error State
-        s.st, s.K0 = st, 0
+        s.st, s.K0, s.has_key = st, 0, False
         s.h.ready()
         s.h.state = 0
 
@@ -215,16 +215,21 @@ class Hmac:
             s.reset()  # invalid Metadata, <<KLEE-MVR-open>>
             return s
         s.h.ready()
-        s.st, s.K0 = KL_STATE_READY, b2v(K0) if variant == 'KIP' else 0
+        s.st, s.K0, s.has_key = KL_STATE_READY, b2v(K0) if variant == 'KIP' else 0, False
         return s
+
+    @property
+    def se(s):  # _StateExtension_: bit 0 HasKey (NIK)
+        return int(s.has_key)
 
     def export(s):
         return pack(*[(getattr(s.h, f) if f else 0, w) for f, w in s.h.fields]) + pack((s.K0, s.b))
 
     @classmethod
-    def load(cls, name, variant, st, c1):
+    def load(cls, name, variant, st, c1, se=0):
         s = cls(name)
         h, s.variant, s.st, pos = s.h, variant, st, 0
+        s.has_key = variant == 'NIK' and bool(se & 1)
         hl = len(pack((0, sum(w for _, w in h.fields))))
         for f, w in h.fields:
             if f:
@@ -239,10 +244,10 @@ class Hmac:
     def setst(s, immed, form='A'):
         h = s.h
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
-                   (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP',
+                   (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
                    (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # SGR4: restarts the load
-                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): h.cumul_len == s.b,  # K0 loaded
-                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR11)
+                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MGR10: K0 loaded
+                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR18)
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
             raise IllegalInstruction  # SGR7
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
@@ -260,7 +265,7 @@ class Hmac:
         elif form != 'A' or not allowed.get((s.st, immed)):  # Form A: max_len set by the Machine
             s.reset()
         elif immed == KL_STATE_SET_KEY:
-            s.st, s.K0, h.block_base, h.cumul_len = immed, 0, 0, 0
+            s.st, s.K0, s.has_key, h.block_base, h.cumul_len = immed, 0, False, 0, 0
         elif immed == KL_STATE_HASH_ABSORB:
             h.reinit()
             h.block = h.block_base = 0
@@ -285,6 +290,7 @@ class Hmac:
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
         if form == 'B' and s.st == KL_STATE_SET_KEY:
             r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
+            s.has_key = h.cumul_len == s.b  # MGR7: set when the load completes
         elif form == 'B' and s.st == KL_STATE_HASH_ABSORB:
             r = process_vli(s.max_len, h, h.attr, h.b, h, h.process_block, *io, xor=h.xor)
         elif form == 'C' and s.st == KL_STATE_HASH_OUTPUT:
@@ -474,7 +480,7 @@ for label, variant, ops in [
         ('kl.exec in _Ready_ (SGR2)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (MGR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (MGR11)', 'KIP', (A, B(data7), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (MGR18)', 'KIP', (A, B(data7), O, O)),
         ('kl.exec in _Success_ (SGR5), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
@@ -498,6 +504,16 @@ check('NIK K0 + 16 excess bytes: load ends at cumul_len = b, excess ignored (ste
 cl = fresh(variant='NIK', key=b'first key', ops=(A, B(b'ignored'), R))
 load_key(cl, K0_7, parts=5)
 check('NIK _Ready_ -> _Set_Key_ replaces K0 (entry zeroes it)', None, run(cl, A, B(data7), O, C(32))[1], TAG7)
+cl = fresh(variant='NIK', key=b'first key')
+check('NIK: HasKey (_StateExtension_ bit 0) set when the K0 load completes', cl.se == 1)
+t1 = run(cl, A, B(data7), O, C(32))[1]
+cl.setst(KL_STATE_READY)
+t2 = run(cl, A, B(data7), O, C(32))[1]
+check('NIK: K0 kept across _Ready_, _Ready_ -> _Hash_Absorb_ with HasKey: the same MAC twice', None, (t1 == t2, cl.st),
+      (True, KL_STATE_SUCCESS))
+cl = fresh(variant='NIK', key=b'first key', ops=(SK, B(K0_7[:32]), R))
+check('NIK: entering _Set_Key_ clears HasKey; a load left incomplete keeps it clear: _Ready_ -> _Hash_Absorb_ -> Invalid',
+      None, (cl.se, run(cl, A) or cl.st), (0, KL_STATE_INVALID))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
 check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MGR7)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
@@ -524,7 +540,7 @@ for name in ('SHA-256', 'SM3', 'SHA3-256'):
             ('KIP in _Hash_Output_ after 12 bytes', 'KIP', (A, B(data7[:100]), B(data7[100:]), O, C(12)), ())]:
         r = run(cl := fresh(name, variant, key7 if variant == 'KIP' else None), *before)
         head = r[1] if variant == 'KIP' and not after else b''
-        cl = Hmac.load(name, variant, cl.st, cl.export())
+        cl = Hmac.load(name, variant, cl.st, cl.export(), cl.se)
         got = head + run(cl, *after, C(32 - len(head)))[1]
         check(f'HMAC-{name} export/import round trip, {label}', got == tag and cl.st == KL_STATE_SUCCESS)
 
@@ -556,9 +572,10 @@ section('Negative controls')
 control('ipad and opad swapped', tag_of('SHA-256', *RFC4231[1], swap_pads=True) != TAGS['SHA-256', 1])
 control('NIK: cumul_len not zeroed on entering _Hash_Absorb_',
         tag_of('SHA-256', *RFC4231[1], 'NIK', keep_cumul=True) != TAGS['SHA-256', 1])
-c1 = (cl := fresh('SHA3-256', 'NIK', key7)).export()
-cl = Hmac.load('SHA3-256', 'NIK', cl.st, v2b(b2v(c1) & ~(M64 << 1616), len(c1)))
-control('HMAC-SHA3-256 Content1 without cumul_len: completed K0 load lost', run(cl, A, B(data7), O, C(32))[1]
-        != ref_hmac('SHA3-256', key7, data7))
+K0s3 = K0_of('SHA3-256', key7)
+c1 = (cl := fresh('SHA3-256', 'NIK', None, ops=(SK, B(K0s3[:40])))).export()
+cl = Hmac.load('SHA3-256', 'NIK', cl.st, v2b(b2v(c1) & ~(M64 << 1616), len(c1)), cl.se)
+control('HMAC-SHA3-256 Content1 without cumul_len: a partial K0 load cannot be resumed',
+        run(cl, B(K0s3[40:]), A, B(data7), O, C(32))[1] != ref_hmac('SHA3-256', key7, data7))
 info('b of HMAC-SHA-3 read as the rate of <<KLEE-SHA-3-parameters>>; KIP K0 as SKID (_KeyType_ = 1) not exercised')
 done()

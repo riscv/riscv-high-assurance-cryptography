@@ -76,7 +76,10 @@ class MLDSALocker:
         if (self.state in (SUCCESS, FAILURE) and st != READY                                  # SGR6
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # MGR1
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
-                or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey')) or st == SIGN_VERIFY and not pol & 2):
+                or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey'))
+                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey'))               # MGR10 entry conditions
+                or st == COMPUTE_PK and not self.flag('HasPrivKey')
+                or st == SIGN_OUT and self.state != SIGN_OUT):          # entered only from _Sign_Generate_
             return self.invalid()
         name = IN_F.get(self.state)
         if name and st != self.state and self.use < self.size(name):     # MGR7: a load left incomplete
@@ -190,7 +193,7 @@ class MLDSALocker:
         for f in ('privkey', 'pubkey', 'signature', 'mu', 'rnd'):
             setattr(new, f, getattr(self, f))
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
-            new.invalid()                          # MGR17: the privkey check on import
+            new.invalid()                          # MGR13: the privkey check on import
         return new
 
 class KeyDest:
@@ -450,7 +453,7 @@ def t_compute_pubkey_and_import():
     bad = bytearray(sk)
     bad[128] = 0xFF                                # s1 coefficients outside [-eta, eta]
     cc.privkey = bytes(bad)                        # as restored from an image that carries it
-    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MGR17)', cc.export_import().state == INVALID)
+    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MGR13)', cc.export_import().state == INVALID)
 
 def t_sign_verify():
     section('_Sign_Generate_ and _Sign_Verify_')
@@ -463,6 +466,11 @@ def t_sign_verify():
           and cc.state == SIGN_OUT and cc.rnd == bytes(32))
     check('_Sign_Generate_ leads to _Sign_Output_, which emits the signature, then _Success_ (MGR7)',
           b''.join(cc.exec_C(n) for n in (1024, 1024, 372)).hex() == det['sig'] and cc.state == SUCCESS)
+    def _to(cc, *sts):
+        for st in sts: cc.setst(st)
+        return cc
+    check('a kl.setst naming _Sign_Output_ from _Ready_ or _Sign_Input_: _Invalid_ (entered only from _Sign_Generate_)',
+          [_to(MLDSALocker(44), SIGN_OUT).state, _to(MLDSALocker(44), SIGN_IN, SIGN_OUT).state] == [INVALID, INVALID])
     rbg = RBG(h(hed['rnd']))
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=rbg)
     cc.setst(SIGN_GEN, 0)
