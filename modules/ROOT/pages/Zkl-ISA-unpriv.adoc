@@ -3893,7 +3893,7 @@ Under the fourth model, all harts in a well-defined subsystem of a SoC share a C
 In the second model, only M-mode may request that the secure hardware block configure its hart's CSK, using a handle or wrapped key. The clear key must not be exposed to any software, including M-mode.
 Addressing and key transport are platform-specific and outside the scope of this specification.
 
-The KLEE unit is immediately available under the third model; under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>). In the first and second models, this includes the configurable CSK, leaving the unit unavailable until the CSK is re-established.
+Under the third model, the KLEE unit is immediately available; under the other models, it becomes available only once a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>). Under the first and second models, this reset also clears the configurable CSK, so the unit remains unavailable until the CSK is re-established.
 
 NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set _Locality_ to include _ChipScrt_ or _DevScrt_.
 
@@ -3902,9 +3902,9 @@ Except for in M-mode and in the first model, CSK values must _never_ be readable
 
 [IMPORTANT]
 ====
-When a process migrates between harts, its SCCs should remain importable, requiring the destination hart to use the same CSK as the source. The OS and hypervisor should ensure that M-mode establishes this CSK on the destination hart. The mechanism for supervisor software to request this operation is platform-dependent and outside the scope of this specification.
-Under the fourth model, this requirement can be met only within the subsystem sharing the CSK, not across subsystems.
-Unless software handles the differences, it may migrate a process only between harts whose KLEE units have identical values for `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` and implement the same extensions and Machines.
+When a process migrates between harts, its SCCs should remain importable. Therefore, the destination hart must use the same CSK as the source hart. The OS or hypervisor should ensure that M-mode establishes this CSK on the destination hart; how supervisor software requests this operation is platform-specific and outside the scope of this specification.
+Under the fourth model, migration is possible only between harts in the same CSK-sharing subsystem.
+Unless software accommodates implementation differences, it may migrate a process only between harts whose KLEE units implement the same extensions and Machines and have identical values of `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen`.
 ====
 
 M-mode firmware must account for the configuration model used for the CSK. Persistence mechanisms for configurable CSKs are implementation-specific. Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for example, to preserve the CSK across suspension or host hibernation), or a cloud-based HSM—*requires* an authenticated public-key wrapping mechanism. Such a mechanism is outside the scope of this specification.
@@ -3965,12 +3965,11 @@ Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
 . All applicable `*llockerstatus` fields are set to _Dirty_; every `KLS` field that is not Off is set to _Dirty_.
 . The software-configurable Locality Secrets — _PhysBootScrt_, _VirtBootScrt_, _MLocality_, _HLocality_, and _SLocality_ (`mklphysbootscrt`, `hklvirtbootscrt`, `mkllocality`, `hkllocality`, `skllocality`, `vskllocality`) — are zeroized. Their CSRs subsequently read as zero.
 . The HW Binding Group entries cannot be zeroized and are therefore _masked_: until the next hart reset each such entry is _unconfigured_ for this hart (<<KLEE-Localities>>). A PI or SCC whose _Locality_ names a masked entry is invalid Metadata, and chain substitution does not substitute a masked entry.
-. The CSK is zeroized _and_ thus is essentially unconfigured. If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
+. The CSK is zeroized and thus unconfigured. If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
 
 [NOTE]
 ====
 Normal execution cannot resume after entry into unauthenticated Debug mode because the KLEE state has been destroyed.
-
 Debugging that preserves KLEE state therefore requires authenticated Debug mode. Recovery requires a hart reset, which restores access to the hardwired HW Binding values and, under the third CSK model, the hardwired CSK, followed by re-establishment of the CSK and Locality Secrets by the privileged software stack and re-provisioning of the contexts.
 
 Under the programmable CSK models, if M-mode re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
