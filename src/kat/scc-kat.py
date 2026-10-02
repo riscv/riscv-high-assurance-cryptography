@@ -242,12 +242,13 @@ class Unit:
             cl.mdh = put(0, 'State', INVALID)  # every other MDH field stays zero
             return
         assert base_type(st) != 'pi', 'PI-shaped images are not modelled'
-        self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0
         aux = fld(ml, 'AuxDataLen')           # step 5: working ADSDropped
         dropped = int(aux >= 2 and (fld(ml, 'ADSDropped') == 1 or aux > self.max_aux))
         cl.mdh = put(put(ml, 'ADSDropped', dropped), 'State', IMPORTING)
 
     def load(self, cl, mem, at=16):            # kl.load: step 6
+        if cl.state == UNCONF or cl.state in ERROR_STATES:
+            return                             # SGR24: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
             raise IllegalInstruction           # SGR21
         self._check_transfer(cl)
@@ -264,8 +265,9 @@ class Unit:
     def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLEE-SCC-export>>
         self._check_managed(cl)
         st = cl.state
-        if st == UNCONF:
-            raise IllegalInstruction
+        if st == UNCONF:                       # SGR24: common steps only
+            self.klmanagedlocker = 32
+            return
         if is_valid(st):
             AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]      # 1.a-1.c
             self.reg_SIV, cl.content1 = SCC_Encrypt(AD, 0, 0, cl.content1, self.CSK)
@@ -281,6 +283,8 @@ class Unit:
         self._set_managed(cl)
 
     def store(self, cl):                       # kl.store
+        if cl.state == UNCONF:
+            return b''                         # SGR24: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
             raise IllegalInstruction           # SGR22
         self._check_transfer(cl)
@@ -294,6 +298,9 @@ class Unit:
         """kl_cfg_management_end for base type scc: <<KLEE-SCC-import>> steps 7-15. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
+        if cl.state == UNCONF or cl.state in ERROR_STATES:   # SGR24: common steps only
+            self.klmanagedlocker = 32
+            return
         st = fld(ml, 'State')
         if cl.state not in (IMPORTING, EXPORTING) or not (is_complete(st) or st in (IMPORTING, EXPORTING)):
             raise IllegalInstruction
@@ -826,9 +833,10 @@ unit.mgmt_open_export(cl_fail)
 eq("kl.mgmt #kl_cfg_exporting on an Error-State locker leaves it unchanged", cl_fail.snapshot(), snap)
 far = new_unit(LST_NO_SLOC, ids=IDS_NEXT_REV, csk=CSK ^ 7, max_aux=0)
 cl_e, res = import_image(far, Mem(img_e))
-eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then illegal",
-   (res, cl_e.snapshot(), raises(far.mgmt_complete, cl_e, cl_e.mdh), raises(far.load, cl_e, Mem(img_e))),
-   (AUTH_F, snap, True, True))
+far.mgmt_complete(cl_e, cl_e.mdh)
+far.load(cl_e, Mem(img_e))
+eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (SGR24)",
+   (res, cl_e.snapshot()), (AUTH_F, snap))
 dirty = make_mdh(Machine=0xFFF, MachinePolicy=0, KeyType=3, AuxDataLen=5, ADSDropped=1, UsagePolicy=0b10101,
                  MachineExtension=2, SCProtection=7, StateExtension=0xF, AuxInfo=0x155, MachineUse=0x2EEF,
                  ExpirationDate=0xFFFFF, Version=2) | 0x1FF << 69

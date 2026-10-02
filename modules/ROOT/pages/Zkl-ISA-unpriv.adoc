@@ -271,14 +271,14 @@ A hart reset resets the KLEE state of the hart, and the KLEE implementation must
 The software stack should also clear all KLEE state at power-down, so that the implementation zeroizes all lockers.
 
 The KLEE unit holds three 128-bit _authentication registers_, with the authentication and identification data of the locker being managed: `SIV`, `IMPQUAL` and `SIV2`. `kl.load`, `kl.store` and `kl.mv` access them as the leading bytes of the image they transfer (<<KLEE-instruction-mv>>).
-They are zeroized by a KLEE unit reset, by `kl.clearall`, and by a `kl.mgmt` that opens an import; the `kl.mgmt` that opens an export of a locker in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
+They are zeroized by a KLEE unit reset and by `kl.clearall`; the `kl.mgmt` that opens an export of a locker in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`. A `kl.mgmt` that opens an import leaves them unchanged: the `kl.load` or `kl.mv` that follows writes them, and nothing reads their previous values.
 
 [NOTE]
 ====
 The 128 or 384 bits of `SIV`, `IMPQUAL` and `SIV2` are allocated per hart, not per locker, to reduce hardware cost.
 Code therefore cannot run concurrent non-clearing management operations: a second operation may overwrite the in-flight `SIV`, `IMPQUAL` and `SIV2` of the first.
 Within one process, such operations need coordination, such as lightweight threads with KLEE context-switching support, or a mutex.
-`kl.clear` and provisioning do not touch these registers and are not restricted; `kl.clearall` zeroizes them.
+`kl.clear` and provisioning do not touch these registers and `kl.clear` is not restricted; `kl.clearall` zeroizes them.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -782,7 +782,7 @@ A KLEE CSR with a maximum, given in its description below, has a uniform WARL po
 
 Context-switch code must save and restore the RW CSRs, by the same software convention as `vstart`:
 
-. `klstart` and `klmanagedlocker`, always.
+. `klstart` and `klmanagedlocker`, always; 32 replaces the saved `klmanagedlocker` in the one case that <<KLEE-state-save-and-restore-order>> gives.
 . With `Zklio`, `kliobuflen`; if its saved value is non-zero, also `kliobuftop` and the KLIOBUF contents up to `kliobuflen`.
 . `SIV`, `IMPQUAL` and `SIV2` need no separate save: when `klmanagedlocker` names a locker in State `kl_cfg_importing` or `kl_cfg_exporting`, the nested export of that locker (<<KLEE-state-save-and-restore-order>>) carries them in its image, and its nested import restores them.
 
@@ -919,6 +919,7 @@ It holds the number of the locker under management, or 32 if none. Values 33 and
 The internal values `SIV`, `SIV2` and `IMPQUAL` belong to the locker it names.
 
 `klmanagedlocker` becomes 32 when the locker it names is cleared (`kl.clear`, `kl.clearall`, or the zeroizing step of a `kl.mgmt` whose opening then fails), is overwritten as the destination of a `kl.clone` or `kl.rename` from another locker, or transitions to an Error State.
+A `kl.mgmt` that performs no operation on an _Unconfigured_ or Error-State locker also leaves it at 32 (Rule <<KLEE-SGR-cleared-under-management>>).
 When `kl.rename` or `kl.swap` moves the CC of the locker it names, `klmanagedlocker` takes the number of the locker that receives that CC (<<KLEE-instruction-clone>>).
 Otherwise, a KLEE exception raised during a management operation that does not transition the locker to an Error State leaves `klmanagedlocker` unchanged: the handler either resolves the condition or writes 32 itself.
 
@@ -995,7 +996,7 @@ NOTE: The uninterruptible vector-form instructions, which Rule <<KLEE-GR-vector-
 | `kl.output`                 | Only `klstart`  | Yes | No                   | Modifies `klstart`, but no locker.
 | `kl.clear`, `kl.clearall`   | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
 | `kl.clearads`               | Yes             | No  | Yes
-5+| ^*^ Usable only in the States admitted by Rule <<KLEE-SGR-zkl-load-mv-allowed>>, resp. Rule <<KLEE-SGR-zkl-store-mv-allowed>>.
+5+| ^*^ Usable only in the States admitted by Rule <<KLEE-SGR-zkl-load-mv-allowed>>, resp. Rule <<KLEE-SGR-zkl-store-mv-allowed>>; on an _Unconfigured_ or Error-State locker they perform no operation (Rule <<KLEE-SGR-cleared-under-management>>).
 |===
 
 [[KLEE-GR-opening-locker-when,GR5]]GR5:: _When a locker can be opened for import or export:_
@@ -1053,7 +1054,7 @@ Setting error handling aside, *provisioning* consists of the following three ste
 
 *Exporting* a locker as an SCC takes five steps:
 
-. `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>) exports the MDH out of the locker, from which software determines the size of the SCC and allocates resources.
+. `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>) exports the MDH out of the locker, and `kl.size` (<<KLEE-instruction-size>>) gives the size of the SCC, for which software allocates resources.
 . Software stores the MDH to memory.
 . `kl.mgmt` prepares the locker to produce an SCC, encrypting its contents and computing the authentication tag(s).
 . One or more `kl.mv` store the rest of the SCC, authentication data first, to memory.
@@ -1280,6 +1281,7 @@ The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of t
 
 The locker must be ready to accept information (being provisioned or imported) or to output its contents (being exported).
 If its _State_ is not one admitted by Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>, which exclude every Complete State and the _Unconfigured_ State, or if `klstart` is not a multiple of 16, an illegal-instruction exception is raised.
+Two cases differ: on an _Unconfigured_ locker, and on a locker in an Error State, every variant performs no operation and raises no exception, whatever the value of `klstart`; a variant that reads the locker (Form III or IV) writes zeros to its destination (Rule <<KLEE-SGR-cleared-under-management>>).
 For provisioning or import, the `kl.mgmt` that opened the locker (<<KLEE-instruction-mgmt>>) must already have loaded the MDH.
 
 Let `content_size` be the length in bytes of the serialized `Content` of the locker, that of a PI or of an SCC according to the base type of the image the locker holds (<<KLEE-length-rule>>).
@@ -1962,6 +1964,7 @@ As for `kl.mv`, the leading bytes of the image are the authentication fields `SI
 Transfers follow the constraints of `kl.mv` (<<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>), with `S`, `image_end` and _ContentOffset_ as defined there.
 `kl.load` transfers the offsets `[klstart, image_end-1]` of `S`: for each _j_ from `klstart` to `image_end` − 1, it loads the byte at memory address ``Xs1 + %offset + ``_j_ into byte _j_ of `S`.
 `klstart` tracks a prefix-complete number of bytes loaded; if `klstart` {ge} `image_end`, nothing is transferred.
+On an _Unconfigured_ locker, or one in an Error State, `kl.load` has an empty transfer window, and accesses no memory (Rule <<KLEE-SGR-cleared-under-management>>).
 
 With a system-specific format, the semantics of `kl.load` are implementation-defined and must be documented, and must satisfy Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-IRR-which-resumable-instructions>>–<<KLEE-IRR-memory-instructions>>.
 --
@@ -2003,6 +2006,7 @@ Transfers follow the constraints of `kl.mv` (<<KLEE-instruction-mv>>, <<KLEE-Mem
 `kl.store` transfers the offsets `[klstart, image_size-1]` of `S`, storing those below `image_end` from the locker and those in `[image_end, image_size-1]` as zero: for each _j_ from `klstart` to `image_size` − 1, byte _j_ of `S` is stored at memory address ``Xs1 + %offset + ``_j_.
 `klstart` tracks the prefix-complete number of bytes stored; if `klstart` {ge} `image_size`, nothing is transferred.
 As for `kl.mv`, a _State_ that Rule <<KLEE-SGR-zkl-store-mv-allowed>> does not admit, or a `klstart` that violates those constraints, raises an illegal-instruction exception.
+Two cases differ: on an _Unconfigured_ locker, or one in an Error State, `kl.store` has an empty transfer window, and accesses no memory (Rule <<KLEE-SGR-cleared-under-management>>).
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2286,6 +2290,32 @@ in a State of Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> it zeroes
 when its instruction is next issued, exactly as if the SCC exported before the `kl.clearads` had been imported on a different
 KLEE implementation (Rule <<KLEE-IRR-long-running-no-data>>).
 
+[[KLEE-SGR-cleared-under-management,SGR24]]SGR24:: On a locker that is _Unconfigured_ or in an Error State, `kl.load`, `kl.store`, `kl.mv` and `kl.mgmt` with `kl_cfg_management_end` perform no operation and raise no exception on account of that _State_; so does `kl.mgmt` with `kl_cfg_exporting` on an _Unconfigured_ locker (on an Error-State locker it takes the short export path of <<KLEE-error-state-transfer>>).
+These outcomes follow the checks that do not depend on the _State_: the first group of <<KLEE-illegal-instruction-grounds>>, `kl_exc_fatal`, `kl_exc_no_csk`, `kl_exc_locker_off` and, for `kl.mgmt`, the check of `klmanagedlocker`. In detail:
++
+--
+* `kl.load` and `kl.store` have an empty transfer window, whatever the value of `klstart`: they access no memory, retire with `klstart` = 0, and still raise the address-misaligned exception (<<KLEE-Memory-Alignment>>).
+* `kl.mv` leaves `klstart` unchanged, whatever its value; a variant that reads the locker writes zeros, as when `klstart` {ge} `image_end` (<<KLEE-instruction-mv>>).
+* `kl.mgmt` ignores `ml`, leaves the authentication registers unchanged, and performs only its common steps (<<KLEE-locker-management>>), which leave `klmanagedlocker` = 32 and `klstart` = 0. On a locker in a Valid State, `kl_cfg_management_end` still raises an illegal-instruction exception.
+
+Software that exports a locker must rely on the image only if the _State_ read after the last instruction of the export, or in the MDH that `kl.getmd*` returned when the image is the MDH alone, is not _Unconfigured_.
+--
++
+[NOTE]
+====
+This Rule serves to prevent a _check-then-use race_.
+A handler that does not save a partially provisioned or imported locker clears it instead, which forces a restart (<<KLEE-CC-management>>, which also obliges system software to let the operation complete).
+The interrupted software detects the clear by reading the _State_ after each management instruction (<<Zkl-pseudocode.adoc#KLEE-management-code-snippets>>), but no check protects the next instruction: an interrupt between the two clears the locker after the check, and software below M-mode cannot mask interrupts.
+A trap there would depend on interrupt timing, would need a handler that recognizes the cause and skips the instruction, and might reach a mode other than the one that cleared the locker, for instance a guest OS when the hypervisor did.
+A no-op instead lets software reach its next check and restart, with no help from any handler.
+The same holds for an Error State that a handler sets on a locker under management, for instance _Out of Memory_ when a context restore cannot re-import it: software finds it at its next check and abandons the operation.
+In return, these instructions do not trap on a locker that software never opened; the same check reveals that error.
+
+An export cannot be restarted, since the clear destroys what was being exported, but its instructions, the opening `kl.mgmt` included, perform no operation all the same, so that the exporting software learns of the loss from its check rather than from a trap.
+Layered system software then composes: a guest OS saving a partially provisioned locker when the hypervisor clears it finds the locker _Unconfigured_, saves no image, and passes the restart on to the provisioning software.
+Once cleared, a locker stays _Unconfigured_ until software reopens it, so the check after the last instruction of an export alone decides whether the image is complete; earlier checks only end the export sooner.
+====
+
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-error-architecture]]
@@ -2314,13 +2344,13 @@ the endpoint on which the failing check is detected, the source being checked be
 the destination (Rule <<KLEE-SGR-gate-order>>).
 
 With the Privileged Architecture, the exception handler performs the transition. A handler
-that can neither resolve `kl_exc_unsupported`, `kl_exc_out_of_memory` or
-`kl_exc_privilege_violation` nor forward it to another handler, an in-process one included, and that does not terminate the process that caused it, must:
+that can neither resolve `kl_exc_unsupported`, `kl_exc_out_of_memory` or `kl_exc_privilege_violation`, or any exception raised by a `kl.mgmt` that opens a provisioning or an import,
+nor forward it to another handler, an in-process one included, and that does not terminate the process that caused it, must:
 
 . set the _State_ of the locker on which the exception was raised to the corresponding Error State of
-  <<KLEE-exception-error-correspondence>>, using the short import of <<KLEE-error-state-transfer>>
+  <<KLEE-exception-error-correspondence>>, or to _Invalid_ where that table gives none, using the short import of <<KLEE-error-state-transfer>>
   where the instruction left the locker _Unconfigured_, as Rule
-  <<KLEE-SGR-transition-to-from-unconfigured>> requires; and
+  <<KLEE-SGR-transition-to-from-unconfigured>> requires; a locker left _Unconfigured_ would make software restart the operation (Rule <<KLEE-SGR-cleared-under-management>>) and trap again without end; and
 . advance `xepc` past the trapping instruction, since re-executing it raises the same exception again.
   A handler that advances `xepc` past a usage instruction must write zeros to its output operand,
   as the instruction would have done had it performed no operation (Rule <<KLEE-SGR-usage-locker-error-state>>).
@@ -2332,8 +2362,8 @@ describes behavior with the Privileged Architecture; without it, the behaviors a
 State change rule for exceptions:: An illegal-instruction exception, or a KLEE
 exception other than `kl_exc_fatal`, leaves the KLEE state unchanged, except for two changes that `kl.mgmt`
 makes even if it later raises an exception (<<KLEE-locker-management>>):
-an opening `kl.mgmt` zeroizes the target locker and writes 32 to `klmanagedlocker`, and any `kl.mgmt` not
-rejected on a ground of the first group of <<KLEE-illegal-instruction-grounds>> clears `klstart`.
+a `kl.mgmt` that opens a provisioning or an import zeroizes the target locker and writes 32 to `klmanagedlocker`, and any `kl.mgmt` that
+passes the check of `klmanagedlocker` (<<KLEE-locker-management>>) clears `klstart`.
 `kl_exc_fatal` resets the KLEE state (_Fatal Conditions_ below).
 
 === Categories of Error Conditions
@@ -2396,8 +2426,8 @@ The grounds for an illegal-instruction exception form two groups:
   Configuration-State conditions:
 
 . A usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) issued on a locker in State _Unconfigured_ (Rule <<KLEE-SGR-transition-to-from-unconfigured>>), including `kl.derive` with an _Unconfigured_ endpoint.
-. `kl.load`, `kl.store` or `kl.mv` on a locker whose _State_ does not admit the transfer, or with an inconsistent `klstart` (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>).
-. `kl.mgmt` when `klmanagedlocker` names another locker, when opening an export on an _Unconfigured_ locker, when completing with an `ml`._State_ inconsistent with the locker's Configuration State, or when `kl_cfg_management_end` is issued with no management operation open (<<KLEE-locker-management>>).
+. `kl.load`, `kl.store` or `kl.mv` on a locker whose _State_ does not admit the transfer, or with an inconsistent `klstart` (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>), except on a locker that is _Unconfigured_ or in an Error State, where the instruction performs no operation (Rule <<KLEE-SGR-cleared-under-management>>).
+. `kl.mgmt` when `klmanagedlocker` names another locker, when completing with an `ml`._State_ inconsistent with the locker's Configuration State, or when `kl_cfg_management_end` is issued on a locker in a Valid State (<<KLEE-locker-management>>); on a locker that is _Unconfigured_ or in an Error State, `kl_cfg_management_end` performs no operation, as does the opening of an export on an _Unconfigured_ locker (Rule <<KLEE-SGR-cleared-under-management>>).
 . A KLIOBUF substitution that <<KLEE-usage-input-output>> forbids, such as a Form B or C `kl.exec` issued where Form A is expected, or any substitution without `Zklio`. This ground depends on the State, which defines the operation and thus whether a Form is a substitution.
 . A Form A `kl.mgmt` that must take the MDH from a configured KLIOBUF with `kliobuftop` < 16 (Rule <<KLEE-GR-vector-MDH-operand>>).
 . A `kl.clone` whose source is _Unconfigured_ and differs from its destination (<<KLEE-instruction-clone>>).
@@ -2532,12 +2562,12 @@ the Error State is the second condition of that Rule, right after _Unconfigured_
 | Instruction | Outcome
 | `kl.size` | Returns 16 (<<KLEE-instruction-size>>).
 | `kl.avail`, Form A | Evaluates the MDH fields that identify the Machine (<<KLEE-instruction-size>>).
-| `kl.load`, `kl.store`, `kl.mv` | Illegal-instruction exception (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>).
+| `kl.load`, `kl.store`, `kl.mv` | No operation and no exception: `kl.load` and `kl.store` have an empty transfer window, and a `kl.mv` that reads the locker writes zeros (Rule <<KLEE-SGR-cleared-under-management>>).
 | Usage-controlled instructions (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>): `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-locker-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
 | `kl.setst` with an Error-State immediate | The locker transitions to that Error State without an exception, a reserved one to _Invalid_ (<<KLEE-instruction-setst>>).
 | `kl.mgmt` opening a provisioning or an import | The locker is zeroized and reconfigured (Rule <<KLEE-GR-opening-locker-when>>, <<KLEE-locker-management>>).
 | `kl.mgmt` opening an export | The locker is left unchanged and no management operation is opened (<<KLEE-locker-management>>).
-| `kl.mgmt` with `kl_cfg_management_end` | Illegal-instruction exception, since no management operation is open (<<KLEE-locker-management>>).
+| `kl.mgmt` with `kl_cfg_management_end` | No operation and no exception; `klmanagedlocker` becomes 32 and `klstart` 0 (Rule <<KLEE-SGR-cleared-under-management>>).
 | `kl.getmd*`, `kl.getst` | Return the retained MDH (<<KLEE-instruction-getmd>>).
 | `kl.restrict*` | Narrows the MDH, as in any Complete State; a request that would transition the locker to _Invalid_ performs no operation instead, so that the original Error State is kept (Rule <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-instruction-restrict>>).
 | `kl.clone`, with the locker as source | The destination receives the MDH alone (<<KLEE-instruction-clone>>).
@@ -2632,7 +2662,8 @@ Rules <<KLEE-IRR-resumability-options>> and <<KLEE-IRR-conflicting-access-rule>>
 [[KLEE-IRR-memory-instructions,IRR8]]IRR8:: KLEE memory instructions are RISC-V memory instructions: one completes, and may retire or take a trap with `xepc` past it, only after every component access has passed address translation and permission checks and has been performed.
 Otherwise, as for vector memory operations, the implementation halts it precisely, with `klstart` at a prefix-complete point that the instruction allows, and raises the corresponding load/store page-fault, guest-page-fault or access-fault exception synchronously for that execution attempt.
 +
-NOTE: After each `kl.load`, the caller checks whether the locker is _Unconfigured_. If it is, an exception handler may have cleared it and advanced `xepc`, and the whole configuration operation, not only the `kl.load`, must be restarted by the software using it.
+NOTE: After each `kl.load`, the caller checks whether the locker is _Unconfigured_. If it is, a handler has cleared it, and the software restarts the whole configuration operation, not only the `kl.load`.
+A `kl.load` issued or resumed after the locker was cleared performs no operation, so the caller always reaches this check (Rule <<KLEE-SGR-cleared-under-management>>).
 // +
 // NOTE: Clearing a locker in an exporting State (<<KLEE-instruction-setst>>) calls for particular care from an
 // exception handler, because until the export completes, the ciphertext the locker holds may be the only copy of
@@ -2738,7 +2769,8 @@ so context switching, process and virtual machine migration, hibernation, and in
 The confidentiality and integrity of the MDH and Content of a CC must be preserved throughout.
 
 KLEE meets these requirements while keeping binary compatibility across implementations that support the same sub-extensions.
-An implementation need not support the resumption of interrupted management operations: it may force a restart, or a context-switch handler may do so by clearing partially provisioned or imported lockers during context save or restore. The architected instructions, and the software using them, support both scenarios without code changes.
+A context-switch handler need not save a partially provisioned or imported locker: it may clear the locker instead, during context save or restore, which forces the interrupted management operation to restart. The architected instructions, and the software using them, support both resumption and restart without code changes: software reads the _State_ of the locker after each management instruction, and restarts the operation if it finds the locker _Unconfigured_ (Rule <<KLEE-SGR-cleared-under-management>>).
+System software that clears such lockers must ensure that the operation can still complete: clearing must not be its unconditional response at every context switch, since repeated restarts would then prevent completion, for instance while a debugger single-steps the interrupted software.
 
 KLEE defines three external CC formats:
 
@@ -2929,9 +2961,9 @@ Three steps are common to every operation below, and are not repeated in their d
 . `kl.mgmt` first checks that `klmanagedlocker` holds the number of the target locker or 32, and raises an illegal-instruction exception otherwise.
 . It updates `klmanagedlocker` according to the _State_ in which it leaves the target locker:
 .. a Configuration State: the number of the target locker;
-.. a Complete State, Error States included: 32;
+.. a Complete State, Error States included, or _Unconfigured_ (Rule <<KLEE-SGR-cleared-under-management>>): 32;
 .. if it raises an exception without leaving the target locker in an Error State, `klmanagedlocker` is unchanged, or 32 if the zeroizing step has left the target locker _Unconfigured_ (<<KLEE-CSR-klmanagedlocker>>).
-. It clears `klstart`, even if it then raises an exception, unless it is rejected on a ground of the first group of <<KLEE-illegal-instruction-grounds>>; software restores `klstart` to resume interrupted management operations.
+. It clears `klstart` once it has passed the checks that precede the conditions on the locker (the first group of <<KLEE-illegal-instruction-grounds>>, `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off`) and the check of `klmanagedlocker` above, even if it then raises an exception; rejected by one of those checks, it leaves `klstart` unchanged, so that an accidentally interleaved `kl.mgmt` does not destroy the progress of the operation under way. Software restores `klstart` to resume interrupted management operations.
 
 The four operations of `kl.mgmt` are:
 
@@ -2963,7 +2995,7 @@ The instruction:
 ... sets _StateExtension_ and _MachineUse_ to 0, ignoring the values in the PI;
 ... requires _AuxDataLen_ and _ADSDropped_ to be 0: if either is non-zero in the MDH of the PI,
 the locker transitions to Error State _Invalid_, a Complete State, and the instruction terminates;
-.. transitions the locker to Error State _Invalid_ if `ml` is invalid Metadata (<<KLEE-MVR-open>>);
+.. transitions the locker to Error State _Invalid_ if `ml` is invalid Metadata (<<KLEE-MVR-open>>), an _Unconfigured_ `ml`._State_ being invalid for an import;
 .. attempts to allocate the KLF capacity that the MDH fields _Machine_, _MachinePolicy_, _SCProtection_, and _KeyType_ require (<<KLEE-length-rule>>),
     and raises KLEE exception `kl_exc_out_of_memory` if it cannot;
 .. for a *provisioning*, sets the _State_ of the locker to `kl_cfg_provisioning`;
@@ -2971,8 +3003,7 @@ the locker transitions to Error State _Invalid_, a Complete State, and the instr
 ... applies steps 1–5 of <<KLEE-SCC-import>>, which decide, from the MDH loaded and the maximum that the implementation supports, whether the ADS is retained;
 ... sets the _State_ of the locker to `kl_cfg_importing` if `ml`._State_ is a Valid State,
 or `kl_cfg_importing` or `kl_cfg_exporting` (the image of an interrupted import or export of a locker in a Complete State);
-... sets it to `kl_cfg_ppi_importing` if the base type of `ml`._State_ is `pi` (<<KLEE-nested-state-base-types>>);
-... treats an _Unconfigured_ `ml`._State_ as invalid Metadata (<<KLEE-MVR-open>>).
+... sets it to `kl_cfg_ppi_importing` if the base type of `ml`._State_ is `pi` (<<KLEE-nested-state-base-types>>).
 
 Wherever a check above fails, raising a KLEE exception or transitioning the locker to Error State _Unsupported_ or _Invalid_, every
 MDH field other than _State_ remains zero, and no KLF capacity is allocated; after `kl_exc_out_of_memory`, the locker remains _Unconfigured_.
@@ -2985,7 +3016,7 @@ This does not apply to the configuration of a locker directly into an Error Stat
 Let `ml` be the MDH of the locker, which software first saves in its local state, to restore the _State_ when completing the export.
 `kl.mgmt` can be of Form A, C or D, and ignores its auxiliary input. Depending on `ml`._State_:
 
-.. _Unconfigured_: an illegal-instruction exception is raised.
+.. _Unconfigured_: no operation and no exception. No management operation is opened, the authentication registers are unchanged, and only the common steps above take effect (Rule <<KLEE-SGR-cleared-under-management>>).
 
 .. An Error State: the locker is left unchanged, and no management operation is opened (Rule <<KLEE-SGR-error-state-locker-is-only-MDH>>); <<KLEE-error-state-transfer>> details this short export path.
 
@@ -3075,7 +3106,9 @@ NOTE: An implementation may instead restore the clear contents from an internal 
 .. If `ml`._State_ is not a Complete State, the contents of the locker are not changed further.
 --
 
-** `*kl_cfg_management_end*` *issued on a locker in State _Unconfigured_ or in a Complete State*, with no management operation open on it, raises an illegal-instruction exception.
+** `*kl_cfg_management_end*` *issued on a locker in a Valid State*, with no management operation open on it, raises an illegal-instruction exception.
+
+** `*kl_cfg_management_end*` *issued on a locker that is _Unconfigured_ or in an Error State* performs no operation and raises no exception: it ignores `ml`, and only the common steps above take effect (Rule <<KLEE-SGR-cleared-under-management>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3189,10 +3222,10 @@ useless: it leaves the locker unchanged, and opens no management operation
   .. zeroizes the locker it names, and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLEE-SGR-clear-locker-content-error-state>>);
   .. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
 
-The locker then holds only its MDH: no Machine is selected for execution, and no KLF capacity is allocated, so this import cannot fail.
+The locker then holds only its MDH: no Machine is selected for execution, and no KLF capacity is allocated, so no check of the Machine or of the KLF capacity can fail this import.
 The instruction is uninterruptible
   (Rule <<KLEE-IRR-uninterruptible-instructions>>), so no intermediate state of the locker is ever observable.
-No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one raises an illegal-instruction exception.
+No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one performs no operation (Rule <<KLEE-SGR-cleared-under-management>>).
 The `SIV`, `SIV2` and `IMPQUAL` registers take no part in either path, and need not be saved for it.
 --
 
@@ -3535,12 +3568,16 @@ The recommended order for saving and restoring the KLEE state is:
 .. restore `kliobuflen`, which zeroes the buffer and sets `kliobuftop`;
 .. restore the buffer contents, if saved, with `kl.input`, with `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop`.
-. Restore the raw saved value of `klmanagedlocker`.
+. Restore the raw saved value of `klmanagedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` last, since every earlier step may clear it.
 
 A handler that passes `ml` through the KLIOBUF configures `kliobuflen` {ge} 16 for the locker exports and imports, and restores the saved value afterwards.
 
-A handler must treat `klmanagedlocker` as a hint, and check the MDH of the locker it names before choosing a save path. User software may, for example, clear `K0`, write 0 to `klmanagedlocker`, and enter a handler: the all-zero MDH identifies `K0` as _Unconfigured_, so the handler saves no image for it, and does not attempt an export that would raise an illegal-instruction exception.
+A handler must treat `klmanagedlocker` as a hint, and check the MDH of the locker it names before choosing a save path. User software may, for example, clear `K0`, write 0 to `klmanagedlocker`, and enter a handler: the all-zero MDH identifies `K0` as _Unconfigured_, so the handler saves no image for it. An export attempted on it would perform no operation (Rule <<KLEE-SGR-cleared-under-management>>).
+Likewise, a handler whose export of a locker ends with the locker _Unconfigured_, because more privileged software has cleared it in the meantime, saves no image for it.
+
+A handler that clears a partially provisioned or imported locker that `klmanagedlocker` names, instead of saving it, restores 32 in place of the saved `klmanagedlocker`, the value that the clear has set; it restores `klstart` as saved.
+The interrupted software then finds the locker _Unconfigured_ at its next check, and restarts the provisioning or import (Rule <<KLEE-SGR-cleared-under-management>>).
 
 // ////////////////////////////////////////////////////////////////////
 
