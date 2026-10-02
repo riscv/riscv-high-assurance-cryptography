@@ -12,87 +12,78 @@ endif::[]
 [[KLEE-unpriv-intro]]
 == Introduction
 
-We introduce here the fundamental concepts around which KLEE is designed.
+This section introduces the concepts on which KLEE is built.
 
 [[KLEE-concepts]]
 === Fundamental Concepts and Definitions
 
 Cryptographic Context:::
 (((Cryptographic Context)))
-The *Cryptographic Context* (CC) is the foundation of KLEE.
-All cryptographic operations performed by KLEE execute within the constraints defined by a CC.
-A CC contains secrets, usually keys, but it is more than just a key container:
-it is an indivisible structure consisting of a *Metadata Header* (MDH) and *Content*.
-The MDH has a fixed format and specifies which Machine can be used with the secrets, and various optional policies associated with the CC.
+Every cryptographic operation of KLEE runs within the constraints of a *Cryptographic Context* (CC).
+A CC is more than a key container: it is an indivisible structure of a *Metadata Header* (MDH) and *Content*.
+The MDH specifies the Machine, in other words, the algorithms that may use the secrets in the CC and the optional policies for its usage. It has a fixed format.
 (((Cryptographic Context, Metadata Header)))
-The Content has a Machine-specific format and holds the secrets and other sensitive material, as well as a representation of the Machine's state.
+The Content has a Machine-specific format, and holds the secrets, usually keys, other sensitive material, and the state of the Machine.
 (((Cryptographic Context, Content)))
-The Metadata requires integrity, except for explicitly identified non-authoritative format hints such as _ADSDropped_ and layout-preserving fields that the hint makes semantically inactive; the Content requires both integrity and confidentiality.
-These requirements are architecturally enforced by KLEE and by the algorithms it implements.
+The Metadata requires integrity, except for explicitly identified format hints, and the layout-preserving fields that hints make inactive; the Content requires integrity and confidentiality.
+KLEE and the algorithms it implements enforce these requirements architecturally.
 
 Cryptographic Locker:::
 (((Cryptographic Locker)))
-To create CCs, KLEE uses *Cryptographic Lockers* (called also simply _locker_ in the following), per-hart architectural containers that safeguard their contents.
-A locker is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
-There is no store-like instruction to extract the Content of the locker in a manner that compromises its confidentiality.
-A CC may be used for cryptographic operations only while resident in a locker.
-Only the KLEE unit may access or modify a CC residing in a locker, in accordance with the rules set by the architecture and by the Machine bound to the CC.
-
-Sealed Cryptographic Context:::
-(((Cryptographic Context, sealed)))
-To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a locker as a *Sealed Cryptographic Context* (SCC)—an encrypted and authenticated representation of a CC that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which may be programmable by M-mode. An SCC sealed under one CSK cannot be imported under a different CSK, providing cryptographic domain separation across spatial and temporal domains.
+CCs are created in *Cryptographic Lockers* (_lockers_ for short), per-hart architectural containers that safeguard their contents.
+*Provisioning* a locker writes Metadata and Content into it and binds them into a CC.
+No instruction extracts the Content of a locker in a way that compromises its confidentiality.
+A CC can be used for cryptographic operations only while it resides in a locker, and only the KLEE unit accesses or modifies it there, under the rules of the architecture and of the Machine bound to the CC.
 
 Machine:::
 (((Machines)))
 (((Cryptographic Context, object-oriented)))
-A *Machine* is a state machine that performs cryptographic operations through the interface defined in this specification.
-It can implement one or more cryptographic functions (primitives, modes, protocols).
-In the metadata of a locker, it is encoded as 16 bits of information.
-KLEE provides a small set of instructions for interacting with these state machines.
-These instructions take the 16-bit identifier from the locker's metadata, along with standard RISC-V inputs and outputs such as GPRs, vector registers, and memory. Their semantics depend on the selected Machine. Consequently, a CC in a locker encapsulates Machine-specific behavior, allowing different primitives (e.g., AES-128, AES-256, and SM4) to be used interchangeably in the same modes (e.g., ECB, GCM-SIV, and XTS) without changes to the compiled code. Side-channel-attack-resistant variants are supported transparently.
+A *Machine* is a state machine that implements one or more cryptographic functions (primitives, modes, protocols) through the interface of this specification.
+The metadata of a locker encodes it in a 16-bit identifier.
+A small set of KLEE instructions operates the Machines: they take this identifier from the metadata and standard RISC-V inputs and outputs, such as GPRs, vector registers and memory, and their semantics depend on the Machine.
+A CC thus encapsulates Machine-specific behavior, so that different primitives (e.g., AES-128, AES-256 and SM4) can be used in the same modes (e.g., ECB, GCM-SIV and XTS) without changing the compiled code. Side-channel-resistant variants are supported transparently.
+
+Sealed Cryptographic Context:::
+(((Cryptographic Context, sealed)))
+For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program. An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
 
 Usage Control Policy:::
 (((Cryptographic Context, usage control)))
 (((Cryptographic Context, management operations)))
 (((Cryptographic Context, usage operations)))
-KLEE distinguishes between CC/locker *management* and *usage* operations.
+KLEE distinguishes *management* operations from *usage* operations on CCs and lockers.
 (((Cryptographic Context, export)))
-Management operations include *configuration* (e.g., locker provisioning, SCC import, and cloning), *export* of a locker as an SCC, and *clearing* a locker.
-Usage operations include cryptographic operations and state changes.
-To prevent denial-of-service scenarios, management operations, in particular configuration operations, are less restricted than usage operations. _Usage Control_ policies restrict only certain CC/locker usage operations.
+Management operations are *configuration* (e.g., provisioning, SCC import and cloning), *export* as an SCC, and *clearing*; usage operations are cryptographic operations and state changes.
+To prevent denial of service, management operations, configuration in particular, are less restricted than usage operations: _Usage Control_ policies restrict only certain usage operations.
 
 Localities:::
 (((Cryptographic Context, Locality)))
-KLEE can bind CCs to *Localities*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles, and process domains at various privilege modes. This binding is achieved by using the Localities as _tweaks_ in the encryption and decryption of SCCs.
+KLEE can bind a CC to *Localities*, which restrict its use to specific devices or device classes, hardware configurations, physical or virtual boot cycles, and process domains at various privilege modes. The Localities act as _tweaks_ in the encryption and decryption of SCCs.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-architectural-model]]
 === Architectural Model
 
-KLEE is architected as an interface to an _attached_ unit. KLEE instructions are modeled as messages sent over a tightly coupled coprocessor interface. The KLEE unit receives operations from the issuing hart, executes them independently, and returns results.
-This model minimizes hart-side implementation complexity: for instance, software implements the logic for locker configuration instructions, while the KLEE unit implements cryptographic operations.
-This allows multiple cores to share a KLEE unit, with separate architectural state for each hart, while minimizing the hardware footprint.
+KLEE is architected as an interface to an _attached_ unit: its instructions are messages over a tightly coupled coprocessor interface, and the KLEE unit executes them independently of the issuing hart and returns the results.
+This keeps the hart side simple, since software implements the logic of locker configuration and the KLEE unit the cryptographic operations, and it lets several cores share a KLEE unit, with separate architectural state per hart and a small hardware footprint.
 
-The specification only defines the architectural behavior, not implementation.
-KLEE may be integrated into a CPU core or implemented as a distinct hardware unit, with separate architectural state for each client hart, and both approaches will be supported by the same code.
+The specification defines architectural behavior only, not implementation.
+KLEE may be integrated into a CPU core or be a distinct hardware unit, with separate architectural state per client hart; the same code runs on both.
 
-KLEE may be partially or completely emulated in M-mode firmware.
-For example, an implementation may perform symmetric cipher operations (cf. <<Zkl-ISA-machines.adoc#KLEE-states-symmetric>>) in the KLEE unit while emulating public-key cryptography (cf. <<Zkl-ISA-machines.adoc#KLEE-ECC>> and <<Zkl-ISA-machines.adoc#KLEE-PQC>>).
-Public-key primitives may require very large states. Emulating them in M-mode firmware avoids storing those states in the KLEE unit, provided that the relevant lockers reside in secure memory such as on-chip SRAM reserved to M-mode (see <<KLEE-KLF>> for the requirements of this memory).
+KLEE may be emulated, partly or completely, in M-mode firmware.
+For example, an implementation may perform symmetric operations (<<Zkl-ISA-machines.adoc#KLEE-states-symmetric>>) in the KLEE unit and emulate public-key cryptography (<<Zkl-ISA-machines.adoc#KLEE-ECC>>, <<Zkl-ISA-machines.adoc#KLEE-PQC>>), whose very large states then need not be stored in the KLEE unit, provided that those lockers reside in secure memory, such as on-chip SRAM reserved to M-mode (<<KLEE-KLF>> states the requirements of this memory).
 
 Locker state must never be accessible in the clear to any privileged mode except M-mode and authenticated Debug mode.
-This forbids KLEE implementations in S/VS-mode or HS-mode.
-Instructions and Machines may be emulated only in M-mode.
-Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*llockerstatus`` CSRs (cf. <<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>).
+KLEE implementations in S/VS-mode or HS-mode are therefore forbidden: instructions and Machines may be emulated only in M-mode.
+Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*llockerstatus`` CSRs (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>).
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-RBG]]
 === Requirements on Random Bit Generators
 
-In certain cases either the KLEE unit or the Machines implemented in it require an RBG.
-The RBG must use an entropy source and a DRBG satisfying the requirements described in the `Zkr` specification cite:[RISCV-ISA-Unpriv].
+Where the KLEE unit or its Machines need an RBG, it must use an entropy source and a DRBG that meet the requirements of the `Zkr` specification cite:[RISCV-ISA-Unpriv].
 Rule <<KLEE-GR-rbg-failure>> states what happens when the RBG fails.
 
 // ////////////////////////////////////////////////////////////////////
@@ -220,90 +211,68 @@ enables the following operations:
 
 {empty}
 (((Cryptographic Context)))
-KLEE defines 32 Cryptographic Lockers, numbered 0 to 31 and denoted `K0`–`K31`.
+KLEE defines 32 Cryptographic Lockers, `K0`–`K31`.
+Like GPRs or vector registers, lockers are per-hart architectural state, and they are not separated by privilege mode: a hart sees the same lockers in every mode.
+Unlike a conventional register, a locker can be _unconfigured_, that is hold no CC.
 
-Lockers are per-hart architectural state, like GPRs or vector registers.
-
-Lockers are not separated by privilege mode: when a hart changes mode, it sees the same set of lockers.
-
-Unlike a conventional register, a locker can be _unconfigured_, meaning it does not contain a CC.
-
-If the extension `Zklind` is not implemented,
-a locker is addressed like a conventional register, i.e., via a 5-bit immediate.
-
-If the extension `Zklind` is implemented,
-a locker can also be addressed indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
-
-Independently of `Zklind`, indirect locker addressing is always available for
-instructions `kl.clone`, `kl.rename`, and `kl.swap` (<<KLEE-instruction-clone>>).
+A locker is addressed like a conventional register, by a 5-bit immediate.
+If the extension `Zklind` is implemented `Zklind`, a locker can also be addressed indirectly, by a GPR value, and an encoding bit selects the mode.
+`kl.clone`, `kl.rename` and `kl.swap` (<<KLEE-instruction-clone>>) always support indirect addressing, with or without `Zklind`.
 
 [NOTE]
 ====
-Indirect locker addressing under `Zklind` implies that locker renaming, while still possible, would significantly increase microarchitectural complexity.
-We posit that locker renaming is not expected to be necessary, and may even be detrimental, for KLEE.
-First, excluding internal state changes, lockers are redefined far less frequently than GPRs or FP registers, and
-conditional situations where a locker may take one key or a different one are uncommon.
-Second, speculating on the results of cryptographic operations usually leads to security issues.
+With indirect locker addressing, locker renaming remains possible but would add significant microarchitectural complexity.
+We expect KLEE not to need it, and it may even be detrimental: apart from internal state changes, lockers are redefined far less often than GPRs or FP registers, a locker rarely takes one key or another conditionally, and speculating on the results of cryptographic operations usually creates security issues.
 ====
 
-As described in <<KLEE-concepts>>, the CC in each configured locker consists of a Metadata Header (MDH) and `Content`.
+The CC in a configured locker consists of a Metadata Header (MDH) and `Content` (<<KLEE-concepts>>).
 The _i_-th locker is denoted `K(i)`, its MDH `K(i).MDH`, and its content `K(i).Content`.
-During provisioning and in derived import/export structures, `K(i).Content` is an array of 128-bit blocks.
-During import and export, and in an SCC, this array is partitioned into two consecutive arrays of 128-bit blocks:
-`Content1`, the architecturally defined content specified for each Machine in <<Zkl-ISA-machines.adoc#KLEE-Machines>>,
+During import and export, and in an SCC, the contents consists of two consecutive arrays of 128-bit blocks:
+`Content1`, the architected content that <<Zkl-ISA-machines.adoc#KLEE-Machines>> specifies for each Machine,
 and `Content2`, any implementation-defined content.
 
 [[KLEE-KLF]]
 === The Cryptographic Locker File and Authentication Information
 
-Lockers reside in a dedicated, per-hart _cryptographic locker file_ (KLF), a memory accessible only to the KLEE implementation.
-If the implementation is (partially) emulated, only M-mode firmware can access the KLF and an implementation-defined mechanism to access the KLF must be provided.
+Lockers reside in a per-hart _cryptographic locker file_ (KLF), a memory that only the KLEE implementation can access.
+If the implementation is emulated, partly or fully, only M-mode firmware can access the KLF, through an implementation-defined mechanism that must be provided.
 (((Cryptographic Locker File)))
 
-The KLF guarantees the confidentiality and integrity of its contents, including protection against rollback through any access not explicitly permitted by this specification.
-KLF accesses do not require hardware-level hardening against physical side-channel attacks.
-However, side-channel-protected implementations of the Machines provided by the KLEE unit must also protect the KLF accesses.
+The KLF guarantees the confidentiality and integrity of its contents, including against rollback through any access this specification does not permit.
+KLF accesses need no hardware hardening against physical side-channel attacks, except that side-channel-protected implementations of the Machines of the KLEE unit must protect them too.
 
-It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Machine.
+It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it have side-channel protection not weaker than the highest _SCProtection_ level, in the implementation's ordering, that the implementation supports for any Machine.
 
-NOTE: While the KLF, as a memory device, must resist rollback attacks, individual lockers do not have to resist rollback via export and import, and cannot.
-While re-importing previous CC states may allow multi-time pad attacks on modes such as CTR, XCTR, and GCM (<<Zkl-ISA-machines.adoc#KLEE-nonce-reuse>>), exploiting this would require a level of control over the target software that typically also implies access to plaintext.
-Reuse of an internal random value through re-import or cloning is excluded by Rule <<KLEE-GR-atomic-randomness>>.
-Re-importing a previous CC state is also desirable, however. For instance, it allows restarting an operation that failed because a payload was corrupted in transit. Adding and enforcing policies to control resumability and cover every legitimate case would overcomplicate the feature.
+NOTE: The KLF, as a memory device, must resist rollback, but individual lockers need not, and cannot, resist rollback through export and import.
+Re-importing an earlier CC state may allow multi-time-pad attacks on modes such as CTR, XCTR and GCM (<<Zkl-ISA-machines.adoc#KLEE-nonce-reuse>>), but exploiting them needs a control of the target software that usually also gives access to the plaintext.
+Rule <<KLEE-GR-atomic-randomness>> excludes the reuse of an internal random value through re-import or cloning.
+Re-importing an earlier state is also useful, for instance to restart an operation that failed because its payload was corrupted in transit, and policies covering every legitimate case would overcomplicate the feature.
 
 Architecturally, the KLF contains:
 
-. An array of 32 128-bit blocks, where the _i_-th entry contains the MDH of `K(i)`.
-. An implementation-defined amount of memory that can be dynamically allocated to the various registers. This region contains the
-   `Content` sections of all configured lockers.
+. an array of 32 128-bit blocks, whose _i_-th entry holds the MDH of `K(i)`; and
+. an implementation-defined amount of memory, allocated dynamically to the lockers, which holds the `Content` of every configured locker.
 
-These two types of information are conceptually distinct, regardless of implementation.
-The MDH array is always present and is not subject to allocation, so every locker always holds its MDH, even if only to signal that the locker is not configured.
-Only the second part is dynamically allocated and capacity-limited; “KLF capacity” refers only to this part.
-A locker that holds only its MDH therefore consumes no KLF capacity.
+The two parts are conceptually distinct, whatever the implementation.
+The MDH array is always present and not subject to allocation, so every locker always holds its MDH, if only to show that it is unconfigured.
+Only the second part is allocated and capacity-limited, and “KLF capacity” refers to it alone: a locker that holds only its MDH consumes none.
+The capacity a locker consumes depends on the Machine encoded in its MDH.
+Insufficient residual capacity may prevent a configuration instruction from executing; unconfiguring other lockers frees capacity.
 
-The amount of KLF capacity consumed by each locker depends on the Machine encoded in the MDH, and it may differ from one locker to another.
+The corruption of a hart's KLF is unrecoverable: the KLEE architectural state of the hart is reset (<<KLEE-reset-and-m-mode-only>>), and KLEE exception `kl_exc_fatal` is raised (see <<Zkl-ISA-priv.adoc#KLEE-exceptions>>, and <<KLEE-error-architecture>> for the behavior without the Privileged Architecture).
 
-Insufficient residual KLF capacity may prevent execution of a configuration instruction.
+A hart reset resets the KLEE state of the hart, and the KLEE implementation must zeroize the KLEE state on power-up.
+The software stack should also clear all KLEE state at power-down, so that the implementation zeroizes all lockers.
 
-Capacity is freed by unconfiguring other lockers.
-
-The corruption of a hart's KLF is an unrecoverable error condition.
-The KLEE architectural state associated with the hart is then reset (<<KLEE-reset-and-m-mode-only>>), and KLEE exception `kl_exc_fatal` is raised (see <<Zkl-ISA-priv.adoc#KLEE-exceptions>> and <<KLEE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
-
-A hart reset resets the KLEE state of the hart.
-The KLEE implementation must zeroize the KLEE state on power up.
-The software stack should also explicitly clear all KLEE state at power down, to cause the implementation to zeroize the contents of all lockers.
-
-The KLEE unit holds three 128-bit registers that hold authentication data (the `SIV`, `IMPQUAL`, and `SIV2`) of the locker being currently managed. These registers are accessed using the `kl.load`, `kl.store` and `kl.mv` instructions, as the leading bytes of the image they transfer (<<KLEE-instruction-mv>>).
+The KLEE unit holds three 128-bit registers with the authentication data of the locker being managed: `SIV`, `IMPQUAL` and `SIV2`. `kl.load`, `kl.store` and `kl.mv` access them as the leading bytes of the image they transfer (<<KLEE-instruction-mv>>).
 They are zeroized by a KLEE unit reset, by `kl.clearall`, and by a `kl.mgmt` that opens an import; the `kl.mgmt` that opens an export of a locker in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
 
 [NOTE]
 ====
-The 128 or 384 bits used to hold `SIV`, `IMPQUAL`, and `SIV2` are allocated per hart and not per locker to reduce their hardware cost.
-This prevents concurrent non-clearing management operations in the same code: starting a second operation may overwrite the first operation's in-flight `SIV`, `IMPQUAL`, and `SIV2` values.
-In a single process space, multiple such operations require careful coordination such as lightweight threads with KLEE context-switching support or serialization using a mutex.
-`kl.clear` and provisioning do not touch `SIV`, `IMPQUAL`, and `SIV2` and are thus not subject to these restrictions; `kl.clearall` zeroizes them.
+The 128 or 384 bits of `SIV`, `IMPQUAL` and `SIV2` are allocated per hart, not per locker, to reduce hardware cost.
+Code therefore cannot run concurrent non-clearing management operations: a second operation may overwrite the in-flight `SIV`, `IMPQUAL` and `SIV2` of the first.
+Within one process, such operations need coordination, such as lightweight threads with KLEE context-switching support, or a mutex.
+`kl.clear` and provisioning do not touch these registers and are not restricted; `kl.clearall` zeroizes them.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -313,46 +282,37 @@ In a single process space, multiple such operations require careful coordination
 [[KLEE-KLV]]
 ==== RVV/KLV
 
-KLEE inputs and outputs may use vector registers or an architectural input/output buffer (KLIOBUF)
-that can be loaded from and stored to external memory. Both mechanisms may be supported simultaneously.
+KLEE takes its inputs and outputs from vector registers, from an architectural input/output buffer (KLIOBUF) loaded from and stored to memory, or from both.
 
-When vector registers are used, the full V extension is not required. KLEE depends only on a minimal subset, termed _KLV_ (KLEE-subset of V)
+Vector registers do not require the full V extension, only a minimal subset, _KLV_ (KLEE-subset of V).
 (((KLV)))
-KLV must be fully opcode-compatible with RVV: code written for KLV executes with identical behavior under V together with `Zvbc`.
-The current set of features is:
+KLV must be fully opcode-compatible with RVV: code written for KLV behaves identically under V with `Zvbc`.
+KLV comprises:
 
-* Vector registers of at least 128 bits.
-* Configuration-setting instructions (`vsetvli`/`vsetivli`/`vsetvl`):
-** KLEE does not use vector masking and does not define masked versions of its instructions.
-Therefore, KLV only requires tail-agnostic and mask-agnostic configurations, and KLEE operations on vector registers always use a tail-agnostic policy;
-Bit 25 of the `kl.exec` instruction encoding is reserved for potential future adoption of masked operations, should a compelling use case arise.
-** Support for `LMUL` integer values of 1, 2, 4, and 8;
-** A `vsetvl`/`vsetvli`/`vsetivli` requesting a configuration that KLV does not support sets `vtype.vill` and `vl` = 0, as in RVV; a KLEE instruction with a vector operand issued while `vtype.vill` is set raises an illegal-instruction exception.
-* Unit-strided vector loads and stores;
-* `vmv.x.s` and `vmv.s.x` and the slide instructions `vslideup.v[xi]`, `vslidedown.v[xi]`, `vslide1up.vx`, and `vslide1down.vx`, to insert data into and extract data from vector registers;
-* Vector logical operations: `vand.v[vxi]`, `vor.v[vxi]`, and `vxor.v[vxi]` (the immediate variants allow obtaining, for instance, a bitwise NOT); and
-* `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`. They may be implemented as trap-and-emulate.
+* vector registers of at least 128 bits;
+* the configuration-setting instructions `vsetvli`, `vsetivli` and `vsetvl`, with:
+** tail-agnostic and mask-agnostic configurations only, since KLEE neither uses vector masking nor defines masked instructions, and always applies a tail-agnostic policy (bit 25 of the `kl.exec` encoding is reserved for masked operations, should a compelling use case arise);
+** `LMUL` values 1, 2, 4 and 8; and
+** for a configuration that KLV does not support, `vtype.vill` is set and `vl` = 0, as in RVV, and a KLEE instruction with a vector operand issued while `vtype.vill` is set raises an illegal-instruction exception;
+* unit-strided vector loads and stores;
+* `vmv.x.s`, `vmv.s.x`, and the slides `vslideup.v[xi]`, `vslidedown.v[xi]`, `vslide1up.vx` and `vslide1down.vx`, to move data into and out of vector registers;
+* the logical operations `vand.v[vxi]`, `vor.v[vxi]` and `vxor.v[vxi]` (the immediate forms give, for instance, a bitwise NOT); and
+* `vclmul.v[vx]` and `vclmulh.v[vx]` of `Zvbc`, which may be trap-and-emulated.
 
-NOTE: KLEE does not depend on a concept of element.
-From a logical point of view, the operations are not performed in the vector unit.
-A vector register (group) is seen as a bit string of length `KLLEN` = `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
+Floating-point, fixed-point and general arithmetic vector operations are not required.
 
-Floating-point, fixed-point, and general arithmetic vector operations are not required.
+NOTE: KLEE has no concept of element, and logically does not operate in the vector unit: it sees a vector register (group) as a bit string of length `KLLEN` = `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
 
-When vector registers are used, KLEE determines the lengths of its operands from `VL*SEW`.
-The specific choice of `VL` and `SEW` is irrelevant; for example, `VL` = 2, `SEW` = 64 and `VL` = 4, `SEW` = 32 both define a 128-bit input.
-The CPU instruction-decoding side of KLEE uses `VL` and `SEW` to determine how much data to send to the KLEE unit proper, but the KLEE unit itself requires only the product `VL*SEW` (or `kliobuftop`).
+KLEE takes the length of a vector operand from `VL*SEW` alone, so that, for example, `VL` = 2, `SEW` = 64 and `VL` = 4, `SEW` = 32 both give a 128-bit input.
+The instruction-decoding side of the CPU uses `VL` and `SEW` to determine how much data to send to the KLEE unit, which needs only the product `VL*SEW` (or `kliobuftop`).
 
 ==== KLIOBUF
 
-KLIOBUF is an optional architectural input/output buffer that may be used in place of vector registers.
+The KLIOBUF is an optional architectural input/output buffer that may replace vector registers.
+The KLIOBUF is not part of the KLF.
 
-KLIOBUF is not part of the KLF.
-
-Two instructions, `kl.input` and `kl.output`, load and store data from/to the KLIOBUF to/from external memory.
-When the KLIOBUF is used, `kl.exec`, `kl.setst` and `kl.mgmt` are used in forms with implicit input and output provided by the KLIOBUF, as described in <<KLEE-usage-input-output>>.
-
-The definition of `KLLEN` for KLIOBUF inputs is given in <<KLEE-CSR-kliobuftop>>.
+The instructions `kl.input` and `kl.output` transfer data between the KLIOBUF and memory, and `kl.exec`, `kl.setst` and `kl.mgmt` then use Forms whose inputs and outputs are implicitly in the KLIOBUF (<<KLEE-usage-input-output>>).
+<<KLEE-CSR-kliobuftop>> defines `KLLEN` for KLIOBUF operands.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -4051,12 +4011,11 @@ Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
 . All applicable `*llockerstatus` fields are set to _Dirty_; every `KLS` field that is not Off is set to _Dirty_.
 . The software-configurable Locality Secrets — _PhysBootScrt_, _VirtBootScrt_, _MLocality_, _HLocality_, and _SLocality_ (`mklphysbootscrt`, `hklvirtbootscrt`, `mkllocality`, `hkllocality`, `skllocality`, `vskllocality`) — are zeroized. Their CSRs subsequently read as zero.
 . The HW Binding Group entries cannot be zeroized and are therefore _masked_: until the next hart reset each such entry is _unconfigured_ for this hart (<<KLEE-Localities>>). A PI or SCC whose _Locality_ names a masked entry is invalid Metadata, and chain substitution does not substitute a masked entry.
-. The CSK is zeroized _and_ thus is essentially unconfigured. If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
+. The CSK is zeroized _and_ thus unconfigured. If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
 
 [NOTE]
 ====
 Normal execution cannot resume after entry into unauthenticated Debug mode because the KLEE state has been destroyed.
-
 Debugging that preserves KLEE state therefore requires authenticated Debug mode. Recovery requires a hart reset, which restores access to the hardwired HW Binding values and, under the third CSK model, the hardwired CSK, followed by re-establishment of the CSK and Locality Secrets by the privileged software stack and re-provisioning of the contexts.
 
 Under the programmable CSK models, if M-mode re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
