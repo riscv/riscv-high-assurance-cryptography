@@ -5,160 +5,130 @@ ifdef::env-site[]
 include::partial$Zkl-symbols.adoc[]
 endif::[]
 
-This brief introduction to the
-_Cryptographic Lockers Extensions_ (KLEE) – formerly known as the _Atomic Cryptography Extension_ (ACE) – is not
-part of the specification.
-
-The ratification plan can be found
+This introduction to the _Cryptographic Lockers Extensions_ (KLEE), formerly the _Atomic Cryptography Extension_ (ACE),
+is not part of the specification.
+The ratification plan is
 https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].
 
 == Features
 
-KLEE defines an interface to high-performance cryptographic operations without giving software access to the keys.
+KLEE lets software perform high-performance cryptographic operations without having direct access to the keys.
 (((design, high performance)))
-Its development has been prompted by use cases such as content protection (including local LLM decryption), link and storage encryption, secure boot, and attestation.
+Its use cases include content protection (including local LLM decryption), link and storage encryption, secure boot, and attestation.
 
-KLEE's main features are:
+Its main features are:
 
-* To mitigate key misuse, KLEE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, expiration date, or other policies.
+* *Cryptographic Contexts.* KLEE binds secrets, such as keys, and metadata into an indivisible _Cryptographic Context_ (CC). The metadata restricts each secret to one algorithm and can enforce usage constraints by process, VM, security state, boot cycle, expiration date, or other policies.
 
-* To implement CCs, KLEE introduces _Cryptographic Lockers_—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a locker. KLEE instructions operate on lockers instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, and also benefit from higher performance and side-channel-protected implementations when available.
+* *Cryptographic Lockers.* CCs reside in _Cryptographic Lockers_, architectural containers that hide their secrets from software. Software _provisions_ (writes) secrets and metadata into a locker, and KLEE instructions name lockers instead of key values. Keys thus never sit in process memory, and implementations can be faster and side-channel protected.
 
-* Cryptographic operations are performed _atomically_ to avoid leaking data through architectural side-channels.
-  Instructions can be interrupted only between cryptographic operations, or at the points that the algorithms they execute define for their long-running operations.
+* *Atomic operations.* Each cryptographic operation is atomic, so no intermediate value leaks through architectural side channels.
+  An instruction can be interrupted only between operations, or at the points an algorithm defines for its long-running operations.
 
-* KLEE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.
- ** Exposing only the primitives is insufficient for modes like AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise security. Therefore, KLEE also defines modes of operation and secure key derivation.
- ** In addition to GCM-SIV, XTS, and OCB, KLEE defines modes such as CTR, GCM, and CMAC. Where applicable, encrypt-only or decrypt-only versions, which reduce the potential for misuse, and versions with a preset IV or nonce, which keep it confidential, are also defined. These modes can be instantiated not only with AES-128, AES-192 and AES-256 but also with other block ciphers such as SM4.
- ** The interface supports various hash functions.
- ** The interface supports SCA-resistant implementations of the algorithms.
- ** The interface provides access to public-key and post-quantum algorithms.
- ** Not all algorithms defined in this specification are required in every KLEE implementation; following RISC-V practice, KLEE defines several subextensions and delegates profile requirements to the RISC-V profile process.
+* *One interface for many primitives*, instead of separate instructions per primitive:
+ ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLEE therefore also defines modes of operation, among them CTR, GCM, and CMAC, and secure key derivation.
+ ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential. The modes work with AES-128, AES-192, AES-256, and other block ciphers such as SM4.
+ ** The interface also covers hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
+ ** Implementations need not support every algorithm: following RISC-V practice, KLEE defines subextensions and leaves requirements to the RISC-V profiles.
 
-* KLEE provides a secure mechanism to store a CC to memory via authenticated
-  encryption, producing a _Sealed Cryptographic Context_ (SCC). Once generated,
-  an SCC can later be re-imported into a locker. If an SCC is passed to a process
-  in place of the key value, the key is not exposed in that process's memory.
+* *Sealed contexts.* KLEE stores a CC to memory with authenticated encryption as a _Sealed Cryptographic Context_ (SCC), which can later be re-imported into a locker. A process given an SCC instead of a key never holds the key in its memory.
 
-* KLEE scales from embedded to server cores with a unified ISA and ABI.
-* KLEE is compatible with sleep, hibernation, and VM migration.
+* *Scalability.* One ISA and ABI serve embedded to server cores, and KLEE supports sleep, hibernation, and VM migration.
 (((design, scalable)))
 (((VM migration)))
 
 //
 
 Rationale for atomic operations:::
-Assuming the primitive is secure, the key cannot be recovered from the input and output of the full cryptographic operation. Typical round-based ISAs require keys to be supplied between rounds or MAC stages. This allows easy key recovery from the input and output, even if the key came from a hidden register. In fact, even if an instruction computed only 4 or 5 rounds of AES, an attacker with access to the instruction oracle could efficiently recover the key cite:[Rijndael-revised].
+If the primitive is secure, its key cannot be recovered from the inputs and outputs of the complete operation. ISAs that take the key between rounds or MAC stages lose this property, even when the key comes from a hidden register: an attacker with access to an instruction computing only 4 or 5 rounds of AES can efficiently recover the key cite:[Rijndael-revised].
 
 //
 
 [[KLEE-introduction-non-features]]
 == Non-Goals
 
-KLEE intentionally excludes the following:
+KLEE intentionally does not provide:
 
-* **Variable-length complete ciphertext and plaintext inputs:** Plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
+* **Variable-length inputs:** plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
 
-* **Full key management:** KLEE provides only architectural building blocks for key management; the key-management logic resides in trusted software (e.g., TEE applets). KLEE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted software or hardware component obtains keys and policies from external components and configures CCs for the KLEE unit.
+* **Full key management:** KLEE provides only building blocks; the key-management logic resides in trusted software, such as TEE applets. External schemes do not provision keys directly: a local trusted software or hardware component obtains keys and policies and configures the CCs.
 
-* **Key revocation:**
-This specification does not define a key revocation mechanism. The rationale is:
+* **Key revocation**, because:
 
-. A revocation mechanism would impose significant implementation and performance costs, contrary to KLEE’s goals of simplicity and speed.
-. A universal revocation mechanism would be impractical to implement because of the numerous protocols, and revocation data may be unbounded. Implementing it in the KLEE unit would require dynamic access to secure memory. Isolated software components integrated with the local software stack can provide this functionality while maintaining strong security guarantees.
-. Revocation generally applies to root keys, not derived keys such as session keys. The trusted entity that manages the root keys can therefore manage revocation. The expiration-date mechanism and _Localities_ can limit the lifetime and scope of derived keys.
-. Applications that require direct software access to root keys, such as link or storage encryption, typically run in protected environments that can implement their own revocation mechanisms.
+. it would cost significant implementation effort and performance, against KLEE's goals of simplicity and speed;
+. a universal mechanism is impractical: protocols are numerous, revocation data may be unbounded, and the KLEE unit would need dynamic access to secure memory, whereas isolated software components can provide revocation with strong guarantees;
+. revocation applies mainly to root keys, which the trusted entity managing them can revoke, while expiration dates and _Localities_ limit the lifetime and scope of derived keys; and
+. applications that access root keys directly, such as link or storage encryption, usually run in protected environments with their own revocation mechanisms.
 
-* **Full prevention of misuse by compromised processes:** KLEE cannot fully prevent misuse by compromised processes, as they retain access to their own CCs. KLEE complements but does not replace existing software vulnerability mitigations and process isolation. Additionally, some modes, such as counter mode encryption, use the same operation for both encryption and decryption, which can be abused by malicious software; this risk is inherent and cannot be mitigated.
+* **Full prevention of misuse by compromised processes:** a compromised process keeps access to its own CCs, so KLEE complements, but does not replace, vulnerability mitigations and process isolation. Modes that use one operation for both encryption and decryption, such as counter mode, remain open to such abuse.
 
 [[KLEE-threat-model]]
 == Threat Model
 
-The KLEE threat model is straightforward.
+**Assets** are _keys_ and any information that helps an adversary recover plaintext or forge ciphertexts or MACs, such as the masks of tweakable XEX modes and the derived keys of AES-GCM-SIV.
+Their _confidentiality_ and _integrity_ are protected; their _availability_ is not an architectural goal.
 
-**Assets** are _keys_ and any information that may help an adversary recover plaintext or forge ciphertexts or MACs.
-Examples include masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are _confidentiality_ and _integrity_.
-Asset _availability_ is not an architectural goal.
+**Adversaries** can compromise processes through software vulnerabilities, and can access memory, for example by abusing hardware interfaces or interposing between the SoC and memory. Sophisticated hardware attacks, such as tampering with a focused ion beam or scanning electron microscope (FIB/SEM), are excluded. Side-channel attack (SCA) protection is optional: KLEE provides interfaces to SCA-unprotected and SCA-protected implementations, where these are implemented.
 
-**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities. They may also access memory contents by, for example, abusing hardware interfaces or interposing between the SoC and memory. The model excludes adversaries capable of sophisticated hardware attacks, such as tampering using a focused ion beam or scanning electron microscope (FIB/SEM). Side-channel attack (SCA) protection is optional. KLEE provides interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, where these options are implemented.
+Where it can, KLEE neither accepts risks nor removes useful features. It _controls_ threats through its own mechanisms and _transfers_ the residual risk, key extraction, to the privileged or trusted software and hardware that manage keys. Trusted software can use control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms; hardware key-management blocks can be hardened.
 
-KLEE tries to avoid accepting risks or suppressing useful features as much as possible. It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction—to the privileged or trusted software and hardware environments that manage keys. For example, trusted software can employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
-
-Direct plaintext leakage, memory-corruption attacks against the KLEE-using process, and Release of Unverified Plaintext (RUP) attacks are out of scope. KLEE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
+Direct plaintext leakage, memory-corruption attacks against the process using KLEE, and Release of Unverified Plaintext (RUP) attacks are _accepted_: the processed data resides in the user's execution context, where KLEE cannot protect it.
 
 == Discussion Points
 
-These items are *not* known defects, nor a measure of the specification's maturity. They fall
-into two groups, and the distinction matters when assessing the document.
+These items are neither known defects nor a measure of the specification's maturity. They fall into two groups.
 
 Group A — items requiring closure by the RISC-V Architecture Review Committee (ARC).:::
 
-. *Opcode allocation.* The encodings are provisional.
-  We are using the opcode MISC-MEM to encode the _core instructions_, because at the moment of
-  this writing, it has several completely unused `funct3` values, but other similar “holes” can be
-  used.
-  More problematic may be the _memory instructions_, since, because of the offsets, they use all
-  the bits once `opcode` and `funct3` are allocated. LOAD has only one unused `funct3` value and
-  we use it for `kl.input`. The same `funct3` value is currently unused in STORE, so we use it for
-  `kl.output`.
-  For `kl.load` and `kl.store` we use two `funct3` slots of `JALR` and `STORE`, respectively.
+. *Opcode allocation.* The encodings are provisional, and the final allocation is the ARC's responsibility.
+  The _core instructions_ use the MISC-MEM opcode, which currently has several unused `funct3` values; similar gaps elsewhere
+  would serve as well. The _memory instructions_ are harder, since their offsets take all remaining bits once `opcode`,
+  `funct3`, and source and destination registers are fixed: `kl.input` uses the only unused `funct3` value of LOAD, `kl.output` the same value of STORE, and
+  `kl.load` and `kl.store` use two `funct3` slots of JALR and STORE, respectively.
 +
-`kl.load` under JALR `funct3` 6/7 is an I-type encoding whose `rd` is a locker number rather than a GPR.
-Tools that decode JALR generically may mis-disassemble it (but in theory they should check `funct3` first).
+`kl.load` under JALR `funct3` 6/7 is an I-type encoding whose `rd` is a locker number, not a GPR. Tools that decode JALR
+without first checking `funct3` may mis-disassemble it.
 +
-A second option for `kl.size`, `kl.avail`, `kl.getmd*`, `kl.restrict*`, and `kl.clone`
-  is to move encoding bits [29:25] to [24:20], fixing bits [29:25] to zero,
-  thus freeing up significant space in `funct7`.
-  The final allocation is the ARC's responsibility.
+`kl.size`, `kl.avail`, `kl.getmd*`, `kl.restrict*`, and `kl.clone` could move encoding bits [29:25] to [24:20] and fix
+bits [29:25] to zero, freeing significant space in `funct7`.
 
-. *`misa.L` and `mstatus[26:25]` (KLS).* Provisional, contested, and resolvable only by
-  the ARC. `misa.L` may be replaced by another mechanism, such as Unified Discovery, and the
-  `*status` CSRs by other CSRs. Same for the choice of bits `mstatus`[26:25], and of the
-  corresponding bits of `sstatus` and `vsstatus`. KLS may end up at a
-  different offset, in a different register, or be carried by a mechanism other than a
-  `*status` context-status field. Nothing in this specification depends on the particular
-  offset: only on there being a two-bit context-status field with the semantics of
-  <<Zkl-ISA-priv.adoc#KLEE-aces-encoding>>, defined analogously to `FS` and `VS`.
+. *`misa.L` and `mstatus[26:25]` (KLS).* Provisional and contested. `misa.L` may give way to another mechanism, such as
+  Unified Discovery, and KLS may move to another offset or register, or to a mechanism other than a `*status`
+  context-status field; the same holds for the corresponding bits of `sstatus` and `vsstatus`. The specification depends
+  only on a two-bit context-status field with the semantics of <<Zkl-ISA-priv.adoc#KLEE-aces-encoding>>, analogous to
+  `FS` and `VS`.
 
-. *KLEE CSR addresses.* All addresses are `0xXXX` or “(Indirect)” placeholders, to be assigned by
-  the ARC, as is the `Smstateen` bit of <<Zkl-ISA-priv.adoc#KLEE-CSRs-priv>>.
-  Some CSRs have been marked as indirect, by which we mean that
-  we envision we can use the Indirect CSR Access mechanism of `Smcsrind`/`Sscsrind`.
-  The final word, either `*iselect` values or direct CSR access and the allocation of the indices,
-  is to be determined by the ARC.
+. *KLEE CSR addresses.* All addresses are `0xXXX` or “(Indirect)” placeholders for the ARC to assign, as is the
+  `Smstateen` bit of <<Zkl-ISA-priv.adoc#KLEE-CSRs-priv>>. “Indirect” CSRs would use the Indirect CSR Access of
+  `Smcsrind`/`Sscsrind`; the ARC decides between `*iselect` values and direct access, and allocates the indices.
 
-. *Exception cause codes.* The ARC must allocate `mcause` values: individual causes, or a single
-  KLEE cause with a subcause register. Some form of “`mvalue`” reporting the locker number is also
-  needed; it would spare handlers from decoding direct and indirect locker references.
-.. *specific* `*mtval*` *or KLEE Emulation Trap.* Currently we are using the illegal-instruction exception for the purpose of
-  trap-and-emulate. It would be a good idea to define a new exception type for this purpose, especially
-  since we are currently _not_ delegating emulation to any mode below M. Or getting a special `mtval`
-  for the purpose.
+. *Exception cause codes.* The ARC must allocate `mcause` values: individual causes, or one KLEE cause with a subcause
+  register. A value reporting the locker number, an “`mvalue`”, would spare handlers from decoding direct and indirect
+  locker references.
+
+. *Emulation trap.* Trap-and-emulate currently uses the illegal-instruction exception, and emulation is not delegated
+  below M-mode. A dedicated KLEE exception, such as `kl_exc_emulate` in the first group of illegal-instruction grounds,
+  or a specific `mtval`, would separate KLEE emulation from other virtual- and illegal-instruction exceptions.
 
 . *KLV scope.* <<Zkl-ISA-unpriv.adoc#KLEE-KLV>> defines the vector subset KLEE requires, which we consider complete.
-  The following questions do not block candidacy but must be resolved; we request ARC feedback.
+  These questions do not block candidacy but need ARC feedback:
 
-  .. Should KLV vector instructions be gated by `*status.VS` or another mechanism?
+  .. Should KLV vector instructions be gated by `*status.VS` or by another mechanism?
   .. How should KLV be discovered?
-  .. How should element widths be defined for the operations of `kl.exec`? `EGW`/`SEW` cannot
-     represent input/output sizes that are not powers of two. One option is to allow any value
-     that divides the size, defining `EGW`/`SEW` and the `vstart` increment per iteration
-     (link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[]).
+  .. How should `kl.exec` define element widths? `EGW`/`SEW` cannot represent sizes that are not powers of two; one
+     option is to allow any value that divides the size, with `EGW`/`SEW` and the `vstart` increment defined per
+     iteration (link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[]).
 
-. *RVWMO axiomatic integration.* <<Zkl-ISA-unpriv.adoc#KLEE-Memory-Model>> specifies the memory ordering of KLEE's
-  component memory operations informally, through prefix-completeness, and <<Zkl-ISA-unpriv.adoc#KLEE-resumability>>
-  gives a conflicting-access rule. Integrating KLEE into RVWMO's axiomatic formalism remains to be
-  done with the ARC during ratification.
+. *RVWMO axiomatic integration.* <<Zkl-ISA-unpriv.adoc#KLEE-Memory-Model>> specifies the ordering of KLEE's component
+  memory operations informally, through prefix-completeness, and <<Zkl-ISA-unpriv.adoc#KLEE-resumability>> gives a
+  conflicting-access rule. Their integration into RVWMO's axiomatic formalism remains to be done with the ARC.
 
-. *Discoverability of cipher/mode combinations.* Subextensions may be impractical, as argued in the
-  introduction to <<Zkl-ISA-machines.adoc#KLEE-Machines>>; `kl.avail` can also serve. We are open to using Unified Discovery.
+. *Discoverability of cipher/mode combinations.* Subextensions may be impractical (see the introduction to
+  <<Zkl-ISA-machines.adoc#KLEE-Machines>>); `kl.avail` can serve, and Unified Discovery is an option.
 
-. *Cross-hart CSR access.* Is there, or should there be, an architected mechanism for M-mode on
-  one hart to read or configure another hart's CSRs (<<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>>,
-  <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>)? If one exists or is planned, <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>> could use it instead
-  of platform-specific channels.
-
-. *Separate the KLEE-specific virtual- and illegal-instruction exception types.* i.e., create KLEE exception `kl_exc_emulate` in place of illegal-instruction exception, place it in the first illegal-instruction exception group.
+. *Cross-hart CSR access.* Is there, or should there be, an architected way for M-mode on one hart to read or configure
+  another hart's CSRs? <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>> and <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>> could
+  then use it instead of platform-specific channels.
 
 //
 
@@ -167,40 +137,35 @@ Group B — open design questions owned by this task group.:::
 . *Effective data endianness.* Clarify UBE and its interaction with MPRV/MPP in the definition of
   _effective data endianness of the current privilege mode_ (<<Zkl-notation.adoc#KLEE-Notation>>).
 
-. *Guest and Host settable CSKs.* Instead of always switching to M-mode. Or only Host.
+. *Guest- and host-settable CSKs*, instead of always switching to M-mode, or host-settable only.
 
-. *Delegate KLEE Unit trap-and-emulate to HSx* TBD: important and necessary.
+. *Delegate KLEE trap-and-emulate to HSx.* Important and necessary; to be defined.
 
-. *Eliminate* `*kl.load*` and ``*kl.store*``**?** Rationale: `kl.mv` is sufficient, esp., if we have vectors, there are no performance penalties, simplifies logic, reduces encoding pressure. If we do not have vectors performance is compromised anyway in name of compactness. Maybe we could use the KLIOBUF in the latter case (if it is not killed by ARC).
+. *Eliminate `kl.load` and `kl.store`?* `kl.mv` suffices: with vectors there is no performance penalty, and dropping them
+  simplifies the logic and relieves encoding pressure. Without vectors, performance is already traded for compactness,
+  and the KLIOBUF could serve, if the ARC keeps it.
 
-. *Side-channel protection* for the Machines and the sealing path. Discuss levels and formalization, documents to refer to.
+. *Side-channel protection* of the Machines and the sealing path: levels, formalization, and the documents to refer to.
 
-. *`kl.mgmt` interruptibility.* `kl.mgmt` can be relatively long-running, though not on the order of ECC
-  scalar multiplication or signature verification. It is currently uninterruptible: preemption and
-  resumption of `kl.mgmt` may introduce new attack vectors. Interrupting the internal encryption or decryption
-  process complicates export, as a locker may contain both encrypted and unencrypted content,
-  and unencrypted content cannot be exported as such.
-  We do not think there is a secure way to interrupt `kl.mgmt` precisely except by having the KLEE unit work on internal copy.
+. *`kl.mgmt` interruptibility.* `kl.mgmt` can run relatively long, though much less than an ECC scalar multiplication or a
+  signature verification. It is uninterruptible because preempting and resuming it may open new attack vectors: an
+  interrupted encryption or decryption leaves a locker with both encrypted and unencrypted content, and unencrypted
+  content cannot be exported as such. A precise interruption seems secure only if the KLEE unit works on an internal copy.
 
-. *Nonces for SCC export and import.* A nonce as in RFC 8452 costs six AES-256 encryptions per
-  export or import, whereas the current design recomputes derived keys only when the CSK changes.
-  A competing architecture also omits nonces from key export and import, likely for the same
-  reason. We welcome input on this choice.
+. *Nonces for SCC export and import.* An RFC 8452 nonce costs six AES-256 encryptions per export or import, whereas the
+  current design recomputes the derived keys only when the CSK changes. A competing architecture also omits nonces from
+  key export and import, probably for the same reason. We welcome input on this choice.
 // One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
-. *Additional inputs for random key generation.* KDFs that accept arbitrary inputs and produce
-  unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a locker's
-  key field. Should standard KDFs be defined?
+. *Additional inputs for random key generation.* KDFs with arbitrary inputs and unlimited outputs could easily be defined
+  as Machines that feed a locker's key field through `kl.derive`. Should standard KDFs be defined?
 
 . *`SCC_Encrypt` security claim.* Substantiate the claim “secure for up to 2^64^ 128-bit blocks.”
 
-. *KLF capacity.* Residual KLF capacity is not discoverable.
-  The capacity used by a locker depends on the implementation's internal representation (ADS size, number
-  of shares of a masked implementation), so exact requirements are impossible; the task group may
-  discuss approximate mechanisms. We could extend `kl.size`/`kl.avail` to return whether there is
-  sufficient capacity available for a given provision/import/clone operation, and whether implementations
-  can offer to suggest which locker to free first except a given one (for instance, the current largest, or
-  the one that has not been used longest). Intel may cache keys; we have to manage them explicitly.
+. *KLF capacity.* Residual KLF capacity is not discoverable, and exact requirements are impossible, since a locker's
+  footprint depends on the implementation (ADS size, number of shares of a masked implementation). `kl.size`/`kl.avail`
+  could report whether a provision, import or clone fits, and possibly which locker other than a given one to free first,
+  for instance the largest or the least recently used. Intel may cache keys; KLEE manages them explicitly.
 
 . *Random material in exportable States.* Compare and streamline Rules
   <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>>, <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-atomic-randomness>> and
@@ -212,5 +177,5 @@ Group B — open design questions owned by this task group.:::
 //  bring the Machine off course. Principle: an implementor may take an optional optimization path,
 //  but is then responsible for its security.
 
-. *Debug-mode interaction.* Specified in <<Zkl-ISA-unpriv.adoc#KLEE-interaction-with-debug>>, but more discussion seems
-   to be warranted because the authors feel they do not have the necessary insight into the Debug Specification.
+. *Debug-mode interaction.* Specified in <<Zkl-ISA-unpriv.adoc#KLEE-interaction-with-debug>>, but it needs more
+  discussion: the authors lack insight into the Debug Specification.
