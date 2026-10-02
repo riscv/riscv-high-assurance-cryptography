@@ -58,7 +58,7 @@ vloop:
   bleu      s2, s6, 1f
   mv        s2, s6
 1:
-  vsetvli   s2, s2, e8, m1, ta, ma # AVL <= VLMAX, so vl = AVL, a multiple of 16
+  vsetvli   s2, s2, e8, m1, ta, ma # AVL <= VLMAX, so vl = AVL, multiple of 16
   vle8.v    v1, (t4)              # load a chunk of the PI
   kl.mv     K(t0), v1             # move it into the locker
   add       t4, t4, s2            # bump the source pointer
@@ -77,9 +77,9 @@ vloop:
   beq       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
 
 finished:
-# Here, the code should check whether there is an Error, and in this case
-# whether it is new (old s4 was not in an Error State) and decide course
-# of action.
+# Here, the code should check whether the locker is in an Error State and, if
+# so, decide the course of action. The PI carried State = Unconfigured, so any
+# Error State is new.
 ----
 
 *Provisioning Code (`Zklmem`)*
@@ -125,11 +125,10 @@ finished:
 
   addi       t6, t6, 16           # point to next memory region
   li         s3, 16               # s3 = 16 (size of MDH)
-  beq        s1, s3, done         # in Error State we are done
+  beq        s1, s3, done         # only the MDH to store (e.g., Error State)
   addi       s1, s1, -16          # adjust size to remove the MDH
 
   kl.mgmt    K(t0), #kl_cfg_exporting # start exporting
-
   mv         t4, t6               # destination: first byte after stored MDH
   vsetvli    s6, zero, e8, m1, ta, ma # s6 = VLMAX
 store_loop:
@@ -160,7 +159,10 @@ done:
 [WARNING]
 ====
 Incomplete procedure, like all the others in management.
-Need to add support for PP and ES export.
+A locker in an Error State is covered: only its MDH is stored.
+A locker under management (partially provisioned or partially imported) is exported by the same sequence,
+but the caller must also save `klstart` before the opening `kl.mgmt`, which clears it, and restore it after the re-import
+(<<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>); this is not shown.
 ====
 
 *Export Code (`Zklmem`)*
@@ -181,6 +183,8 @@ store_loop:
   ld         s4, 0(t6)            # load MDH[63:0] from memory
   ld         s5, 8(t6)            # load MDH[127:64] from memory
   li         t3, 0x30             # to determine Error States
+  srli       s7, s4, 19           # _State_ of the saved MDH, bits [24:19]
+  andi       s7, s7, 0x38         # s7 = 0x30: the image of an Error-State locker
 
 restart:
   kl.size    s1, s4               # length of SCC/PCCC (Form B: MDH[63:0])
@@ -189,8 +193,11 @@ restart:
   kl.getst  t2, K(t0)
   beqz      t2, handle_errors
   andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # three top bits of _State_ = 110 ?
-
+  bne       t3, t2, 2f            # three top bits of _State_ = 110 ?
+  beq       t3, s7, success       # yes, as saved: the short import is complete,
+                                  # with this one kl.mgmt and no load
+  j         handle_errors         # yes, but new (e.g., invalid Metadata)
+2:
   addi      t4, t6, 16            # first byte after the MDH
   addi      s1, s1, -16           # Content size to load, without MDH
 
@@ -212,7 +219,7 @@ vloop:
   bnez      s1, vloop
 
   kl.mgmt   K(t0), #kl_cfg_management_end, s5:s4  # decrypt and auth SCC
-                                  # and restore original MDH
+                                  # and restore _State_ from the saved MDH
   kl.getst  t2, K(t0)
   andi      t2, t2, 0x38
   beq       t3, t2, handle_errors # catches "Authentication Failed"
@@ -225,14 +232,18 @@ success:
   ld        s4, 0(t6)             # load MDH[63:0] from memory
   ld        s5, 8(t6)             # load MDH[127:64] from memory
   li        t3, 0x30              # to determine Error States
+  srli      s7, s4, 19            # _State_ of the saved MDH, bits [24:19]
+  andi      s7, s7, 0x38          # s7 = 0x30: the image of an Error-State locker
 
 restart:
   kl.mgmt   K(t0), #kl_cfg_importing, s5:s4 # open locker for import, load MDH
   kl.getst  t2, K(t0)
   beqz      t2, handle_errors
   andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # three top bits of _State_ = 110 ?
-
+  bne       t3, t2, 2f            # three top bits of _State_ = 110 ?
+  beq       t3, s7, success       # yes, as saved: the short import is complete
+  j         handle_errors         # yes, but new (e.g., invalid Metadata)
+2:
   addi      t4, t6, 16            # walking pointer: first byte after MDH
 
 content:
@@ -285,7 +296,7 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 ----
 
 [[KLEE-keystream-modes-example]]
-== CTR/LFSR/XCTR/XLFSR Keystream Generation
+== CTR/XCTR Keystream Generation
 
 [[KLEE-pseudocode-keystream-modes]]
 .Encrypt with Keystream Generation
@@ -327,7 +338,7 @@ Only XEX encryption pseudocode is provided; decryption is similar
   IMPORT K0, (X5)
 
   V0 ← IV
-  kl.setst K0, #kl_state_encrypt, V0   // Configure locker to encrypt, set tweak
+  kl.setst K0, #kl_state_encrypt, V0 // Configure locker to encrypt, set tweak
 
   foreach(i from 0 to floor(len_in_bytes(PT)/16)-1) do:
     V0 ← PT[16*i .. 16*i+15]
@@ -379,9 +390,8 @@ a multiple of `b`; a final block length shorter than `b` is presented in State _
   kl.exec K0, V0
   vsetivli zero, 4, e32, m1, ta, ma        // back to 128-bit vectors
 
-  // Compute the AD contribution to the tag.  The caller has zero-filled the last
-  // block beyond the end of the AD.
-
+  // Compute the AD contribution to the tag.
+  // The caller has zero-filled the last block beyond the end of the AD.
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V0 ← AD[16*i .. 16*i+15]
     kl.exec K0, V0                       // Absorb it into GHASH
@@ -395,7 +405,7 @@ a multiple of `b`; a final block length shorter than `b` is presented in State _
     kl.exec V1, K0, V0
     CT[16*i .. 16*i+15] ← V1
 
-  // Fractional final block, if any.  The plaintext is not zero-padded here.
+  // Fractional final block, if any. The plaintext is not zero-padded here.
   X1 ← len_in_bits(PT) mod 128
   if (X1 != 0) then:
     kl.setst K0, #kl_state_enc_last_block, X1
@@ -409,7 +419,7 @@ a multiple of `b`; a final block length shorter than `b` is presented in State _
   kl.exec V2, K0                          // V2 contains the tag
 ----
 
-Now we give the code for GCM decryption.
+<<KLEE-pseudocode-GCM-decryption>> gives the code for GCM decryption, from the point where the AD has been absorbed; up to there, the code is that of <<KLEE-pseudocode-GCM-encryption>>.
 // Decryption differs from encryption in three ways: the roles of `PT` and `CT` are
 // reversed; States _Encrypt_ and _Enc_Last_Block_ are replaced by _Decrypt_ and
 // _Dec_Last_Block_; and the tag is finalized and verified instead of being emitted, as shown
@@ -463,9 +473,12 @@ supports carry-less binary multiplication.
 
   vsetivli zero, 4, e32, m1, ta, ma
   IMPORT K0, (X5)
+  kl.setst K0, #kl_state_encrypt      // ECB admits kl.exec only in _Encrypt_
   V0[95:0] ← IV                       // 96-bit IV in bytes 0..11
   V3 ← zeros(b)                       // “Auth Data 1”
   kl.exec V4, K0, V3                  // compute H
+
+  // The caller has zero-filled the last block beyond the end of the AD.
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V1 ← AD[16*i .. 16*i+15]
     V3 ← V3 xor V1
@@ -474,12 +487,9 @@ supports carry-less binary multiplication.
   // Counter = 1 is used for E(K,J0), which is the tag mask: in this 96-bit
   // nonce version, the counter for the text starts at 2.
 
-  // The final block is truncated to the length of the message remainder before
-  // it is stored; the copy absorbed into GHASH is the zero-padded ciphertext,
-  // which is what SP 800-38D specifies.
-
   counter ← 2
-  foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) do:
+  PT_fullblocks ← floor(len_in_bytes(PT)/16)
+  foreach(i from 0 to PT_fullblocks-1) do:
     V5 ← bswap(bin(counter,32)) @ V0[95:0]
     V1 ← PT[16*i .. 16*i+15]
     kl.exec V2, K0, V5                // create mask by encrypting the counter
@@ -488,6 +498,20 @@ supports carry-less binary multiplication.
     V3 ← Galoismul(V4, V3)
     CT[16*i .. 16*i+15] ← V1
     counter ← counter + 1
+
+  // Fractional final block of r bytes, if any.  The ciphertext is truncated
+  // to r bytes before it is absorbed and stored: GHASH absorbs the
+  // zero-padded ciphertext, which is what SP 800-38D specifies.
+  r ← len_in_bytes(PT) mod 16
+  if (r != 0) then:
+    V5 ← bswap(bin(counter,32)) @ V0[95:0]
+    V1 ← PT[16*PT_fullblocks .. 16*PT_fullblocks+r-1]
+    kl.exec V2, K0, V5
+    V1 ← V1 xor V2
+    V1 ← zeros(128-8*r) @ V1[8*r-1:0] // discard the keystream past the end
+    V3 ← V3 xor V1
+    V3 ← Galoismul(V4, V3)
+    CT[16*PT_fullblocks .. 16*PT_fullblocks+r-1] ← V1
 
   V3 ← V3 xor (bswap(bin(len_in_bits(PT),64)) @ bswap(bin(len_in_bits(AD),64)))
   V3 ← Galoismul(V4, V3)
@@ -534,18 +558,17 @@ We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption
     V0 ← PT[16*i .. 16*i+15]             // Load a block of plaintext
     kl.exec K0, V0                       // Absorb it into POLYVAL
 
-  // Finalize the SIV.  The lengths are the *input* of a Form A kl.exec in State
-  // _Enc_Tag_Finalize_, and the SIV is its output; they are not absorbed by a
-  // further kl.exec in _Hash_Absorb_.
-
+  // Finalize the SIV.  The lengths are the *input* of a Form A kl.exec in
+  // State _Enc_Tag_Finalize_, and the SIV is its output; they are not
+  // absorbed by a further kl.exec in _Hash_Absorb_.
   kl.setst K0, #kl_state_enc_tag_finalize
   V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
   kl.exec V2, K0, V0
   tag ← V2
 
-  // Second pass: encrypt the whole blocks of the plaintext, with the SIV as IV.
-  // The kl.exec above has already moved the locker to _Encrypt_; a kl.setst
-  // naming _Encrypt_ would invalidate it.
+  // Second pass: encrypt the whole blocks of the plaintext, with the SIV
+  // as IV. The kl.exec above has already moved the locker to _Encrypt_;
+  // a kl.setst naming _Encrypt_ would invalidate it.
   PT_fullblocks ← floor(len_in_bits(PT)/128)
 
   foreach(i from 0 to PT_fullblocks-1) do:
@@ -553,7 +576,7 @@ We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption
     kl.exec V1, K0, V0                   // Encrypt the block
     CT[16*i .. 16*i+15] ← V1             // Store a block of ciphertext
 
-  // Fractional final block, if any.  Here the plaintext must not be zero-padded:
+  // Fractional final block, if any.  Here the PT must not be zero-padded:
   // the state exists so that no keystream bit past its end is written to CT.
   X1 ← len_in_bits(PT) mod 128
   if (X1 != 0) then:
@@ -606,8 +629,8 @@ We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption
     kl.exec V1, K0, V0
     PT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1] ← V1
 
-  // Absorb the lengths and verify, with a Form B kl.exec: the recomputed SIV is
-  // compared internally against the one supplied above
+  // Absorb the lengths and verify, with a Form B kl.exec: the recomputed
+  // SIV is compared internally against the one supplied above
   kl.setst K0, #kl_state_dec_tag_finalize
   V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
   kl.exec K0, V0
@@ -686,7 +709,8 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `KLL
   kl.exec V1, K0                         // output tag
 ----
 
-Now we give the code for OCB decryption.
+OCB decryption follows <<KLEE-pseudocode-OCB-encryption>> up to the final block, with the roles of `PT` and `CT` exchanged, and States _Decrypt_ and _Dec_Last_Block_ in place of _Encrypt_ and _Enc_Last_Block_;
+<<KLEE-pseudocode-OCB-decryption-difference>> gives only the last step, which differs.
 OCB has no _Dec_Tag_Finalize_ state: after the last block, _Dec_Last_Block_ transitions directly to
 _Hash_Verify_, where the received tag is supplied, as shown below.
 
@@ -717,7 +741,7 @@ _Hash_Verify_, where the received tag is supplied, as shown below.
   remainder ← M_len mod 128
   if remainder == 0 and blocks > 0 then  // a whole number of full blocks:
     blocks    ← blocks - 1               // the last one is the "last block"
-    remainder ← 128                      // do not forget to add 10* padded block
+    remainder ← 128                  // a full last block takes no 10* padding
 
   foreach(i from 0 to blocks-1) do:
     V0 ← M[16*i .. 16*i+15]
