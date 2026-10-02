@@ -401,9 +401,8 @@ class Unit:
         self.hw = {j: _secret(b'hw', j) for j in range(6) if j not in hw_missing}
         self.sks = dict(DEFAULT_SKS)
         self.physbootscrt, self.virtbootscrt = _secret(b'phys'), _secret(b'virt')
-        self.mlocality, self.hlocality = _secret(b'mloc'), _secret(b'hloc')
-        self.slocality, self.vslocality = _secret(b'sloc'), _secret(b'vsloc')
-        self.mode, self.V, self.kls_off, self.llstatus, self.vstart, self._rbg = 'M', 0, False, {}, 0, 0
+        self.mlocality, self.hlocality, self.slocality = _secret(b'mloc'), _secret(b'hloc'), _secret(b'sloc')
+        self.mode, self.kls_off, self.llstatus, self.vstart, self._rbg = 'M', False, {}, 0, 0
         self.reset()
         self.__dict__.update(attrs)
     def reset(self):                                                # <<KLEE-out-of-reset-unpriv>>
@@ -433,11 +432,9 @@ class Unit:
     def _lst_raw(self, j):
         if j <= 5: return self.hw.get(j, 0)
         return {6: self.physbootscrt, 7: self.virtbootscrt if self.h_ext else 0, 8: self.mlocality,
-                9: self.hlocality if self.h_ext else 0,
-                10: self.vslocality if self.V else self.slocality}[j]
+                9: self.hlocality if self.h_ext else 0, 10: self.slocality}[j]
     def lst_register(self, j):
-        return {8: 'mkllocality', 9: 'hkllocality' if self.h_ext else None,
-                10: 'vskllocality' if self.V else 'skllocality'}[j]
+        return {8: 'mkllocality', 9: 'hkllocality' if self.h_ext else None, 10: 'skllocality'}[j]
     def lst_eff(self, j):
         """LST_eff: substitution along the HW Binding chains, zeros(128) if none."""
         if j > 5: return self._lst_raw(j)
@@ -1560,9 +1557,9 @@ def t_localities():
                                                                        ('mlocality', loc(mloc=1)),
                                                                        ('slocality', loc(sloc=1)))],
         nh.lst_eff(7), nh.lst_eff(9)), ([True] * 3, 0, 0))
-    eq('entries 8-10 are three registers; entry 10 is skllocality at V=0, vskllocality at V=1',
-       [[fresh(V=v).lst_register(j) for j in (8, 9, 10)] for v in (0, 1)],
-       [['mkllocality', 'hkllocality', 'skllocality'], ['mkllocality', 'hkllocality', 'vskllocality']])
+    eq('entries 8-10 are three registers, the same in every mode; entry 10 is skllocality at V=0 and at V=1',
+       [[fresh(mode=m).lst_register(j) for j in (8, 9, 10)] for m in ('M', 'HS', 'U', 'VS', 'VU')],
+       [['mkllocality', 'hkllocality', 'skllocality']] * 5)
     img = export(pv(fresh(), 0, cipher(Locality=loc(sloc=1, hw1=2))), 0)
     eq('SCC imports with matching secrets; other SLocality or substituted ChipFamScrt rejects',
        [import_(fresh(), 1, img), import_(fresh(slocality=_secret(b'sloc') ^ 1 << 77), 1, img),
@@ -1574,15 +1571,19 @@ def t_localities():
        (len(img0), u.getst(0), import_(fresh(hlocality=0), 1, img0), import_(fresh(), 1, img0)),
        (64, READY, INVALID, AUTH))
     os_hart = pv(fresh(h_ext=False, mode='S'), 0, cipher(Locality=loc(sloc=1)))
-    guest = fresh(mode='VS', V=1, vslocality=os_hart.slocality, slocality=1, hlocality=2)
-    g1, g2 = (fresh(mode='VS', V=1, vslocality=0x5555, hlocality=t) for t in (0x111, 0x222))
+    guest = fresh(mode='VS', slocality=os_hart.slocality, hlocality=2)     # the OS still writes skllocality
+    g1, g2 = (fresh(mode='VS', slocality=0x5555, hlocality=t) for t in (0x111, 0x222))
     provision(g1, 0, cipher(Locality=loc(hloc=1, sloc=1)))
     hv = pv(pv(fresh(mode='HS', hlocality=0x9999), 0, cipher(Locality=loc(hloc=1))), 1, cipher(Locality=loc(sloc=1)))
-    handed, sl_img = export(hv, 0), export(hv, 1)
-    hv.mode, hv.V = 'VS', 1
-    eq('interoperability: OS to guest; VM separation; HLocality hand-off; SLocality cannot cross',
-       [import_(guest, 0, export(os_hart, 0)), import_(g2, 0, export(g1, 0)), import_(hv, 2, handed),
-        import_(hv, 3, sl_img)], [READY, AUTH, READY, AUTH])
+    handed, sl_img, hv_sloc = export(hv, 0), export(hv, 1), hv.slocality
+    hv.mode, hv.slocality = 'VS', 0x7777                # entering the guest: skllocality holds the guest's value
+    r = [import_(guest, 0, export(os_hart, 0)), import_(g2, 0, export(g1, 0)), import_(hv, 2, handed),
+         import_(hv, 3, sl_img)]
+    hv.slocality = hv_sloc                              # the hypervisor's own value left in place
+    eq('interoperability: OS to guest; VM separation; HLocality hand-off; SLocality crosses levels only with '
+       'the same skllocality value', r + [import_(hv, 3, sl_img)], [READY, AUTH, READY, AUTH, READY])
+    info('skllocality is one register in every mode: a hypervisor separates its own SLocality-bound CCs from a '
+         'guest by loading the guest\'s value into skllocality before it runs the guest.')
     u = pv(fresh(), 0, cipher(KeyType=1, UsagePolicy=0b10001, Locality=loc(hw1=1, mloc=1)), v2b(SKID_A, 16))
     m, img, v = u.getmd(0), export(u, 0), fresh()
     eq('SKID resolution narrows UsagePolicy and Locality, keeps KeyType 1 and the SKID; re-resolved at import',

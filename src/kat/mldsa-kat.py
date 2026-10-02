@@ -24,7 +24,7 @@ SET_SCALAR = 3                                     # ECC _Set_Scalar_
 h = bytes.fromhex
 
 class RBG:
-    """<<KLEE-RBG>>, scripted: each draw returns the next value."""
+    """<<KLEE-Prerequisites>>, scripted: each draw returns the next value."""
     def __init__(self, *values):
         self.values, self.draws = list(values), 0
 

@@ -66,7 +66,7 @@ def fset(mdh, f, v):
     return mdh & ~m | v << lo & m
 
 class RBG:
-    """<<KLEE-RBG>>, scripted: each draw returns the next value; None is a failure."""
+    """<<KLEE-Prerequisites>>, scripted: each draw returns the next value; None is a failure."""
     def __init__(self, *values): self.values, self.draws = list(values), 0
 
     def __call__(self):
