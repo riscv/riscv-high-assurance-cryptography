@@ -1506,7 +1506,7 @@ def t_usage():
     eq('denied mode: kl.exec, kl.setst, kl.clearads -> kl_exc_privilege_violation (GR7)',
        [trap_of(ex, u, 0), trap_of(u.setst, 0, READY), trap_of(u.setst, 0, CLEAR_ADS), u.getst(0)],
        ['privilege_violation'] * 3 + [ToyCipher.ENCRYPT])
-    eq('not usage-controlled: getmd, getst, size, avail, restrict, clone, error setst, mgmt, clear',
+    eq('not usage instructions: getmd, getst, size, avail, restrict, clone, error setst, mgmt, clear',
        [u.getmd(0)['Machine'], u.getst(0), u.size(k=0), u.avail(k=0), u.restrict(0, md(UsagePolicy=2), 'h'),
         u.getmd(0)['UsagePolicy'], u.clone(1, 0), u.setst(1, EXPIRED), export(u, 0)[:16] == mdh_bytes(u.getmd(0)),
         u.getst(0), u.setst(0, 0)],
@@ -2143,7 +2143,7 @@ def t_sgr():
        (u.getst(0), u.exec_(0, 'C', vout=bytearray(4)), u.getmd(0)['MachineUse']), (SUCCESS, 'done', 4))
     u = fresh()
     vo = bytearray(b'\xAA' * 32)
-    eq('SGR16: usage-controlled instructions on an Unconfigured locker are no-ops, output zeroed, State kept',
+    eq('SGR16: usage instructions on an Unconfigured locker are no-ops, output zeroed, State kept',
        [u.exec_(0, 'D'), u.exec_(0, 'C', vout=vo), bytes(vo), u.setst(0, READY), u.setst(0, CLEAR_ADS),
         u.derive(1, 0, 32), u.getst(0), u.getst(1)],
        ['noop', 'noop', bytes(32), 'noop', 'noop', 'noop', UNCONF, UNCONF])
@@ -2174,7 +2174,8 @@ def t_sgr():
         pv(fresh(), 0, cipher())
     w6.mode = 'S'
     w1.setst(0, INVALID)
-    eq('Gate Order Rule: Error State > Configuration > forbidden substitution > UsagePolicy > expiry > KLIOBUF > Machine',
+    eq('Gate Order Rule: Error State > Configuration > forbidden substitution > UsagePolicy > expiry > KLIOBUF > '
+       'Machine',
        [(ex(w1, 0), w1.getst(0)), trap_of(w2.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w3.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w4.exec_, 0, 'D'), (trap_of(ex, w5, 0), w5.getst(0)), (w6.exec_(0, 'D'), w6.getst(0)),
@@ -2314,7 +2315,7 @@ def t_expiration():
        ('invalid', 'invalid', INVALID, 'error state', INVALID))
     u, out = rc(1, eu(0, ed=1 << 19)), bytearray(b'\x22' * 16)
     u.clock = None
-    eq('an unreadable clock expires a non-zero date at the next usage-controlled instruction, not date 0',
+    eq('an unreadable clock expires a non-zero date at the next usage instruction, not date 0',
        (u.exec_(0, 'A', vin=bytearray(16), vout=out), u.getst(0), bytes(out), u.setst(1, READY)),
        ('expired', EXPIRED, bytes(16), 'ok'))
 
@@ -2651,7 +2652,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage-controlled, no evaluation point, uninterruptible (IRR1); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (IRR1); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 
