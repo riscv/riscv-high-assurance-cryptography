@@ -72,7 +72,7 @@ class XexLocker:
     keytype = property(lambda s: fget(s.mdh, 'KeyType'))
     k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
     widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
-    def invalidate(s):                            # GR9
+    def invalidate(s):                            # SGR10
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
     def _install(s, field, key2, importing):
@@ -105,14 +105,14 @@ class XexLocker:
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
         """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
-        if s.state in ERROR_STATES:               # GR11
+        if s.state in ERROR_STATES:               # SGR16
             return
         pol = fget(s.mdh, 'MachinePolicy')
         if immed == READY and form == 'A':
             s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
         elif (immed in (ENCRYPT, DECRYPT) and form in ('C', 'A/iobuf')
               and (s.state == READY and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)
-                   or s.state == immed)):         # GR20: same State re-tweaks
+                   or s.state == immed)):         # SGR4: same State re-tweaks
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
             s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MGR5)
             s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
@@ -126,8 +126,8 @@ class XexLocker:
         lo = 8 * klstart
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
-            return out & ~window, 0               # GR11
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR18, MGR1; MGR2 (<<KLEE-CSR-klstart>>: length first)
+            return out & ~window, 0               # SGR16
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # SGR2, MGR1; MGR2 (<<KLEE-CSR-klstart>>: length first)
             s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -406,7 +406,7 @@ check("Encrypt -> Ready zeroes the mask; the CC is reusable with a new tweak", T
       (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
 cl = tw(new_xex(k1, k2), t=0xdead)
 cl_run(cl, data)
-check("same-State kl.setst (GR20) re-tweaks: mask index back to 0", True,
+check("same-State kl.setst (SGR4) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 info("a same-State kl.setst is read as the Form C transition into that State: it sets the tweak afresh.")
 cl = new_xex(k1, k2)

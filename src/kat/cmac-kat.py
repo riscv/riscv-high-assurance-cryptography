@@ -62,7 +62,7 @@ class Cmac:
             SKS[skid] = key
         s.hash = s.last_blk_len = 0
     def _invalid(s, why=None):
-        s.state, s.key, s.skid = INVALID, None, None   # GR9
+        s.state, s.key, s.skid = INVALID, None, None   # SGR10
         s.hash = s.last_blk_len = 0
         if why:
             raise Invalid(why)
@@ -76,13 +76,13 @@ class Cmac:
     SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
              (VERIFY, 'C'): (OUTPUT,), (VERIFY, 'A'): (OUTPUT,)}
     def setst(s, immed, form='A', aux=0):
-        if s.state in ERROR_STATES:               # GR11
+        if s.state in ERROR_STATES:               # SGR16
             return
-        if immed == READY:                        # GR21
+        if immed == READY:                        # SGR8
             s.state, s.hash, s.last_blk_len = READY, 0, 0
             return
         if s.state not in s.SETST.get((immed, form), ()):
-            s._invalid('transition')              # MGR1, GR24
+            s._invalid('transition')              # MGR1, SGR6
         if immed == VERIFY and not s.policy & 2:
             s._invalid('MachinePolicy[1] clear')  # MGR10
         if immed == LAST:
@@ -92,10 +92,10 @@ class Cmac:
         s.state = immed if immed != VERIFY else SUCCESS if sl(aux, B - 1, 0) == s.hash else FAILURE
     def exec(s, form, INPUT=0, klen=B):
         st = s.state
-        if st in ERROR_STATES:                    # GR11
+        if st in ERROR_STATES:                    # SGR16
             return 0
         if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD'}.get(st) or ''):
-            s._invalid('Form')                    # MGR1, GR18, GR23
+            s._invalid('Form')                    # MGR1, SGR2, SGR5
         if st == ABSORB:
             if klen % B:
                 s._invalid('MGR2')
@@ -137,7 +137,7 @@ def derive(src, dst, length):
     Endpoints: output in Hash_Output (DER6 source); `key` in Ready, input in Hash_Absorb (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(c.state in ERROR_STATES for c in lockers):
-        return                                    # GR16
+        return                                    # SGR19
     bad = [c for c, ok in ((src, src.state == OUTPUT) if isinstance(src, Cmac) else (src, True),
                            (dst, dst.state == ABSORB or (dst.state == READY and dst.skid is None))) if not ok]
     for c in bad:                                 # DER1 items 1-2 (DER4): only the offending lockers
@@ -264,7 +264,7 @@ def last_set():
     cl.setst(LAST, 'B', 64)
     return cl
 INVALID_CASES = [
-    ("kl.exec in Ready (GR18)", lambda: Cmac(K128), lambda c: c.exec('B')),
+    ("kl.exec in Ready (SGR2)", lambda: Cmac(K128), lambda c: c.exec('B')),
     ("kl.setst #hash_last_block from Ready", lambda: Cmac(K128), lambda c: c.setst(LAST, 'B', 0)),
     ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'C', 0)),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
@@ -274,9 +274,9 @@ INVALID_CASES = [
     ("KLLEN = 200 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
     ("KLLEN = 56 < last_blk_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
     ("second kl.exec after the last block", lambda: run(K128, MSG[:40]), lambda c: c.exec('B', 0, 64)),
-    ("second tag kl.exec, in Success (GR23)", done_ok, lambda c: c.exec('C')),
-    ("kl.setst #hash_absorb in Success (GR24)", done_ok, lambda c: c.setst(ABSORB)),
-    ("kl.setst #hash_absorb in Failure (GR24)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
+    ("second tag kl.exec, in Success (SGR5)", done_ok, lambda c: c.exec('C')),
+    ("kl.setst #hash_absorb in Success (SGR6)", done_ok, lambda c: c.setst(ABSORB)),
+    ("kl.setst #hash_absorb in Failure (SGR6)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
     ("MGR18: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
 INVALID_CASES += [
@@ -290,7 +290,7 @@ for name, mk, act in INVALID_CASES:
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
 cl = Cmac(K128)
 raises(cl.exec, 'B', exc=Invalid)
-check("Error State: Content cleared (GR9); kl.exec no operation, OUTPUT 0 (GR11)", True,
+check("Error State: Content cleared (SGR10); kl.exec no operation, OUTPUT 0 (SGR16)", True,
       (cl.key, cl.hash, cl.exec('C'), cl.state), (None, 0, 0, INVALID))
 subst = all(tag(K, M, subst=True) == W for _, K, M, W in VEC)
 cl = run(K128, MSG[:40], subst=True)
@@ -311,7 +311,7 @@ for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
                  ("Hash_Absorb", at_absorb)):
     cl = mk()
     cl.setst(READY)
-    check(f"kl.setst #ready from {name}, then ex4 (GR21)", True, tag(None, MSG[:40], cl=cl), W4)
+    check(f"kl.setst #ready from {name}, then ex4 (SGR8)", True, tag(None, MSG[:40], cl=cl), W4)
 
 section("kl.derive")
 secret = K128 + bytes(range(0xF0, 0x100))

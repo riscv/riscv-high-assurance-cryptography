@@ -64,7 +64,7 @@ class Gcm:
         s.klstart, s.halted = 0, False
         s._error(UNCONF)
 
-    def _error(s, st):                                   # GR9
+    def _error(s, st):                                   # SGR10
         s.state, s.key, s.k, s.key_type, s.skid = st, b'', 0, 0, 0
         s.J0 = s.auth_key = s.tag = s.start_ctr = s.last_blk_len = 0
         s.len = s.input_base = s.block_base = s.cumul_len = 0
@@ -100,7 +100,7 @@ class Gcm:
 
     def export(s):
         if s.state in ERROR_STATES:
-            return 0, 0                                  # GR9
+            return 0, 0                                  # SGR11
         kb = 64 if s.key_type else s.k
         slot = (cat((s.cumul_len, 48), (s.block_base, 16), (0, 16), (s.len, 16))   # ii.b padding, ii.e J0_padding
                 if s.state == SAV else s.J0)
@@ -144,22 +144,22 @@ class Gcm:
         if s.set_iv:
             t[READY, HA] = 'A'
         else:
-            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (GR20, MGR7)
+            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (SGR4, MGR7)
         return t.get((st, immed))
 
     def setst(s, immed, form='A', aux=0):
         st = s.state
-        if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, GR10
+        if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, SGR15
             return s._error(immed if immed < 54 else INV)
         if st in ERROR_STATES:
-            return                                       # GR11
-        if immed == READY and form == 'A':               # GR24, GR21
+            return                                       # SGR16
+        if immed == READY and form == 'A':               # SGR6, SGR8
             if st == SAV:                                # IV left incomplete: discarded, no finalize() (MGR7)
                 s.tag = s.J0 = s.len = s.block_base = s.cumul_len = 0
             s.state = READY
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
-            return s._invalid()                          # GR23/GR24, MGR1
+            return s._invalid()                          # SGR5/SGR6, MGR1
         if immed in (ENC, DEC) and not s.policy & (1 if immed == ENC else 2):
             return s._invalid()
         if immed == SAV:
@@ -195,9 +195,9 @@ class Gcm:
         """kl.exec; `start` resumes at that klstart, `stop` halts after that many units."""
         s.halted = False
         if s.state in ERROR_STATES:
-            return 0                                     # GR11
+            return 0                                     # SGR16
         if {SAV: 'B', HA: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C'}.get(s.state) != form:
-            return s._invalid()                          # GR18, GR23, MGR1
+            return s._invalid()                          # SGR2, SGR5, MGR1
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
                 KLLEN < s.last_blk_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
             return s._invalid()                          # MGR2, <<KLEE-truncation-vs-length>>: length first
@@ -285,7 +285,7 @@ class Gcm:
         """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready (DER5/DER7 source), the IV
         (`kl.exec` input) in Set_Aux_Value."""
         if s.state in ERROR_STATES or isinstance(src, Gcm) and src.state in ERROR_STATES:
-            return                                       # GR16
+            return                                       # SGR19
         if isinstance(src, Gcm):                         # DER1 item 1: no source endpoint (the tag is none, DER6)
             return src._invalid()
         if s.state == SAV:                               # DER8: consumed as a Form B kl.exec would be
@@ -490,13 +490,13 @@ check('kl.setst Ready part-way: the partial IV discarded, no finalize(): tag, J0
 c3 = Gcm.provisioned(K)
 c3.setst(SAV, 'B', 160)
 c3.exec('B', b2v(bytes(range(16))), 128)
-c3.setst(SAV, 'B', 8 * len(IV))                         # same-State kl.setst: restarts the IV (GR20, MGR7)
+c3.setst(SAV, 'B', 8 * len(IV))                         # same-State kl.setst: restarts the IV (SGR4, MGR7)
 feed(c3, IV)
 check('same-State kl.setst into Set_Aux_Value part-way restarts the IV with the new len: tc4', finish(c3, A, P)[:2] == (RC, RT))
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:16]), 128)
 cl.setst(READY)
-check('GR21: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
+check('SGR8: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
       kl_encrypt(K, IV60B, A, P, cl=cl)[:2] == TC6)
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MGR2); '
      'kl.setst out of the state part-way discards the IV (MGR7)')
@@ -603,9 +603,9 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('IRR6/GR11: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('IRR6/SGR16: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
-check('GR9: the invalidated locker keeps only its MDH',
+check('SGR10/SGR11: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))
 
 section('GCM with Set IV')
@@ -627,7 +627,7 @@ c1 = kl_encrypt(None, None, A, P, cl=cl)[:2]
 cl.setst(READY)
 back = (cl.state, cl.tag) == (READY, 0)
 c2 = kl_encrypt(None, None, A, P, cl=cl)[:2]
-check('GR24/GR21: Success -> Ready allowed, tag cleared', back and c1 == (RC, RT))
+check('SGR6/SGR8: Success -> Ready allowed, tag cleared', back and c1 == (RC, RT))
 check('the next message continues the counter under the same tag mask',
       c2 == ref_gcm(K, IV, A, P, J0B, inc32(J0B, -(-len(P) // 16) + 1)))
 states = []
@@ -649,9 +649,9 @@ for name, where, ops, *kw in [
         ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 384, 8)]),
         ('KLLEN (96) < last_blk_len (104)', 'enc', [('setst', ELB, 'B', 104), ('exec', 'A', 0, 96)]),
-        ('GR18: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
-        ('GR23: kl.exec in Success', 'success', [('exec', 'A', 0, 128)]),
-        ('GR23/GR24: kl.setst Encrypt in Success', 'success', [('setst', ENC)]),
+        ('SGR2: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
+        ('SGR5: kl.exec in Success', 'success', [('exec', 'A', 0, 128)]),
+        ('SGR5/SGR6: kl.setst Encrypt in Success', 'success', [('setst', ENC)]),
         ('MGR1: GCM Ready -> Hash_Absorb', 'ready', [('setst', HA)]),
         ('MGR1: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', B16, 128)]),
         ('MGR1: Form B kl.exec in Encrypt', 'enc', [('exec', 'B', B16, 128)]),
@@ -678,7 +678,7 @@ check('KLLEN = 120, klstart = 15 in Encrypt: invalid length first, Invalid', (cl
       == (0, INV))
 cl = at('success')
 cl.setst(READY)
-check('GR24/GR21: Success -> Ready; the same locker reproduces tc5',
+check('SGR6/SGR8: Success -> Ready; the same locker reproduces tc5',
       kl_encrypt(K, bytes.fromhex(IV8), A, P, cl=cl)[:2] == TC5)
 _, st1, cl = kl_decrypt(K, IV, A, RC, bytes(16))
 cl.setst(READY)
@@ -687,13 +687,13 @@ check('Failure -> Ready; the same locker decrypts and verifies', (st1, st2, p2) 
 cl = at('enc')
 cl.exec('A', B16, 128)
 cl.setst(READY)
-check('GR21: Encrypt -> Ready mid-message; next message unaffected',
+check('SGR8: Encrypt -> Ready mid-message; next message unaffected',
       kl_encrypt(K, IV, A, P, cl=cl)[:2] == (RC, RT))
 cl = at('ha')
 cl.setst(HA)
 cl.setst(ENC)
 cl.setst(ENC)
-check('GR20: same-State kl.setst in Hash_Absorb and Encrypt change nothing', crypt(cl, P, 4) == RC)
+check('SGR4: same-State kl.setst in Hash_Absorb and Encrypt change nothing', crypt(cl, P, 4) == RC)
 check('MachinePolicy decrypt-only: decryption works', kl_decrypt(K, IV, A, RC, RT, policy=2)[1] == SUCC)
 cl = at('enc')
 cl.setst(PRIV)
@@ -702,7 +702,7 @@ cl.setst(READY)
 s2 = cl.state
 cl.setst(INV)
 check('Error State immediate accepted; then kl.exec and kl.setst Ready do nothing, '
-      'the Error State may change (GR10, GR11)', (s1, s2, out, cl.state) == (PRIV, PRIV, 0, INV))
+      'the Error State may change (SGR15, SGR16)', (s1, s2, out, cl.state) == (PRIV, PRIV, 0, INV))
 
 section('Serialized Content, export/import (MGR4)')
 for k, skid, nblk in ((16, None, 4), (24, None, 4), (32, None, 5), (16, SKID, 3)):

@@ -111,7 +111,7 @@ class Siv:
         s.klstart, s.halted, s.probe = 0, False, None
         s._error(UNCONF)
 
-    def _error(s, st):                                   # GR9
+    def _error(s, st):                                   # SGR10
         s.state, s.k, s.key_type, s.skid, s.key = st, 0, 0, 0, b''
         s.enc_key = s.auth_key = s.nonce = s.ctr = s.SIV = s.tmp = s.last_blk_len = 0
         return 0
@@ -133,7 +133,7 @@ class Siv:
 
     def export(s):
         if s.state in ERROR_STATES:
-            return 0, 0                                  # GR9
+            return 0, 0                                  # SGR11
         kb = 64 if s.key_type else s.k
         return (cat((s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr % 2**32, 32), (s.nonce, 96),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 400))
@@ -154,15 +154,15 @@ class Siv:
 
     def setst(s, immed, form='A', aux=0):
         st = s.state
-        if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, GR10
+        if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, SGR15
             return s._error(immed if immed < 54 else INV)
         if st in ERROR_STATES:
-            return                                       # GR11
-        if immed == READY and form == 'A':               # GR24, GR21
+            return                                       # SGR16
+        if immed == READY and form == 'A':               # SGR6, SGR8
             s.state = READY
             return s._ready()
         if st in (SUCC, FAIL) or FORMS.get((st, immed)) != form:
-            return s._invalid()                          # GR23/GR24, MGR1
+            return s._invalid()                          # SGR5/SGR6, MGR1
         if immed in (ETF, DEC) and not s.policy & (1 if immed == ETF else 2):
             return s._invalid()
         if immed == SAV:
@@ -180,9 +180,9 @@ class Siv:
         """kl.exec; `start` resumes at that klstart, `stop` halts after that many blocks."""
         s.halted, st = False, s.state
         if st in ERROR_STATES:
-            return 0                                     # GR11
+            return 0                                     # SGR16
         if {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st) != form:
-            return s._invalid()                          # GR18, GR23, MGR1
+            return s._invalid()                          # SGR2, SGR5, MGR1
         if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
             return s._invalid()                          # MGR2: length first (<<KLEE-CSR-klstart>>)
         if start is not None:
@@ -234,7 +234,7 @@ class Siv:
     def derive(s, src, length):
         """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready."""
         if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
-            return                                       # GR16
+            return                                       # SGR19
         if isinstance(src, Siv):                         # DER1 item 1: no source endpoint (the tag is none, DER6)
             return src._invalid()
         if s.key_type or s.state != READY or length < s.k // 8:
@@ -532,7 +532,7 @@ check('encryption ends in Enc_Last_Block; kl.setst Ready clears nonce, ctr, tmp,
       'then encrypts C.1 #14 and decrypts C.1 #15',
       (end, reset, got1, got2, kl_decrypt(k5, n5, a5, w5, m=m)) == (ELB, True, w5, w6, (SUCC, p5)))
 info('the encryption path ends in Encrypt or Enc_Last_Block, never in Success; software returns '
-     'to Ready with kl.setst (GR21)')
+     'to Ready with kl.setst (SGR8)')
 
 section('counter, last blocks, interruption')
 for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
@@ -554,7 +554,7 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
 m, ref = at('enc'), at('enc')
 m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('IRR6/GR11/GR9: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('IRR6/SGR16/SGR10: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
 m = at('dec')
 m.ctr = 2**32
@@ -601,8 +601,8 @@ for name, where, ops, *kw in [
         ('kl.setst naming Encrypt in Enc_Tag_Finalize', 'etf', [('setst', ENC)]),
         ('kl.setst naming Encrypt in Decrypt', 'dec', [('setst', ENC)]),
         ('kl.setst naming Encrypt in Encrypt', 'enc', [('setst', ENC)]),
-        ('GR18: kl.exec in Ready', 'ready', [('exec', 'A', 0, 128)]),
-        ('GR23: kl.exec in Success', 'success', [('exec', 'B', 0, 128)]),
+        ('SGR2: kl.exec in Ready', 'ready', [('exec', 'A', 0, 128)]),
+        ('SGR5: kl.exec in Success', 'success', [('exec', 'B', 0, 128)]),
         ('MGR1: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', 0, 128)]),
         ('MGR2: KLLEN = 120 in Hash_Absorb', 'ha', [('exec', 'B', 1, 120)]),
         ('MGR2: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', 1, 120)]),
@@ -626,13 +626,13 @@ m = at('enc')
 m.setst(EXPIRED)
 out = m.exec('A', 0x1234, 128)
 m.setst(READY)
-check('GR10/GR11: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
+check('SGR15/SGR16: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
 m = at('ha')
 m.setst(HA)
 absorb(m, a5)
 m.setst(DEC)
 m.setst(DEC)
-check('GR20: same-State kl.setst in Hash_Absorb and Decrypt', m.state == DEC)
+check('SGR4: same-State kl.setst in Hash_Absorb and Decrypt', m.state == DEC)
 check('Enc_Tag_Finalize: 128 LSBs of a 256-bit INPUT; OUTPUT[255:128] clear',
       v2b(at('etf').exec('A', LB0 | 0xFF << 140, 256), 32) == W1 + bytes(16))
 check('Dec_Tag_Finalize: 128 LSBs of a longer INPUT', kl_decrypt(K, N, b'', W1, lb=LB0 | 0xFF << 140)[0] == SUCC)

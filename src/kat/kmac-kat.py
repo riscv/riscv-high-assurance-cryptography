@@ -213,7 +213,7 @@ class Kmac:
         self.b = self.t = 8 * RATE[self.sec]                             # t = b
         self.D = (1, 1, 1, 1) if 'suffix' in self.bad else (0, 0)       # cSHAKE suffix
 
-    def _clear(self):                                                    # GR9
+    def _clear(self):                                                    # SGR10
         self.state = self.block_base = self.cb = self.kb = self.L = 0
 
     def invalidate(self):
@@ -277,9 +277,9 @@ class Kmac:
     def setst(self, immed, form='A', aux=None):
         if immed == UNCONF:
             return self.__init__(self.hart, self.bad)
-        if self.st in ERROR_STATES:                                      # GR11
+        if self.st in ERROR_STATES:                                      # SGR16
             return
-        if immed == READY:                                               # GR21
+        if immed == READY:                                               # SGR8
             return self.ready()
         if immed == ABSORB and self.st == READY and form == 'A':         # no same-State (process_VLI)
             self.st = ABSORB
@@ -305,7 +305,7 @@ class Kmac:
             self.L = 8 * -(-self.L // 8)
 
     def _end(self, status, out=None):
-        if out is not None and status in ('invalid', 'noop'):             # GR11
+        if out is not None and status in ('invalid', 'noop'):             # SGR16
             k = min(self.hart.klstart, len(out))
             out[k:] = bytes(len(out) - k)
         self.hart.klstart = 0
@@ -327,7 +327,7 @@ class Kmac:
             return st if st == 'interrupted' else self._end(st)
         if self.st == OUTPUT and inp is None and out is not None:
             return self._squeeze(out, halt)
-        self.invalidate()                                                # MGR1, GR18, GR23
+        self.invalidate()                                                # MGR1, SGR2, SGR5
         return self._end('invalid', out)
 
     def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLEE-process-VLI>>
@@ -602,7 +602,7 @@ for label, c, act in (
         ('KMAC128 Form A kl.setst to _Hash_Output_', absorbing(128, DATA4), lambda c: c.setst(OUTPUT)),
         ('KMACXOF256 Form B kl.setst to _Hash_Output_', absorbing(256, DATA4, True),
          lambda c: c.setst(OUTPUT, 'B', 512)),
-        ('kl.exec in _Ready_ (GR18)', locker(128), lambda c: c.exec(inp=DATA4)),
+        ('kl.exec in _Ready_ (SGR2)', locker(128), lambda c: c.exec(inp=DATA4)),
         ('Form B kl.setst into _Hash_Absorb_', locker(128), lambda c: c.setst(ABSORB, 'B', 32)),
         ('same-State kl.setst in _Hash_Absorb_ (<<KLEE-process-VLI>>)', absorbing(128, DATA4),
          lambda c: c.setst(ABSORB)),
@@ -617,7 +617,7 @@ for label, c, act in (
 c = squeezing(128, DATA4, 256)
 squeeze(c, 32)
 (st, o), = squeeze(c, 32, fill=0xEE)
-check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR23, GR11)', True,
+check('kl.exec in _Success_ -> _Invalid_, output window zeroed (SGR5, SGR16)', True,
       (st, c.st, bytes(o)), ('invalid', INVALID, bytes(32)))
 c = squeezing(128, DATA200, 256)
 squeeze(c, 32)
@@ -734,7 +734,7 @@ check('whole KMAC256 output (L = 512) -> KMACXOF256; source in _Success_', True,
       (src.st, bytes(squeeze(dst, 64)[0][1])),
       (SUCCESS, ref_kmac(256, KEY, WANT[3], 0, b'', True, 64)))
 derive(h, absorbing(128, hart=h), src, 16)
-check('source in _Success_ (no kl.exec output left, GR23) -> source _Invalid_', True, src.st, INVALID)
+check('source in _Success_ (no kl.exec output left, SGR5) -> source _Invalid_', True, src.st, INVALID)
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), squeezing(128, DATA4, 256, hart=h)
 snap = (src.st, src.state, src.block_base)
 derive(h, dst, src, 16)

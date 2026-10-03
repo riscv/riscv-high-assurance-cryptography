@@ -111,7 +111,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # GR18; <<KLEE-CSR-klstart>>: invalid length (MGR2), also output only
+        if self.state != OP or KLLEN % B:     # SGR2; <<KLEE-CSR-klstart>>: invalid length (MGR2), also output only
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -298,7 +298,7 @@ section("States, transitions and general rules (F.5.1)")
 eq("State values Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49", (RDY, OP, AUX, INV), (1, 2, 13, 49))
 cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR18)",
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR2)",
    (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
 for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
                     ("#kl_state_operate in Form B (Form C required)", (OP, 'B', T1 & ONES64)),
@@ -315,9 +315,9 @@ eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
    (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, NONCE, 32, 0, PT)))
 cl = ctr_cl(key, 0x1234, C0)
 cl.setst(OP, 'C', T1)
-eq("Operate -> Operate (GR20): IV replaced, ctr kept; F.5.1",
+eq("Operate -> Operate (SGR4): IV replaced, ctr kept; F.5.1",
    (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
-info("a same-State kl.setst #kl_state_operate (GR20) replaces IV and keeps ctr (Ready is not entered).")
+info("a same-State kl.setst #kl_state_operate (SGR4) replaces IV and keeps ctr (Ready is not entered).")
 cl = ctr_cl(key)
 cl.setst(OP, 'A/iobuf', SP38A_ICB)
 cl.setst(AUX, 'B', C0)
@@ -336,7 +336,7 @@ cl = ctr_cl(key, T1, C0)
 for ks in (64, 80):
     eq(f"KLLEN = 512, klstart = {ks}: empty window, only klstart = 0",
        (cl.exec(512, klstart=ks, out=7), cl.state, cl.ctr), ((7, 0), OP, C0))
-eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (GR11)",
+eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (SGR16)",
    (cl.exec(512, klstart=8, out=(1 << 512) - 1)[0], cl.state), ((1 << 64) - 1, INV))
 for q in (1, 2, 3):
     for iob in (False, True):
