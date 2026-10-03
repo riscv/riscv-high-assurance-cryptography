@@ -1888,7 +1888,7 @@ def t_nested():
 
 
 def t_error_states():
-    section('Lockers in an Error State  <<KLEE-error-state-transfer>>, <<KLEE-error-state-instructions>>')
+    section('Lockers in an Error State  <<KLEE-error-state-transfer>>, <<KLEE-insns-on-unconf-or-error-locker>>')
     rows, want = [], []
     for st in ERROR_STATES:
         u = pv(fresh(), 0, cipher(SCProtection=1, ExpirationDate=77, UsagePolicy=2))
