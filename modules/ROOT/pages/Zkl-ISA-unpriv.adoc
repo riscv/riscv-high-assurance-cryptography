@@ -243,7 +243,6 @@ It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every u
 
 NOTE: The KLF, as a memory device, must resist rollback, but individual lockers need not, and cannot, resist rollback through export and import.
 Re-importing an earlier CC state may enable multi-time-pad attacks on modes such as CTR, XCTR and GCM (<<Zkl-ISA-machines.adoc#KLEE-nonce-reuse>>), but exploiting them needs a control of the target software that usually also exposes the plaintext.
-Rule <<KLEE-GR-atomic-randomness>> excludes the reuse of an internal random value which may be used by some algorithms to avoid nonce reuse.
 Re-import is also a useful feature, for instance to restart an operation whose payload was corrupted in transit, and policies covering every legitimate case would overcomplicate the feature.
 
 Architecturally, the KLF contains:
@@ -1005,14 +1004,12 @@ Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires,
 +
 NOTE: If the KLEE unit is emulated, different versions of the KLEE firmware may offer different features on the same hardware, which a hardware-fixed Locality cannot distinguish. Rule <<KLEE-GR-custom-locality>> is nevertheless a first line of protection against accidental misuse.
 
-[[KLEE-GR-atomic-randomness,GR10]]GR10:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates and consumes it within one instruction; if the RBG cannot supply it, Rule <<KLEE-GR-rbg-failure>> applies.
-No State from which the locker can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation, Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> of <<Zkl-ISA-machines.adoc#KLEE-Machines>> ensures this. Rule <<KLEE-GR-opening-locker-when>> is not relaxed to obtain this.
 
-[[KLEE-GR-GPR-indirect, GR11]]GR11:: _Use of a GPR as indirect locker index:_
+[[KLEE-GR-GPR-indirect, GR10]]GR10:: _Use of a GPR as indirect locker index:_
 An indirect locker index outside [0..31] raises an illegal-instruction exception, and so does `X0` as the indirect locker index register, except in the encoding of `kl.clearall` (<<KLEE-instruction-clearall>>).
 Without `Zklind`, an encoding that selects indirect locker addressing (`r` = 1, `R` {ne} `00`, or `funct3` = 7) is reserved and raises an illegal-instruction exception, except for `kl.clone`, `kl.rename` and `kl.swap`, which always offer indirect addressing (<<KLEE-instruction-clone>>), and for the encoding of `kl.clearall`.
 
-[[KLEE-GR-rbg-failure,GR12]]GR12:: _Failure of the random bit generator:_
+[[KLEE-GR-rbg-failure,GR11]]GR11:: _Failure of the random bit generator:_
 If an operation needs random bits from the RBG (<<KLEE-Prerequisites>>), for instance for a key, a key pair, a signing
 nonce, the per-encapsulation randomness of a KEM, or the key of an all-ones SKID when provisioning completes, and the RBG
 fails to supply them, the operation is not performed, and the locker transitions to Error State _Invalid_, which clears its
@@ -2196,7 +2193,7 @@ NOTE: Machines such as GCM with a set IV (not GCM-SIV) and Ascon-AEAD128 with a 
 [[KLEE-SGR-to-ready,SGR8]]SGR8:: `kl.setst` may always transition a locker from a Valid State to _Ready_, unless the Machine explicitly forbids it.
 // NOTE: Since a locker can always be restored from a backup SCC, preventing transitions to _Ready_--as "GCM with Set IV" (<<KLEE-GCM-with-IV-mode>>) does--is not an effective mitigation against the attacks that would be enabled by transitioning to _Ready_.
 
-SGR9:: The final State reached upon completion of a `kl.setst` need not be the one its immediate names: besides Error State transitions, some operations determine the next State dynamically.
+[[KLEE-SGR-state-after-setst,SGR9]]SGR9:: The final State reached upon completion of a `kl.setst` need not be the one its immediate names: besides Error State transitions, some operations determine the next State dynamically.
 For example, `kl.setst` with immediate `kl_state_hash_verify` and a verification parameter transitions the locker to _Success_ or _Failure_.
 Other instructions, such as `kl.exec`, may also change the _State_, under conditions that the Machine specifies.
 
@@ -2656,7 +2653,7 @@ On preemption, it may follow any behavior of <<KLEE-IRR-resumability-options>> c
 The implementation supports at least one of options 3, 4 and 5 of Rule <<KLEE-IRR-resumability-options>>; under option 5 it guarantees and documents a minimum uninterrupted execution quantum, or a maximum number of consecutive restarts of one instruction, to avoid livelocks.
 If the operation continues while the hart is preempted, and the hart waits for completion before accessing the affected state, any nested interrupt handler must wait too.
 +
-An operation that can record its progress, halt at well-defined points and resume from the recorded point records that progress in _MachineUse_, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). The implementation may halt such an operation and record its progress only where the recorded state, ADS included, cannot be consumed against inputs other than those the operation started with; Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> of <<Zkl-ISA-machines.adoc#KLEE-Machines>> ensures this by discarding the recorded state on every transition of the _State_ of the locker other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>).
+An operation that can record its progress, halt at well-defined points and resume from the recorded point records that progress in _MachineUse_, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). The implementation may halt such an operation and record its progress only where the recorded state, ADS included, cannot be consumed against inputs other than those the operation started with; Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> of <<Zkl-ISA-machines.adoc#KLEE-Machines>> ensures this by discarding the recorded state on every transition of the _State_ of the locker other than the completion of the operation.
 +
 The implementation keeps every intermediate result needed for resumption in the ADS, which it exports; the architected Content of the locker thus does not depend on the progress of the operation, and a restarted operation starts from the architected Content alone. An importing implementation may discard the ADS and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if `kl.clearads` (<<KLEE-instruction-clearads>>) has removed the ADS.
 +

@@ -410,16 +410,21 @@ completes, that is by the `kl.mgmt` with `#kl_cfg_management_end`, and whenever 
 is modified, for instance when `kl.derive` overwrites a key field or an explicit operation of the Machine regenerates it. A Machine states only the derivation itself, and marks such a field “(derived)” in
 its *Internal State*.
 
-[[KLEE-MGR-fixed-width-input,MGR5]]MGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
+[[KLEE-MGR-atomic-randomness,MGR5]]MGR5:: Whenever a Machine requires a random value, if the RBG cannot supply it, Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> applies.
+Such an internal random value, such as a signing nonce or an ephemeral scalar, is generated and consumed only for the purpose of the scheme which requires it, and for no other instance of the original use or any other purpose.
+This Rule excludes the reuse of an internal random value which may be used by some algorithms to enforce nonce reuse.
+Rule <<KLEE-MGR-progress-discard>> ensures this.
+
+[[KLEE-MGR-fixed-width-input,MGR6]]MGR6:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
 operand it is defined over — a `KLLEN` greater than that width is truncated: only that many least
 significant bits of `INPUT` are considered, and the rest are ignored; a smaller `KLLEN` violates
 the granularity of the state (Rule <<KLEE-MGR-granularity>>). The width is not necessarily the block size `b`.
 
-[[KLEE-MGR-clear-output,MGR6]]MGR6:: When a state writes fewer than `KLLEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
+[[KLEE-MGR-clear-output,MGR7]]MGR7:: When a state writes fewer than `KLLEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
 cleared. This concerns the bits *within* the operand; the elements beyond `VL` are governed by the
 tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLEE-KLV>>.
 
-[[KLEE-MGR-load-long-field,MGR7]]MGR7:: A State _X_ that loads a long field from `INPUT`, or emits one to
+[[KLEE-MGR-load-long-field,MGR8]]MGR8:: A State _X_ that loads a long field from `INPUT`, or emits one to
 `OUTPUT`, using multiple `kl.exec` instructions records the amount transferred so far in a state
 field _W_ (e.g., _MachineUse_ of the MDH).
 +
@@ -454,20 +459,28 @@ cleared on entering the loading State of its field, set when the load completes 
 <<KLEE-MGR-check-on-write>>, and also set by an operation of the Machine that computes the field; it is readable with
 `kl.getstx`. Each Machine lists its flags, their bit positions, and any departure from this pattern.
 
-[[KLEE-MGR-progress-discard,MGR8]]MGR8:: _Interrupted long-running operations._
+[[KLEE-MGR-progress-discard,MGR9]]MGR9:: _Interrupted long-running operations._
 A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-ISA-unpriv.adoc#KLEE-IRR-long-running-no-data>> admits, besides `kl.setst`, only that one instruction Form.
 +
-Each such Machine
-designates one field _P_ that is zero whenever no such operation is interrupted, and non-zero from the first precise halt of one until its completion.
+Each such Machine and State designates one field _P_ that is zero whenever no such operation is in an interrupted state, and non-zero from the first precise halt of one until its completion.
+The encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt before completion is never zero.
 +
-The encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt is never zero.
+The instruction issued in such a State may, if _P_ is non-zero, either resume the interrupted operation or restart it, in which case internally _P_ is first reset to zero.
 +
-Every random value and every intermediate value kept for the operation, in a state field or in the ADS, is meaningful only while _P_ is non-zero.
-_P_ is zeroed, and that material destroyed, on every transition of the locker's _State_, including a same-State `kl.setst`, a transition to _Ready_ or to an Error State, on completion of the operation, by `kl.clearads`, and by an import that discards the ADS; it is not changed by an interrupt, by export, import or `kl.clone`, or by re-execution of the instruction.
+Every random value and every intermediate value generated for the operation (the "material"), kept in a state field or in the ADS, is meaningful for resumption only if _P_ is non-zero.
 +
-The instruction issued in such a State resumes the interrupted operation if _P_ is non-zero and starts a new one, drawing fresh random values, if it is zero.
+Any material *must* be regenerated if the operation is restarted instead of resumed.
+It is up to the algorithm implemented in the Machine to establish whether these values are kept upon completion of the operations.
++
+If _P_ is non-zero, _P_ is zeroed, and the material destroyed, on every transition of the locker's _State_, including a same-State `kl.setst`, a transition to _Ready_ or to an Error State, by `kl.clearads`, and by an import that discards the ADS.
++
+If the Machine is cloned, the copy of the original Machine will have _P_ set to zero and the material destroyed.
++
+_P_ is not cleared, and the material is not destroyed, by an interrupt, export or import.
++
+When the operation completes, _P_ is set to zero, but it is up to the algorithm encoded in the Machine to establish whether the material is kept or destroyed.
 
-[[KLEE-MGR-single-last-block,MGR9]]MGR9:: _Single final block._
+[[KLEE-MGR-single-last-block,MGR10]]MGR10:: _Single final block._
 A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_,
 admits one `kl.exec`, which processes that block (Rule <<KLEE-MGR-one-klexec-per-block>>), or none, where the Machine
 explicitly allows an empty final block that needs no `kl.exec`, as OCB does for the AD (<<KLEE-OCB-mode>>).
@@ -476,7 +489,7 @@ and any further `kl.exec` issued in it transitions the locker to Error State _In
 (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SGR-usage-locker-error-state>>): a second final block is not a continuation of the input
 but an attempt to manipulate the internal state of the Machine.
 
-[[KLEE-MGR-policy-gate,MGR10]]MGR10:: _Policy gate and entry conditions._
+[[KLEE-MGR-policy-gate,MGR11]]MGR11:: _Policy gate and entry conditions._
 Each Machine states which bit of _MachinePolicy_, if any, enables the operation of each of its States, and the conditions
 that must hold on entering a State.
 A `kl.setst` into a State whose operation _MachinePolicy_ disables, or whose stated entry conditions are not met,
@@ -493,7 +506,7 @@ can change while the locker is in the State, or if it is a check of Rule <<KLEE-
 stated with the instruction, and its violation also transitions the locker to Error State _Invalid_, unless it is a data
 error (Rule <<KLEE-MGR-config-data-error>>).
 
-[[KLEE-MGR-config-data-error,MGR11]]MGR11:: _Configuration errors and data errors._
+[[KLEE-MGR-config-data-error,MGR12]]MGR12:: _Configuration errors and data errors._
 A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard
 rejects, such as a malformed private key, or a value whose encoding violates a constraint of its representation, such as the
 zero most significant bits of secp521r1 (<<KLEE-ECC>>). It transitions the locker to Error State _Invalid_, and the CC
@@ -504,7 +517,7 @@ a public key or a generator — that is not a valid point of the curve.
 It transitions the state machine to _Failure_, which is a Valid State.
 Each Machine states which of its checks are of which kind.
 
-[[KLEE-MGR-check-on-read,MGR12]]MGR12:: _Checks when a field is read._
+[[KLEE-MGR-check-on-read,MGR13]]MGR13:: _Checks when a field is read._
 When an operation reads a field, it performs the checks that depend on the operation or on more than one field
 — for instance the validity of a point in the role the operation gives it, the range of `Scalar` against the group
 order, or the consistency of a public key with a private key — before it changes any state. A failure is classified
@@ -514,7 +527,7 @@ repeated when it is read, since the KLF guarantees the integrity of the locker (
 a Machine may nevertheless require a repeat as a means to detect a corruption of the KLF, as secp521r1 does
 (<<KLEE-ECC>>), and a repeated check that fails transitions the locker to Error State _Invalid_.
 
-[[KLEE-MGR-check-on-write,MGR13]]MGR13:: _Checks when a field is written._
+[[KLEE-MGR-check-on-write,MGR14]]MGR14:: _Checks when a field is written._
 A check that a Machine attaches to a field and that depends on that field alone — such as the zero most significant
 bits of secp521r1, the well-formedness of an ML-DSA `privkey`, or the input checks of cite:[nist-fips-203] on an
 ML-KEM key — is performed whenever the field is written: at the completion of its load (Rule <<KLEE-MGR-load-long-field>>),
@@ -525,7 +538,7 @@ to _Failure_.
 The validity of a curve point is not checked when the point is written: it depends on the role that an operation gives
 the point, and is checked when the point is read (Rule <<KLEE-MGR-check-on-read>>).
 
-[[KLEE-MGR-tag-verify,MGR14]]MGR14:: _Verification of a tag._
+[[KLEE-MGR-tag-verify,MGR15]]MGR15:: _Verification of a tag._
 A Machine that verifies a tag or a MAC without disclosing the value it computes does so by a Form C `kl.setst` naming
 _Hash_Verify_, whose auxiliary operand carries the expected value. The comparison takes a time independent of the values
 compared, and transitions the state machine to _Success_ if they match and to _Failure_ otherwise (Rule
@@ -542,11 +555,11 @@ decryption, and the `kl.exec` that completes the tag computation performs the co
 System Keys modify the data structures of all Machines as follows:
 
 [horizontal]
-[[KLEE-MGR-skid-field,MGR15]]MGR15:: In a PI and in an SCC, the key field of a System Key holds its SKID in place of the key value,
+[[KLEE-MGR-skid-field,MGR16]]MGR16:: In a PI and in an SCC, the key field of a System Key holds its SKID in place of the key value,
 and is thereby reduced from the key size to 64 bits.
 //This saves space in an SCC and allows faster export and import operations.
 
-[[KLEE-MGR-single-skid,MGR16]]MGR16:: For a Machine with more than one key, such as XEX/XTS, a single
+[[KLEE-MGR-single-skid,MGR17]]MGR17:: For a Machine with more than one key, such as XEX/XTS, a single
 SKID retrieves all its keys from the SKS.
 
 // ////////////////////////////////////////////////////////////////////
@@ -563,7 +576,7 @@ This occurs, for instance, with the `last_blk_len` parameters in <<KLEE-GCM-mode
 Where a standard's formula requires a bit count, it is obtained by multiplying the byte count by 8, as with the length block of GHASH in <<KLEE-GCM-mode>>.
 
 [horizontal]
-[[KLEE-MGR-last-blk-len,MGR17]]MGR17:: A `last_blk_len`, or any other parameter giving the bit length of a final input piece, is a multiple of 8,
+[[KLEE-MGR-last-blk-len,MGR18]]MGR18:: A `last_blk_len`, or any other parameter giving the bit length of a final input piece, is a multiple of 8,
 unless the Machine states that its referenced standard orders the bits within a byte as <<Zkl-notation.adoc#KLEE-Notation>> does,
 so that a truncation of the last byte to its least significant bits is the bit string that the standard defines (as for <<KLEE-Ascon-AEAD128>>).
 A value that the Machine does not admit transitions the locker to Error State _Invalid_.
