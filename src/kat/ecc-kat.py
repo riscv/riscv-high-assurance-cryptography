@@ -87,7 +87,7 @@ class Locker:
     def machine_use(self):              # <<KLEE-ECC-MachineUse>>
         return int(self.out_type) | self.progress << 1
 
-    def discard(self):                  # MGR8
+    def discard(self):                  # MGR6
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
@@ -107,11 +107,11 @@ class Locker:
         if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit):
             raise Invalid('transition not allowed')                   # MGR1
         if t in (SET_HASH, SET_SIG) and not any(self.policy):
-            raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MGR10
+            raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MGR11
         if self.state == MSG_ABSORB:
             self._finalize_pass()
         f = self.loading
-        if f and self.bb < self.size[f]:            # MGR7: a load left incomplete leaves the field unconfigured
+        if f and self.bb < self.size[f]:            # MGR9: a load left incomplete leaves the field unconfigured
             if f == 'ctx':
                 self.ctx, self.size['ctx'] = b'', 0
             else:
@@ -189,7 +189,7 @@ class Locker:
         self.msg_pass, self.ctx, self.r, self.kp = 0, b'', None, None
 
     def exec_in(self, data):
-        """Form B kl.exec: MGR7 loading with W = block_base, or message absorption."""
+        """Form B kl.exec: MGR9 loading with W = block_base, or message absorption."""
         if self.state == MSG_ABSORB:
             self.absorb += data
             return
@@ -208,7 +208,7 @@ class Locker:
 
     def exec_run(self, rbg=(), bad=None, be=False):
         """Form D kl.exec; `bad(attempt)` forces a degenerate draw, `be` mis-encodes EdDSA S."""
-        # secp521r1: the zero msbs of every value used are checked again (MGR12: KLF corruption)
+        # secp521r1: the zero msbs of every value used are checked again (MGR13: KLF corruption)
         used = {POINT_MUL: ('scalar', 'sec' if 'sec' in self.has else 'gen'),
                 SIGN_GEN: ('scalar', 'hash', 'gen') + ('rnd',) * bool(self.progress and 'rnd' in self.has),
                 SIGN_VER: ('sig', 'hash', 'sec', 'gen')}.get(self.state, ())
@@ -217,7 +217,7 @@ class Locker:
         if self.state == POINT_MUL:
             return self._point_mul()
         if self.state == SIGN_GEN:
-            if self.mode != 'eddsa' and not self.valid(self.gen):   # MGR11; EdDSA signs over B
+            if self.mode != 'eddsa' and not self.valid(self.gen):   # MGR12; EdDSA signs over B
                 return self._fail()
             return self._eddsa_sign(be) if self.mode == 'eddsa' else self._sign(rbg, bad)
         if self.state == SIGN_VER:
@@ -237,7 +237,7 @@ class Locker:
         P = self.dec(data)
         return P is not None and self.c.in_subgroup(P)
 
-    def _fail(self):                                # MGR11 data error: _Failure_, a Valid State
+    def _fail(self):                                # MGR12 data error: _Failure_, a Valid State
         self.discard()
         self.state = FAILURE
 
@@ -246,7 +246,7 @@ class Locker:
         if not k or self.mode != 'eddsa' and k >= self.c.n:
             raise Invalid('no configured seed / Scalar out of range')
         base = self.sec if 'sec' in self.has else self.gen
-        if not self.valid(base):                    # not a valid point: data error (MGR11)
+        if not self.valid(base):                    # not a valid point: data error (MGR12)
             return self._fail()
         P = self.dec(base)
         R = self.c.mul(self.keys()[0] if self.mode == 'eddsa' else k, P)
@@ -294,13 +294,13 @@ class Locker:
         return X is not None and X[0] % n == r
 
     def exec_out(self, nbytes, pad=False):
-        """Form C kl.exec in _Output_, then _Success_; MGR7: carrying W past the field invalidates
+        """Form C kl.exec in _Output_, then _Success_; MGR9: carrying W past the field invalidates
         (`pad`: a kl.derive source, zero-padded under DER8)."""
         if self.state != OUTPUT:
             raise Invalid('output transfer outside _Output_')
         buf = self.sig if self.out_type else self.sec
         if self.bb + nbytes > len(buf) and not pad:
-            raise Invalid('emitting kl.exec past the end of the field (MGR7)')
+            raise Invalid('emitting kl.exec past the end of the field (MGR9)')
         chunk = buf[self.bb:self.bb + nbytes]
         self.bb += nbytes
         if self.bb >= len(buf):
@@ -646,7 +646,7 @@ for label, st, data in (('Scalar with bit 521 set', SET_SCALAR, v2b(1 << 521, 72
                         ('all-ones SecondPt (no infinity sentinel any more)', SET_SECONDPT, b'\xff' * 144)):
     check(f'{label} -> Invalid at load', invalid(load, Locker(c), st, data))
 (r, s), sig521, _, _ = sign(c, V521, 7, [99])
-for label, st, f, loads, rbg in (               # bit 575 set by a corruption of the locker file (MGR12)
+for label, st, f, loads, rbg in (               # bit 575 set by a corruption of the locker file (MGR13)
         ('Point_Mul uses a Generator', POINT_MUL, 'gen', [sc(V521, 72)], ()),
         ('Sign_Generate uses a Hash', SIGN_GEN, 'hash', [sc(V521, 72), H7], [99]),
         ('a resumed Sign_Generate uses a RndNum', SIGN_GEN, 'rnd', [sc(V521, 72), H7], []),
@@ -670,7 +670,7 @@ for label, k, want in (('n-1: accepted, result -G', P256.n - 1, (P256.G[0], P256
 off = v2b(P256.G[0], 32) + v2b(P256.G[1] + 1, 32)
 cr = locker(P256, sc(2), (SET_SECONDPT, off), to=POINT_MUL)
 cr.exec_run()
-check('off-curve SecondPt in _Point_Mul_ -> Failure (MGR11 data error), SecondPt unchanged',
+check('off-curve SecondPt in _Point_Mul_ -> Failure (MGR12 data error), SecondPt unchanged',
       (cr.state, cr.sec) == (FAILURE, off))
 check('Sign_Verify with an off-curve public key -> Failure', verify(P256, off, 1, v2b(1, 32) * 2) == FAILURE)
 cr = locker(P256, sc(2), (SET_SECONDPT, b'\xff' * 64), to=POINT_MUL)
@@ -681,13 +681,13 @@ cr.exec_run()
 check('off-curve Generator in _Point_Mul_ -> Failure', cr.state == FAILURE)
 cr = locker(P256, sc(2), (SET_GEN, Locker(P256).gen[:40]), to=POINT_MUL)
 cr.exec_run()
-check('Generator load left incomplete: Generator zeroed (MGR7), not a valid point: _Point_Mul_ -> Failure',
+check('Generator load left incomplete: Generator zeroed (MGR9), not a valid point: _Point_Mul_ -> Failure',
       cr.state == FAILURE and cr.gen == bytes(64))
 cr = locker(P256, (SET_SCALAR, v2b(5, 32)[:16]), to=POINT_MUL)
-check('Scalar load left incomplete: Scalar zeroed (MGR7), _Point_Mul_ -> Invalid',
+check('Scalar load left incomplete: Scalar zeroed (MGR9), _Point_Mul_ -> Invalid',
       cr.scalar == bytes(32) and invalid(cr.exec_run))
 cr = locker(P256, (SET_SECONDPT, pt(P256, P256.mul_g(3))[:32]), to=SET_HASH)
-check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt clear (MGR7)',
+check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt clear (MGR9)',
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
@@ -779,14 +779,14 @@ check('Output: block_base-tracked, 24 + 24 + 16 bytes, then Success',
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.exec_run()
 cr.exec_out(24), cr.exec_out(24)
-check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MGR7)', invalid(cr.exec_out, 24))
+check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MGR9)', invalid(cr.exec_out, 24))
 for t in (SUCCESS, FAILURE):
     cr = Locker(P256)
     check(f'kl.setst #{t}: illegal instruction, State unchanged (SGR8)', raises(cr.setst, t) and cr.state == READY)
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.halt(3)
 cr.setst(POINT_MUL)
-check('same-State kl.setst admitted (SGR5), zeroes Progress (MGR8)', (cr.state, cr.progress) == (POINT_MUL, 0))
+check('same-State kl.setst admitted (SGR5), zeroes Progress (MGR6)', (cr.state, cr.progress) == (POINT_MUL, 0))
 
 def reach(eddsa, sig_exit=True):
     """Whether Sign_Verify is reachable by kl.setst from every Set state."""
@@ -934,7 +934,7 @@ B2 = c.encode(c.mul(2, c.B))
 check('EdDSA signs and verifies over B whatever `Generator` holds (here 2B): the RFC 8032 signature, verified',
       None, (ed_sign(c, seed1, msg1, gen=B2)[0].hex(), ed_verify(c, pk1, sig1, msg1, gen=B2)), (sig1.hex(), SUCCESS))
 cr = locker(c, (SET_CTX, b'abcd', None, 10), to=READY)
-check('ctx load left incomplete (4 of 10 bytes): ctx and ctxlen zeroed (MGR7)', (cr.ctx, cr.size['ctx']) == (b'', 0))
+check('ctx load left incomplete (4 of 10 bytes): ctx and ctxlen zeroed (MGR9)', (cr.ctx, cr.size['ctx']) == (b'', 0))
 check('_AuxInfo_ = 1 without pure mode, or a reserved bit of [15:3] (8): kl_exc_unsupported at provisioning; '
       'bits [2:1] of a PI (6) are ignored and zeroed', True,
       [raises(Locker, c, aux_info=1, pure_impl=False, exc=Unsupported), raises(Locker, c, aux_info=8, exc=Unsupported),
@@ -1116,7 +1116,7 @@ def kl_derive(dest, src, length):
         return
     data = src.sec[:size] if field else src.exec_out(size, pad=True)
     if ecc:
-        if not dest.repr_ok(data):                                  # MGR13: checked when written
+        if not dest.repr_ok(data):                                  # MGR14: checked when written
             raise Invalid('Scalar violates the b-bit representation', who='destination')
         dest.scalar, dest.bb = data, size                           # DER8: as a completing kl.exec
     else:
@@ -1216,7 +1216,7 @@ kl_derive(k, HashSrc(hashlib.sha512(dg).digest(), UsagePolicy=0b10011), 40)
 d.setst(POINT_MUL)
 d521, ok521 = locker(EC.P521, to=SET_SCALAR), locker(EC.P521, to=SET_SCALAR)
 top, fine = bytes(71) + b'\x02', v2b(12345, 72)                 # bit 569 set / a 14-bit value
-check('MGR13: a kl.derive into a secp521r1 `Scalar` with a top bit set: destination _Invalid_; a value with the '
+check('MGR14: a kl.derive into a secp521r1 `Scalar` with a top bit set: destination _Invalid_; a value with the '
       '55 msbs zero is accepted', True,
       (derive_who(d521, HashSrc(top), 72), derive_who(ok521, HashSrc(fine), 72), ok521.scalar),
       ('destination', None, fine))

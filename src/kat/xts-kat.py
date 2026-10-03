@@ -28,7 +28,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: MGR16)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: SKR2)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -82,7 +82,7 @@ class XexLocker:
             s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
             s.mdh = fset(s.mdh, 'KeyType', 0)
         elif field != ONES64 and field in s.sks:
-            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (MGR16)
+            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (SKR2)
         else:
             s.invalidate()                        # <<KLEE-MVR-open>>
     def provision(s, pi):
@@ -114,7 +114,7 @@ class XexLocker:
               and (s.state == READY and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)
                    or s.state == immed)):         # SGR5: same State re-tweaks
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
-            s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MGR5)
+            s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MGR7)
             s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
             s.mdh = fset(s.mdh, 'State', immed)
         else:
@@ -411,7 +411,7 @@ check("same-State kl.setst (SGR5) re-tweaks: mask index back to 0", True,
 info("a same-State kl.setst is read as the Form C transition into that State: it sets the tweak afresh.")
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
-check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MGR5)", True, cl_run(cl, data)[0], c)
+check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MGR7)", True, cl_run(cl, data)[0], c)
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'A/iobuf', v2b(bin_(i, B), 16))
 check("Form A kl.setst and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)

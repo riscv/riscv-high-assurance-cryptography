@@ -77,19 +77,19 @@ class MLDSALocker:
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # MGR1
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey'))
-                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey'))               # MGR10 entry conditions
+                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey'))               # MGR11 entry conditions
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
                 or st == SIGN_OUT and self.state != SIGN_OUT):          # entered only from _Sign_Generate_
             return self.invalid()
         name = IN_F.get(self.state)
-        if name and st != self.state and self.use < self.size(name):     # MGR7: a load left incomplete
+        if name and st != self.state and self.use < self.size(name):     # MGR9: a load left incomplete
             setattr(self, name, b'')                                      # leaves the field unconfigured
         self.put('State', st)
-        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # MGR8; MGR7 W
+        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # MGR6; MGR9 W
         if st == READY:
             self.clear()
         if st in IN_F:
-            setattr(self, IN_F[st], b'')           # MGR7: reloading replaces
+            setattr(self, IN_F[st], b'')           # MGR9: reloading replaces
         if st == SIGN_GEN:
             self.set_flag('Hedged', aux == 0)
         elif st == SK_IN:
@@ -99,7 +99,7 @@ class MLDSALocker:
         elif st == PK_IN:
             self.set_flag('HasPubKey', 0)
 
-    def exec_B(self, data):                        # Form B in a loading State (MGR7, W in bytes)
+    def exec_B(self, data):                        # Form B in a loading State (MGR9, W in bytes)
         if self.state in ERROR_STATES:
             return 0
         name, w = IN_F.get(self.state), self.use
@@ -117,7 +117,7 @@ class MLDSALocker:
             self.set_flag('HasPubKey', 1)
         return n
 
-    def exec_C(self, n):                           # Form C in an emitting State (MGR7)
+    def exec_C(self, n):                           # Form C in an emitting State (MGR9)
         name, w = OUT_F.get(self.state), self.use
         if self.state in ERROR_STATES or name is None or w + n > self.size(name):
             if self.state not in ERROR_STATES:
@@ -125,7 +125,7 @@ class MLDSALocker:
             return bytes(n)                        # SGR15
         self.use = w + n
         out = getattr(self, name)[w:w + n]
-        if self.use == self.size(name):            # MGR7: a completely emitted field -> _Success_
+        if self.use == self.size(name):            # MGR9: a completely emitted field -> _Success_
             self.put('State', SUCCESS)
             self.use = 0
         return out
@@ -147,7 +147,7 @@ class MLDSALocker:
         elif st == SIGN_GEN:
             if not self.flag('HasPrivKey'):
                 return self.invalid()
-            if self.use == 0:                      # MGR8: start, drawing rnd when Hedged
+            if self.use == 0:                      # MGR6: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
                 if self.rnd is None:               # GR10: RBG failure
                     return self.invalid()
@@ -193,7 +193,7 @@ class MLDSALocker:
         for f in ('privkey', 'pubkey', 'signature', 'mu', 'rnd'):
             setattr(new, f, getattr(self, f))
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
-            new.invalid()                          # MGR13: the privkey check on import
+            new.invalid()                          # MGR14: the privkey check on import
         return new
 
 class KeyDest:
@@ -218,7 +218,7 @@ def kl_derive_exec(dest, src, length):
             dest.key = src.exec_C(dest.size)
         return
     if w + length > src.size(name):
-        return src.invalid()                       # MGR7
+        return src.invalid()                       # MGR9
     dest += src.exec_C(length)
 
 # ---------------------------------------------------------------- helpers
@@ -328,7 +328,7 @@ def t_mdh():
         cc = generated()
         cc.setst(st, aux)
         check(f'{why}: _Invalid_ (MGR1)', cc.state == INVALID)
-    spec_note('the long-field transfers are recorded "in MachineUse" without the unit MGR7 requires; the model '
+    spec_note('the long-field transfers are recorded "in MachineUse" without the unit MGR9 requires; the model '
               'counts bytes')
 
 def t_fips204():
@@ -354,7 +354,7 @@ def t_fips204():
               D.verify_internal_mu(h(v['pk']), h(v['mu']), h(v['sig']), v['ps']) == v['pass'])
 
 def t_state_machine():
-    section('State machine, flags, MachineUse (MGR7)')
+    section('State machine, flags, MachineUse (MGR9)')
     kv = VECTORS['keyGen'][0]
     sk, pk = h(kv['sk']), h(kv['pk'])
     cc = MLDSALocker(44)
@@ -373,7 +373,7 @@ def t_state_machine():
     check('Form D kl.exec in _Ready_: _Invalid_ (SGR6)', c2.state == INVALID)
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ zeroes MachineUse', cc.use == 0)
-    check('_pubkey_Output_ emits the ACVP pubkey, then _Success_ (MGR7)',
+    check('_pubkey_Output_ emits the ACVP pubkey, then _Success_ (MGR9)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
     check('kl.exec after the field is complete (now in _Success_): _Invalid_, OUTPUT zeroed (SGR10)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
@@ -407,7 +407,7 @@ def t_state_machine():
                               (MU_IN, bytes(range(32)), 'mu', None)):
         cc = loaded(44, (st, data))
         cc.setst(READY)
-        check(f'{f} load left incomplete for _Ready_: {f} zeroed' + (f', {flag} false' if flag else '') + ' (MGR7)',
+        check(f'{f} load left incomplete for _Ready_: {f} zeroed' + (f', {flag} false' if flag else '') + ' (MGR9)',
               getattr(cc, f) == b'' and not (flag and cc.flag(flag)))
     bad = bytearray(sk)
     bad[128] = 0xFF                                # s1 coefficients outside [-eta, eta]
@@ -453,7 +453,7 @@ def t_compute_pubkey_and_import():
     bad = bytearray(sk)
     bad[128] = 0xFF                                # s1 coefficients outside [-eta, eta]
     cc.privkey = bytes(bad)                        # as restored from an image that carries it
-    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MGR13)', cc.export_import().state == INVALID)
+    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MGR14)', cc.export_import().state == INVALID)
 
 def t_sign_verify():
     section('_Sign_Generate_ and _Sign_Verify_')
@@ -464,7 +464,7 @@ def t_sign_verify():
     cc.exec_D()
     check(f"deterministic _Sign_Generate_ = ACVP {det['src']}, rnd zero", cc.signature.hex() == det['sig']
           and cc.state == SIGN_OUT and cc.rnd == bytes(32))
-    check('_Sign_Generate_ leads to _Sign_Output_, which emits the signature, then _Success_ (MGR7)',
+    check('_Sign_Generate_ leads to _Sign_Output_, which emits the signature, then _Success_ (MGR9)',
           b''.join(cc.exec_C(n) for n in (1024, 1024, 372)).hex() == det['sig'] and cc.state == SUCCESS)
     def _to(cc, *sts):
         for st in sts: cc.setst(st)
@@ -518,7 +518,7 @@ def t_sign_verify():
     check('deterministic signing is reproducible', c2.signature == sig)
 
 def t_progress():
-    section('Interrupted _Sign_Generate_: MachineUse as P (MGR8)')
+    section('Interrupted _Sign_Generate_: MachineUse as P (MGR6)')
     hed = mu_vec(True)
 
     def armed(aux=0):

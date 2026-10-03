@@ -72,7 +72,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (MGR15)
+    def _load_key(s, v, k, key_type):                    # key or SKID (SKR1)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -144,7 +144,7 @@ class Gcm:
         if s.set_iv:
             t[READY, HA] = 'A'
         else:
-            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (SGR5, MGR7)
+            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (SGR5, MGR9)
         return t.get((st, immed))
 
     def setst(s, immed, form='A', aux=0):
@@ -154,7 +154,7 @@ class Gcm:
         if st in ERROR_STATES:
             return                                       # SGR15
         if immed == READY and form == 'A':               # SGR9, SGR4
-            if st == SAV:                                # IV left incomplete: discarded, no finalize() (MGR7)
+            if st == SAV:                                # IV left incomplete: discarded, no finalize() (MGR9)
                 s.tag = s.J0 = s.len = s.block_base = s.cumul_len = 0
             s.state = READY
             return s._ready()
@@ -178,7 +178,7 @@ class Gcm:
         elif immed == HV:
             immed = SUCC if aux & MASK128 == s.tag else FAIL
         elif st == SAV:
-            return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MGR10)
+            return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MGR11)
         s.state = immed
 
     def _finalize(s):
@@ -241,7 +241,7 @@ class Gcm:
 
     def _exec_last(s, INPUT, KLLEN):
         lbl = s.last_blk_len
-        if lbl == 0:                                   # MGR9: the final block was already processed
+        if lbl == 0:                                   # MGR10: the final block was already processed
             return s._invalid()
         ctr = s._next_ctr()
         if ctr is None:
@@ -452,7 +452,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (MGR15): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (SKR1): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 for n in (1, 8, 15, 21):
     check(f'{n}-byte plaintext matches REF', kl_encrypt(K, IV, A, P[:n])[:2] == ref_gcm(K, IV, A, P[:n]))
 
@@ -483,14 +483,14 @@ cl.setst(SAV, 'B', 160)
 cl.exec('B', b2v(bytes(range(16))), 128)
 c2 = copy.copy(cl)
 cl.setst(HA)
-check('kl.setst Hash_Absorb part-way: _Invalid_, since Hash_Absorb needs a complete IV (MGR10)', cl.state == INV)
+check('kl.setst Hash_Absorb part-way: _Invalid_, since Hash_Absorb needs a complete IV (MGR11)', cl.state == INV)
 c2.setst(READY)
-check('kl.setst Ready part-way: the partial IV discarded, no finalize(): tag, J0, len, block_base, cumul_len zero (MGR7)',
+check('kl.setst Ready part-way: the partial IV discarded, no finalize(): tag, J0, len, block_base, cumul_len zero (MGR9)',
       (c2.state, c2.tag, c2.J0, c2.len, c2.block_base, c2.cumul_len) == (READY, 0, 0, 0, 0, 0))
 c3 = Gcm.provisioned(K)
 c3.setst(SAV, 'B', 160)
 c3.exec('B', b2v(bytes(range(16))), 128)
-c3.setst(SAV, 'B', 8 * len(IV))                         # same-State kl.setst: restarts the IV (SGR5, MGR7)
+c3.setst(SAV, 'B', 8 * len(IV))                         # same-State kl.setst: restarts the IV (SGR5, MGR9)
 feed(c3, IV)
 check('same-State kl.setst into Set_Aux_Value part-way restarts the IV with the new len: tc4', finish(c3, A, P)[:2] == (RC, RT))
 cl = at('sav')
@@ -499,7 +499,7 @@ cl.setst(READY)
 check('SGR4: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
       kl_encrypt(K, IV60B, A, P, cl=cl)[:2] == TC6)
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MGR2); '
-     'kl.setst out of the state part-way discards the IV (MGR7)')
+     'kl.setst out of the state part-way discards the IV (MGR9)')
 
 section('multi-block kl.exec, IRR6/IRR7')
 for n in (2, 3):
@@ -531,7 +531,7 @@ out = cl.exec('C', 0, 128)
 check('no kl.exec in Dec_Tag_Finalize: Invalid, zeros written', (cl.state, out) == (INV, 0))
 cl = to_dtf()
 cl.setst(HV, 'C', b2v(RT) | 0xABCD << 128)
-check('MGR5: Hash_Verify compares the 128 LSBs', cl.state == SUCC)
+check('MGR7: Hash_Verify compares the 128 LSBs', cl.state == SUCC)
 for nbits in (8, 16, 56, 96, 120):
     x = b2v(bytes(range(16))) & ((1 << nbits) - 1)
     e = at('enc')
@@ -546,7 +546,7 @@ for nbits in (8, 16, 56, 96, 120):
     pt = d.exec('A', ct, 128)
     d.setst(DTF, 'C', lb)
     d.setst(HV, 'C', e.exec('C', 0, 128))
-    check(f'last_blk_len = {nbits}: round trip -> Success, OUTPUT clear above it (MGR6)',
+    check(f'last_blk_len = {nbits}: round trip -> Success, OUTPUT clear above it (MGR8)',
           (pf, pt, d.state) == (b2v(bytes(range(32))), x, SUCC) and ct >> nbits == 0)
 bad = (0, 1, 7, 60, 100, 127, 128, 200)
 for where, last in (('enc', ELB), ('dec', DLB)):
@@ -555,15 +555,15 @@ for where, last in (('enc', ELB), ('dec', DLB)):
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
 first = cl.exec('A', b2v(P[:12]), 96)
-check('second kl.exec in Enc_Last_Block (MGR9): _Invalid_, output zeroed',
+check('second kl.exec in Enc_Last_Block (MGR10): _Invalid_, output zeroed',
       first and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 cl = at('dec')
 cl.setst(DLB, 'B', 96)
-check('second kl.exec in Dec_Last_Block (MGR9): _Invalid_, output zeroed',
+check('second kl.exec in Dec_Last_Block (MGR10): _Invalid_, output zeroed',
       cl.exec('A', b2v(P[:12]), 96) and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
-check('Enc_Last_Block with KLLEN = 256: one block, excess ignored (MGR3, MGR6)',
+check('Enc_Last_Block with KLLEN = 256: one block, excess ignored (MGR3, MGR8)',
       cl.exec('A', b2v(P[:12] + bytes(range(1, 21))), 256) == first)
 cl = at('enc')
 crypt(cl, P, 3)

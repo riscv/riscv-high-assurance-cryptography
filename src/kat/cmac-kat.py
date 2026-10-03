@@ -55,7 +55,7 @@ def unpack(data, lay):
 
 class Cmac:
     def __init__(s, key, skid=None, policy=3, **nc):
-        """policy: _MachinePolicy_, bit 0 tag output, bit 1 verification (<<KLEE-CMAC-mode>>, MGR10)."""
+        """policy: _MachinePolicy_, bit 0 tag output, bit 1 verification (<<KLEE-CMAC-mode>>, MGR11)."""
         s.key, s.skid, s.state, s.policy = key, skid, READY, policy
         s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False), **nc)
         if skid is not None:
@@ -72,7 +72,7 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L)
         return L, K1, s.nc['dbl'](K1)
-    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MGR18); VERIFY Form A: KLIOBUF substitution
+    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MGR17); VERIFY Form A: KLIOBUF substitution
     SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
              (VERIFY, 'C'): (OUTPUT,), (VERIFY, 'A'): (OUTPUT,)}
     def setst(s, immed, form='A', aux=0):
@@ -84,7 +84,7 @@ class Cmac:
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MGR1, SGR9
         if immed == VERIFY and not s.policy & 2:
-            s._invalid('MachinePolicy[1] clear')  # MGR10
+            s._invalid('MachinePolicy[1] clear')  # MGR11
         if immed == LAST:
             if aux > B or aux % 8:
                 s._invalid('Xs')
@@ -105,13 +105,13 @@ class Cmac:
             return 0
         if st == OUTPUT:
             if not s.policy & 1:
-                s._invalid('MachinePolicy[0] clear')  # MGR10
+                s._invalid('MachinePolicy[0] clear')  # MGR11
             s.state = SUCCESS
-            return s.hash & ((1 << klen) - 1)     # MGR6
+            return s.hash & ((1 << klen) - 1)     # MGR8
         n = s.last_blk_len
         if klen < n:
             s._invalid('KLLEN < last_blk_len')
-        INPUT = sl(INPUT, B - 1, 0)               # MGR5
+        INPUT = sl(INPUT, B - 1, 0)               # MGR7
         _, K1, K2 = s.gen_subkeys()
         if n == B:
             tmp = INPUT ^ (K2 if s.nc['k2full'] else K1)
@@ -222,7 +222,7 @@ def verified(K, M, t):
 for lab, K, M, W in VEC:
     for name, got, want in (
             ("REF", ref_cmac(K, M)[0], W), ("one block per kl.exec", tag(K, M), W),
-            ("multi-block kl.exec, KLLEN 2b, filler ignored (MGR3, MGR5, MGR6)",
+            ("multi-block kl.exec, KLLEN 2b, filler ignored (MGR3, MGR7, MGR8)",
              v2b(run(K, M, per_exec=0, junk=True).exec('C', klen=2 * B), 32), W + bytes(16)),
             ("#hash_verify: Success, filler ignored; tampered: Failure",
              [verified(K, M, b2v(W) | junk_above(B)), verified(K, M, b2v(W) ^ 1 << 7)],
@@ -277,12 +277,12 @@ INVALID_CASES = [
     ("second tag kl.exec, in Success (SGR10)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (SGR9)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (SGR9)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
-    ("MGR18: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("MGR17: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
 INVALID_CASES += [
-    ("tag output with MachinePolicy = 0b10 (MGR10)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=2)),
+    ("tag output with MachinePolicy = 0b10 (MGR11)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=2)),
      lambda c: c.exec('C')),
-    ("kl.setst #hash_verify with MachinePolicy = 0b01 (MGR10)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=1)),
+    ("kl.setst #hash_verify with MachinePolicy = 0b01 (MGR11)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=1)),
      lambda c: c.setst(VERIFY, 'C', b2v(W4))),
 ]
 for name, mk, act in INVALID_CASES:
@@ -301,7 +301,7 @@ vcl = run(K128, MSG[:40], cl=Cmac(K128, policy=2))
 vcl.setst(VERIFY, 'C', b2v(W4))
 z_out, z_ver = run(K128, MSG[:40], cl=Cmac(K128, policy=0)), run(K128, MSG[:40], cl=Cmac(K128, policy=0))
 check("MachinePolicy = 0b10 verifies, 0b01 emits the tag; MachinePolicy = 0 is admissible but useless: "
-      "provisioned and absorbs, then both output and verification -> Invalid (MGR10)", True,
+      "provisioned and absorbs, then both output and verification -> Invalid (MGR11)", True,
       (vcl.state, tag(None, MSG[:40], cl=Cmac(K128, policy=1)), z_out.state,
        raises(z_out.exec, 'C', exc=Invalid), raises(z_ver.setst, VERIFY, 'C', b2v(W4), exc=Invalid)),
       (SUCCESS, W4, OUTPUT, True, True))

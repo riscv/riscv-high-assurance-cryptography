@@ -169,7 +169,7 @@ class Siv:
             s.nonce = sl(aux, 95, 0)
             s._derive()
         elif immed == SAV2:
-            s.SIV = aux & MASK128                        # MGR5
+            s.SIV = aux & MASK128                        # MGR7
         elif immed in (ELB, DLB):
             if not (0 < aux <= 120 and aux % 8 == 0):
                 return s._invalid()
@@ -193,17 +193,17 @@ class Siv:
             if start % 16 or start and s.state in (ELB, DLB, ETF, DTF):
                 return s._invalid()                      # not an interruption point
         if st in (ETF, DTF):
-            s._absorb(INPUT & MASK128)                   # MGR5
+            s._absorb(INPUT & MASK128)                   # MGR7
             s.probe = s.tmp
             s.tmp = s._enc(cat((0, 1), (sl(s.tmp, 126, 96), 31), (sl(s.tmp, 95, 0) ^ s.nonce, 96)))
             if st == DTF:
                 s.state = SUCC if s.tmp == s.SIV else FAIL
                 return 0
             s.SIV, s.state = s.tmp, ENC
-            return s.SIV & ((1 << KLLEN) - 1)            # MGR6
+            return s.SIV & ((1 << KLLEN) - 1)            # MGR8
         if st in (ELB, DLB):
             lbl = s.last_blk_len
-            if lbl == 0:                                 # MGR9: the final block was already processed
+            if lbl == 0:                                 # MGR10: the final block was already processed
                 return s._invalid()
             if s.ctr == 2**32:                           # one block more than P_MAX
                 return s._invalid()
@@ -513,7 +513,7 @@ m.setst(SAV2, 'C', 0x1234)
 m.setst(SAV2, 'C', b2v(w5[-16:]) | 0x77 << 200)
 siv = m.SIV
 m.setst(READY)
-check('Set_Aux_Value_2 repeated overwrites SIV; a 256-bit INPUT keeps its 128 LSBs (MGR5)',
+check('Set_Aux_Value_2 repeated overwrites SIV; a 256-bit INPUT keeps its 128 LSBs (MGR7)',
       siv == b2v(w5[-16:]) and kl_decrypt(k5, n5, a5, w5, m=m) == (SUCC, p5))
 s0, s1 = kl_decrypt(k5, n5, a5, w5[:-16] + bytes(16)), kl_decrypt(k5, n5, a5, w5, set_siv=False)
 check('skipping Set_Aux_Value_2 equals setting SIV to zero', s0 == s1 and s0[0] == FAIL)
@@ -570,8 +570,8 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     m = at(where)
     m.setst(last, 'B', 64)
     first = m.exec('A', b2v(bytes(range(1, 17))), 128)
-    check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MGR6); '
-          'a second kl.exec -> _Invalid_, output zeroed (MGR9)',
+    check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MGR8); '
+          'a second kl.exec -> _Invalid_, output zeroed (MGR10)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
@@ -642,7 +642,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (MGR15): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (SKR1): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)

@@ -246,8 +246,8 @@ class Hmac:
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
                    (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # SGR5: restarts the load
-                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MGR10: K0 loaded
-                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR18)
+                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MGR11: K0 loaded
+                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR17)
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
             raise IllegalInstruction  # SGR8
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
@@ -257,7 +257,7 @@ class Hmac:
             raise IllegalInstruction  # SGR16
         elif s.st in ERROR_STATES:
             pass
-        elif immed == KL_STATE_READY:  # K0 kept, unless its load was left incomplete (MGR7)
+        elif immed == KL_STATE_READY:  # K0 kept, unless its load was left incomplete (MGR9)
             if s.st == KL_STATE_SET_KEY and h.cumul_len < s.b:
                 s.K0 = 0
             h.ready()
@@ -290,7 +290,7 @@ class Hmac:
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
         if form == 'B' and s.st == KL_STATE_SET_KEY:
             r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
-            s.has_key = h.cumul_len == s.b  # MGR7: set when the load completes
+            s.has_key = h.cumul_len == s.b  # MGR9: set when the load completes
         elif form == 'B' and s.st == KL_STATE_HASH_ABSORB:
             r = process_vli(s.max_len, h, h.attr, h.b, h, h.process_block, *io, xor=h.xor)
         elif form == 'C' and s.st == KL_STATE_HASH_OUTPUT:
@@ -476,11 +476,11 @@ for label, variant, ops in [
         ('NIK _Ready_ -> _Hash_Absorb_', 'NIK', (A,)),
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
-        ('NIK kl.exec after K0 is complete (MGR7)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
+        ('NIK kl.exec after K0 is complete (MGR9)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
         ('kl.exec in _Ready_ (SGR6)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (MGR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (MGR18)', 'KIP', (A, B(data7), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (MGR17)', 'KIP', (A, B(data7), O, O)),
         ('kl.exec in _Success_ (SGR10), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
@@ -515,7 +515,7 @@ cl = fresh(variant='NIK', key=b'first key', ops=(SK, B(K0_7[:32]), R))
 check('NIK: entering _Set_Key_ clears HasKey; a load left incomplete keeps it clear: _Ready_ -> _Hash_Absorb_ -> Invalid',
       None, (cl.se, run(cl, A) or cl.st), (0, KL_STATE_INVALID))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
-check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MGR7)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
+check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MGR9)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
 run(cl, SK)
 check('NIK same-State kl.setst to _Set_Key_ restarts the load (SGR5): K0 and cumul_len zeroed',

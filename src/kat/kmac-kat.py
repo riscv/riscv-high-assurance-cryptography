@@ -185,7 +185,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None):
-    """PI; with a SKID (_KeyType_ = 1, MGR15) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
+    """PI; with a SKID (_KeyType_ = 1, SKR1) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
     cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
     mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
     return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
@@ -263,7 +263,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # MGR15: SKID resolved after import
+            self._resolve(key)                                           # SKR1: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -359,7 +359,7 @@ class Kmac:
             ob, self.block_base = ob + amt, self.block_base + amt
             if not self.xof:
                 self.L -= amt
-            if not self.xof and self.L == 0:                             # then MGR6
+            if not self.xof and self.L == 0:                             # then MGR8
                 out[:] = v2b(OUT & ((1 << ob) - 1), top)
                 self.st = SUCCESS
                 return self._end('success')
@@ -537,7 +537,7 @@ for L in (255, 250, 257, 1000, 1001):
           (ref_kmac(128, KEY, DATA4, L, TAG), SUCCESS))
 c = squeezing(128, DATA4, 250)
 (st, o), = squeeze(c, 40, fill=0xEE)
-check('KMAC128 L=250 into 40 B: _Success_, OUTPUT bits [319:250] cleared (MGR6)', True,
+check('KMAC128 L=250 into 40 B: _Success_, OUTPUT bits [319:250] cleared (MGR8)', True,
       (st, bytes(o[:32]), o[32:], o[31] >> 2),
       ('success', ref_kmac(128, KEY, DATA4, 250, TAG), bytearray(8), 0))
 c = squeezing(256, DATA4, 512)
@@ -608,9 +608,9 @@ for label, c, act in (
          lambda c: c.setst(ABSORB)),
         ('Form B kl.exec in _Hash_Output_ (MGR1)', squeezing(128, DATA4, 256),
          lambda c: c.exec(inp=DATA4)),
-        ('KMAC128 same-State kl.setst to _Hash_Output_ (MGR18)', squeezing(128, DATA4, 256),
+        ('KMAC128 same-State kl.setst to _Hash_Output_ (MGR17)', squeezing(128, DATA4, 256),
          lambda c: c.setst(OUTPUT, 'B', 256)),
-        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (MGR18)', squeezing(256, DATA4, 0, True),
+        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (MGR17)', squeezing(256, DATA4, 0, True),
          lambda c: c.setst(OUTPUT))):
     act(c)
     check(f'{label} -> _Invalid_', True, c.st, INVALID)
