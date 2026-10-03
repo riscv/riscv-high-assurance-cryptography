@@ -1207,7 +1207,7 @@ _Description_::
 +
 --
 Performs the cryptographic operation that the Machine in locker `Kn` or `K(Xn)` defines, possibly taking an input and producing an output.
-When it performs no operation, on a locker in an Error State or an expired locker, or when it transitions the locker to an Error State, it zeroes the unwritten part of its output window instead of producing output (Rule <<KLEE-SGR-usage-locker-error-state>>).
+When it performs no operation, on an _Unconfigured_, Error-State or expired locker, or when it transitions the locker to an Error State, it zeroes the unwritten part of its output window instead of producing output (Rule <<KLEE-SGR-usage-locker-error-state>>).
 
 In Form A, `Vd` and `Vs2` may be the same register group; any other overlap is reserved.
 `Vd` = `Vs2` is allowed only for an operation whose output blocks have the length of its input blocks, each block's output then replacing its input at the same offset; for any other operation it raises an illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>).
@@ -1411,7 +1411,7 @@ For all Machines, `#immed7` takes the following values:
 * 65–127 are Machine-defined, and may change other state information, such as _StateExtension_.
 
 Any other value that the architecture or the current Machine does not support transitions the locker to
-Error State _Invalid_. Some values require a 64- or 128-bit auxiliary operand, in one or more
+Error State _Invalid_; on an _Unconfigured_ locker, every immediate other than `kl_state_unconfigured` performs no operation (Rule <<KLEE-SGR-transition-to-from-unconfigured>>). Some values require a 64- or 128-bit auxiliary operand, in one or more
 GPRs or in a vector register (group) `Vs`.
 --
 
@@ -1850,8 +1850,8 @@ Any further transfer that a Machine defines must respect these restrictions.
 [horizontal]
 [[KLEE-DER-SKID-no-export,DER4]]DER4:: A field configured by a SKID is _never_ exportable, and a key field of a locker whose _KeyType_ is 1 is _never_ importable. No rule may be defined to export or import such a field.
 
-[[KLEE-DER-shared-secret,DER5]]DER5:: Moving a shared secret held by a key-agreement or key-encapsulation Machine, such as the ECC `SecondPt` or the ML-KEM `sharedkey`,
-into a key field of a symmetric Machine, a private key field of a public-key Machine, or the `kl.exec` input of a hash function, MAC function or XOF is a _restricted transfer_.
+[[KLEE-DER-shared-secret,DER5]]DER5:: Moving a shared secret from a key-agreement or key-encapsulation Machine, such as the ECC `SecondPt` or the ML-KEM `sharedkey`,
+into a key field of a symmetric Machine, a private key field of a public-key Machine, or the `kl.exec` input of a hash, MAC or XOF is a _restricted transfer_.
 It is admitted whenever both endpoints are defined (Rule <<KLEE-DER-checks>> items 1 and 2); a key field receives the first `dest_length` bytes of the secret (Rule <<KLEE-DER-checks>> item 5).
 
 [[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: The _`kl.exec` output_ of a source locker, where <<Zkl-ISA-machines.adoc#KLEE-derive-endpoints>> lists it as the source endpoint, is the data that the Form C `kl.exec` instructions permitted in its current _State_ would emit; the tag of an AEAD Machine is not such output, unless that Machine explicitly allows it.
@@ -2206,7 +2206,7 @@ Other instructions, such as `kl.exec`, may also change the _State_, under condit
 A locker in an Error State therefore holds only its MDH, and its size (<<KLEE-instruction-size>>) is 16 bytes.
 
 [[KLEE-SGR-transition-to-from-unconfigured,SGR12]]SGR12:: Only a configuration instruction can transition a locker from _Unconfigured_ to a Complete State.
-Any usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in State _Unconfigured_ raises an illegal-instruction exception.
+Any usage-controlled instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in State _Unconfigured_ performs no operation and raises no exception: the locker stays _Unconfigured_, and an output operand is zeroed as Rule <<KLEE-SGR-usage-locker-error-state>> prescribes; `kl.derive` has no output operand, and performs no operation if either endpoint is _Unconfigured_.
 A locker leaves an Error State for _Unconfigured_ through `kl.clear` or `kl.clearall`, through a `kl.rename` naming it as source, or as destination with an _Unconfigured_ source (<<KLEE-instruction-clone>>), or by being re-opened for provisioning or import.
 
 SGR13:: `kl.getmd*` (<<KLEE-instruction-getmd>>) reads the MDH of an _Unconfigured_ locker as all zeros.
@@ -2221,17 +2221,17 @@ apart from clearing it, `kl.setst` can only change its Error State.
 [[KLEE-SGR-usage-locker-error-state,SGR16]]SGR16:: An attempt to _use_ a locker in an Error State performs no operation, and in particular leaves the _State_ unchanged.
 Although such an attempt is an error that would otherwise transition the locker to _Invalid_, the _State_ is kept, so that software can address the original error condition; the architecture keeps no history of Error States.
 +
-A usage instruction with an output operand that performs no operation under this Rule or under Rule <<KLEE-SGR-gate-order>> (Error State, expiration), or that transitions its locker to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements `vstart` to `vl` − 1 of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output. An in-place operation thus never leaves its input in place of the output it did not produce.
+A usage instruction with an output operand that performs no operation under this Rule or under Rule <<KLEE-SGR-gate-order>> (_Unconfigured_, Error State, expiration), or that transitions its locker to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements `vstart` to `vl` − 1 of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output. An in-place operation thus never leaves its input in place of the output it did not produce.
 
 [[KLEE-SGR-usage-policy,SGR17]]SGR17:: A _usage_ instruction that would violate the Usage Control policies does not perform its operation, and raises KLEE exception `kl_exc_privilege_violation`. <<KLEE-error-architecture>> gives the exact behavior, including that without the Privileged Architecture.
 
 [[KLEE-SGR-usage-locker-config-state,SGR18]]SGR18:: Using a locker in a Configuration State, cloning from it, or restricting it raises KLEE exception `kl_exc_privilege_violation`.
 <<KLEE-instruction-clone>> covers such a locker as the destination of a `kl.clone`, or as both its source and its destination.
 
-[[KLEE-SGR-gate-order,SGR19]]SGR19:: For a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), after the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>, the conditions on a locker are evaluated in the following order, and the first that applies decides the outcome:
+[[KLEE-SGR-gate-order,SGR19]]SGR19:: For a usage-controlled instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), after the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_locker_off` (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>, the conditions on a locker are evaluated in the following order, and the first that applies decides the outcome:
 +
 --
-. _Unconfigured_: illegal-instruction exception (Rule <<KLEE-SGR-transition-to-from-unconfigured>>);
+. _Unconfigured_: no operation and no exception (Rule <<KLEE-SGR-transition-to-from-unconfigured>>);
 . Error State: no operation and no exception (Rule <<KLEE-SGR-usage-locker-error-state>>);
 . Configuration State: KLEE exception `kl_exc_privilege_violation` (Rule <<KLEE-SGR-usage-locker-config-state>>);
 . a forbidden KLIOBUF substitution, or a Form A `kl.exec` with `Vd` = `Vs2` that <<KLEE-instruction-exec>> forbids: illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>);
@@ -2240,7 +2240,7 @@ A usage instruction with an output operand that performs no operation under this
 . a KLIOBUF required by a substitution but unconfigured: KLEE exception `kl_exc_unconfigured_buffer` (Rule <<KLEE-GR-iobuf-configured>>);
 . the Machine's own rules.
 
-For `kl.derive`, each condition is evaluated for both endpoints, the source first, before the next condition; an Error State on either endpoint makes the whole instruction a no-op.
+For `kl.derive`, each condition is evaluated for both endpoints, the source first, before the next condition; an _Unconfigured_ or Error-State endpoint makes the whole instruction a no-op.
 --
 
 [[KLEE-SGR-config-instructions-config-state,SGR20]]SGR20:: The following configuration instructions, which Usage Control policies do not gate, are also allowed on a locker in a Configuration State:
@@ -2255,7 +2255,7 @@ are allowed in States `kl_cfg_provisioning`, `kl_cfg_importing` and `kl_cfg_ppi_
 are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`; in State `kl_cfg_exporting`, only on the locker that `klmanagedlocker` names.
 
 [[KLEE-SGR-clearads,SGR23]]SGR23:: `kl.clearads` (<<KLEE-instruction-clearads>>) is permitted in every Valid State.
-It leaves _State_ and _StateExtension_ unchanged, and is subject to Usage Control (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>).
+It leaves _State_ and _StateExtension_ unchanged, and is subject to Usage Control (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>).
 Removing the ADS discards any intermediate state of an interrupted long-running operation that the implementation keeps there:
 in a State of Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>> it zeroes the progress field _P_, and the operation restarts
 when its instruction is next issued, exactly as if the SCC exported before the `kl.clearads` had been imported on a different
@@ -2390,10 +2390,9 @@ The grounds for an illegal-instruction exception form two groups:
   lazily loaded, or in the M-mode code that emulates it. They are evaluated after
   `kl_exc_no_csk` and the _Off_ gate, once the locker is loaded or by the emulator, and only if no
   fatal condition is pending; otherwise `kl_exc_fatal` is raised. For a usage-controlled instruction they follow the
-  order of Rule <<KLEE-SGR-gate-order>>, so items 4 and 8 below are evaluated only after the Error-State and
+  order of Rule <<KLEE-SGR-gate-order>>, so items 3 and 7 below are evaluated only after the _Unconfigured_, Error-State and
   Configuration-State conditions:
 
-. A usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) issued on a locker in State _Unconfigured_ (Rule <<KLEE-SGR-transition-to-from-unconfigured>>), including `kl.derive` with an _Unconfigured_ endpoint.
 . `kl.load`, `kl.store` or `kl.mv` on a locker whose _State_ does not admit the transfer, or with an inconsistent `klstart` (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>), except on a locker that is _Unconfigured_ or in an Error State, where the instruction performs no operation (Rule <<KLEE-SGR-cleared-under-management>>).
 . `kl.mgmt` when `klmanagedlocker` names another locker, when completing with an `ml`._State_ inconsistent with the locker's Configuration State, or when `kl_cfg_management_end` is issued on a locker in a Valid State (<<KLEE-locker-management>>); on a locker that is _Unconfigured_ or in an Error State, `kl_cfg_management_end` performs no operation, as does the opening of an export on an _Unconfigured_ locker (Rule <<KLEE-SGR-cleared-under-management>>).
 . A KLIOBUF substitution that <<KLEE-usage-input-output>> forbids, such as a Form B or C `kl.exec` issued where Form A is expected, or any substitution without `Zklio`. This ground depends on the State, which defines the operation and thus whether a Form is a substitution.
@@ -2448,7 +2447,7 @@ Privileged Architecture, <<KLEE-exception-error-correspondence>> replaces the KL
 . *Locker marked _Off_.* `kl_exc_locker_off`, on any access to the locker that <<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>> does not
   exempt, before any condition that depends on its contents. M-mode resolves it or forwards it to
   the mode that owns the _Off_ field.
-. *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in a mode that
+. *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in a mode that
   the _UsagePolicy_ excludes (Rule <<KLEE-SGR-usage-policy>>), and for any use, cloning or
   restriction of a locker in a Configuration State (Rule <<KLEE-SGR-usage-locker-config-state>>).
 . *Insufficient KLF capacity.* `kl_exc_out_of_memory`, for a `kl.mgmt` opening a provisioning or
@@ -2480,10 +2479,10 @@ the conditions that <<KLEE-exception-error-correspondence>> maps to an Error Sta
   <<Zkl-ISA-machines.adoc#KLEE-MGR-policy-gate>>, <<KLEE-instruction-setst>>), and for
   a `kl.derive` that fails its checks (<<KLEE-instruction-derive>>).
 . *Invalid length.* _Invalid_, for an operand whose transfer-window length (`kliobuftop`, or `VL` {times} `SEW` / 8) the Machine does not accept (<<KLEE-CSR-klstart>>, <<KLEE-usage-input-output>>).
-. *Expiration.* _Expired_, for a usage-controlled instruction (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) on an expired locker, which then performs
+. *Expiration.* _Expired_, for a usage-controlled instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) on an expired locker, which then performs
   no operation (<<KLEE-Metadata-expiration-date>>).
-. *Use of a locker in an Error State.* No operation, and the _State_ is unchanged (Rule
-  <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-error-state-instructions>>).
+. *Use of an _Unconfigured_ or Error-State locker.* No operation, and the _State_ is unchanged (Rules
+  <<KLEE-SGR-transition-to-from-unconfigured>> and <<KLEE-SGR-usage-locker-error-state>>, <<KLEE-error-state-instructions>>, <<KLEE-unconfigured-instructions>>).
 . *Explicit Error State.* The Error State that a `kl.setst` immediate names
   (<<KLEE-instruction-setst>>).
 . *RBG failure.* _Invalid_, for an operation that cannot obtain the random bits it needs (Rule <<KLEE-GR-rbg-failure>>).
@@ -2512,16 +2511,49 @@ procedures) nor that of a signature is an algorithmic error, whether it succeeds
 Machine has performed as expected.
 --
 
-=== Summary of Behavior of KLEE Instructions in Error States
+=== Summary of Behavior of KLEE Instructions in Error States and on Unconfigured Lockers
 
-A locker in an Error State holds only its MDH (Rules <<KLEE-SGR-clear-locker-content-error-state>> and <<KLEE-SGR-error-state-locker-is-only-MDH>>), and what an instruction does with it depends on whether the instruction uses the locker or manages it.
+An important principle in KLEE is that once a locker has entered an Error State, it becomes inert:
+A locker in an Error State holds only its MDH (Rules <<KLEE-SGR-clear-locker-content-error-state>> and <<KLEE-SGR-error-state-locker-is-only-MDH>>.
+What an instruction does with it depends on whether the instruction _uses_ the locker or _manages_ it.
+Usage instructions on lockers in an Error State simply fail through, as no-ops or zero writes, so that the caller can detect the error condition and take appropriate action without having to check after every single instruction and without spending time in trap handlers that would not be capable or resolving the error condition. The same applies to usage operations on unconfigured lockers: the also fail through as no-ops or zero writes.
 
-// The illegal-instruction grounds of the first group (<<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk`, `kl_exc_locker_off` if a `*llockerstatus` field in effect for the locker is _Off_ (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and, for Forms A–C of `kl.exec`, the `klstart`/`vstart` check of <<KLEE-CSR-klstart>> precede any consideration of the _State_ of the locker (Rule <<KLEE-SGR-gate-order>>).
-The checks that Rule <<KLEE-SGR-gate-order>> places before the conditions on the locker come first, whatever its _State_.
-An instruction that uses the locker, that is `kl.exec`, `kl.derive` or a usage-controlled `kl.setst` (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), then performs no operation and raises no exception:
-the Error State is the second condition of that Rule, right after _Unconfigured_, so neither the _UsagePolicy_ nor the _ExpirationDate_ is evaluated, and the _State_ is unchanged, so that the original Error State remains visible to software (Rule <<KLEE-SGR-usage-locker-error-state>>).
+Several conditions are tested before the _State_ of the locker is considered:
+by Rule <<KLEE-SGR-gate-order>>, the first group of illegal-instruction grounds <<KLEE-illegal-instruction-grounds>> is checked first.
+Only then does the _State_ of the locker come into play.
+First, it is checked whether the locker is _Unconfigured_, and then in an Error State.
 
-<<KLEE-error-state-instructions>> summarizes the outcome of every instruction on a locker in an Error State.
+Usage operations on an unconfigured locker or on a locker in an Error State not only do not perform any cryptographic operation, but they also do not touch the MDH.
+In particular, _State_ is not changed, so that the original error condition is preserved.
+In order to preserve the error condition, the checks on the _UsagePolicy_ or the _ExpirationDate_ are skipped.
+
+// An instruction that uses the locker, that is `kl.exec`, `kl.derive` or a usage-controlled `kl.setst` (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), then performs no operation and raises no exception:
+// , so neither the _UsagePolicy_ nor the _ExpirationDate_ is evaluated, and the _State_ is unchanged, so that the original Error State remains visible to software (Rule <<KLEE-SGR-usage-locker-error-state>>).
+
+<<KLEE-unconfigured-instructions>> and
+<<KLEE-error-state-instructions>> summarize the outcome of every instruction on an unconfigured locker and a locker in an Error State, respectively.
+
+[[KLEE-unconfigured-instructions]]
+.Instructions on an _Unconfigured_ locker
+[float="center",align="center",width="100%",cols="<38%,<62%",options="header"]
+|===
+| Instruction | Outcome
+| `kl.size`, Form A | Returns 0 (<<KLEE-instruction-size>>).
+| `kl.avail`, Form A | Returns 0 (<<KLEE-instruction-size>>).
+| `kl.load`, `kl.store`, `kl.mv` | No operation, and no exception on account of the _State_: `kl.load` and `kl.store` have an empty transfer window and retire with `klstart` = 0, and a `kl.mv` that reads the locker writes zeros (Rule <<KLEE-SGR-cleared-under-management>>).
+| Usage-controlled instructions (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>): `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the locker stays _Unconfigured_ and the output window is zeroed (Rules <<KLEE-SGR-transition-to-from-unconfigured>> and <<KLEE-SGR-usage-locker-error-state>>). For `kl.derive`, an _Unconfigured_ endpoint on either side suffices.
+| `kl.setst` with an Error-State immediate | No operation: only the short import of <<KLEE-error-state-transfer>> configures a locker directly into an Error State (<<KLEE-instruction-setst>>).
+| `kl.mgmt` opening a provisioning or an import | The locker is configured (Rule <<KLEE-GR-opening-locker-when>>, <<KLEE-locker-management>>).
+| `kl.mgmt` opening an export | No operation and no exception; only the common steps take effect, `klmanagedlocker` becoming 32 and `klstart` 0 (Rule <<KLEE-SGR-cleared-under-management>>).
+| `kl.mgmt` with `kl_cfg_management_end` | No operation and no exception; `klmanagedlocker` becomes 32 and `klstart` 0 (Rule <<KLEE-SGR-cleared-under-management>>).
+| `kl.getmd*`, `kl.getst` | Return zeros (Rule SGR13, <<KLEE-instruction-getmd>>).
+| `kl.restrict*` | No operation (<<KLEE-instruction-restrict>>).
+| `kl.clone`, with the locker as source | Illegal-instruction exception, unless source and destination are the same locker, in which case no operation (<<KLEE-instruction-clone>>).
+| `kl.clone`, with the locker as destination | The locker receives the clone of the source (<<KLEE-instruction-clone>>).
+| `kl.rename`, with the locker as source | The destination becomes _Unconfigured_ too, as by `kl.clear` (<<KLEE-instruction-clone>>).
+| `kl.rename`, `kl.swap`, with the locker as destination | The locker receives the CC of the source; after a `kl.swap`, the source becomes _Unconfigured_ (<<KLEE-instruction-clone>>).
+| `kl.clear`, `kl.clearall` | The locker stays _Unconfigured_; no `*llockerstatus` or `KLS` field is set to _Dirty_ on its account, unless a `*llockerstatus` field in effect for it is _Off_ (<<KLEE-instruction-clear>>).
+|===
 
 [[KLEE-error-state-instructions]]
 .Instructions on a locker in an Error State
@@ -2530,8 +2562,9 @@ the Error State is the second condition of that Rule, right after _Unconfigured_
 | Instruction | Outcome
 | `kl.size` | Returns 16 (<<KLEE-instruction-size>>).
 | `kl.avail`, Form A | Evaluates the MDH fields that identify the Machine (<<KLEE-instruction-size>>).
-| `kl.load`, `kl.store`, `kl.mv` | No operation, and no exception on account of the _State_: `kl.load` and `kl.store` have an empty transfer window, and a `kl.mv` that reads the locker writes zeros (Rule <<KLEE-SGR-cleared-under-management>>).
-| Usage-controlled instructions (Table <<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>): `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-locker-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
+| `kl.load`, `kl.store`, `kl.mv` | `kl.load` and `kl.store` perform no operation. `kl.mv` does not write anything into the locker, and reads zeros from it.
+No exception is raised.  (Rule <<KLEE-SGR-cleared-under-management>>).
+| Usage-controlled instructions (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>): `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-locker-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
 | `kl.setst` with an Error-State immediate | The locker transitions to that Error State without an exception, a reserved one to _Invalid_ (<<KLEE-instruction-setst>>).
 | `kl.mgmt` opening a provisioning or an import | The locker is zeroized and reconfigured (Rule <<KLEE-GR-opening-locker-when>>, <<KLEE-locker-management>>).
 | `kl.mgmt` opening an export | The locker is left unchanged and no management operation is opened; `klmanagedlocker` becoming 32 and `klstart` 0 (<<KLEE-locker-management>>).
@@ -2543,6 +2576,9 @@ the Error State is the second condition of that Rule, right after _Unconfigured_
 | `kl.rename`, `kl.swap` | The CC, reduced to its MDH, is moved or exchanged unchanged (<<KLEE-instruction-clone>>).
 | `kl.clear`, `kl.clearall` | The locker becomes _Unconfigured_ (<<KLEE-instruction-clear>>).
 |===
+
+// <<KLEE-unconfigured-instructions>> does the same for an _Unconfigured_ locker, which holds no CC and whose MDH reads as all zeros (Rule SGR13). The checks that precede the conditions on the locker, the _Off_ gate included, again come first.
+
 
 // ////////////////////////////////////////////////////////////////////
 

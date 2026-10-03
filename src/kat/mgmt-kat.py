@@ -786,8 +786,7 @@ class Unit:
     def _usage_gate(self, k, forbidden_sub=False, needs_buf=False):
         """SGR19, conditions 1-7."""
         m = self.lockers[k].mdh
-        if m['State'] == UNCONF: raise Trap('illegal', 2)
-        if m['State'] in ERROR_STATES: return 'noop'
+        if m['State'] == UNCONF or m['State'] in ERROR_STATES: return 'noop'          # SGR12, SGR16
         if m['State'] in PARTIAL: return self._exc_locker(k, 'privilege_violation')
         if forbidden_sub: raise Trap('illegal', 2)
         if not self.usage_allowed(m): return self._exc_locker(k, 'privilege_violation')
@@ -951,8 +950,8 @@ class Unit:
         self._off(ks)
         self._off(kd)
         ends = (ks, kd)
-        if any(self.lockers[e].mdh['State'] == UNCONF for e in ends): raise Trap('illegal', 2)
-        if any(self.lockers[e].mdh['State'] in ERROR_STATES for e in ends): return 'noop'
+        if any(self.lockers[e].mdh['State'] == UNCONF or self.lockers[e].mdh['State'] in ERROR_STATES for e in ends):
+            return 'noop'                                           # SGR12, SGR16
         for test in (lambda m: m['State'] in PARTIAL, lambda m: not self.usage_allowed(m)):     # SGR19
             for e in ends:
                 if test(self.lockers[e].mdh): return self._exc_locker(e, 'privilege_violation')
@@ -2142,10 +2141,11 @@ def t_sgr():
     eq('SGR5: in Success a XOF still produces output',
        (u.getst(0), u.exec_(0, 'C', vout=bytearray(4)), u.getmd(0)['MachineUse']), (SUCCESS, 'done', 4))
     u = fresh()
-    eq('SGR12: usage-controlled instructions on an Unconfigured locker are illegal/2',
-       [trap_of(u.exec_, 0, 'D'), trap_of(u.setst, 0, READY), trap_of(u.setst, 0, CLEAR_ADS),
-        trap_of(u.derive, 1, 0, 32)],
-       ['illegal/2'] * 4)
+    vo = bytearray(b'\xAA' * 32)
+    eq('SGR12: usage-controlled instructions on an Unconfigured locker are no-ops, output zeroed, State kept',
+       [u.exec_(0, 'D'), u.exec_(0, 'C', vout=vo), bytes(vo), u.setst(0, READY), u.setst(0, CLEAR_ADS),
+        u.derive(1, 0, 32), u.getst(0), u.getst(1)],
+       ['noop', 'noop', bytes(32), 'noop', 'noop', 'noop', UNCONF, UNCONF])
     u, w, buf = rc(), rc(), bytearray(b'\xBB' * 32)
     u.setst(0, INVALID)
     u.csrs(kliobuflen=64).kliobuf[:] = b'\xAA' * 64
@@ -2343,10 +2343,10 @@ def t_derive():
     u[5].clock = 9
     eq('equal indices; Error-State endpoint no-op; Unconfigured; Configuration; UsagePolicy; both expire',
        [trap_of(u[0].derive, 0, 0, 32), u[1].derive(1, 0, 32), u[1].getmd(0)['MachineUse'],
-        trap_of(u[2].derive, 1, 0, 32),
+        u[2].derive(1, 0, 32),
         trap_of(u[3].derive, 1, 0, 32), trap_of(u[4].derive, 1, 0, 32), u[5].derive(1, 0, 32), u[5].getst(0),
         u[5].getst(1)],
-       ['illegal/1', 'noop', 0, 'illegal/2', 'privilege_violation', 'privilege_violation', 'expired', EXPIRED, EXPIRED])
+       ['illegal/1', 'noop', 0, 'noop', 'privilege_violation', 'privilege_violation', 'expired', EXPIRED, EXPIRED])
     u = [pair() for _ in range(7)]
     u[0].setst(1, ToyCipher.ENCRYPT, 1)
     u[1].setst(1, ToyCipher.VERIFY, MACHINES[M_CIPHER].verify_tag(u[1], u[1].lockers[1]))
