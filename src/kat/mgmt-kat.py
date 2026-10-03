@@ -914,7 +914,8 @@ class Unit:
         self._off(ks)
         self._off(kd, exempt=True)
         src = self.lockers[ks]
-        if src.mdh['State'] == UNCONF: raise Trap('illegal', 2)
+        if src.mdh['State'] == UNCONF:                                  # the clone of no CC is no CC
+            return self.clear(kd)
         if src.mdh['State'] in PARTIAL: return self._exc_locker(ks, 'privilege_violation')
         if src.alloc > self.clf_free() + self.lockers[kd].alloc: return self._exc_locker(kd, 'out_of_memory')
         self._zeroize(kd)
@@ -2201,7 +2202,7 @@ def t_sgr():
             trap_of(z.getmd, Ind(0, reg=0)), z.getst(Ind(31))],
        ['cleared', 32, NONE, True, 'cleared all', [0] * 32, 0, 0, b'', 0, 32, 0, True] + ['illegal/1'] * 5 + [0])
     w = fresh()
-    r = [trap_of(w.clone, 1, 0)]
+    r = [w.clone(1, 0)]
     rc(unit=w, SCProtection=1)
     w.siv, w.impqual, w.siv2 = 1, 2, 3
     cl = lambda k: (w.getmd(k), w.lockers[k].c1, w.lockers[k].c2, w.lockers[k].alloc)
@@ -2211,8 +2212,8 @@ def t_sgr():
            SCProtection=1)
     r += [t.clone(1, 0), t.clf_free(), trap_of(t.clone, 2, 0), t.getst(2), t.restrict(1, md(MachinePolicy=1)),
           t.getmd(1)['MachinePolicy'], t.getmd(0)['MachinePolicy']]
-    eq('kl.clone: Unconfigured source; perfect copy = export+import; capacity; clone then restrict', r,
-       ['illegal/2', 'cloned', True, (1, 2, 3), ToyCipher.ENCRYPT, True, 'cloned', 0, 'out_of_memory', 0, 'ok', 1, 3])
+    eq('kl.clone: Unconfigured source clears Kd; perfect copy = export+import; capacity; clone then restrict', r,
+       ['cleared', 'cloned', True, (1, 2, 3), ToyCipher.ENCRYPT, True, 'cloned', 0, 'out_of_memory', 0, 'ok', 1, 3])
     w = rc().csrs(klstart=16)
     w.vstart = 16
     ks = [(f(), w.klstart)[1] for f in (lambda: w.getmd(0), lambda: w.size(k=0), lambda: w.avail(k=0),
@@ -2611,13 +2612,13 @@ def t_rename_swap():
     b0 = snapshot(u)
     r += [u.rename(6, 6), u.swap(6, 6), snapshot(u) == b0]
     a, b = pv(u, 1, sig(AuxInfo=2)).getmd(1), u.getmd(6)
-    r += [u.swap(1, 6), (u.getmd(1), u.getmd(6)) == (b, a), u.lockers[1].alloc, trap_of(u.clone, 1, 9), u.rename(1, 9),
+    r += [u.swap(1, 6), (u.getmd(1), u.getmd(6)) == (b, a), u.lockers[1].alloc, u.clone(1, 9), u.rename(1, 9),
           u.getst(1)]
     t = rc(0, rc(1, fresh(clf_total=2 * cap), SCProtection=1), SCProtection=1)
     eq('rename moves, frees the destination; Ks = Kd no-op; swap exchanges; no capacity checks; '
-       'an Unconfigured source (K9): rename clears Kd, where clone traps',
+       'an Unconfigured source (K9): clone and rename both clear Kd',
        r + [t.clf_free(), t.swap(0, 1), t.rename(2, 0), trap_of(t.clone, 3, 1)],
-       ['renamed', True, 0, 0, 'renamed', True, cap, 'noop', 'noop', True, 'swapped', True, cap, 'illegal/2',
+       ['renamed', True, 0, 0, 'renamed', True, cap, 'noop', 'noop', True, 'swapped', True, cap, 'cleared',
         'renamed', 0,
         0, 'swapped', 'renamed', 'out_of_memory'])
     e = rc()
