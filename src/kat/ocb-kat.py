@@ -83,7 +83,7 @@ def unpack(data, lay):
     return out
 
 class Ocb:
-    # (immed, Form) -> States it is allowed from (SGR4 included); VERIFY Form A: KLIOBUF substitution
+    # (immed, Form) -> States it is allowed from (SGR5 included); VERIFY Form A: KLIOBUF substitution
     SETST = {(SET_AUX, 'B'): (READY, SET_AUX), (ABSORB, 'B'): (SET_AUX, ABSORB),
              (LAST, 'B'): (ABSORB, LAST), (ENC_LAST, 'B'): (ENCRYPT, ENC_LAST),
              (DEC_LAST, 'B'): (DECRYPT, DEC_LAST), (ENCRYPT, 'A'): (LAST, ENCRYPT),
@@ -100,7 +100,7 @@ class Ocb:
     def _ready(s):
         s.N = s.N_len = s.hash_A = s.checksum_P = s.index = 0
     def _invalid(s, why=None, out=0):
-        s._ready()                                     # SGR10
+        s._ready()                                     # SGR11
         s.state, s.key, s.skid, s.tag_len, s.L = INVALID, None, None, None, []
         s.Lstar = s.offset = s.last_blk_len = 0
         if why:
@@ -117,12 +117,12 @@ class Ocb:
             s.L.append(s.nc['dbl'](s.L[-1]))
         return s.L[i]
     def setst(s, immed, form='A', aux=0):
-        if s.state in ERROR_STATES:                    # SGR16
+        if s.state in ERROR_STATES:                    # SGR15
             return
-        if immed == READY:                             # SGR8
+        if immed == READY:                             # SGR4
             s.state = READY
             return s._ready()
-        if (s.state not in s.SETST.get((immed, form), ())   # MGR1, SGR6
+        if (s.state not in s.SETST.get((immed, form), ())   # MGR1, SGR9
                 or not s.policy & {ENCRYPT: 1, DECRYPT: 2}.get(immed, 3)):   # <<KLEE-Machine-field>>
             s._invalid('transition')
         if immed == SET_AUX:
@@ -160,7 +160,7 @@ class Ocb:
         s.offset = bswap(sl(s.Stretch_be, 191 - s.bottom, 64 - s.bottom), 16)
     def exec(s, form, INPUT=0, klen=B):
         st, n = s.state, s.last_blk_len
-        if st in ERROR_STATES:                         # SGR16
+        if st in ERROR_STATES:                         # SGR15
             return 0
         want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B' if n else '',
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
@@ -168,7 +168,7 @@ class Ocb:
         if want == 'A' and form in 'BC':               # <<KLEE-usage-input-output>>: no mixing
             raise IllegalInstruction(form)
         if not want or form not in (want, 'D'):
-            s._invalid('Form')                         # MGR1, SGR2, SGR5
+            s._invalid('Form')                         # MGR1, SGR6, SGR10
         if st == SET_AUX:
             s._set_N(INPUT)
             return 0
@@ -477,9 +477,9 @@ INVALID_CASES = [
     ("kl.setst #hash_verify in Decrypt", lambda: at_crypt(True), lambda c: c.setst(VERIFY, 'C')),
     ("kl.setst #hash_verify in Enc_Tag_Finalize", lambda: at_last(finish=True)[0],
      lambda c: c.setst(VERIFY, 'C')),
-    ("second tag kl.exec, in Success (SGR5)", at_end, lambda c: c.exec('C')),
-    ("kl.setst #decrypt in Success (SGR6)", at_end, lambda c: c.setst(DECRYPT, 'A')),
-    ("kl.setst #decrypt in Failure (SGR6)", lambda: at_end(True), lambda c: c.setst(DECRYPT, 'A')),
+    ("second tag kl.exec, in Success (SGR10)", at_end, lambda c: c.exec('C')),
+    ("kl.setst #decrypt in Success (SGR9)", at_end, lambda c: c.setst(DECRYPT, 'A')),
+    ("kl.setst #decrypt in Failure (SGR9)", lambda: at_end(True), lambda c: c.setst(DECRYPT, 'A')),
     ("KLLEN = 64 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 64)),
     ("KLLEN = 136 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
@@ -491,7 +491,7 @@ for name, mk, act in INVALID_CASES:
     check(f"{name} -> Invalid", inval(act, cl) is not None and cl.state == INVALID)
 cl = Ocb(K128)
 inval(cl.exec, 'B')
-check("kl.exec in Ready -> Invalid (SGR2); Content cleared (SGR10); then no operation (SGR16)",
+check("kl.exec in Ready -> Invalid (SGR6); Content cleared (SGR11); then no operation (SGR15)",
       True, (cl.state, cl.key, cl.hash_A, cl.exec('A', 1234), cl.state), (INVALID, None, 0, 0, INVALID))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
@@ -503,7 +503,7 @@ check("Form D kl.exec, Form A kl.setst substitutions: all vectors, both directio
 for name, mk in (("Success", at_end), ("Failure", lambda: at_end(True)), ("Encrypt", at_crypt)):
     cl = mk()
     cl.setst(READY)
-    check(f"kl.setst #ready from {name}, then vector 07 (SGR8)", True,
+    check(f"kl.setst #ready from {name}, then vector 07 (SGR4)", True,
           run(None, *E7[1:], cl=cl), VEC[7][5])
 cl = at_crypt()
 e = inval(cl.exec, 'A', b2v(S40[:16]) | 1 << 140, 144)

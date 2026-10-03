@@ -61,7 +61,7 @@ class MLDSALocker:
     def set_flag(self, f, v): self.put('StateExtension', self.get('StateExtension') & ~SE[f] | SE[f] * v)
     def size(self, name): return 64 if name == 'mu' else self.n.get(name, 0)
 
-    def invalid(self):                             # SGR10
+    def invalid(self):                             # SGR11
         self.put('State', INVALID)
         self.privkey = self.pubkey = b''
         self.clear()
@@ -69,11 +69,11 @@ class MLDSALocker:
     def setst(self, st, aux=None):
         """Form A (aux None) or Form B (aux = Xs)."""
         if st in (SUCCESS, FAILURE):
-            raise IllegalInstruction               # SGR7
+            raise IllegalInstruction               # SGR8
         if self.state in ERROR_STATES:
             return
         pol = self.get('MachinePolicy')
-        if (self.state in (SUCCESS, FAILURE) and st != READY                                  # SGR6
+        if (self.state in (SUCCESS, FAILURE) and st != READY                                  # SGR9
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # MGR1
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey'))
@@ -122,7 +122,7 @@ class MLDSALocker:
         if self.state in ERROR_STATES or name is None or w + n > self.size(name):
             if self.state not in ERROR_STATES:
                 self.invalid()
-            return bytes(n)                        # SGR16
+            return bytes(n)                        # SGR15
         self.use = w + n
         out = getattr(self, name)[w:w + n]
         if self.use == self.size(name):            # MGR7: a completely emitted field -> _Success_
@@ -149,7 +149,7 @@ class MLDSALocker:
                 return self.invalid()
             if self.use == 0:                      # MGR8: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR12: RBG failure
+                if self.rnd is None:               # GR10: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after)
@@ -166,7 +166,7 @@ class MLDSALocker:
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             return self.put('State', SUCCESS if ok else FAILURE)
         else:
-            return self.invalid()                  # SGR2 in _Ready_, MGR1 elsewhere
+            return self.invalid()                  # SGR6 in _Ready_, MGR1 elsewhere
         if st in (GEN, COMPUTE_PK):                # R13: back to _Ready_, which keeps the key pair
             self.set_flag('HasPubKey', 1)
             self.set_flag('HasPrivKey', 1)
@@ -317,7 +317,7 @@ def t_mdh():
         check(f'{name} clear: _Invalid_', cc.state == INVALID)
     cc = MLDSALocker(44)
     for imm in (SUCCESS, FAILURE):
-        check(f'kl.setst #{imm}: illegal instruction (SGR7)', raises(cc.setst, imm) and cc.state == READY)
+        check(f'kl.setst #{imm}: illegal instruction (SGR8)', raises(cc.setst, imm) and cc.state == READY)
     for imm in (14, 45):
         cc = MLDSALocker(44)
         cc.setst(imm)
@@ -370,12 +370,12 @@ def t_state_machine():
     check('re-entering _GenerateKeyPair_ generates another key pair, back to _Ready_',
           c2.state == READY and (c2.pubkey, c2.privkey) == D.keygen_internal(h(kv2['seed']), 44) != (pk, sk))
     c2.exec_D()
-    check('Form D kl.exec in _Ready_: _Invalid_ (SGR2)', c2.state == INVALID)
+    check('Form D kl.exec in _Ready_: _Invalid_ (SGR6)', c2.state == INVALID)
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ zeroes MachineUse', cc.use == 0)
     check('_pubkey_Output_ emits the ACVP pubkey, then _Success_ (MGR7)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
-    check('kl.exec after the field is complete (now in _Success_): _Invalid_, OUTPUT zeroed (SGR5)',
+    check('kl.exec after the field is complete (now in _Success_): _Invalid_, OUTPUT zeroed (SGR10)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
     cc.setst(MU_IN)
@@ -483,7 +483,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR12)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR10)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -503,14 +503,14 @@ def t_sign_verify():
     sig = cc.signature
     run(cc, SIGN_VERIFY)
     check('sign then verify in one CC: _Success_', cc.state == SUCCESS and len(sig) == 2420)
-    cc.setst(READY)                                 # SGR6; _Ready_ keeps the keys
+    cc.setst(READY)                                 # SGR9; _Ready_ keeps the keys
     for st, data in ((MU_IN, bytes([mu[0] ^ 1]) + mu[1:]), (SIGN_IN, sig)):
         cc.setst(st)
         cc.exec_B(data)
     run(cc, SIGN_VERIFY)
     check('verification under another mu, after _Ready_: _Failure_ (a Valid State)', cc.state == FAILURE)
     cc.setst(SIGN_IN)
-    check('SGR6: _Failure_ -> _Sign_Input_ -> _Invalid_', cc.state == INVALID)
+    check('SGR9: _Failure_ -> _Sign_Input_ -> _Invalid_', cc.state == INVALID)
     c2 = generated()
     c2.setst(MU_IN)
     c2.exec_B(mu)
