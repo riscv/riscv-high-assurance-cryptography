@@ -137,22 +137,22 @@ class Locker:
         self.st, self.policy, self.machine_use, self.key_type, self.klstart, self.halted = UNCONF, 0, 0, 0, 0, False
         self._clear()
     def in_error(self): return self.st in ERROR_STATES
-    def invalidate(self, **_): self.st = INVALID; self._clear()  # SGR10
+    def invalidate(self, **_): self.st = INVALID; self._clear()  # GR9
     def _resolve_key(self, sks): pass
     def setst(self, immed, form='A', Xs=None, INPUT=0, KLLEN=0):
-        if self.in_error(): pass                                  # SGR16
-        elif immed == READY and form == 'A': self._enter_ready()  # SGR8
+        if self.in_error(): pass                                  # GR11
+        elif immed == READY and form == 'A': self._enter_ready()  # GR21
         else: self._setst().get((self.st, immed, form), self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # MGR1
         return self
     def exec(self, form, INPUT=0, KLLEN=0, out=0, halt_after=None):
         """One kl.exec; `out` is the prior content of the output operand, the result its content after.
         `halt_after` = n halts precisely after n blocks; re-issuing resumes at klstart."""
         has_out, done, self.halted = form in 'AC', out & mask(8 * self.klstart), False
-        zeroed = done if has_out else out                        # SGR16
+        zeroed = done if has_out else out                        # GR11
         if self.in_error(): return zeroed
         ks = 8 * self.klstart                                    # <<KLEE-CSR-klstart>>: interruption point?
         clause = self._exec().get((self.st, form))
-        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # SGR2, SGR5, MGR1; MGR2
+        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # GR18, GR23, MGR1; MGR2
             self.invalidate(); self.klstart = 0; return zeroed
         if ks >= KLLEN:                                          # empty window: only klstart = 0
             self.klstart = 0; return out
@@ -171,7 +171,7 @@ class Locker:
         if n[0] == 's' and n[1:].isdigit(): self.s[int(n[1])] = v
         else: setattr(self, n, v)
     def export(self):
-        """(MDH, Content1); SGR11: a locker in an Error State is its MDH alone."""
+        """(MDH, Content1); GR9: a locker in an Error State is its MDH alone."""
         mdh = mdh_pack(Machine=0x80 | self.MODE, MachinePolicy=self.policy, State=self.st,
                        KeyType=self.key_type, MachineUse=self.machine_use)
         return mdh, b'' if self.in_error() else pack([(self._get(n), w) for n, w in self._layout()])
@@ -223,7 +223,7 @@ class AEAD(Locker):
                 (ABSORB, ENCRYPT, 'A'): lambda **_: self._c_enter(ENCRYPT, 0b01),
                 (ABSORB, DECRYPT, 'A'): lambda **_: self._c_enter(DECRYPT, 0b10),
                 (ENCRYPT, ENC_LAST, 'B'): el, (DECRYPT, DEC_LAST, 'B'): dl,
-                # SGR4 repeats; not into _Hash_Absorb_, _Encrypt_, _Decrypt_ (Machine rule), _Hash_Output_ (MGR18)
+                # GR20 repeats; not into _Hash_Absorb_, _Encrypt_, _Decrypt_ (Machine rule), _Hash_Output_ (MGR18)
                 (ENC_LAST, ENC_LAST, 'B'): el, (DEC_LAST, DEC_LAST, 'B'): dl,
                 (VERIFY, VERIFY, 'C'): self._c_verify}               # MGR14: the tag comes with the kl.setst
     def _exec(self):
@@ -326,7 +326,7 @@ class Hash256(Locker):
     def _clear(self): self.s = [0] * 5
     def _layout(self): return [(f's{i}', 64) for i in range(5)]
     def _enter_ready(self): self.s[:] = ascon_p([self.IV, 0, 0, 0, 0], 12); self.st = READY
-    def _setst(self): return {(READY, ABSORB, 'A'): self._c_absorb, (ABSORB, ABSORB, 'A'): self._c_absorb,   # SGR4
+    def _setst(self): return {(READY, ABSORB, 'A'): self._c_absorb, (ABSORB, ABSORB, 'A'): self._c_absorb,   # GR20
                               (ABSORB, FINALIZE, 'A'): self._c_finalize}
     def _exec(self): return {(ABSORB, 'B'): self._x_absorb, (FINALIZE, 'C'): self._x_squeeze}
     def _c_absorb(self, **_): self.st = ABSORB
@@ -378,7 +378,7 @@ class Secret:
 
 def kl_derive(dst, src, length):
     """kl.derive between the endpoints of <<KLEE-derive-endpoints>> under DER1-DER8."""
-    if src.in_error() or dst.in_error(): return                   # SGR19
+    if src.in_error() or dst.in_error(): return                   # GR16
     states, n = dst.DST or ((), None)                             # no endpoint: offending locker only
     bad = [c for c, ok in ((src, src.st in (src.SRC or ())), (dst, dst.st in states and not (n and dst.key_type)))
            if not ok]
@@ -689,7 +689,7 @@ check('same-State kl.setst into _Hash_Absorb_ (Form C, and Form A with a set non
       [INVALID] * 4)
 cc = AEAD(K).setst(ABSORB, 'C', INPUT=NN, KLLEN=128).setst(ENCRYPT, 'A').setst(ENC_LAST, 'B', Xs=16)
 ct = v2b(cc.setst(ENC_LAST, 'B', Xs=40).exec('A', b2v(LAST5), 40), 16)[:5]
-check('SGR4 repeats admitted: _Enc_Last_Block_ (the second Xs replaces the first, Count=166 holds); '
+check('GR20 repeats admitted: _Enc_Last_Block_ (the second Xs replaces the first, Count=166 holds); '
       'MGR14: the same-State Form C kl.setst into _Hash_Verify_ carries the tag (Count=166: _Success_)', True,
       (ct + v2b(cc.exec('C', 0, 128), 16), aead_to(VERIFY).setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128).st),
       (ref_aead_encrypt(KAT_KEY, KAT_NONCE, b'', LAST5), SUCCESS))
@@ -699,8 +699,8 @@ ca, cc = AEAD(K), AEAD(K)
 res = [(ca.exec('A', 0, 128, out=M128), ca.st), (cc.exec('B', 0, 128), cc.st)]
 o = cc.exec('A', 1, 128, out=M128)
 cc.setst(READY)
-check('SGR2: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; SGR10/11: Content cleared, export is '
-      'the MDH only; SGR16: kl.exec and kl.setst are no-ops', True,
+check('GR18: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR9/11: Content cleared, export is '
+      'the MDH only; GR11: kl.exec and kl.setst are no-ops', True,
       (res, cc.key, cc.s, cc.tag_len, cc.export()[1], o, cc.st),
       ([(0, INVALID)] * 2, 0, [0] * 5, 0, b'', 0, INVALID))
 res = [after(aead_to(start), act).st for start, act in (
@@ -714,7 +714,7 @@ cc = aead_to(SUCCESS)
 res.append((cc.exec('C', 0, 128, out=M128), cc.st))
 check('MGR1: tag_len in _Hash_Absorb_, wrong Forms and transitions, including _Encrypt_ -> _Hash_Output_ and '
       '_Decrypt_ -> _Hash_Verify_ without the padded last block, and a kl.exec in _Hash_Verify_ (MGR14) -> _Invalid_; '
-      'SGR5: kl.exec in _Success_ (not a XOF) -> _Invalid_, output zeroed', True, res, [INVALID] * 11 + [(0, INVALID)])
+      'GR23: kl.exec in _Success_ (not a XOF) -> _Invalid_, output zeroed', True, res, [INVALID] * 11 + [(0, INVALID)])
 res = []
 for start, form, n in ((ABSORB, 'B', 120), (ENCRYPT, 'A', 136), (DECRYPT, 'A', 64)):
     cc = aead_to(start)
@@ -743,7 +743,7 @@ st3 = (ok, c2.st)
 c2, rec, ok = aead_run(c2.setst(READY), True, KAT_NONCE, ad579, ct579, tag=b2v(tag579))
 c3 = aead_to(ENCRYPT)
 c3.exec('A', 0, 256)
-check('SGR8: _Success_ (64-bit tag) -> _Ready_ re-initializes (tag_len <- 128); _Failure_ -> _Ready_ -> genuine '
+check('GR21: _Success_ (64-bit tag) -> _Ready_ re-initializes (tag_len <- 128); _Failure_ -> _Ready_ -> genuine '
       'tag; _Encrypt_ -> _Ready_ -> Count=579', True, (st1, st2, ct2, st3, (rec, ok, c2.st), seal(c3.setst(READY))),
       ((blob579[:-8], SUCCESS), (READY, [IV_AEAD, sl(K, 63, 0), sl(K, 127, 64), 0, 0], 128), blob579,
        (False, FAILURE), (pt579, True, SUCCESS), blob579))
@@ -809,7 +809,7 @@ check('Form C kl.setst into _Hash_Absorb_ -> _Invalid_; no block budget (40 bloc
       (INVALID, ref_aead_encrypt(KAT_KEY, KAT_NONCE, ad579, long_pt), SUCCESS))
 cc, ct, tag = aead_run(provision(pi), False, None, ad579, pt579)
 st_r = cc.setst(READY).st
-check('SGR8: _Success_ -> _Ready_ reuses the PI nonce; migrated after every instruction == Count=579', True,
+check('GR21: _Success_ -> _Ready_ reuses the PI nonce; migrated after every instruction == Count=579', True,
       (st_r, seal(cc, None), seal(provision(pi), None, after=migrate(AEADNonce))), (READY, ct + tag, blob579))
 cc = AEADNonce.import_(cc.export()).setst(READY)
 check('nonce serialized (Pos. ix): an imported locker in _Success_ re-enters _Ready_ and reuses it', True,
@@ -838,7 +838,7 @@ check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 byte
       (len(pi_s), len(img), sl(c1, 63, 0), sl(c1, 127, 64), seal(cc, after=migrate(AEADMask, SKS))),
       (32, 64, SKID_M, provision(pi_s, SKS).s[0], ref579(K1, Nm)))
 cc, ct, tag = aead_run(provision(pi), False, KAT_NONCE, h("3031"), LAST5)
-check('set-nonce Machine with K1 and nonce N xor K2 == masking Machine given N; SGR8 restart agrees', True,
+check('set-nonce Machine with K1 and nonce N xor K2 == masking Machine given N; GR21 restart agrees', True,
       (seal(provision(build_pi(1, [(K1v, 128), (b2v(Nm), 128)], policy=0b11)), None, h("3031"), LAST5),
        seal(cc.setst(READY), ad=h("3031"), pt=LAST5)), (ct + tag, ct + tag))
 cc = provision(pi)
@@ -863,7 +863,7 @@ cc = at_finalize(Hash256)
 trace = [cc.countdown]
 while cc.st == FINALIZE: cc.exec('C', 0, 64); trace.append(cc.countdown)
 check('countdown: 3 on entering _Hash_Finalize_, then 2, 1, 0 and _Success_ on the fourth word; a fifth '
-      'kl.exec -> _Invalid_ (SGR5), output zeroed', True,
+      'kl.exec -> _Invalid_ (GR23), output zeroed', True,
       (trace, cc.st, cc.exec('C', 0, 64, out=M64), cc.st), ([3, 2, 1, 0, 0], SUCCESS, 0, INVALID))
 cc, c2 = at_finalize(Hash256), at_finalize(Hash256)
 o1, o2 = cc.exec('C', 0, 192, out=mask(192)), cc.exec('C', 0, 192, out=mask(192))
@@ -884,12 +884,12 @@ for KLLEN, form, fin in ((64, 'B', None), (56, 'B', False), (104, 'C', True), (6
     res.append(cc.st)
 cc, c2 = at_finalize(Hash256), Hash256()
 kl_restrictl(cc, 0, machine_use=0x0003); kl_restrictl(c2, 0b01)
-check('SGR2; MGR2 (KLLEN 56, 104); MGR1 (Form B in _Hash_Finalize_, Form A in _Hash_Absorb_); kl.restrictl on '
+check('GR18; MGR2 (KLLEN 56, 104); MGR1 (Form B in _Hash_Finalize_, Form A in _Hash_Absorb_); kl.restrictl on '
       'the countdown; kl.restrictl on an unused _MachinePolicy_ -> _Invalid_', True, res + [cc.st, c2.st],
       [INVALID] * 7)
 check('MGR18: a same-State kl.setst into _Hash_Finalize_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
       [at_finalize(c).setst(FINALIZE, 'A').st for c in (Hash256, XOF, CXOF)], [INVALID] * 3)
-check('SGR4: a same-State kl.setst into _Hash_Absorb_ of Ascon-Hash256 is admitted and changes nothing', True,
+check('GR20: a same-State kl.setst into _Hash_Absorb_ of Ascon-Hash256 is admitted and changes nothing', True,
       sponge_run(Hash256().setst(ABSORB, 'A'), b'abc', 32)[0], sponge_run(Hash256(), b'abc', 32)[0])
 
 section('<<KLEE-Ascon-XOF128>>')

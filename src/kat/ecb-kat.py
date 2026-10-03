@@ -141,7 +141,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # SGR2; MGR2 (<<KLEE-CSR-klstart>>: length first)
+            self.invalidate()                 # GR18; MGR2 (<<KLEE-CSR-klstart>>: length first)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
@@ -289,13 +289,13 @@ out = run(cl, pt)[0]
 cl.setst(DEC)
 eq("Encrypt -> Decrypt directly (from any valid state)", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
 cl.setst(DEC)
-eq("same-State kl.setst (SGR4)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
+eq("same-State kl.setst (GR20)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
 cl.setst(RDY)
-eq("back to Ready (SGR8)", cl.state, RDY)
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR2, SGR10, SGR16)",
+eq("back to Ready (GR21)", cl.state, RDY)
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR18, GR9, GR11)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)
-eq("Invalid locker: kl.setst and kl.exec perform no operation (SGR16)", (cl.state, cl.exec(v, 512)[0]),
+eq("Invalid locker: kl.setst and kl.exec perform no operation (GR11)", (cl.state, cl.exec(v, 512)[0]),
    (INV, 0))
 for pol, immed, want in ((POL_DEC, DEC, DEC), (POL_DEC, ENC, INV), (POL_ENC, DEC, INV),
                          (POL_BOTH, KL_STATE_OPERATE, INV)):

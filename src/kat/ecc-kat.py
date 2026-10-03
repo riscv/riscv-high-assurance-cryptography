@@ -28,7 +28,7 @@ class Invalid(Exception):
         self.who = who
 
 def targets(state, eddsa, sig_exit=True):
-    """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, SGR4, SGR8."""
+    """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, GR20, GR21."""
     entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
     free = entry - (set() if sig_exit else {SET_SIG})
     ops, absorb = {POINT_MUL, SIGN_GEN, SIGN_VER}, {MSG_ABSORB} if eddsa else set()
@@ -103,7 +103,7 @@ class Locker:
     def setst(self, t, xs=0, rand=None):
         """kl.setst #t; Form A is modelled as xs = 0."""
         if t in (SUCCESS, FAILURE):
-            raise IllegalInstruction                                  # SGR7
+            raise IllegalInstruction                                  # GR25
         if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit):
             raise Invalid('transition not allowed')                   # MGR1
         if t in (SET_HASH, SET_SIG) and not any(self.policy):
@@ -261,7 +261,7 @@ class Locker:
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is None:                           # GR12: RBG failure
+            if k is None:                           # GR34: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -691,7 +691,7 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR12)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR34)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
@@ -782,11 +782,11 @@ cr.exec_out(24), cr.exec_out(24)
 check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MGR7)', invalid(cr.exec_out, 24))
 for t in (SUCCESS, FAILURE):
     cr = Locker(P256)
-    check(f'kl.setst #{t}: illegal instruction, State unchanged (SGR7)', raises(cr.setst, t) and cr.state == READY)
+    check(f'kl.setst #{t}: illegal instruction, State unchanged (GR25)', raises(cr.setst, t) and cr.state == READY)
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.halt(3)
 cr.setst(POINT_MUL)
-check('same-State kl.setst admitted (SGR4), zeroes Progress (MGR8)', (cr.state, cr.progress) == (POINT_MUL, 0))
+check('same-State kl.setst admitted (GR20), zeroes Progress (MGR8)', (cr.state, cr.progress) == (POINT_MUL, 0))
 
 def reach(eddsa, sig_exit=True):
     """Whether Sign_Verify is reachable by kl.setst from every Set state."""
