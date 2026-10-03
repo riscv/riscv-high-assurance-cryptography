@@ -441,7 +441,7 @@ the _Error States_ 48–55, which report KLEE errors.
 (((KLEE, Machine, configuration states)))
 States 56–63, used during management operations, are the _Configuration States_, exactly the States that are neither _Unconfigured_ nor Complete; 61–63 are reserved (<<KLEE-SC-sealing-status>>).
 
-The following tables give the values of _State_ common to all Machines, including that of a locker with no Machine; <<KLEE-SC-sealing-status>> gives those used for management.
+The following tables give the values of _State_ common to all Machines, including that of a locker with no Machine, and those used for management.
 
 [[KLEE-state-off]]
 .Global CC State Numbers: Unconfigured State
@@ -477,6 +477,22 @@ The following tables give the values of _State_ common to all Machines, includin
 |===
 
 Without `Zklexpire`, no locker can be in State _Expired_, and a PI, SCC or PCCC whose MDH carries it is invalid.
+
+While a locker is being provisioned, exported or imported, it is in one of the following _Configuration_ States:
+
+[[KLEE-SC-sealing-status]]
+.Global CC State Numbers: Configuration States
+[float="center",align="center",cols="^7%,<33%,<60%",options="header"]
+|===
+| Value    | Mnemonic                   | Description
+|   56     | `kl_cfg_provisioning`     | The locker is being configured.
+|   57     | `kl_cfg_exporting`        | The locker is being exported as an SCC: its contents have been encrypted and authenticated for export.
+|   58     | `kl_cfg_importing`        | An SCC is being imported into the locker.
+|   59     | `kl_cfg_ppi_exporting`    | The locker, whose base operation is a provisioning (see <<KLEE-nested-mgmt>> and <<KLEE-nested-state-base-types>>), is being exported; its image has the format of a PI.
+|   60     | `kl_cfg_ppi_importing`    | Such an image is being re-imported.
+|  61-63   | (Reserved)                | Reserved.
+|===
+
 <<KLEE-State-management>> defines the behavior of lockers and SCCs in these States.
 
 // ////////////////////////////////////////////////////////////////////
@@ -2073,20 +2089,7 @@ A locker is _invalidated_ when it transitions to Error State `kl_state_invalid`.
 _State_ encodes up to 47 Valid States, _Ready_, _Success_ and _Failure_ included.
 A Machine with more Valid States may use _AuxInfo_, _MachineUse_, or even the Content to store additional state information, in a Machine-specific format.
 
-While a locker is being provisioned, exported or imported, it is in one of the following _Configuration_ States:
-
-[[KLEE-SC-sealing-status]]
-.Global CC State Numbers: Configuration States
-[float="center",align="center",cols="^7%,<33%,<60%",options="header"]
-|===
-| Value    | Mnemonic                   | Description
-|   56     | `kl_cfg_provisioning`     | The locker is being configured.
-|   57     | `kl_cfg_exporting`        | The locker is being exported as an SCC: its contents have been encrypted and authenticated for export.
-|   58     | `kl_cfg_importing`        | An SCC is being imported into the locker.
-|   59     | `kl_cfg_ppi_exporting`    | The locker, whose base operation is a provisioning (see <<KLEE-nested-mgmt>> and <<KLEE-nested-state-base-types>>), is being exported; its image has the format of a PI.
-|   60     | `kl_cfg_ppi_importing`    | Such an image is being re-imported.
-|  61-63   | (Reserved)                | Reserved.
-|===
+<<KLEE-SC-sealing-status>> lists the _Configuration_ States, which a locker takes while it is being provisioned, exported or imported.
 
 [[KLEE-nested-mgmt]]
 .Nested Management Operations
@@ -2111,7 +2114,7 @@ operations have overwritten the original _State_.
 
 The immediate of `kl.setst` (<<KLEE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further operations related to state changes: the architected `kl_cfg_clear_ads` (64, <<KLEE-instruction-clearads>>), and the values 65–127, available to Machines.
 
-<<KLEE-states-graph>> shows the default state transitions, with the following legend:
+<<KLEE-states-graph>> shows the default state transitions, with following legend:
 
 * Double-bordered ellipses: the _Unconfigured_ State, and the Configuration States, outermost and nested.
 * Single-bordered rounded rectangles: the Valid States.
@@ -2153,9 +2156,6 @@ image::statestikz-3.svg[]
 INSERT TIKZ HERE
 ....
 ////
-
-Completing a provisioning always leads to State _Ready_.
-Completing an import may lead to any admissible value of _State_ and _StateExtension_, since it restores the values the fields had at export.
 
 The following _State-Specific General Rules_ (*SGR*) apply to all Machines:
 
@@ -2278,6 +2278,14 @@ are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`; in State `k
 
 [[KLEE-SGR-usage-locker-config-state,SGR23]]SGR23:: Using a locker in a Configuration State, cloning from it, or restricting it raises KLEE exception `kl_exc_privilege_violation`.
 <<KLEE-instruction-clone>> covers such a locker as the destination of a `kl.clone`, or as both its source and its destination.
+
+[[KLEE-SGR-completion-state,SGR24]]SGR24:: The `kl.mgmt` that completes a management operation (<<KLEE-locker-management>>) leaves the locker:
++
+--
+* after a provisioning, in State _Ready_, with _StateExtension_ and _MachineUse_ zero;
+* after an import or an export, in the _State_ supplied in `ml`, that is the one the locker had when it was exported, resp. when the export was opened, and which may itself be a Configuration State; an import thus restores the _State_ and the _StateExtension_ that the locker had at export, the latter carried in the SCC; or
+* in an Error State, or in _Failure_, if a check made at completion fails: _Authentication Failed_ for the `SIV` check, and otherwise the outcome that the failing check prescribes.
+--
 
 // ////////////////////////////////////////////////////////////////////
 
