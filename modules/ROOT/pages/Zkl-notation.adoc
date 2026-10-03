@@ -6,15 +6,11 @@ include::partial$Zkl-symbols.adoc[]
 endif::[]
 
 _This section is normative.
-It fixes notation, the representation of values, the meaning of the
-concatenation operator, and the finite-field operations used throughout this specification.
-Every formula in this specification is to be read under these conventions, and no
-Machine description may introduce a different one._
+It fixes the notation, the representation of values, the concatenation operator and the finite-field operations used throughout this specification. Every formula is read under these conventions, and no Machine description may introduce a different one._
 
 [IMPORTANT]
 ====
-The entire KLEE specification is written assuming it operates on RISC-V harts in little-endian mode.
-Executing any KLEE instruction while the effective data endianness of the current privilege mode is big-endian raises an illegal-instruction exception.
+This specification assumes RISC-V harts in little-endian mode: a KLEE instruction executed while the effective data endianness of the current privilege mode is big-endian raises an illegal-instruction exception.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -26,138 +22,77 @@ For a value `V` of `n` bits, `V[i]` denotes its ``i``-th bit and `V[j:i]`, with
 `0` {le} `i` {le} `j` < `n`, the bit slice from bit `i` to bit `j`, both inclusive.
 Bit `0` is the least significant bit.
 
-A referenced standard may specify an input, output, key, state field, or constant as a *byte string* `M` = `M~0~`, `M~1~`, {ellipsis}, `M~n-1~`, where `M~0~` is the first (leftmost, lowest-addressed) byte. This specification represents such a string by the `8n`-bit value `V` defined by `V[8i+7 : 8i]` = `M~i~` for `0` {le} `i` < `n`. This is the only string-to-value mapping used in this specification.
-
-This mapping matches the default little-endian ordering of RISC-V and its vector register interfaces. A unit-stride byte load places the lowest-addressed byte in the lowest-numbered element.
-
-For KLEE memory operations, the byte at the lowest address is byte `0`.
-The byte at address `A + i` is `V[8i+7 : 8i]`, where `A` is the effective
-address of the transfer.
-
-A vector register (group) supplying `INPUT` to a KLEE operation or receiving `OUTPUT` from it holds the value `V` that a unit-stride byte load (`vle8.v`) would produce from a memory read.
-A unit-stride byte store (`vse8.v`) of that register (group) reproduces the same memory content.
-This mapping is independent of the individual `SEW` and `VL` settings;
-KLEE uses only their product (<<Zkl-ISA-machines.adoc#KLEE-algo-notation>>).
+A referenced standard may specify an input, output, key, state field or constant as a *byte string* `M` = `M~0~`, `M~1~`, {ellipsis}, `M~n-1~`, `M~0~` being the first (leftmost, lowest-addressed) byte.
+This specification represents such a string by the `8n`-bit value `V` with `V[8i+7 : 8i]` = `M~i~` for `0` {le} `i` < `n`, the only string-to-value mapping it uses.
+The mapping matches the little-endian ordering of RISC-V and its vector interfaces: for a KLEE memory operation with effective address `A`, the byte at `A + i` is `V[8i+7 : 8i]`; a vector register (group) that supplies `INPUT` to a KLEE operation, or receives its `OUTPUT`, holds the value that a unit-stride byte load (`vle8.v`) of that memory would produce, and a unit-stride byte store (`vse8.v`) of it reproduces the memory content.
+The mapping is independent of `SEW` and `VL`, of which KLEE uses only the product (<<Zkl-ISA-machines.adoc#KLEE-algo-notation>>).
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-Notation-concatenation]]
 == Concatenation
 
-For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value `C` with
-
-`{fournbsp}{fournbsp}` `C[q-1:0]` = `B` `{nbsp}{nbsp}` and `{nbsp}{nbsp}`
-`C[p+q-1:q]` = `A`.
-
-That is, *the left operand of `@` occupies the more significant bits*.
+For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value `C` with `C[q-1:0]` = `B` and `C[p+q-1:q]` = `A`: *the left operand of `@` occupies the more significant bits*.
 
 == Operators and Control Constructs
 
-* `x {leftarrow} y` denotes assignment of `y` to `x`.
-* `x = y` and `x {ne} y` denote equality and inequality; `<`, `{le}`, `>`, `{ge}` denote
-  the usual comparisons on integers.
-* `+`, `-`, `{times}` denote integer addition, subtraction, and multiplication.
-  `a mod b`, for `b` > 0, denotes the remainder of the division of `a` by `b`, in the
-  range `0` to `b-1`.
-* `V xor W`, `V and W`, `V or W` denote bitwise operations on values of equal length,
-  and `V << k`, `V >> k` the shifts defined in <<KLEE-Notation-functions>>.
-* `A @ B` denotes concatenation, defined in <<KLEE-Notation-concatenation>>.
-* `A[] || B[]` denotes the concatenation of two arrays of blocks, the elements of `A[]` first, in index order.
-* `foreach(i from a to b) { {ellipsis} }` executes its body once for each integer `i`
-  from `a` to `b`, both included, in increasing order; the body is not executed if
-  `a` > `b`. The variant `foreach(i from a to b by s)` advances `i` in steps of `s`.
-* `x^k^` denotes `x` raised to the power `k`. Inside listing blocks, the notation `x**k` is used.
-* `local x : T` declares an internal variable of the pseudocode that is not part of any
-  architectural state.
+* `x {leftarrow} y`: assignment of `y` to `x`.
+* `x = y`, `x {ne} y`, `<`, `{le}`, `>`, `{ge}`: equality, inequality and the usual integer comparisons.
+* `+`, `-`, `{times}`: integer addition, subtraction and multiplication; `a mod b`, for `b` > 0, the remainder of `a` divided by `b`, in the range `0` to `b-1`.
+* `V xor W`, `V and W`, `V or W`: bitwise operations on values of equal length.
+* `V << k`, `V >> k`: logical shifts of `V` by `k` bits within its declared width, bits shifted out being discarded and zeros shifted in; a left shift moves data towards the *later* bytes of the string.
+* `A @ B`: concatenation (<<KLEE-Notation-concatenation>>); `A[] || B[]`: concatenation of two arrays of blocks, the elements of `A[]` first, in index order.
+* `foreach(i from a to b) { {ellipsis} }`: executes its body once for each integer `i` from `a` to `b`, both included, in increasing order, and not at all if `a` > `b`; `foreach(i from a to b by s)` advances `i` in steps of `s`.
+* `x^k^`: `x` raised to the power `k`; `x**k` in listing blocks.
+* `local x : T`: an internal variable of the pseudocode, not part of any architectural state.
 
 [[KLEE-Notation-functions]]
 == Functions
 
-* `0` denotes a single bit equal to zero.
-* `1` denotes a single bit equal to one.
-* `bin(n,m)` = the `m`-bit binary representation of the unsigned integer `n`, zero-extended or truncated to its `m` least significant bits. Bit `i` of the result is the coefficient of 2^i^, so `bin` is the inverse of `int`.
-* `bswap(m)` = the byte string `m` with its byte order reversed.
-* `ceil(x)` = the smallest integer not smaller than `x`; also written `{lceil}x{rceil}`.
-* `double(S)` = doubling in the OCB3 field. See <<Zkl-ISA-machines.adoc#KLEE-OCB-mode>>.
-* `floor(x)` = the largest integer not larger than `x`; also written `{lfloor}x{rfloor}`.
-* `Galoismul(a, b)` = multiplication of `a` and `b` in the GHASH field. See <<Zkl-ISA-machines.adoc#KLEE-GCM-mode>>.
-* `int(V)` = the unsigned integer whose binary expansion has bit `V[i]` as the coefficient
-  of 2^i^, i.e., the value read as a little-endian unsigned binary number.
-* `len_in_bits(M)` = the length of the value or string `M` in bits.
-* `len_in_bytes(M)` = the length of the value or string `M` in bytes, i.e.,
-  `len_in_bits(M) / 8`. It is defined only when `len_in_bits(M)` is a multiple of 8.
-* `lsb(x)` = least significant bit of `x`, and `lsb~c~(x)` its `c` least significant bits.
-* `m[i .. j]` = the bytes from the ``i``-th to the ``j``-th of byte array ``m``, both inclusive.
-* `m[j:i]` = the bit slice from the ``i``-th to the ``j``-th bit of ``m``, both inclusive.
-* `min(x, y, {ellipsis})`, `max(x, y, {ellipsis})` = the smallest and largest of
-  their arguments, respectively.
-* `Montmul(a, b)` = the POLYVAL field operation.
-* `msb(x)` = most significant bit of `x`, and `msb~c~(x)` its `c` most significant bits.
-* `ones(i)` = sequence of `i` ones.
-* `update_mask(M)` = the XEX/XTS mask update. See <<Zkl-ISA-machines.adoc#KLEE-XEX-XTS-modes>>.
-* `zeros(i)` = sequence of `i` zeros.
-
-* `V << k` and `V >> k` logically shift `int(V)` left or right, respectively, by `k` bit positions
-  within the declared width of `V`: bits shifted beyond bit `n-1` or below bit `0` are
-  discarded and zeros are shifted in. A left shift therefore moves data towards the
-  *later* bytes of the string.
-* `V xor W`, `V and W`, `V or W` are bitwise and require `|V|` = `|W|`.
+* `0`, `1`: a single bit equal to zero, resp. one.
+* `bin(n,m)`: the `m`-bit binary representation of the unsigned integer `n`, zero-extended or truncated to its `m` least significant bits; bit `i` is the coefficient of 2^i^, so `bin` is the inverse of `int`.
+* `bswap(m)`: the byte string `m` with its byte order reversed.
+* `ceil(x)`, also `{lceil}x{rceil}`: the smallest integer not smaller than `x`; `floor(x)`, also `{lfloor}x{rfloor}`: the largest integer not larger than `x`.
+* `double(S)`: doubling in the OCB3 field (<<Zkl-ISA-machines.adoc#KLEE-OCB-mode>>).
+* `Galoismul(a, b)`: multiplication of `a` and `b` in the GHASH field (<<Zkl-ISA-machines.adoc#KLEE-GCM-mode>>).
+* `int(V)`: the unsigned integer with bit `V[i]` as the coefficient of 2^i^, that is `V` read as a little-endian unsigned binary number.
+* `len_in_bits(M)`: the length of the value or string `M` in bits; `len_in_bytes(M)` = `len_in_bits(M) / 8`, defined only when `len_in_bits(M)` is a multiple of 8.
+* `lsb(x)`, `msb(x)`: the least, resp. most, significant bit of `x`; `lsb~c~(x)`, `msb~c~(x)`: its `c` least, resp. most, significant bits.
+* `m[i .. j]`: the bytes from the ``i``-th to the ``j``-th of byte array `m`, both inclusive; `m[j:i]`: the bits from the ``i``-th to the ``j``-th of `m`, both inclusive.
+* `min(x, y, {ellipsis})`, `max(x, y, {ellipsis})`: the smallest, resp. largest, of the arguments.
+* `Montmul(a, b)`: the POLYVAL field operation.
+* `ones(i)`, `zeros(i)`: a sequence of `i` ones, resp. zeros.
+* `update_mask(M)`: the XEX/XTS mask update (<<Zkl-ISA-machines.adoc#KLEE-XEX-XTS-modes>>).
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-Notation-transcription]]
 == Transcribing a Formula from a Standard
 
-When a formula is taken from a referenced standard, the original may follow an ordering
-natural to certain communication protocols and therefore uses big-endian notation.
-The KLEE specification follows little-endian notation, so the formula
-must be transcribed by applying the following two steps, in this order:
+Referenced standards often use the big-endian notation natural to communication protocols; this specification uses little-endian notation.
+A formula taken from a standard is transcribed in two steps, in this order:
 
-. *Reverse the concatenation.* Replace
-  `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` by
-  `A~m-1~ @ {ellipsis} @ A~1~ @ A~0~`.
-  Failure to follow the proper ordering is the single most common source of error when transcribing a standard.
-  When forming long messages by concatenation, the “{vvert}” notation is still used, since the original
-  standard may itself use it — with some ambiguity — in a little-endian sense.
+. *Reverse the concatenation:* `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` becomes `A~m-1~ @ {ellipsis} @ A~1~ @ A~0~`.
+  A wrong ordering is the single most common error in transcribing a standard.
+  Long messages formed by concatenation keep the “{vvert}” notation, which the standard may itself use, with some ambiguity, in a little-endian sense.
+. *Encode each integer explicitly:* a field that the standard specifies as a big-endian integer becomes `bswap(bin(n, m))`, and one specified as little-endian `bin(n, m)`; neither is written as a bare numeral.
 
-. *Encode each integer explicitly.* A field that the standard specifies as a big-endian
-  integer becomes `bswap(bin(n, m))`; one specified as a little-endian integer becomes
-  `bin(n, m)`. Neither may be written as a bare numeral.
+Two examples:
 
-Two worked-out examples:
-
-* cite:[RFC8452] {sect}4 builds each key-derivation input as the four-byte
-  little-endian counter followed by the twelve-byte nonce, `LE32(i) {vvert} N`. Step 1
-  gives `N @ LE32(i)` and step 2 gives `N @ bin(i,32)`.
-
-* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV,
-  `J0` = `IV {vvert} 0^31^ {vvert} 1`, in which the trailing four bytes are the
-  big-endian encoding of the integer 1. Step 1 gives `1 {vvert} 0^31^` reversed onto the
-  left of `IV`, and step 2 encodes the counter, yielding
-  `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
-Writing `IV @ zeros(31) @ 1` instead — the form that results from transcribing the
-standard left to right — places the IV in `J0[127:32]` and the counter bytes in
-`J0[31:0]`, which is the reverse of what cite:[nist-SP-800-38D] requires.
+* cite:[RFC8452] {sect}4 builds each key-derivation input as the four-byte little-endian counter followed by the twelve-byte nonce, `LE32(i) {vvert} N`: step 1 gives `N @ LE32(i)`, and step 2 `N @ bin(i,32)`.
+* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV, `J0` = `IV {vvert} 0^31^ {vvert} 1`, whose trailing four bytes are the big-endian encoding of the integer 1: step 1 reverses `1 {vvert} 0^31^` onto the left of `IV`, and step 2 encodes the counter, giving `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
+  The left-to-right transcription `IV @ zeros(31) @ 1` would place the IV in `J0[127:32]` and the counter in `J0[31:0]`, the reverse of what cite:[nist-SP-800-38D] requires.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-Notation-standards]]
 == Conventions of the Referenced Standards
 
-When a formula is taken from a referenced standard, the original may follow an ordering
-natural to certain communication protocols and therefore uses big-endian notation.
-The KLEE specification follows little-endian notation.
-Depending on the standard,
-`A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~`
-may mean that `A~0~` is the most significant element and `A~m-1~` is the least significant,
-or vice versa.
+In a standard, `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` may make `A~0~` the most significant element, or the least.
+The table records, for each standard whose algorithms this specification reproduces, its convention and the resulting obligation here.
+It is an aid to review, and does not relieve an algorithm description of the obligation to be explicit.
 
-The following table records, for each standard whose algorithms this specification
-reproduces, the convention that standard uses and the resulting obligation here. It is
-provided as an aid to review and does not relieve an algorithm description of the
-obligation to be explicit.
-
-[float="center",align="center",width="100%",cols="<26%,<40%,<34%",options="header"]
+[float="center",align="center",width="100%",cols="<26%,<37%,<37%",options="header"]
 |===
 | Standard | Convention used by the standard | Obligation in this specification
 | SP 800-38A/B/E (ECB, CTR, CMAC, XTS)
@@ -166,8 +101,7 @@ obligation to be explicit.
   little-endian.
 | Direct mapping for ECB and for the XTS data path, with `update_mask` as defined in <<Zkl-ISA-machines.adoc#KLEE-XEX-XTS-modes>>.
   The CTR counter block is assembled big-endian, via `bswap` (<<Zkl-ISA-machines.adoc#KLEE-keystream-modes>>), and
-  CMAC's subkeys via the big-endian `double` (<<Zkl-ISA-machines.adoc#KLEE-CMAC-mode>>). Note that this one row
-  covers three different orderings; do not read “direct mapping” as applying to all of them.
+  CMAC's subkeys via the big-endian `double` (<<Zkl-ISA-machines.adoc#KLEE-CMAC-mode>>): three orderings in one row.
 | SP 800-38D (GCM)
 | byte strings; GHASH field bit-reflected within bytes; counters big-endian.
 | `Galoismul` as defined in <<Zkl-ISA-machines.adoc#KLEE-GCM-mode>>; every counter and length field via `bswap`.
