@@ -1225,25 +1225,19 @@ The `Content` starts at a _ContentOffset_ of 0, 16 or 48 in the external formats
 . if MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`: 16 if _AuxDataLen_ = 0, and 48 if _AuxDataLen_ {ge} 2;
 . if MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`: 0.
 
-The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively, and
-`image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
+The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively, and its size is `image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
 
 Let `max_admissible` be the length of the longest image of the locker's current base type that the implementation can hold for the Machine: for an SCC base type, `content1_size` plus the largest `content2_size` that the implementation supports; for a PI base type, `pi_content_size` (these sizes are defined in <<KLEE-instruction-size>>). With _ADSDropped_ = 1, `content2_size` is zero, so the image contains no `Content2` byte. Bytes of an SCC beyond `max_admissible` belong to a discarded ADS (<<KLEE-SCC-import>>), and are neither read from memory nor written to the locker.
 Let
 
 {fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
 
-Offsets of `S` at or beyond `image_end` hold no locker data: writes to them are ignored, and they read as zero through every architectural access.
+`kl.mv` transfers only 16-byte aligned 16-byte blocks, lying below `image_end`.
+Each `kl.mv`  advances `klstart` by 16.
+A block at an offset `klstart` below `image_end` is transferred.
+If `klstart` {ge} `image_end`, the locker-writing variants write nothing, and the locker-reading variants write zero to their
+destination GPR operand, resp. to every element of `Vd` from `vstart` to `vl` − 1; `klstart` is unchanged in all variants.
 
-`kl.mv` transfers only whole 128-bit blocks, each lying either wholly below `image_end` or wholly at or beyond it:
-
-* A block at an offset below `image_end` is transferred.
-* A block at an offset at or beyond `image_end` is not: no locker byte is written for it, the destination
-  GPR operand, resp. the corresponding elements of `Vd`, are written with zero, and `klstart` does not advance past `image_end`.
-* If `klstart` {ge} `image_end`, the locker-writing variants write nothing, and the locker-reading variants write zero to their
-  destination GPR operand, resp. to every element of `Vd` from `vstart` to `vl` − 1; `klstart` is unchanged in all variants.
-
-Each 16-byte block transferred advances `klstart` by 16.
 Vector variants also track progress in vector elements, in `vstart`: each 16-byte block advances it, for instance, by 4 for 32-bit elements or by 2 for 64-bit elements.
 If a vector transfer is interrupted, `klstart` records the total number of bytes transferred, and `vstart` the first untransferred vector element.
 Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `klstart` + (_k_ − `vstart`) × `SEW`/8 of the serialized image `S`.
