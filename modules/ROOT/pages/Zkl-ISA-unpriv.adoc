@@ -1625,10 +1625,8 @@ They are not usage instructions (Rule <<KLEE-GR-usage-policy>>): every change na
 [NOTE]
 ====
 These instructions enable two practical use cases:
-
-* Privileged code can give a CC to some processes rather than to all, by cloning the locker and customizing the Localities of each clone.
-* Privileged code can split a CC capable of encryption and decryption into two CCs, one able only to encrypt and the other only to decrypt, creating a one-way channel between processes.
-
+privileged code can give a CC to some processes rather than to all, by cloning the locker and customizing the Localities of each clone; and
+privileged code can split a CC capable of encryption and decryption into two CCs, one able only to encrypt and the other only to decrypt, creating a one-way channel between processes.
 Such customizations save time and computation by avoiding round-trips to trusted environments.
 ====
 
@@ -1768,7 +1766,7 @@ An _endpoint descriptor_, of the source or of the destination, consists of: +
 (MDH._Machine_ {vvert} _MachinePolicy_, MDH._State_ {vvert} _StateExtension_, MDH._KeyType_, +
 {nbsp}{nbsp}{nbsp}MDH._SCProtection_,  MDH._UsagePolicy_, MDH._Locality_, MDH._ExpirationDate_).
 
-A transfer may occur only if the architecture allows the pair of endpoint descriptors, that is, if the Machines and States of the two lockers are compatible.
+A transfer may occur only if the architecture allows the pair of endpoint descriptors.
 An allowed pair may define a minimum length, an upper limit and a granularity; the architecture defines, per pair, the semantics of the transfer and its updates to the States of the two lockers, to `klstart` and `vstart`, and to any other state of the hart.
 The checks below then decide: a disallowed transfer transitions the lockers as they specify, and an allowed one updates the policies of the destination as follows.
 --
@@ -1800,11 +1798,13 @@ Any further transfer that a Machine defines must respect these restrictions.
 into a key field of a symmetric Machine, a private key field of a public-key Machine, or the `kl.exec` input of a hash, MAC or XOF is a _restricted transfer_.
 It is admitted whenever both endpoints are defined (Rule <<KLEE-DER-checks>> items 1 and 2); a key field receives the first `dest_length` bytes of the secret (Rule <<KLEE-DER-checks>> item 5).
 
-[[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: The _`kl.exec` output_ of a source locker, where <<Zkl-ISA-machines.adoc#KLEE-derive-endpoints>> lists it as the source endpoint, is the data that the Form C `kl.exec` instructions permitted in its current _State_ would emit; the tag of an AEAD Machine is not such output, unless that Machine explicitly allows it.
+[[KLEE-DER-exec-implies-unrestricted,DER6]]DER6:: The _`kl.exec` output_ of a source locker, listed in <<Zkl-ISA-machines.adoc#KLEE-derive-endpoints>> as a source endpoint, is the data that the Form C `kl.exec` instructions permitted in its current _State_ would emit; the tag of an AEAD Machine is not such output, unless that Machine explicitly allows it.
 The `kl.exec` output can always be moved, as an _unrestricted transfer_, into a destination endpoint that Form B `kl.exec` instructions load in the current _State_ of the destination, such as the `kl.exec` input of a hash function, MAC or XOF, or the `Scalar` of an ECC Machine in State _Set_Scalar_: the transfer is a shortcut for `kl.exec` instructions that software could issue on both lockers.
 +
-NOTE: Such a destination may be a key field, such as the `Scalar` of an ECC Machine or the `K0` of HMAC. Moving any `kl.exec` output into it does not increase the attack surface, which is why such transfers are allowed:
-software can always provision a new locker with a key of its choice and any policies, and use it in place of a locker whose key it does not know.
+NOTE: Such transfers are allowed and unrestricted because in these cases the source data can be obtained
+and the destination fields can be freely written by the caller, so no attack surface is increased.
+// NOTE: Such a destination may be a key field, such as the `Scalar` of an ECC Machine or the `K0` of HMAC. Moving any `kl.exec` output into it does not increase the attack surface, which is why
+// software can always provision a new locker with a key of its choice and any policies, and use it in place of a locker whose key it does not know.
 +
 _Key derivation._ The `kl.exec` output of a hash function, MAC or XOF can also be moved, as an _unrestricted transfer_, into a key field of a symmetric Machine or a private key field of a public-key Machine, in a State in which Rule <<KLEE-DER-checks>> item 2 admits that field; the key field receives the first `dest_length` bytes of the output (Rule <<KLEE-DER-checks>> item 5).
 
@@ -1821,7 +1821,7 @@ An _exportable field_ is one that its Machine lists as a source endpoint in <<Zk
 Rules <<KLEE-DER-shared-secret>>, <<KLEE-DER-exec-implies-unrestricted>> and <<KLEE-DER-DRBG-implies-unrestricted>> admit pairs of endpoints; any other pair not explicitly defined in <<Zkl-ISA-machines.adoc#KLEE-Machines>> fails Rule <<KLEE-DER-checks>> item 3.
 
 [horizontal]
-[[KLEE-derive-rule-both-fixed-size,DER8]]DER8:: *(Transfer Size Rule.)*
+[[KLEE-derive-rule-both-fixed-size,DER8]]DER8:: _Transfer Size Rule:_
 A destination field of `dest_length` bytes receives `eff_length` = min(`length`, `dest_length`)
 bytes, zero-filled beyond them (zero-filling does not apply to keys, per Rule <<KLEE-DER-checks>>);
 any other destination receives `eff_length` = `length` bytes.
@@ -1830,15 +1830,15 @@ and the destination transitions to Error State _Invalid_; for any other destinat
 +
 The source supplies `eff_length` bytes: the transferred part of a field is truncated to `eff_length` bytes if longer, or zero-padded if shorter, and a source producing output in blocks of `b` bytes produces the blocks needed to cover them.
 +
-The destination consumes the bytes in its blocks of `b'` bytes, a field being a single block; a final block shorter than `b'`
-is supplied as a `kl.exec` with that shorter input would supply it. Each endpoint advances as the
+The destination consumes the bytes it received in equal-sized blocks,
+where a shorter final block is supplied by a `kl.exec` with a corresponding shorter input.
+Each endpoint advances by the amount of data being transferred like the
 `kl.exec` operations producing or consuming these blocks would advance it; a destination
 State implemented by `process_VLI` may be left open and continued with `kl.exec`.
 +
-The endpoints must have compatible units: if the source produces data only in multiples of `p` bytes and the destination consumes it
-only in multiples of `q` bytes (for instance, a XOF feeding a `process_VLI` state,
-<<Zkl-ISA-machines.adoc#KLEE-process-VLI>>), where `p` and `q` are the granularities of the
-two States and not their block sizes, either `p` or `q` must divide the other.
+The units of the endpoints must be compatible: if the source produces data as `p`-byte blocks and the destination consumes it
+only in `q`-byte block, where `p` and `q` are the granularities of the
+two States and not necessarily their block sizes, either `p` or `q` must divide the other.
 The implementation can then internally split the output of one outputting `kl.exec` into `p/q` inputting `kl.exec` operations,
 or concatenate the outputs of `q/p` outputting `kl.exec` operations into one inputting `kl.exec`,
 without carrying state from an internal partial transfer of `max(p,q)` bytes to the next.
@@ -2035,7 +2035,7 @@ A locker is _invalidated_ when it transitions to Error State `kl_state_invalid`.
 <<Zkl-ISA-priv.adoc#KLEE-exceptions>> treats the error conditions that raise exceptions, and <<KLEE-error-architecture>> the behavior without the Privileged Architecture.
 
 _State_ encodes up to 47 Valid States, _Ready_, _Success_ and _Failure_ included.
-A Machine with more Valid States may use _AuxInfo_, _MachineUse_, or even the Content to store additional state information, in a Machine-specific format.
+A Machine may use _AuxInfo_, _MachineUse_, or the Content to store additional state information, in a Machine-specific format.
 
 [[KLEE-nested-mgmt,Nested Management Operations]]
 Nested Management Operations:::
@@ -2046,7 +2046,7 @@ The two Configuration States whose mnemonics contain `ppi` ("`partial provisioni
 are reached only by a nested operation whose base operation is a provisioning.
 A nested operation on an interrupted import or export of a locker in a Complete State reuses
 `kl_cfg_exporting` and `kl_cfg_importing`, and its base operation is that import or export.
-Clearing a locker is not a nested management operation: it resets the locker to _Unconfigured_ atomically.
+Clearing a locker undoes any nested management operation by resetting a locker to _Unconfigured_.
 
 [[KLEE-nested-state-base-types,Nested State Base Types]]
 Nested State Base Types:::
