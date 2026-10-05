@@ -82,6 +82,8 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*llockerstatus`` 
 
 A conformant implementation of KLEE requires the RISC-V External Debug Security extension.
 
+It also requires that the KLEE exceptions defined in <Zkl-ISA-priv.adoc#KLEE-exceptions>>> be implemented and raised as the unprivileged architecture mandates.
+
 Where the KLEE unit or its Machines need an RBG, it must use an entropy source and a DRBG that meet the requirements of the `Zkr` specification cite:[RISCV-ISA-Unpriv].
 Rule <<KLEE-GR-rbg-failure>> states what happens when the RBG fails.
 
@@ -216,7 +218,7 @@ The MDH array is always present, so every locker holds its MDH, if only to show 
 Only the second part is allocated and capacity-limited: "`KLF capacity`" refers to it alone, a locker that holds only its MDH consumes none, and the capacity a locker consumes depends on its MDH (<<KLEE-length-rule>>).
 Insufficient capacity may prevent a configuration instruction from executing; unconfiguring other lockers frees it.
 
-The corruption of a hart's KLF is unrecoverable: the KLEE architectural state of the hart is reset (<<KLEE-reset-and-m-mode-only>>), and a KLEE fatal-error exception is raised–see <<Zkl-ISA-priv.adoc#KLEE-exceptions>> for the definitions of exceptions raised by KLEE, and <<KLEE-error-architecture>> for the behavior without the Privileged Architecture.
+The corruption of a hart's KLF is unrecoverable: the KLEE architectural state of the hart is reset (<<KLEE-reset-and-m-mode-only>>), and a KLEE fatal-error exception is raised–see <<Zkl-ISA-priv.adoc#KLEE-exceptions>> for the definitions of exceptions raised by KLEE.
 
 The implementation must zeroize the KLEE state on power-up. A hart reset brings the KLEE state of the hart to the state that <<Zkl-ISA-priv.adoc#KLEE-out-of-reset-priv>> describes.
 The software stack should also clear all KLEE state at power-down.
@@ -922,7 +924,7 @@ NOTE: The uninterruptible vector-form instructions, which Rule <<KLEE-GR-vector-
 [horizontal]
 [[KLEE-GR-usage-policy,GR7]]GR7:: The _UsagePolicy_ of the MDH determines whether, and sometimes when, an instruction can be issued in a given privilege mode, and some instructions may modify the state of the locker.
 <<KLEE-instruction-properties>> is the authoritative table of both properties for every instruction; instruction descriptions refer to this Rule.
-A _usage_ instruction that would violate the Usage Control policies does not perform its operation, and raises a KLEE privilege-violation exception. <<KLEE-error-architecture>> gives the exact behavior, including that without the Privileged Architecture.
+A _usage_ instruction that would violate the Usage Control policies does not perform its operation, and raises a KLEE privilege-violation exception. <<KLEE-error-architecture>> gives the exact behavior.
 +
 [[KLEE-instruction-properties]]
 .State modification and usage control, per instruction
@@ -1095,7 +1097,7 @@ Let `content2_size` be 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDr
 . if MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`:
   .. 32 + `content1_size` if _AuxDataLen_ = 0;
   .. 64 + `content1_size` + `content2_size` if _AuxDataLen_ {ge} 2, the 64-byte fixed part including `IMPQUAL` and `SIV2` even when _ADSDropped_ = 1;
-. 16 + `pi_content_size` if MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`, or, for a supplied MDH, _Unconfigured_ (the MDH of a PI).
+. 16 + `pi_content_size` if MDH._State_ is `kl_cfg_provisioning`, `kl_cfg_ppi_importing`, or `kl_cfg_ppi_exporting`, or, for a supplied MDH, _Unconfigured_ (the MDH of a PI).
 --
 
 
@@ -1227,7 +1229,7 @@ The `Content` starts at a _ContentOffset_ of 0, 16 or 48 in the external formats
 // the same case distinction of `kl.size` (<<KLEE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
 
 . if MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`: 16 if _AuxDataLen_ = 0, and 48 if _AuxDataLen_ {ge} 2;
-. if MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`: 0.
+. if MDH._State_ is `kl_cfg_provisioning`, `kl_cfg_ppi_importing`, or `kl_cfg_ppi_exporting`: 0.
 
 The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively, and its size is `image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
 
@@ -2033,7 +2035,7 @@ The output counterpart of `kl.input`: the <<KLEE-iobuf-transfer-window>> of <<KL
 (((KLEE, Machine, invalid state)))
 (((Cryptographic Locker, invalidation)))
 A locker is _invalidated_ when it transitions to Error State `kl_state_invalid`.
-<<Zkl-ISA-priv.adoc#KLEE-exceptions>> treats the error conditions that raise exceptions, and <<KLEE-error-architecture>> the behavior without the Privileged Architecture.
+<<Zkl-ISA-priv.adoc#KLEE-exceptions>> treats the error conditions that raise exceptions.
 
 _State_ encodes up to 47 Valid States, _Ready_, _Success_ and _Failure_ included.
 A Machine may use _AuxInfo_, _MachineUse_, or the Content to store additional state information, in a Machine-specific format.
@@ -2238,20 +2240,20 @@ are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`; in State `k
 [[KLEE-error-architecture]]
 == Error Handling Architecture
 
-Only an M-mode-only hart may omit the KLEE Privileged Architecture, in which case the behaviors of <<KLEE-exception-error-correspondence>>, listed in priority order, replace the KLEE exceptions.
+The following table lists the default locker Error States set by KLEE exception handlers.
 
 [[KLEE-exception-error-correspondence]]
-.Behavior on exception conditions without the Privileged Architecture
+.Locker error states corresponding to KLEE exceptions
 [float="center",align="center",cols="<2,<3",options="header"]
 |===
 | KLEE Exception                    | Behavior without the Privileged Architecture
-| Fatal-error                       | Implementation- and platform-defined.
-| Missing-CSK (<<KLEE-CSK-requirements>>, <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>) | Transition to Error State _Privilege Violation_.
+| Fatal-error                       | (Non-recoverable.)
+| Missing-CSK (<<KLEE-CSK-requirements>>, <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>) | _Privilege Violation_.
 | Locker-Off (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>)| Does not occur: the `*llockerstatus` CSRs do not exist.
-| Unsupported-Metadata              | Transition to Error State _Unsupported_.
-| Out-of-memory                     | Transition to Error State _Out of Memory_.
-| Privilege-violation               | Transition to Error State _Privilege Violation_.
-| Unconfigured-KLIOBUF              | NOP for `kl.input`/`kl.output`, and at the replaced `kl.exec`, `kl.setst`/`kl.mgmt`, the locker transitions to Error State _Privilege Violation_.
+| Unsupported-Metadata              | _Unsupported_.
+| Out-of-memory                     | _Out of Memory_.
+| Privilege-violation               | _Privilege Violation_.
+| Unconfigured-KLIOBUF              | _Privilege Violation_.
 |===
 
 For `kl.clone` and `kl.derive`, which name two lockers, the behavior above and the handler's duty
@@ -2260,8 +2262,8 @@ a KLEE privilege-violation exception and the destination for a KLEE out-of-memor
 the endpoint on which the failing check is detected, the source being checked before
 the destination (<<KLEE-SGR-gate-order>>).
 
-With the Privileged Architecture, the exception handler performs the transition. A handler
-that can neither resolve a KLEE unsupported-Metadata, out-of-memory or privilege-violation exception, or any exception that a `kl.mgmt` opening a provisioning or an import raises once it has zeroized the locker,
+It is the duty of an exception handler to perform the transition.
+A handler that can neither resolve a KLEE unsupported-Metadata, out-of-memory or privilege-violation exception, or any exception that a `kl.mgmt` opening a provisioning or an import raises once it has zeroized the locker,
 nor forward it to another handler, an in-process one included, and that does not terminate the process that caused it, must:
 
 . set the _State_ of the locker on which the exception was raised to the corresponding Error State of
@@ -2271,9 +2273,6 @@ nor forward it to another handler, an in-process one included, and that does not
 . advance `xepc` past the trapping instruction, since re-executing it raises the same exception again.
   A handler that advances `xepc` past a usage instruction must write zeros to its output operand,
   as the instruction would have done had it performed no operation (Rule <<KLEE-SGR-usage-locker-error-state>>).
-
-Elsewhere, including <<Zkl-ISA-machines.adoc#KLEE-Machines>>, <<Zkl-ISA-priv.adoc#KLEE-priv>> and <<Zkl-pseudocode.adoc#KLEE-pseudocode-examples>>, this specification
-describes behavior with the Privileged Architecture; without it, the behaviors above replace the exceptions.
 
 
 State change rule for exceptions:: An illegal-instruction exception, or a KLEE
@@ -2346,7 +2345,7 @@ The grounds for an illegal-instruction exception form two groups:
 . A Form A `kl.mgmt` that must take the MDH from a configured KLIOBUF with `kliobuftop` < 16 (Rule <<KLEE-GR-vector-MDH-operand>>).
 . A Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW` / 8 (<<KLEE-CSR-klstart>>).
 . A Form A `kl.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<KLEE-instruction-exec>>).
-. Without the Privileged Architecture, an instruction issued without a CSK, or one that requires the KLIOBUF while it is unconfigured or absent (<<KLEE-exception-error-correspondence>>).
+. An instruction issued without a CSK, or one that requires the KLIOBUF while it is unconfigured or absent.
 --
 
 // Exceptions and State Changes::: [[KLEE-exceptions-and-state-changes,Exceptions and State Changes]]
@@ -2385,8 +2384,7 @@ Accessing or using a locker in State `kl_state_unsupported` does _not_ raise a K
 Other Exception Conditions:::
 +
 --
-The remaining exceptions are, in the order of <<Zkl-ISA-priv.adoc#KLEE-exception-codes>>, as follows. Without the
-Privileged Architecture, <<KLEE-exception-error-correspondence>> replaces the KLEE exceptions among them.
+The remaining exceptions are, in the order of <<Zkl-ISA-priv.adoc#KLEE-exception-codes>>, as follows.
 
 . *No active CSK.* A KLEE missing-CSK exception, on any KLEE instruction or KLEE CSR access that
   <<KLEE-CSK-requirements>> does not exempt, while no CSK is established or the `mklcsk` group is
@@ -2412,8 +2410,7 @@ Errors Not Raising Exceptions:::
 +
 --
 The following conditions set an Error State, or make the instruction perform no operation, without
-an exception, as do the algorithmic errors below and, without the Privileged Architecture,
-the conditions that <<KLEE-exception-error-correspondence>> maps to an Error State.
+an exception, as do the algorithmic errors below.
 
 . *Invalid Metadata or SKID.* _Invalid_, for a `kl.mgmt` opening a provisioning or an import on
   invalid Metadata (<<KLEE-MVR-open>>), for a SKID other than the all-ones value that the SKS
@@ -2458,12 +2455,9 @@ procedures) nor that of a signature is an algorithmic error, whether it succeeds
 Machine has performed as expected.
 --
 
-[[KLEE-SGR-gate-order,the Gate Order Rule]]
-== Order of Evaluation for Usage Instructions
+[[KLEE-SGR-gate-order]]
+== Rule for the Order of Evaluation for Usage Instructions
 
-The Gate Order Rule.:::
-+
---
 For a usage instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>), the following are evaluated first: the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), then the KLEE fatal-error, missing-CSK and locker-Off exceptions (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>.
 The conditions on the locker follow in this order, and the first that applies decides the outcome:
 
@@ -2477,7 +2471,6 @@ The conditions on the locker follow in this order, and the first that applies de
 . the Machine's own rules.
 
 For `kl.derive`, each condition is evaluated for both endpoints, the source first, before the next condition; an _Unconfigured_ or Error-State endpoint makes the whole instruction a no-op.
---
 
 == Summary of Behavior of KLEE Instructions on Unconfigured or Error State Lockers
 
@@ -3625,6 +3618,6 @@ in a KLEE unit shared by several harts, it affects only the state of that hart, 
 A hart reset implies a KLEE unit reset of that hart, and so does a fatal condition, with the differences stated in <<KLEE-error-architecture>>.
 Reset does not affect a hardwired CSK.
 
-On a hart without the KLEE Privileged Architecture (<<KLEE-error-architecture>>), M-mode establishes the CSK by one of the models of <<KLEE-CSK-requirements>>, every software-programmable Locality Secret whose CSR group is not implemented is unconfigured (<<KLEE-Localities>>), and `KLS` is treated as Initial; <<Zkl-ISA-priv.adoc#KLEE-priv>> states which of its CSRs may exist on such a hart.
+M-mode establishes the CSK by one of the models of <<KLEE-CSK-requirements>>, every software-programmable Locality Secret whose CSR group is not implemented is unconfigured (<<KLEE-Localities>>), and `KLS` is treated as Initial; <<Zkl-ISA-priv.adoc#KLEE-priv>> states which of its CSRs may exist on such a hart.
 
 // ////////////////////////////////////////////////////////////////////
