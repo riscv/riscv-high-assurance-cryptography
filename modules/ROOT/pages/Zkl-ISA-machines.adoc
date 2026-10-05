@@ -179,6 +179,8 @@ have _KeyType_ = 0 in its MDH. Any other _KeyType_ with a NIK Mode is invalid me
 | 10   | 6    | ECC: `brainpoolP384r1`                        | `Zklbpp384r1c`
 | 10   | 7    | ECC: `brainpoolP512r1`                        | `Zklbpp512r1c`
 | 10   | 8    | ECC: `SM2`                                    | `Zklsm2c`
+| 10   | 9    | ECC: `x25519`                                 | `Zklx25519c`
+| 10   | 10   | ECC: `x448`                                   | `Zklx448c`
 //
 | 11   | 0    | Post-Quantum Cryptography (PQC): `ML-KEM-512` | `Zklmlkem512k`
 | 11   | 1    | PQC: `ML-KEM-768`                             | `Zklmlkem768k`
@@ -3547,6 +3549,8 @@ The Elliptic Curve Machines provide:
 //This can be used to implement Diffie-Hellman key exchange.
 . ECDSA/EdDSA signature generation and verification.
 
+The x25519 and x448 Machines (<<KLEE-X25519-X448>>) provide only the former.
+
 [NOTE]
 ====
 Due to the wide variety of KDFs, hash functions, and formats, general KEM and PKE support is impractical.
@@ -3579,17 +3583,21 @@ The parameters used in this section are:
    <<KLEE-EdDSA>>;
  . The bit length `j` of the random number used as nonce in signature generation;
  . The number `u` of coordinates used to represent a point (`u` can be 1 or 2); and
- . The number `v` of elements used to represent a signature (`v` can be 1 or 2).
+ . The number `v` of elements used to represent a signature (`v` can be 0, 1 or 2, where `v` = 0
+   denotes a curve for which no signature scheme is provided).
 
 The parameters for the defined curves are:
 
-* NIST cite:[NIST-SP-800-186,nist-fips-186-5]:
+* NIST curves cite:[NIST-SP-800-186,nist-fips-186-5]:
   ** secp256r1 (NIST P-256): `b` = `h` = `j` = 256, `u` = `v` = 2.
   ** secp384r1 (NIST P-384): `b` = `h` = `j` = 384, `u` = `v` = 2.
   ** secp521r1 (NIST P-521): `b` = 576 (55 msbs set to zero), `h` = `j` = 576 (55 msbs set to zero), `u` = `v` = 2.
-* Edwards cite:[RFC8032,nist-fips-186-5]:
+* Edwards curves for signatures cite:[RFC8032,nist-fips-186-5]:
   ** ed25519:  `b` = 256, `h` = 512; `u` = 1, `v` = 2.
   ** ed448: `b` = 456, `h` = 512; `u` = 1, `v` = 2.
+* Montgomery forms of Edwards Curves for key-exchange only cite:[RFC7748]:
+  ** x25519 (curve25519): `b` = 256; `u` = 1, `v` = 0.
+  ** x448 (curve448): `b` = 448; `u` = 1, `v` = 0.
 * Brainpool cite:[RFC5639,RFC8734]:
   ** brainpoolP256r1: `b` = `h` = `j` = 256; `u` = `v` = 2.
   ** brainpoolP384r1: `b` = `h` = `j` = 384; `u` = `v` = 2.
@@ -3605,6 +3613,12 @@ signature component being 57 bytes rather than 56. `h` = 512 for both because th
 field, in pre-hash mode, holds the 64-byte `PH(M)`; no value of `j` is given because
 these curves do not use `RndNum` (cf. <<KLEE-EdDSA>>).
 
+For the Montgomery curves, `u` = 1 because a point is represented by its _u_-coordinate alone
+(cite:[RFC7748] {sect}5), a single `b`-bit string, and `v` = 0 because the x25519 and x448 Machines provide key
+exchange only; for the same reason no value of `h` or `j` is given (cf. <<KLEE-X25519-X448>>).
+Although related to the Edwards curves, they are listed separately: the point representation differs, as does
+`b` for x448 and ed448.
+
 All curves specified here are defined over prime fields.
 For secp521r1 the 55 most significant bits of each coordinate of `Generator` and `SecondPt`, of `Scalar`,
 of each component of `Signature`, of `Hash`, and of `RndNum` must be zero. A write of one of these fields with any of those bits set causes the locker to
@@ -3618,6 +3632,7 @@ prime-order subgroup; for the Edwards curves, its encoding must also decode as c
 prescribes. Whenever _Point_Mul_, _Sign_Generate_ or _Sign_Verify_ uses `Generator` (for the Edwards curves, only _Point_Mul_ does, <<KLEE-EdDSA>>) or `SecondPt` and the point is not
 valid, the state transitions to _Failure_: this is a data error (Rule <<KLEE-MGR-config-data-error>>), not a configuration error, whether the
 point is a peer's point, a public key or a generator. The check is made when the point is read (Rule <<KLEE-MGR-check-on-read>>).
+For the Montgomery curves no such check is made: the check of <<KLEE-X25519-X448>> replaces it.
 --
 
 //
@@ -3908,6 +3923,128 @@ An importing implementation that keeps the Auxiliary Data Section must also be w
 random number generator of the originating implementation. If it is not, it discards that Section
 together with `RndNum` (Position vii, if present) and restarts the operation.
 --
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-X25519-X448]]
+=== X25519- and X448-Specific Rules
+
+{empty}
+(((KLEE, Machine, X25519)))
+(((KLEE, Machine, X448)))
+The x25519 and x448 Machines implement the functions `X25519` and `X448` of cite:[RFC7748] {sect}5, and with them
+the Diffie-Hellman key exchange of cite:[RFC7748] {sect}6. Of the operations of <<KLEE-ECC>> they provide only
+scalar multiplication. They differ from the other curves in three respects: a point is a single coordinate,
+the scalar is an arbitrary `b`-bit string, and no input point is rejected. This subsection states the
+consequences; everything not restated here follows <<KLEE-ECC>>.
+
+Parameters:::
+
+* The curves are the Montgomery curves `v^2^` = `u^3^` + `A` {interpunct} `u^2^` + `u` of cite:[RFC7748] {sect}4:
+  curve25519 for x25519, with `p` = 2^255^ - 19 and `A` = 486662, and curve448 for x448, with
+  `p` = 2^448^ - 2^224^ - 1 and `A` = 156326.
+  curve25519 is birationally equivalent to the Edwards curve of ed25519; curve448 is related to that of ed448
+  by an isogeny of degree 4. The Machines are nevertheless distinct, and points and private keys are not
+  interchangeable between them.
+* A point is represented in compressed form, by its _u_-coordinate alone: `u` = 1. This is the X coordinate
+  of `Generator` and `SecondPt` in <<KLEE-ECC>>, and is not to be confused with the parameter `u`.
+  A public key and a shared secret are thus 32 bytes for x25519 and 56 bytes for x448.
+* There is no signature scheme: `v` = 0, and `h` and `j` are not defined.
+* `X25519(k, u)` and `X448(k, u)` map a scalar and a _u_-coordinate, both `b`-bit strings, to a `b`-bit
+  string, decoding their inputs as cite:[RFC7748] {sect}5 prescribes:
+ ** the scalar is _clamped_: for x25519, bits 0, 1, 2 and 255 are cleared and bit 254 is set; for x448,
+    bits 0 and 1 are cleared and bit 447 is set;
+ ** for x25519, bit 255 of the _u_-coordinate is ignored; and
+ ** a _u_-coordinate not smaller than `p` is reduced modulo `p`.
+* The private key is the unclamped `b`-bit string held in `Scalar`, which holds a
+  *configured private key* when it is non-zero. It is not compared with the order of the group.
+
+Data Structures:::
++
+--
+Those of <<KLEE-ECC>>, with the following changes:
+
+* *MDH*:
+ ** _MachinePolicy_ must be zero; a non-zero value is unsupported Metadata
+    (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>).
+ ** Of the _StateExtension_ bits (<<KLEE-ECC-StateExtension>>) only `HasSecondPt` is used: a PCCC or SCC
+    with any of the bits 1 to 3 set is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>).
+ ** `OutputType` (<<KLEE-ECC-MachineUse>>) is always False, the only output being a point.
+
+* *Internal State*: `Generator` and `SecondPt` are each a single `b`-bit string, a _u_-coordinate.
+  `SecondPt` holds the peer's public key and, after a scalar multiplication, the public key of the locker
+  or the shared secret.
+  `Signature`, `Hash` and `RndNum` do not exist.
+
+* *Serialized Content*: Positions i to iv of <<KLEE-ECC>>, with `u` = 1; Positions v to vii are always empty.
+  Hence
++
+`{fournbsp}{fournbsp}` `varlen` <- (`HasSecondPt` != 0) {interpunct} ``b``/8.
+--
+
+State Machine:::
+
+* *States:* besides _Ready_ (1), _Success_ (46) and _Failure_ (47), only the following States of <<KLEE-ECC>>:
+ ** _Set_Generator_ (2)
+ ** _Set_Scalar_ (3)
+ ** _Point_Mul_ (4)
+ ** _Set_SecondPt_ (8)
+ ** _Output_ (10)
+
++
+_Sign_Generate_, _Sign_Verify_, _Set_Hash_ and _Set_Signature_ are not defined: a `kl.setst` that names one of them
+transitions the locker to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-instructions>>).
+
+* *Allowed State Transitions:* those of <<KLEE-ECC>> between the States above, the _Set_ states being
+  _Set_Generator_, _Set_Scalar_ and _Set_SecondPt_:
+ ** _Ready_ -> any _Set_ state; between any two _Set_ states, and from a _Set_ state to itself.
+ ** From _Ready_ or from any _Set_ state -> _Point_Mul_.
+ ** _Point_Mul_ -> _Output_ -> _Success_.
+ ** _Point_Mul_ -> _Failure_, when the result is the all-zero string (Rule <<KLEE-MGR-config-data-error>>).
+
+* *Behavior:*
+
+** Provisioning sets `Generator` to the base point of cite:[RFC7748] {sect}4.1, resp. {sect}4.2, that is to the
+   _u_-coordinate 9 for x25519 and 5 for x448, and `Scalar` to zero.
+
+** `Generator`, `SecondPt` and `Scalar` accept every `b`-bit string: no check is made when they are written
+   (Rule <<KLEE-MGR-check-on-write>>).
+
+** A Form B `kl.setst` to _Set_Scalar_ with a non-zero value in the GPR sets `Scalar` to `b` random bits,
+   as cite:[RFC7748] {sect}6 generates a private key.
+
+** In State _Point_Mul_, a single Form D ``kl.exec Kn|K(Xn)`` performs a scalar
+   multiplication, in the following steps, which replace those of <<KLEE-ECC>>:
+
+  . If `Scalar` does not hold a configured private key (Rule <<KLEE-MGR-check-on-read>>), the locker
+    transitions to Error State _Invalid_.
+  . The base point `P` is `SecondPt` if `HasSecondPt` is set (the peer's public key), and `Generator` otherwise
+    (public-key generation). `P` is not checked for validity: the function is defined for every `b`-bit string
+    (therefore, also _u_-coordinates of points on the quadratic twist).
+  . `R` {leftarrow} `X25519(Scalar, P)`, resp. `X448(Scalar, P)`.
+  . If `R` is the all-zero string, as it is for every `P` of small order, the state transitions to _Failure_,
+    and `SecondPt` and `HasSecondPt` are left unchanged. This check, optional in cite:[RFC7748] {sect}6, is
+    mandatory here, and is made in constant time.
+  . Otherwise `SecondPt` {leftarrow} `R`, `HasSecondPt` is set, `OutputType` {leftarrow} False, and the state
+    transitions to _Output_.
+
+** A key exchange consists of two scalar multiplications with the same `Scalar`. The first, with
+   `HasSecondPt` clear and the default `Generator`, yields the public key, which is output and sent
+   to the peer. The second, after the peer's public key has been loaded in State _Set_SecondPt_, yields the
+   shared secret `K`.
++
+[NOTE]
+====
+cite:[RFC7748] {sect}6 uses `K` not as a key, but as the input of a key derivation function,
+together with the two public keys. Since `SecondPt` is a source endpoint of `kl.derive` (<<KLEE-derive-endpoints>>,
+Rule <<Zkl-ISA-unpriv.adoc#KLEE-DER-shared-secret>>), `K` can reach another locker without being exposed in
+environment memory.
+====
+
+** Upon returning to State _Ready_ with a Form B `kl.setst`, Bits 3 and 6 of `Xs` have no effect, since `Hash`
+   and `Signature` do not exist.
+
+** Rule <<KLEE-MGR-progress-discard>> applies to _Point_Mul_, with no `RndNum` to destroy.
 
 // ////////////////////////////////////////////////////////////////////
 

@@ -6,48 +6,51 @@ include::partial$Zkl-symbols.adoc[]
 endif::[]
 
 This introduction to the _Cryptographic Lockers Extensions_ (KLEE), formerly the _Atomic Cryptography Extension_ (ACE),
-is not part of the specification.
+is not part of the specification and, in particular, is not normative.
+When KLEE is ratified, parts of this introduction, for instance the Threat Model, may be incorporated into the specification.
 The ratification plan is
 https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].
 
 == Features
 
-KLEE lets software perform high-performance cryptographic operations without having direct access to the keys.
+KLEE lets software perform high-performance cryptographic operations without giving it direct access to the keys or to other critical derived value.
 (((design, high performance)))
-Its use cases include content protection (including local LLM decryption), link and storage encryption, secure boot, and attestation.
+The use cases that motivated its development include content protection (including both media and local LLM decryption), link and storage encryption, secure boot, and attestation.
 
-Its main features are:
+We now list the main features of KLEE:
 
-* *Cryptographic Contexts.* KLEE binds secrets, such as keys, and metadata into an indivisible _Cryptographic Context_ (CC). The metadata restricts each secret to one algorithm and can enforce usage constraints by process, VM, security state, boot cycle, expiration date, or other policies.
+* *Atomic operations.* Each cryptographic operation is atomic, so no intermediate value can leak through memory read exploits.
+  An instruction can be interrupted only between operations, if it performs multiple cryptographic operations in a single call,
+  or at the points an algorithm defines for its long-running operations.
++
+_Rationale for atomic operations._
+  If the primitive is secure, its key cannot be recovered from the inputs and outputs of the complete operation. ISAs that take the key between rounds or MAC stages would not have this property, even if the key came from a hidden register. For instance, an attacker with access to an instruction computing only 4 or 5 rounds of AES can efficiently recover the key cite:[Rijndael-revised]. Hence, even splitting the AES, say, into two calls (for AES-128) or three (for AES-192 and AES-256) is not an option if the goal is preventing exposure of the key.
 
-* *Cryptographic Lockers.* CCs reside in _Cryptographic Lockers_, architectural containers that hide their secrets from software. Software _provisions_ (writes) secrets and metadata into a locker, and KLEE instructions name lockers instead of key values. Keys thus never sit in process memory, and implementations can be faster and side-channel protected.
+* *Hidden cryptographic state and Cryptographic Contexts.* KLEE operations do not reveal keys and other critical values. This is achieved by hiding cryptographic state in Cryptographic Contexts (CC), which embed all this information in a secure format, and providing a strict set of rules governing their management.
+CCs are the mechanism used by KLEE to bind secrets, such as keys, and metadata into an indivisible unit. The metadata restricts each secret to one specific set of cryptographic algorithm and can enforce usage constraints by process, VM, security state, boot cycle, expiration date, or other policies.
 
-* *Atomic operations.* Each cryptographic operation is atomic, so no intermediate value leaks through architectural side channels.
-  An instruction can be interrupted only between operations, or at the points an algorithm defines for its long-running operations.
+* *Cryptographic Lockers.* CCs reside in _Cryptographic Lockers_, architectural containers that hide their secrets from software. Software _provisions_ (writes) secrets and metadata into a locker, and KLEE instructions name lockers instead of key values. Keys and other critical values thus never sit in process memory, and implementations can be faster and more secure.
 
-* *One interface for many primitives*, instead of separate instructions per primitive:
+* *A single interface for many primitives*, instead of separate instructions per primitive:
  ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLEE therefore also defines modes of operation, among them CTR, GCM, and CMAC, and secure key derivation.
- ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential. The modes work with AES-128, AES-192, AES-256, and other block ciphers such as SM4.
- ** The interface also covers hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
- ** Implementations need not support every algorithm: following RISC-V practice, KLEE defines subextensions and leaves requirements to the RISC-V profiles.
+ ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential.
+ The modes work with AES-128, -192, -256, and other block ciphers such as SM4.
+ ** The interface also supports hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
+ ** When side-channel protected implementations of cryptographic operations are available, they are simply variants of the standard algorithms, and they can be used in place of the latter without changes to the code.
+ ** Implementations need not support every algorithm and variant thereof: following RISC-V practice, KLEE defines subextensions and leaves requirements to the RISC-V profiles.
 
 * *Sealed contexts.* KLEE stores a CC to memory with authenticated encryption as a _Sealed Cryptographic Context_ (SCC), which can later be re-imported into a locker. A process given an SCC instead of a key never holds the key in its memory.
 
-* *Scalability.* One ISA and ABI serve embedded to server cores, and KLEE supports sleep, hibernation, and VM migration.
+* *Scalability.* One ISA and ABI serve embedded to server cores, and KLEE supports persistence, sleep, hibernation, and VM migration.
 (((design, scalable)))
 (((VM migration)))
-
-//
-
-Rationale for atomic operations:::
-If the primitive is secure, its key cannot be recovered from the inputs and outputs of the complete operation. ISAs that take the key between rounds or MAC stages lose this property, even when the key comes from a hidden register: an attacker with access to an instruction computing only 4 or 5 rounds of AES can efficiently recover the key cite:[Rijndael-revised].
 
 //
 
 [[KLEE-introduction-non-features]]
 == Non-Goals
 
-KLEE intentionally does not provide:
+KLEE intentionally does not provide the following features.
 
 * **Variable-length inputs:** plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
 
@@ -140,8 +143,6 @@ Group B — open design questions owned by this task group.:::
 . *Eliminate `kl.load` and `kl.store`?* `kl.mv` suffices: with vectors there is no performance penalty, and dropping them
   simplifies the logic and relieves encoding pressure. Without vectors, performance is already traded for compactness,
   and the KLIOBUF could serve, if the ARC keeps it.
-
-. *Side-channel protection* of the Machines and the sealing path: levels, formalization, and the documents to refer to.
 
 . *`kl.mgmt` interruptibility.* `kl.mgmt` can run relatively long, though much less than an ECC scalar multiplication or a
   signature verification. It is uninterruptible because preempting and resuming it may open new attack vectors: an

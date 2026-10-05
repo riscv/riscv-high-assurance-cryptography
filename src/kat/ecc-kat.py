@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""KATs for the elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-EdDSA>>): a locker model driven by
-kl.setst / kl.exec / kl.derive against RFC 6979, RFC 8032, GM/T 0003.5 and RFC 5639 data.
+"""KATs for the elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-X25519-X448>>, <<KLEE-EdDSA>>): a locker model
+driven by kl.setst / kl.exec / kl.derive against RFC 6979, RFC 7748, RFC 8032, GM/T 0003.5 and RFC 5639 data.
 The RBG draw of k is injected (RFC 6979's deterministic k)."""
 import copy, hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +17,7 @@ PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2)
           'secp521r1': (576, 576, 576, 2, 2), 'brainpoolP256r1': (256, 256, 256, 2, 2),
           'brainpoolP384r1': (384, 384, 384, 2, 2), 'brainpoolP512r1': (512, 512, 512, 2, 2),
           'sm2p256v1': (256, 256, 256, 2, 2), 'ed25519': (256, 512, 0, 1, 2),
-          'ed448': (456, 512, 0, 1, 2)}
+          'ed448': (456, 512, 0, 1, 2), 'x25519': (256, 0, 0, 1, 0), 'x448': (448, 0, 0, 1, 0)}
 MSB_ZERO = {'secp521r1': 55}
 MDH0 = dict(UsagePolicy=0, ExpirationDate=0, SCProtection=0, KeyType=0)
 
@@ -27,8 +27,13 @@ class Invalid(Exception):
         super().__init__(msg)
         self.who = who
 
-def targets(state, eddsa, sig_exit=True):
+def targets(state, eddsa, sig_exit=True, xdh=False):
     """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, SGR5, SGR4."""
+    if xdh:                                  # <<KLEE-X25519-X448>>: the States without a signature scheme
+        sets = {SET_GEN, SET_SCALAR, SET_SECONDPT}
+        t = {READY: sets | {POINT_MUL}, POINT_MUL: {OUTPUT, READY}, OUTPUT: {READY}, SUCCESS: {READY},
+             FAILURE: {READY}}.get(state, sets | {POINT_MUL, READY} if state in sets else set())
+        return t | ({state} if state not in (SUCCESS, FAILURE) else set())
     entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
     free = entry - (set() if sig_exit else {SET_SIG})
     ops, absorb = {POINT_MUL, SIGN_GEN, SIGN_VER}, {MSG_ABSORB} if eddsa else set()
@@ -50,16 +55,21 @@ class Unsupported(Exception):
     """kl_exc_unsupported at provisioning or import (<<KLEE-Metadata-validity>>)."""
 
 class Locker:
-    def __init__(self, c, sign=True, verify=True, sig_exit=True, aux_info=None, pure_impl=True):
+    def __init__(self, c, sign=None, verify=None, sig_exit=True, aux_info=None, pure_impl=True):
         """aux_info: <<KLEE-EdDSA>> _AuxInfo_ (0 pre-hash only, 1 pure as well; default 1 for EdDSA);
-        pure_impl: the implementation offers pure mode for the curve."""
+        pure_impl: the implementation offers pure mode for the curve.
+        sign, verify: _MachinePolicy_[0], [1]; default both set, and both clear for x25519 / x448."""
+        xdh = getattr(c, 'montgomery', False)
+        sign, verify = (not xdh if x is None else x for x in (sign, verify))
+        if xdh and (sign or verify):
+            raise Unsupported('<<KLEE-X25519-X448>>: _MachinePolicy_ is not used and must be zero')
         self.c, self.policy, self.sig_exit = c, (sign, verify), sig_exit
         self.aux_info = (1 if c.edwards else 0) if aux_info is None else aux_info
         if c.edwards and (self.aux_info >> 3 or self.aux_info & 1 and not pure_impl):
             raise Unsupported('EdDSA _AuxInfo_ reserved bits [15:3], or pure mode not offered')
         self.aux_info &= 1                          # bits [2:1] (msg_pass) of a PI: ignored and zeroed
         self.b, h, self.j, u, v = PARAMS[c.name]
-        self.mode = 'eddsa' if c.edwards else 'sm2' if c is EC.SM2C else 'ecdsa'
+        self.mode = 'eddsa' if c.edwards else 'xdh' if xdh else 'sm2' if c is EC.SM2C else 'ecdsa'
         fw = self.fw = self.b // 8
         self.size = dict(gen=u * fw, sec=u * fw, scalar=fw, hash=h // 8, sig=v * fw)
         self.default_gen = self.gen = self.enc(c.G)
@@ -71,6 +81,8 @@ class Locker:
     # points: little-endian coordinates; the point at infinity has no encoding
     def enc(self, P):
         assert P is not None
+        if self.mode == 'xdh':              # <<KLEE-X25519-X448>>: the u-coordinate alone
+            return v2b(P, self.fw)
         return self.c.encode(P) if self.c.edwards else v2b(P[0], self.fw) + v2b(P[1], self.fw)
 
     def dec(self, data):
@@ -104,7 +116,7 @@ class Locker:
         """kl.setst #t; Form A is modelled as xs = 0."""
         if t in (SUCCESS, FAILURE):
             raise IllegalInstruction                                  # SGR8
-        if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit):
+        if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit, self.mode == 'xdh'):
             raise Invalid('transition not allowed')                   # MGR1
         if t in (SET_HASH, SET_SIG) and not any(self.policy):
             raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MGR11
@@ -242,6 +254,15 @@ class Locker:
         self.state = FAILURE
 
     def _point_mul(self):
+        if self.mode == 'xdh':                      # <<KLEE-X25519-X448>>: no range check, no point validation
+            if not any(self.scalar):
+                raise Invalid('no configured private key')
+            R = self.c.x(self.scalar, self.sec if 'sec' in self.has else self.gen)
+            if not any(R):                          # all-zero result: data error (MGR12), SecondPt unchanged
+                return self._fail()
+            self.sec = R
+            self._to_output(False, 'sec')
+            return R
         k = b2v(self.scalar)                        # <<KLEE-EdDSA>>: s from the configured seed
         if not k or self.mode != 'eddsa' and k >= self.c.n:
             raise Invalid('no configured seed / Scalar out of range')
@@ -352,6 +373,8 @@ class Locker:
         <<KLEE-EdDSA>>): HasRndNum only in _Sign_Generate_; HasHashState exactly in _Msg_Absorb_."""
         if self.mode == 'eddsa':
             return ('hstate' in self.has) == (self.state == MSG_ABSORB)
+        if self.mode == 'xdh':                      # <<KLEE-X25519-X448>>: only HasSecondPt
+            return self.has <= {'sec'}
         return 'rnd' not in self.has or self.state == SIGN_GEN
 
     def aux(self):
@@ -1227,7 +1250,127 @@ check('DER6 key derivation: SHA-256 output -> ECC `Scalar` in _Set_Scalar_ (b/8 
 info('reading: SecondPt is a field source (DER8 truncation / zero-pad, source State unchanged), '
      'the DER5 shared secret.')
 
+section('X25519 and X448 (<<KLEE-X25519-X448>>, RFC 7748)')
+X25, X4 = EC.X25519, EC.X448
+RFC7748 = {                                 # 5.2: (scalar, u, output) x 2; iterations 1, 1000; 6: a, A, b, B, K
+    'x25519': dict(
+        vec=(('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4',
+              'e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c',
+              'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552'),
+             ('4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d',
+              'e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493',
+              '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957')),
+        it=('422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079',
+            '684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51'),
+        dh=('77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a',
+            '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a',
+            '5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb',
+            'de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f',
+            '4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742')),
+    'x448': dict(
+        vec=(('3d262fddf9ec8e88495266fea19a34d28882acef045104d0d1aae121700a779c984c24f8cdd78fbff44943eba368f54b'
+              '29259a4f1c600ad3',
+              '06fce640fa3487bfda5f6cf2d5263f8aad88334cbd07437f020f08f9814dc031ddbdc38c19c6da2583fa5429db94ada1'
+              '8aa7a7fb4ef8a086',
+              'ce3e4ff95a60dc6697da1db1d85e6afbdf79b50a2412d7546d5f239fe14fbaadeb445fc66a01b0779d98223961111e21'
+              '766282f73dd96b6f'),
+             ('203d494428b8399352665ddca42f9de8fef600908e0d461cb021f8c538345dd77c3e4806e25f46d3315c44e0a5b43712'
+              '82dd2c8d5be3095f',
+              '0fbcc2f993cd56d3305b0b7d9e55d4c1a8fb5dbb52f8e9a1e9b6201b165d015894e56c4d3570bee52fe205e28a78b91c'
+              'dfbde71ce8d157db',
+              '884a02576239ff7a2f2f63b2db6a9ff37047ac13568e1e30fe63c4a7ad1b3ee3a5700df34321d62077e63633c575c1c9'
+              '54514e99da7c179d')),
+        it=('3f482c8a9f19b01e6c46ee9711d9dc14fd4bf67af30765c2ae2b846a4d23a8cd0db897086239492caf350b51f833868b'
+            '9bc2b3bca9cf4113',
+            'aa3b4749d55b9daf1e5b00288826c467274ce3ebbdd5c17b975e09d4af6c67cf10d087202db88286e2b79fceea3ec353'
+            'ef54faa26e219f38'),
+        dh=('9a8f4925d1519f5775cf46b04b5800d4ee9ee8bae8bc5565d498c28dd9c9baf574a9419744897391006382a6f127ab1d'
+            '9ac2d8c0a598726b',
+            '9b08f7cc31b7e3e67d22d5aea121074a273bd2b83de09c63faa73d2c22c5d9bbc836647241d953d40c5b12da88120d53'
+            '177f80e532c41fa0',
+            '1c306a7ac2a0e2e0990b294470cba339e6453772b075811d8fad0d1d6927c120bb5ee8972b0d3e21374c9c921b09d1b0'
+            '366f10b65173992d',
+            '3eb7a829b0cd20f5bcfc0b599b6feccf6da4627107bdb0d4f345b43027d8b972fc3e34fb4232a13ca706dcb57aec3dae'
+            '07bdc1c67bf33609',
+            '07fff4181ac6cc95ec1c16a94a0f74d12da232ce40a77552281d282bb60c0b56fd2464c335543936521c24403085d59a'
+            '449a5037514a879d'))}
+
+def xdh(c, k, u=None, chunk=None):
+    '''Scalar multiplication through the locker: (output, final State, locker); u = None: the Generator.'''
+    cr = locker(c, (SET_SCALAR, k, chunk), *(((SET_SECONDPT, u, chunk),) if u is not None else ()), to=POINT_MUL)
+    cr.exec_run()
+    return cr.output_all(16), cr.state, cr
+
+for name, c in EC.MONTGOMERY_CURVES.items():
+    v, n = RFC7748[name], c.nbytes
+    b, h_, j_, u_, v_ = PARAMS[name]
+    cr = Locker(c)
+    check(f'{name}: b = {b}, u = 1, v = 0; fields are b/8 = {n} bytes; default Generator u = {c.G}; '
+          '_MachinePolicy_ = 0', True,
+          (u_, v_, n, cr.size['gen'], cr.size['sec'], cr.size['scalar'], b2v(cr.gen), cr.policy),
+          (1, 0, b // 8, n, n, n, c.G, (False, False)))
+    for i, (k, u, out) in enumerate(v['vec']):
+        got, st, _ = xdh(c, bytes.fromhex(k), bytes.fromhex(u), chunk=16)
+        check(f'{name}: RFC 7748 5.2 vector {i + 1} via _Set_Scalar_, _Set_SecondPt_, _Point_Mul_, _Output_', True,
+              (got.hex(), st), (out, SUCCESS))
+    k = u = v2b(c.G, n)
+    for i in range(1000):
+        k, u = c.x(k, u), k
+        if i == 0:
+            check(f'{name}: RFC 7748 5.2 iterated function, 1 iteration', True, k.hex(), v['it'][0])
+    check(f'{name}: RFC 7748 5.2 iterated function, 1000 iterations', True, k.hex(), v['it'][1])
+    a, A, b_, B, K = map(bytes.fromhex, v['dh'])
+    pa, sa, ca = xdh(c, a)
+    pb, sb, cb = xdh(c, b_)
+    check(f'{name}: RFC 7748 6 public keys = Scalar * default Generator (HasSecondPt clear)', True, (pa, pb), (A, B))
+    ca.setst(READY)                                         # Form A: Scalar kept
+    load(ca, SET_SECONDPT, B)
+    ca.setst(POINT_MUL)
+    ca.exec_run()
+    kb = xdh(c, b_, A)[0]
+    check(f'{name}: RFC 7748 6 shared secret, both sides; the same Scalar serves both multiplications', True,
+          (ca.sec, kb, ca.out_type, 'sec' in ca.has), (K, K, False, True))
+    key = Dest('key', size=32)
+    kl_derive(key, ca, n)
+    check(f'{name}: SecondPt (K) is a kl.derive source in _Output_ (DER5): K never output', True,
+          (key.data, ca.state), (K[:32], OUTPUT))
+    check(f'{name}: a zero Scalar is not a configured private key: _Point_Mul_ -> _Invalid_ (MGR13)',
+          invalid(locker(c, to=POINT_MUL).exec_run))
+    small = [0, 1, c.p - 1]                                 # order 2; order 4, on the curve or on its twist
+    res = [xdh(c, a, v2b(u, n))[1:] for u in small]
+    check(f'{name}: small-order u = 0, 1, p - 1: all-zero result -> _Failure_, SecondPt unchanged, no output',
+          all(st == FAILURE and cr.sec == v2b(u, n) and cr.out_type is False for (st, cr), u in zip(res, small)))
+    big = c.p + c.G                                         # non-canonical u, reduced modulo p
+    check(f'{name}: non-canonical u = p + {c.G} accepted and reduced; no check on write or on read', True,
+          xdh(c, a, v2b(big, n))[:2], (A, SUCCESS))
+    check(f'{name}: _Sign_Generate_, _Sign_Verify_, _Set_Hash_, _Set_Signature_ (and the EdDSA States) are not '
+          'defined: kl.setst -> _Invalid_ (MGR1)',
+          all(invalid(Locker(c).setst, t) for t in (SIGN_GEN, SIGN_VER, SET_HASH, SET_SIG, MSG_ABSORB, SET_CTX)))
+    check(f'{name}: a non-zero _MachinePolicy_ is unsupported Metadata',
+          all(raises(Locker, c, exc=Unsupported, **kw) for kw in (dict(sign=True), dict(verify=True))))
+    cr = xdh(c, a)[2]
+    cr.setst(READY, 0b1001000)                              # bits 3 and 6: no Hash, no Signature
+    kept = (cr.sec, cr.scalar, 'sec' in cr.has)
+    cr.setst(SET_GEN)
+    cr.setst(READY, 0b110110)                               # exchange the points, then erase SecondPt and Scalar
+    check(f'{name}: return to _Ready_: Xs bits 3 and 6 have no effect; bits 4, 5, 1, 2 as in <<KLEE-ECC>>; '
+          'bits 7+ -> _Invalid_', True,
+          (kept, cr.gen, cr.sec, 'sec' in cr.has, any(cr.scalar), invalid(cr.setst, READY, 1 << 7)),
+          ((A, a, True), A, None, False, False, True))
+    cr, bad_se = xdh(c, a)[2], Locker(c)
+    bad_se.has.add('hash')
+    check(f'{name}: _StateExtension_: only HasSecondPt; varlen = HasSecondPt * b/8; bits 1 to 3 unsupported', True,
+          (cr.has, len(cr.sec), cr.state_se_supported(), bad_se.state_se_supported()), ({'sec'}, n, True, False))
+check('x25519: bit 255 of the u-coordinate is ignored', True,
+      xdh(X25, bytes.fromhex(RFC7748['x25519']['dh'][0]), v2b(9 | 1 << 255, 32))[0].hex(), RFC7748['x25519']['dh'][1])
+XST = {READY, SET_GEN, SET_SCALAR, SET_SECONDPT, POINT_MUL, OUTPUT}
+check('x25519 / x448: kl.setst reaches only _Ready_, the three _Set_ states, _Point_Mul_ and _Output_', True,
+      {t for s in XST | {SUCCESS, FAILURE} for t in targets(s, False, xdh=True)}, XST)
+
 section('Negative controls')
+k, u, out = map(bytes.fromhex, RFC7748['x25519']['vec'][0])
+control('x25519 without clamping of the scalar differs from RFC 7748 5.2', X25.x(k, u, clamp=False) != out)
+control('x25519 with a big-endian u-coordinate differs from RFC 7748 5.2', X25.x(k, u[::-1]) != out)
 seed, pk, msg, sig = map(bytes.fromhex, RFC8032_ED25519[1][1:])
 bad = ed_sign(EC.ED25519, seed, msg, be=True)[0]
 control('ed25519 S encoded big-endian differs from RFC 8032 7.1 TEST 2', bad != sig)

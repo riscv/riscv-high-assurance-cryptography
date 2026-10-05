@@ -1,5 +1,6 @@
 """Reference curve arithmetic for ecc-kat.py: SP 800-186 (P-256/384/521), RFC 5639 (Brainpool),
-GB/T 32918.5 (SM2) and RFC 8032 (Ed25519/Ed448) parameters; Jacobian / extended coordinates."""
+GB/T 32918.5 (SM2), RFC 8032 (Ed25519/Ed448) and RFC 7748 (X25519/X448) parameters; Jacobian / extended
+coordinates, and the Montgomery ladder."""
 
 
 class Weierstrass:
@@ -251,5 +252,47 @@ ED448 = Edwards(
     By=0x693F46716EB6BC248876203756C9C7624BEA73736CA3984087789C1E05A0C2D73AD3FF1CE67C39C4FDBD132C4ED7C8AD9808795BF230FA14,
     bbits=456, cofactor=4)
 
+class Montgomery:
+    """v^2 = u^3 + Au^2 + u over GF(p); a point is its u-coordinate alone (RFC 7748 5)."""
+    edwards, montgomery = False, True
+
+    def __init__(self, name, p, A, bits, gu, clamp):
+        self.name, self.p, self.a24, self.bits, self.nbytes = name, p, (A - 2) // 4, bits, (bits + 7) // 8
+        self.G, self.clamp = gu, clamp      # clamp: (bits cleared, bit set, u bits ignored)
+
+    def decode_scalar(self, k):
+        clear, top, _ = self.clamp
+        return int.from_bytes(k, 'little') & ~clear | 1 << top
+
+    def decode_u(self, u):
+        return (int.from_bytes(u, 'little') & ~self.clamp[2]) % self.p
+
+    def ladder(self, k, u):
+        """RFC 7748 5: the u-coordinate of k * (u, .) for the integers k, u."""
+        p, x2, z2, x3, z3, swap = self.p, 1, 0, u, 1, 0
+        for t in reversed(range(self.bits)):
+            kt = k >> t & 1
+            if swap ^ kt:
+                x2, x3, z2, z3 = x3, x2, z3, z2
+            swap = kt
+            A, B, C, D = x2 + z2, x2 - z2, x3 + z3, x3 - z3
+            AA, BB, DA, CB = A * A % p, B * B % p, D * A % p, C * B % p
+            E = AA - BB
+            x3, z3 = (DA + CB) ** 2 % p, u * (DA - CB) ** 2 % p
+            x2, z2 = AA * BB % p, E * (AA + self.a24 * E) % p
+        if swap:
+            x2, z2 = x3, z3
+        return x2 * pow(z2, p - 2, p) % p
+
+    def x(self, k, u, clamp=True):
+        """X25519(k, u), resp. X448(k, u), on byte strings."""
+        ki = self.decode_scalar(k) if clamp else int.from_bytes(k, 'little')
+        return self.ladder(ki, self.decode_u(u)).to_bytes(self.nbytes, 'little')
+
+
+X25519 = Montgomery('x25519', _P25519, 486662, 255, 9, (7 | 1 << 255, 254, 1 << 255))
+X448 = Montgomery('x448', _P448, 156326, 448, 5, (3, 447, 0))
+
 WEIERSTRASS_CURVES = {c.name: c for c in (P256, P384, P521, BP256, BP384, BP512, SM2C)}
 EDWARDS_CURVES = {c.name: c for c in (ED25519, ED448)}
+MONTGOMERY_CURVES = {c.name: c for c in (X25519, X448)}
