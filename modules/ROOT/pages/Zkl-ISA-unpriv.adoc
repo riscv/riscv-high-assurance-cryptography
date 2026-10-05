@@ -3174,54 +3174,11 @@ B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 ....
 ////
 
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-error-state-transfer]]
-=== Export and Import of a Locker in an Error State
-
-A locker in an Error State holds only its MDH (Rule <<KLEE-SGR-clear-locker-content-error-state>>), so there is nothing to
-encrypt or authenticate: neither direction produces an SCC or a PCCC, or opens a
-management operation. Both paths are thus shorter than those of <<KLEE-management-operations>>,
-and, since they issue no `kl.load` or `kl.store`, take no part in resumption.
-
-For such a locker and its exported image, only the _State_ field of the MDH is checked; the other fields are not checked for validity (<<KLEE-Metadata-validity>>).
-
-*Exporting* a locker in an Error State takes two steps, and no `kl.mgmt`:
---
-. Read the _State_ field with `kl.getst` (<<KLEE-instruction-getst>>), and find an Error State.
-. Read the MDH with `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>), and store its 16 bytes
-  to memory; `kl.size` reports 16.
-
-A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on a locker in an Error State is permitted but
-useless: it leaves the locker unchanged and opens no management operation; only its common steps take effect, `klmanagedlocker` becoming 32 and `klstart` 0
-(<<KLEE-locker-management>>).
---
-
-*Importing* such an image takes one step:
---
-. Issue `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH
-  as the auxiliary operand, carried whole by Form C or D, or by a Form A from the KLIOBUF. The instruction:
-  .. zeroizes the locker it names, and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLEE-SGR-clear-locker-content-error-state>>);
-  .. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
-
-The locker then holds only its MDH: no Machine is selected for execution, and no KLF capacity is allocated, so no check of the Machine or of the KLF capacity can fail this import.
-The instruction is uninterruptible
-  (Rule <<KLEE-IRR-uninterruptible-instructions>>), so no intermediate state of the locker is ever observable.
-No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one performs no operation (Rule <<KLEE-SGR-cleared-under-management>>).
-The `SIV`, `SIV2` and `IMPQUAL` registers take no part in either path, and need not be saved for it.
---
-
 // ///////////////////////////////////////////////////////////////////////////
 
 === SCC Export and Import Algorithms
 
 Section <<KLEE-SCC-AEAD>> describes the algorithms of SCC export and import, starting with the authenticated encryption scheme they use.
-
-// This completes the description of the semantics of the management operations given in <<KLEE-management-operations>>,
-// in the description of `kl.setst`
-// (<<KLEE-instruction-setst>>).
-// The code detailing the operations as split by the architecture (<<KLEE-management-code-snippets>>) illustrates how these management operations are actually realized by the caller.
-// See also `kl.load` (<<KLEE-instruction-load>>), `kl.store` (<<KLEE-instruction-store>>), and `kl.getmdl` (<<KLEE-instruction-getmd>>).
 
 [[KLEE-SCC-AEAD]]
 === The SCC Authenticated Encryption Scheme
@@ -3400,6 +3357,8 @@ Distinct Locality sets lead to the same SIV with probability 2^-126^.
 [[KLEE-SCC-export]]
 === Generation of an SCC from a Fully Configured Locker
 
+If the locker is in an Error State, use the method in <<KLEE-error-state-transfer>>.
+
 A locker ``K(i)`` in a Valid State is fully provisioned, and opening it for export (`kl.mgmt Kd|K(Xd), #kl_cfg_exporting`) creates the serialized, encrypted and authenticated SCC by the steps below.
 
 The Locality substitution rules of <<KLEE-Localities>> apply: `LST_eff[j]` is the value of `LST` entry _j_ after substitution, and replaces `LST[j]` in the export and import algorithms.
@@ -3457,11 +3416,13 @@ Leaving either operation uncompleted leaves the _State_ a Configuration State, i
 [[KLEE-SCC-import]]
 === Decryption and Authentication of a Complete SCC into a Locker
 
+If the SCC's MDH is in an Error State, use the method in <<KLEE-error-state-transfer>>.
+
 The following algorithm imports the SCC of a fully configured locker.
-The `kl.mgmt Kd|K(Xd), #kl_cfg_importing` that opens the import performs steps 1 to 5
+The `kl.mgmt Kd|K(Xd), #kl_cfg_importing` opening the import performs steps 1 to 5
 (<<KLEE-locker-management>>), the `kl.load` or locker-writing `kl.mv` instructions that follow perform step 6
 (<<KLEE-instruction-load>>, <<KLEE-instruction-mv>>), and
-`kl.mgmt Kd|K(Xd), #kl_cfg_management_end` performs the remaining steps, decrypting and authenticating the SCC.
+`kl.mgmt Kd|K(Xd), #kl_cfg_management_end` decrypts and authenticates the SCC, makes it available to software.
 
 .Importing a Fully Configured Locker ``K(i)``
 --
@@ -3493,6 +3454,46 @@ The `kl.mgmt Kd|K(Xd), #kl_cfg_importing` that opens the import performs steps 1
 ====
 If the optional implementation-specific ADS makes the SCC too large for a locker, or is incompatible, the implementation ignores it and keeps the architected content: only a failure of the first authentication (`SIV`) rejects the entire SCC.
 ====
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-error-state-transfer]]
+=== Export and Import of a Locker in an Error State
+
+A locker in an Error State holds only its MDH (Rule <<KLEE-SGR-clear-locker-content-error-state>>).
+There is nothing to encrypt and KLEE also does not authenticate it, since it would be easy to forge
+a valid authenticated MDH in the current environment.
+Neither direction produces an SCC or a PCCC, or opens a management operation.
+Both paths are thus shorter than those of <<KLEE-management-operations>>,
+and, since they issue no `kl.load` or `kl.store`, take no part in resumption.
+
+For such a locker and its exported image, only the _State_ field of the MDH is checked; the other fields are not checked for validity (<<KLEE-Metadata-validity>>).
+
+*Exporting* a locker in an Error State takes two steps, and no `kl.mgmt`:
+--
+. Read the _State_ field with `kl.getst` (<<KLEE-instruction-getst>>), and find an Error State.
+. Read the MDH with `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>), and store its 16 bytes
+  to memory; `kl.size` reports 16.
+
+A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on a locker in an Error State is permitted but
+useless: it leaves the locker unchanged and opens no management operation; only its common steps take effect, `klmanagedlocker` becoming 32 and `klstart` 0
+(<<KLEE-locker-management>>).
+--
+
+*Importing* such an image takes one step:
+--
+. Issue `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH
+  as the auxiliary operand, carried whole by Form C or D, or by a Form A from the KLIOBUF. The instruction:
+  .. zeroizes the locker it names, and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLEE-SGR-clear-locker-content-error-state>>);
+  .. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
+
+The locker then holds only its MDH: no Machine is selected for execution, and no KLF capacity is allocated, so no check of the Machine or of the KLF capacity can fail this import.
+The instruction is uninterruptible
+  (Rule <<KLEE-IRR-uninterruptible-instructions>>), so no intermediate state of the locker is ever observable.
+No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one performs no operation (Rule <<KLEE-SGR-cleared-under-management>>).
+The `SIV`, `SIV2` and `IMPQUAL` registers take no part in either path, and need not be saved for it.
+--
+
 
 // ////////////////////////////////////////////////////////////////////
 
