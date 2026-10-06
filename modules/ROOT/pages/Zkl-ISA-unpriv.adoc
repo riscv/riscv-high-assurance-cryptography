@@ -392,7 +392,7 @@ Fault injection is excluded.
 
 |   3    | No timing leakage; advanced differential side-channel protection;
 detection of injected faults, followed either by completion with the correct result and no other physical leakage, or by
-a transition to a fatal error condition (<<KLEE-error-architecture>>).
+a transition to a fatal error condition (see <<KLEE-error-architecture>>).
 | Level 2, plus ISO/IEC 19790:2025 Level 4, Clause 7.7.2.5, for fault-injection protection, and ISO/IEC 24759:2025 Clause 6.7 for fault-injection testing, with the methodology of ISO/IEC 17825:2024.
 Similarly, FIPS 140-3 Level 4. Evidence is provided of reliable fault-injection detection and of safe behavior upon detection.
 |===
@@ -572,6 +572,7 @@ A PI or SCC whose _Locality_ names an unconfigured entry, or carries the reserve
 
 Up to six architected Localities may be active at once: up to two of the HW Binding Group, at most one of _PhysBootScrt_ and _VirtBootScrt_, and up to three of the SW Filter Group. The SCC generation and import algorithms (<<KLEE-CC-management>>) enforce their policies.
 
+////
 [[KLEE-Metadata-locality-interoperability]]
 === Interoperability under _Locality_ configurations
 
@@ -601,6 +602,8 @@ An OS becomes a guest.::: An OS on a hart without the H extension sets `skllocal
 A hypervisor saves and restores guest lockers, or hands a CC to a guest.::: At V=0, entry 9 is the `hkllocality` of the machine loaded, and entry 10 the hypervisor's own value of `skllocality`. A save and its restore happen at the same level, so their bindings match. Before saving, the hypervisor configures `hkllocality` for the machine and, if a guest CC names _SLocality_, its own value of `skllocality`, to which that export is bound; an unconfigured entry makes the restore fail as invalid Metadata. To hand a CC to a guest, the hypervisor provisions it naming _HLocality_: the export at V=0 binds it to the tag of the machine, and the import at V=1 uses the same block. A CC naming _SLocality_ cannot cross levels this way, since `skllocality` holds a different value at each level: the hypervisor's own at V=0, and at V=1 the guest's, which the hypervisor installs before the guest runs.
 
 In every mode the three entries denote three different registers, and no ordering or exclusivity among `mkllocality`, `hkllocality`, and `skllocality` is required. Host software under a hypervisor does not name _HLocality_ or _VirtBootScrt_, whose values the hypervisor sets for the machine loaded.
+
+////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -902,7 +905,13 @@ Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `I
 [[KLEE-instructions-detailed]]
 == Instructions
 
-This section specifies the semantics and encodings of the unprivileged KLEE instructions.
+_This section specifies the semantics and encodings of the unprivileged KLEE instructions.
+Only the semantics and encoding are described here and not the behavior of the instructions in various States of the Machines,
+how they respect usage policies, how they use randomness, how they access memory and whether they are interruptible.
+The rules governing all these aspects are grouped in <<KLEE-ISA-rules>>._
+
+[[KLEE-general-rules-instructions]]
+=== General Rules Governing Encoding and Arguments
 
 In every encoding, fields shown with fixed values must hold them. Any other value of such a field, and any unlisted combination of field values, is a reserved encoding and raises an illegal-instruction exception (first group of <<KLEE-illegal-instruction-grounds>>).
 
@@ -915,12 +924,7 @@ Where an encoding offers both, bit `r`, the _locker indexing mode selector_, cho
 This is the address of the *first* byte of the transfer, even for a multi-byte or resumed transfer; a resumed transfer restarts at that address plus a byte offset of `klstart`.
 Each instruction gives the correspondence between addresses and transfer offsets.
 
-//
-
-[[KLEE-general-rules-instructions]]
-=== General Rules Governing Encoding and Arguments
-
-The following general rules apply to all KLEE instructions, unless stated otherwise.
+The following rules apply to all KLEE instructions, unless stated otherwise.
 
 [horizontal]
 [[KLEE-GR-multiple-GPRs,GR1]]GR1:: _Use of multiple GPRs for longer inputs:_ A 64-bit operand is one GPR on RV64, and the pair `(X[s+1],X[s])`, as `X[s+1] @ X[s]`, on RV32.
@@ -1919,7 +1923,7 @@ The output counterpart of `kl.input`: the <<KLEE-iobuf-transfer-window>> of <<KL
 
 // ////////////////////////////////////////////////////////////////////
 
-
+[[KLEE-ISA-rules]]
 == Rules
 
 === Usage Control and Gating
@@ -1986,32 +1990,11 @@ A locker is _invalidated_ when it transitions to Error State `kl_state_invalid`.
 _State_ encodes up to 47 Valid States, _Ready_, _Success_ and _Failure_ included.
 A Machine may use _AuxInfo_, _MachineUse_, or the Content to store additional state information, in a Machine-specific format.
 
-[[KLEE-nested-mgmt,Nested Management Operations]]
-Nested Management Operations:::
-A _nested_ management operation is one opened on a locker already under management;
-the _base operation_ of a group of nested operations is the outermost one, that is
-the last management operation opened on the locker while it was _not_ in a Configuration State.
-The two Configuration States whose mnemonics contain `ppi` ("`partial provisioning input`")
-are reached only by a nested operation whose base operation is a provisioning.
-A nested operation on an interrupted import or export of a locker in a Complete State reuses
-`kl_cfg_exporting` and `kl_cfg_importing`, and its base operation is that import or export.
-Clearing a locker undoes any nested management operation by resetting a locker to _Unconfigured_.
-
-[[KLEE-nested-state-base-types,Nested State Base Types]]
-Nested State Base Types:::
-The base type of a Configuration State, `pi` or `scc`, records whether the image the locker holds derives
-from a PI or an SCC, as the base operation determines: it is `pi` for
-`kl_cfg_provisioning`, `kl_cfg_ppi_exporting` and `kl_cfg_ppi_importing`, and `scc` for
-`kl_cfg_exporting` and `kl_cfg_importing`.
-It determines the length of the image
-(<<KLEE-instruction-size>>), which could not otherwise be recovered once nested management
-operations have overwritten the original _State_.
-
 The immediate of `kl.setst` (<<KLEE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further operations related to state changes: the architected `kl_cfg_clear_ads` (64, <<KLEE-instruction-clearads>>), and the values 65–127, available to Machines.
 
 <<KLEE-states-graph>> shows the default state transitions, with the following legend:
 
-* Double-bordered ellipses: the _Unconfigured_ State, and the Configuration States, outermost and nested.
+* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
 * Single-bordered rounded rectangles: the Valid States.
 * Double-bordered rounded rectangles: the Error States.
 * Continuous edges: transitions induced by usage instructions.
@@ -2277,11 +2260,22 @@ GR48:: For `FENCE`, `FENCE.I`, `SFENCE.VMA` and the `.aq`/`.rl` annotations, the
 
 // ////////////////////////////////////////////////////////////////////
 
+=== State change rule for exceptions
+
+[horizontal]
+[[KLEE-exception-state-change,GR49}]]GR49:: *:: An illegal-instruction exception, or a KLEE
+exception other than the fatal-error one, leaves the KLEE state unchanged, except for two changes that `kl.mgmt`
+makes even if it later raises an exception (<<KLEE-locker-management>>):
+a `kl.mgmt` that opens a provisioning or an import zeroizes the target locker and writes 32 to `klmanagedlocker`, and any `kl.mgmt` that
+passes the check of `klmanagedlocker` (<<KLEE-locker-management>>) clears `klstart`.
+A KLEE fatal-error exception resets the KLEE state (_Fatal Conditions_ below).
+
+
 [[KLEE-resumability]]
 === Interruptibility and Resumability of KLEE instructions
 
 [horizontal]
-[[KLEE-GR-uninterruptible-instructions,GR49]]GR49:: `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, non-vector `kl.mv`, `kl.size` and `kl.avail` are architecturally _uninterruptible_: each either completes, raises an exception with only the effects that the state change rule of <<KLEE-error-architecture>> allows, or has no architecturally visible effect, writing no vector register, GPR, locker byte, KLIOBUF byte or memory.
+[[KLEE-GR-uninterruptible-instructions,GR50]]GR50:: `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, non-vector `kl.mv`, `kl.size` and `kl.avail` are architecturally _uninterruptible_: each either completes, raises an exception with only the effects that <<KLEE-exception-state-change>> allows, or has no architecturally visible effect, writing no vector register, GPR, locker byte, KLIOBUF byte or memory.
 An implementation achieves this by:
 +
 --
@@ -2292,9 +2286,9 @@ An implementation achieves this by:
 Software must not rely on whether an uninterruptible instruction has retired when a handler runs, and interacts with it only as Rule <<KLEE-GR-conflicting-access-rule>> prescribes.
 --
 
-GR50:: The architecture specifies no interruption point within `kl.setst`, nor within a single block-processing unit of `kl.exec`; an implementation may nevertheless make a long-running instance of either interruptible, as Rule <<KLEE-GR-long-running-no-data>> allows.
+GR51:: The architecture specifies no interruption point within `kl.setst`, nor within a single block-processing unit of `kl.exec`; an implementation may nevertheless make a long-running instance of either interruptible, as Rule <<KLEE-GR-long-running-no-data>> allows.
 
-[[KLEE-GR-resumability-options,GR51]]GR51:: When an interrupt or exception handler accesses an input or output of a preempted instruction, its locker, or any KLEE state that the instruction may affect, the implementation may choose among:
+[[KLEE-GR-resumability-options,GR52]]GR52:: When an interrupt or exception handler accesses an input or output of a preempted instruction, its locker, or any KLEE state that the instruction may affect, the implementation may choose among:
 
 . _Background completion:_ the hart waits for the instruction to complete when the handler accesses affected state. Not available for `kl.load`, `kl.store`, `kl.input` and `kl.output`, which are RISC-V memory instructions.
 . _Atomic completion_ of the instruction before any asynchronous interrupt is taken.
@@ -2304,7 +2298,7 @@ GR50:: The architecture specifies no interruption point within `kl.setst`, nor w
 interrupts, so that repeated interruption cannot prevent completion. Available for `kl.load`, `kl.store`, `kl.input` and `kl.output`, whose transfers are idempotent, and for the long-running instructions of Rule <<KLEE-GR-long-running-no-data>>; block-iterated `kl.exec`, `kl.derive` and vector `kl.mv` use option 3 or 4 (Rule <<KLEE-GR-block-iterated-instructions>>).
 On a synchronous exception raised by a component access, restart is not available: the instruction halts precisely, with `klstart` at the last prefix-complete point before the faulting byte, as in RVV 1.0 §3.7 (`vstart`) and the "`Precise vector traps`" subsection of the Exception Handling chapter.
 
-[[KLEE-GR-long-running-no-data,GR52]]GR52:: A `kl.exec`, `kl.setst` or `kl.derive` whose Machine semantics access no external memory, no vector register, no KLIOBUF, and no GPR other than scalar operands captured at issue (Rule <<KLEE-GR-conflicting-access-rule>>), may be long-running, for instance a scalar multiplication, a key generation, or a signature generation or verification.
+[[KLEE-GR-long-running-no-data,GR53]]GR53:: A `kl.exec`, `kl.setst` or `kl.derive` whose Machine semantics access no external memory, no vector register, no KLIOBUF, and no GPR other than scalar operands captured at issue (Rule <<KLEE-GR-conflicting-access-rule>>), may be long-running, for instance a scalar multiplication, a key generation, or a signature generation or verification.
 +
 On preemption, it may follow any behavior of <<KLEE-GR-resumability-options>> compatible with the requirements of the interrupt or exception.
 The implementation supports at least one of options 3, 4 and 5 of Rule <<KLEE-GR-resumability-options>>; under option 5 it guarantees and documents a minimum uninterrupted execution quantum, or a maximum number of consecutive restarts of one instruction, to avoid livelocks.
@@ -2316,7 +2310,7 @@ The implementation keeps every intermediate result needed for resumption in the 
 +
 A Machine may nevertheless keep in the architected Content a value that the algorithm draws, such as the `RndNum` of the ECC Machines (<<Zkl-ISA-machines.adoc#KLEE-ECC>>) or the `rnd` of ML-DSA (<<Zkl-ISA-machines.adoc#KLEE-PQC-ML-DSA>>), only because such a value depends on the architected state of the algorithm alone, not on the implementation; such a value is meaningful only while the progress field is non-zero (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-progress-discard>>), and is likewise discarded if the operation is restarted.
 
-[[KLEE-GR-conflicting-access-rule,GR53]]GR53:: Every option of Rule <<KLEE-GR-resumability-options>> obeys one rule: before the issuing hart performs a _conflicting access_, the in-flight operation must have completed, or have halted precisely with `klstart` set as <<KLEE-Memory-Model>> requires. A conflicting access is:
+[[KLEE-GR-conflicting-access-rule,GR54]]GR54:: Every option of Rule <<KLEE-GR-resumability-options>> obeys one rule: before the issuing hart performs a _conflicting access_, the in-flight operation must have completed, or have halted precisely with `klstart` set as <<KLEE-Memory-Model>> requires. A conflicting access is:
 +
 --
 * an ordinary load or store overlapping the memory region of the in-flight KLEE operation;
@@ -2328,11 +2322,11 @@ A Machine may nevertheless keep in the architected Content a value that the algo
 Rules <<KLEE-GR-resumability-options>> and <<KLEE-GR-conflicting-access-rule>> make asynchronous execution by the KLEE unit invisible to same-hart program order, as <<KLEE-Memory-Model>> requires. Beyond them, the architecture specifies only the allowed interruption points of its instructions and Machines.
 --
 
-[[KLEE-GR-which-resumable-instructions,GR54]]GR54:: The resumable instructions are `kl.exec`, vector `kl.mv`, `kl.derive`, `kl.load`, `kl.store`, `kl.input` and `kl.output`, which architecturally process their input units serially. On a precise halt, the completed prefix is committed, the failing and subsequent units have no effect, `klstart` records a prefix-complete point, and the instruction does not retire, `xepc` holding its address. If the instruction transitions its locker to an Error State after partial progress, the completed prefix remains committed, the unwritten part of its output window is zeroed (Rule <<KLEE-GR-usage-locker-error-state>>), and the instruction retires (<<KLEE-CSR-klstart>>).
+[[KLEE-GR-which-resumable-instructions,GR55]]GR55:: The resumable instructions are `kl.exec`, vector `kl.mv`, `kl.derive`, `kl.load`, `kl.store`, `kl.input` and `kl.output`, which architecturally process their input units serially. On a precise halt, the completed prefix is committed, the failing and subsequent units have no effect, `klstart` records a prefix-complete point, and the instruction does not retire, `xepc` holding its address. If the instruction transitions its locker to an Error State after partial progress, the completed prefix remains committed, the unwritten part of its output window is zeroed (Rule <<KLEE-GR-usage-locker-error-state>>), and the instruction retires (<<KLEE-CSR-klstart>>).
 
-[[KLEE-GR-block-iterated-instructions,GR55]]GR55:: For a block-iterated `kl.exec`, `kl.mv` or `kl.derive`, the fully processed blocks remain written or transferred, at both endpoints of a transfer, and `klstart` records their total byte count. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would commit, including the locker, `klstart`, and the `*llockerstatus` and effective `KLS` fields, so that context save, restore and resumption remain consistent. Implementations must honor `klstart` for `kl.exec` and `kl.derive`; a handler must not reset it to zero to force a restart, which is UNSPECIFIED and may transition the locker to _Invalid_.
+[[KLEE-GR-block-iterated-instructions,GR56]]GR56:: For a block-iterated `kl.exec`, `kl.mv` or `kl.derive`, the fully processed blocks remain written or transferred, at both endpoints of a transfer, and `klstart` records their total byte count. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would commit, including the locker, `klstart`, and the `*llockerstatus` and effective `KLS` fields, so that context save, restore and resumption remain consistent. Implementations must honor `klstart` for `kl.exec` and `kl.derive`; a handler must not reset it to zero to force a restart, which is UNSPECIFIED and may transition the locker to _Invalid_.
 
-[[KLEE-GR-memory-instructions,GR56]]GR56:: KLEE memory instructions are RISC-V memory instructions: one completes, and may retire or take a trap with `xepc` past it, only after every component access has passed address translation and permission checks and have been performed.
+[[KLEE-GR-memory-instructions,GR57]]GR57:: KLEE memory instructions are RISC-V memory instructions: one completes, and may retire or take a trap with `xepc` past it, only after every component access has passed address translation and permission checks and have been performed.
 Otherwise, as for vector memory operations, the implementation triggers a precise exception, with `klstart` at a prefix-complete point that the instruction allows, and raises the corresponding load/store page-fault, guest-page-fault or access-fault exception synchronously for that execution attempt.
 
 NOTE: After each `kl.load`, the caller checks whether the locker is _Unconfigured_. If it is, a handler has cleared it, and the software restarts the entire configuration operation, not only the `kl.load`.
@@ -2394,13 +2388,7 @@ nor forward it to another handler, an in-process one included, and that does not
   A handler that advances `xepc` past a usage instruction must write zeros to its output operand,
   as the instruction would have done had it performed no operation (Rule <<KLEE-GR-usage-locker-error-state>>).
 
-
-State change rule for exceptions:: An illegal-instruction exception, or a KLEE
-exception other than the fatal-error one, leaves the KLEE state unchanged, except for two changes that `kl.mgmt`
-makes even if it later raises an exception (<<KLEE-locker-management>>):
-a `kl.mgmt` that opens a provisioning or an import zeroizes the target locker and writes 32 to `klmanagedlocker`, and any `kl.mgmt` that
-passes the check of `klmanagedlocker` (<<KLEE-locker-management>>) clears `klstart`.
-A KLEE fatal-error exception resets the KLEE state (_Fatal Conditions_ below).
+//
 
 We now collect the error conditions, which the rest of the specification states where they arise.
 
@@ -2763,9 +2751,6 @@ Two obligations bind system software:
 * Clearing must not be its unconditional response at every context switch, since repeated restarts would prevent completion, for instance while a debugger single-steps the interrupted software.
 * A locker in State `kl_cfg_exporting` holds the only copy of its CC: unless system software terminates the interrupted software, it saves such a locker by a nested export (<<KLEE-nested-mgmt>>), and never clears it.
 
-{empty}
-(((Cryptographic Context,Metadata)))
-(((Cryptographic Context,Metadata,Header)))
 KLEE defines three external CC formats, each beginning with the 128-bit MDH of <<KLEE-Metadata>>:
 
 . the _Provisioning Input_ (PI), loaded into a locker to create a CC;
@@ -2792,6 +2777,34 @@ completing the outermost one brings the locker to State _Ready_.
 . An import of an SCC generated from a locker in a Valid State: the _State_ becomes `kl_cfg_importing`, and nested management operations lead to States `kl_cfg_exporting` and `kl_cfg_importing`.
 
 <<KLEE-SC-sealing-status>> gives the values of these States.
+
+Management operations may be nested, i.e., an exception may interrupt the sequence of operations to provision, import, or export a locker.
+The exception handler may initiate an export operation on the same locker, which we call a _nested export_, which is now in a Configuration State, generating a PCCC.
+Such a nested export may itself be interrupted.
+Later, an exception handler may initiate the restore of the same locker, resulting in a _nested import_, which may also be itself interrupted.
+We have following definitions:
+
+[[KLEE-nested-mgmt,Nested Management Operations]]
+Nested Management Operations:::
+A _nested_ management operation is one opened on a locker already under management;
+the _base operation_ of a group of nested operations is the outermost one, that is
+the last management operation opened on the locker while it was _not_ in a Configuration State.
+The two Configuration States whose mnemonics contain `ppi` ("`partial provisioning input`")
+are reached only by a nested operation whose base operation is a provisioning.
+A nested operation on an interrupted import or export of a locker in a Complete State reuses
+`kl_cfg_exporting` and `kl_cfg_importing`, and its base operation is that import or export.
+Clearing a locker undoes any nested management operation by resetting a locker to _Unconfigured_.
+
+[[KLEE-nested-state-base-types,Nested State Base Types]]
+Nested State Base Types:::
+The base type of a Configuration State, `pi` or `scc`, records whether the image the locker holds derives
+from a PI or an SCC, as the base operation determines: it is `pi` for
+`kl_cfg_provisioning`, `kl_cfg_ppi_exporting` and `kl_cfg_ppi_importing`, and `scc` for
+`kl_cfg_exporting` and `kl_cfg_importing`.
+It determines the length of the image
+(<<KLEE-instruction-size>>), which could not otherwise be recovered once nested management
+operations have overwritten the original _State_.
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2944,7 +2957,8 @@ The current privilege mode does not affect whether the SKS may resolve a SKID.
 A SKID other than the all-ones value that the SKS does not, or may not, resolve transitions the locker to Error State _Invalid_ (<<KLEE-Metadata-validity>>).
 Whenever a SKID is resolved, the MDH of the locker is narrowed by the policies that the SKS associates with the key (Metadata Narrowing Rule <<KLEE-MNR>>); if the narrowing fails, the locker transitions to Error State _Invalid_, as for a supplied MDH at provisioning.
 
-The SKS does not resolve the all-ones SKID (<<KLEE-KeyType-field>>).
+The SKS does not resolve the all-ones SKID, which is instead randomly generated (<<KLEE-KeyType-field>>).
+
 A SKID carried in an SCC is resolved only after the SCC has been authenticated.
 
 A multi-share implementation may copy System Key material from the SKS into the locker and expand it into multiple shares, but
@@ -3079,7 +3093,7 @@ Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if loc
 The operation makes the provisioned locker available to software by:
 
 ... for _KeyType_ = 1, generating the key of the all-ones SKID (<<KLEE-KeyType-field>>, Rule <<KLEE-GR-rbg-failure>>), or applying the SKID resolution of <<KLEE-system-keys>>;
-... converting the content of the locker into the format that the KLEE unit consumes internally;
+... converting the content of the locker into the format that the KLEE unit uses internally;
 ... performing the checks that the Machine attaches to the fields of the PI (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-check-on-write>>); a failed check transitions the
     locker as Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-config-data-error>> classifies it, to Error State _Invalid_ for a configuration error or to _Failure_ for a data
     error, in place of the step below; and
@@ -3100,7 +3114,7 @@ The image authenticated as ``AD[0]`` is the MDH held in the target locker, that 
 .... locker.MDH._State_ is set to `ml`._State_.
 .... The KLEE unit decrypts and authenticates the content of the locker.
 .... If authentication fails, the target locker transitions to Error State _Authentication Failed_, without an exception. Otherwise, if _KeyType_ = 1, the SKID is resolved, and the narrowing of <<KLEE-system-keys>> is applied.
-.... The KLEE unit converts the content of the locker into the format that it consumes internally.
+.... The KLEE unit converts the content of the locker into the format that it uses internally.
 .... The KLEE unit performs the checks that the Machine attaches to the fields that the import restores (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-check-on-write>>); a failed
 check transitions the locker as at the completion of a provisioning (Rule <<Zkl-ISA-machines.adoc#KLEE-MGR-config-data-error>>).
 This makes the locker available to software.
@@ -3245,10 +3259,8 @@ function SCC_KeyDeriv(key : bits(256), nonce : bits(96))
   foreach(i from 0 to 5) do:
     A[i] ← AESE256(key, nonce @ bin(i,32));
 
-  return struct {
-    enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0],
-    auth_key = A[1][63:0] @ A[0][63:0]
-  }
+  return struct { enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0],
+                  auth_key = A[1][63:0] @ A[0][63:0] }
 }
 ----
 
@@ -3293,10 +3305,10 @@ The SCC encryption and decryption functions, <<KLEE-SCC-GCM-SIV-enc>> and <<KLEE
 
 [NOTE]
 ====
-As in AES-GCM-SIV, bit 127 distinguishes tag inputs (0) from
-keystream inputs (1). The second domain separation bit, `sep`, in bit 126, costs one bit
-of security: the tag input carries 126 bits of the `POLYVAL`
-result rather than 127, and the keystream counter block 94 bits of the `SIV` rather than 95.
+As in AES-GCM-SIV, bit 127 separated tag inputs (0) from keystream inputs (1).
+The new domain separation bit, `sep` (bit 126), costs just one bit of security:
+the tag input carries 126 bits of the `POLYVAL` result rather than 127,
+and the keystream generator 94, not 95, bits of the `SIV`.
 ====
 
 // Both segments derive their keys from the same CSK and all-zero nonce.
