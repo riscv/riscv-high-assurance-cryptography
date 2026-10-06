@@ -3302,14 +3302,6 @@ The SCC encryption and decryption functions, <<KLEE-SCC-GCM-SIV-enc>> and <<KLEE
 * `N` is a 96-bit Nonce; and
 * `SIV` is a 128-bit SIV/tag.
 
-[NOTE]
-====
-As in AES-GCM-SIV, bit 127 separated tag inputs (0) from keystream inputs (1).
-The new domain separation bit, `sep` (bit 126), costs just one bit of security:
-the tag input carries 126 bits of the `POLYVAL` result rather than 127,
-and the keystream generator 94, not 95, bits of the `SIV`.
-====
-
 //
 
 [[KLEE-SCC-GCM-SIV-enc]]
@@ -3374,24 +3366,6 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 
 // ///////////////////////////////////////////////////////////////////////////
 
-=== Design Rationale for the Sealing Construction
-
-_This section is informative and non-normative._
-
-To reduce the payload, the construction omits the nonce, relying instead on the resistance of AES-GCM-SIV to nonce reuse and misuse; it remains secure for up to 2^64^ 128-bit blocks observed by an adversary.
-
-This suffices in practice for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK; to transfer CCs between domains, M-mode firmware can import an SCC under the CSK of the source domain, and re-export it under that of the target domain.
-
-The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the MDH, with _ADSDropped_ cleared in the authentication copy, of the Locality Secrets, and of the Content, in that order. In the `POLYVAL` pseudocode below, the input is an array of 128-bit blocks, absorbed in increasing index order.
-
-The Locality Secrets enter the AEAD as _associated data_, rather than being mixed into the
-Context Sealing Key by a KDF. Both approaches bind the SCC to the Locality set, but including the Locality Secrets in the associated data is computationally less expensive:
-POLYVAL needs one `Montmul` per 128-bit block, significantly faster than most KDFs, and a change of
-Locality set requires no re-derivation of `enc_key` and `auth_key`.
-Distinct Locality sets lead to the same SIV with probability 2^-126^.
-
-// ///////////////////////////////////////////////////////////////////////////
-
 [[KLEE-SCC-export]]
 === Generation of an SCC from a Fully Configured Locker
 
@@ -3431,17 +3405,6 @@ After `kl.clearads`, a fully configured locker has _AuxDataLen_ = 0 and _ADSDrop
 // If _AuxDataLen_ = 0, then `SIV2` and `IMPQUAL` are not generated, and therefore
 // `acesiv2l`/`acesiv2h` and `aceiql`/`aceiqh` are not written to.
 // They may contain stale values, but this is not an issue as they are not exported to memory in this case.
-
-[NOTE]
-====
-A locker in an Error State is not exported by this procedure (Rule <<KLEE-GR-error-state-locker-is-only-MDH>>).
-====
-
-[IMPORTANT]
-====
-Taking `SIV` as ``AD2[1]`` binds the two payloads: `SIV2` and the keystream of the second segment change whenever the
-first payload changes, so an attacker cannot graft the implementation-specific ADS of one SCC onto the architected part of another.
-====
 
 [NOTE]
 ====
@@ -3493,12 +3456,28 @@ The `kl.mgmt Kd|K(Xd), #kl_cfg_importing` opening the import performs steps 1 to
 If the optional implementation-specific ADS makes the SCC too large for a locker, or is incompatible, the implementation ignores it and keeps the architected content: only a failure of the first authentication (`SIV`) rejects the entire SCC.
 ====
 
+// ///////////////////////////////////////////////////////////////////////////
+
+=== Design Rationale for the Sealing Construction
+
+_This section is informative and non-normative._
+
+To reduce the size of the payload and allow the system to cache the encryption and authentication keys, the construction omits the nonce and relies on the resistance of AES-GCM-SIV to nonce reuse and misuse. It remains secure for up to O(2^64^) 128-bit blocks observed by an adversary, which suffices for client applications. On cloud servers, each virtual machine and supervisor domain should use its own CSK; to transfer a CC between domains, M-mode firmware imports the SCC under the CSK of the source domain and re-exports it under that of the target domain.
+
+The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash (<<KLEE-SCC-POLYVAL>>) of the MDH, with _ADSDropped_ cleared in the authenticated copy, of the Locality Secrets, and of the Content, in that order.
+The Locality Secrets thus enter the AEAD as _associated data_ rather than being mixed into the Context Sealing Key by a KDF. Both approaches bind the SCC to the Locality set, but associated data is cheaper: POLYVAL costs one `Montmul` per 128-bit block, far less than most KDFs, and a change of Locality set requires no re-derivation of `enc_key` and `auth_key`. Distinct Locality sets yield the same SIV with probability 2^-126^.
+
+Taking `SIV` as ``AD2[1]`` binds the two payloads: `SIV2` and the keystream of the second segment change whenever the first payload changes, so an attacker cannot graft the implementation-specific ADS of one SCC onto the architected part of another.
+
+As in AES-GCM-SIV, bit 127 separates tag inputs (0) from keystream inputs (1). The additional domain separation bit `sep` (bit 126) costs one bit of security: the tag input carries 126 bits of the `POLYVAL` result instead of 127, and the keystream generator 94 bits of the `SIV` instead of 95. Without it, the keystreams of the two segments would coincide only with vanishing probability, so the construction would still be secure; with it, they differ by design.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-error-state-transfer]]
 === Export and Import of a Locker in an Error State
 
 A locker in an Error State holds only its MDH (Rule <<KLEE-GR-clear-locker-content-error-state>>).
+No KLF capacity is allocated for the locker, and the Machine definition fields are ignored.
 There is nothing to encrypt and KLEE also does not authenticate it, since it would be easy to forge
 a valid authenticated MDH in the current environment.
 Neither direction produces an SCC or a PCCC, or opens a management operation.
@@ -3508,7 +3487,7 @@ and, since they issue no `kl.load` or `kl.store`, take no part in resumption.
 For such a locker and its exported image, only the _State_ field of the MDH is checked; the other fields are not checked for validity (<<KLEE-Metadata-validity>>).
 
 *Exporting* a locker in an Error State takes two steps, and no `kl.mgmt`:
---
+
 . Read the _State_ field with `kl.getst` (<<KLEE-instruction-getst>>), and find an Error State.
 . Read the MDH with `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>), and store its 16 bytes
   to memory; `kl.size` reports 16.
@@ -3516,22 +3495,17 @@ For such a locker and its exported image, only the _State_ field of the MDH is c
 A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on a locker in an Error State is permitted but
 useless: it leaves the locker unchanged and opens no management operation; only its common steps take effect, `klmanagedlocker` becoming 32 and `klstart` 0
 (<<KLEE-locker-management>>).
---
 
 *Importing* such an image takes one step:
---
+
 . Issue `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH
   as the auxiliary operand, carried whole by Form C or D, or by a Form A from the KLIOBUF. The instruction:
   .. zeroizes the locker it names, and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLEE-GR-clear-locker-content-error-state>>);
   .. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
 
-The locker then holds only its MDH: no Machine is selected for execution, and no KLF capacity is allocated, so no check of the Machine or of the KLF capacity can fail this import.
-The instruction is uninterruptible
-  (Rule <<KLEE-GR-uninterruptible-instructions>>), so no intermediate state of the locker is ever observable.
+The instruction is uninterruptible (Rule <<KLEE-GR-uninterruptible-instructions>>), so no intermediate state of the locker is ever observable.
 No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one performs no operation (Rule <<KLEE-GR-cleared-under-management>>).
 The `SIV`, `SIV2` and `IMPQUAL` registers take no part in either path, and need not be saved for it.
---
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3605,31 +3579,30 @@ The interrupted software then finds the locker _Unconfigured_ at its next check,
 [[KLEE-CSK-requirements]]
 == Architectural Requirements on the Context Sealing Key
 
-The KLEE unit operates only with a configured Context Sealing Key (CSK). Without an active CSK, every KLEE instruction and KLEE CSR access raises a KLEE missing-CSK exception, in all but two cases: accesses to the `mklcsk` CSR group and to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLEE-CSR-locality-groups>>), which are configured independently of the CSK; and reads of the identification CSRs `klmvendorid`, `klmarchid`, `klmimpid` and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>), so that firmware can identify the KLEE unit without configuring it.
+The KLEE unit operates only with a configured Context Sealing Key (CSK). Without an active CSK, every KLEE instruction and KLEE CSR access raises a KLEE missing-CSK exception, with two exceptions: accesses to the `mklcsk` CSR group and to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLEE-CSR-locality-groups>>), which are configured independently of the CSK; and reads of the identification CSRs `klmvendorid`, `klmarchid`, `klmimpid` and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>), so that firmware can identify the KLEE unit before configuring it.
 
 A CSK is set in one of four mutually exclusive ways:
 
 . a value that M-mode programs through the `mklcsk` CSR group (<<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>);
-. a value configured by a separate secure HW block exclusive to M-mode (e.g., Caliptra cite:[caliptra]), or a port to one, which exports CSK values through a dedicated interface based on public-key encryption;
+. a value configured by a secure hardware block exclusive to M-mode (e.g., Caliptra cite:[caliptra]), or a port to one, which exports CSK values through a dedicated interface based on public-key encryption.
+  Only M-mode may request the block to configure the CSK of its hart, by a handle or a wrapped key; the clear key must not be exposed to any software, M-mode included.
+  Addressing and key transport are platform-specific and outside the scope of this specification;
 . a fixed, hardwired value, generated at manufacturing time, per die or shared across batches; or
 . a value generated at boot by a secure RBG (<<KLEE-Prerequisites>>), and accessible to no software.
+  All harts of a well-defined subsystem of an SoC share it, and cannot exchange SCCs with other subsystems; it survives the reset or fatal condition of a single hart, and is regenerated only at the power-on reset of the subsystem.
 
 The third and fourth models suit mainly specialized embedded deployments: a hardwired CSK cannot be reconfigured or revoked, and a boot-generated CSK cannot preserve SCCs across power loss.
-Under the fourth model, all harts of a well-defined subsystem of an SoC share a CSK, and cannot exchange SCCs with other subsystems; the CSK survives the reset or fatal condition of a single hart, and is regenerated only at the power-on reset of the subsystem.
-
-Under the second model, only M-mode may request the secure hardware block to configure the CSK of its hart, by a handle or wrapped key; the clear key must not be exposed to any software, M-mode included.
-Addressing and key transport are platform-specific, and outside the scope of this specification.
 
 Under the third model the KLEE unit is available at once; under the others, only after a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>), under the first and second models including the configurable CSK, which leaves the unit unavailable until the CSK is re-established.
 
-NOTE: When the CSK is shared across devices, CCs meant to be device-bound must name _ChipScrt_ or _DevScrt_ in their _Locality_.
-
-No software may ever read a CSK value in clear, except M-mode under the first model.
+No software may read a CSK value in clear, except M-mode under the first model.
 //An implementation that permits CSK reprogramming via the `mklcsk` CSR group must follow the activation rules in <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>.
+
+NOTE: When the CSK is shared across devices, CCs meant to be device-bound must name _ChipScrt_ or _DevScrt_ in their _Locality_.
 
 [IMPORTANT]
 ====
-For the SCCs of a process to remain importable when it migrates between harts, the destination hart must use the CSK of the source; the OS and hypervisor should ensure that M-mode establishes it on the destination hart, by a platform-dependent mechanism outside the scope of this specification.
+For the SCCs of a process to remain importable when it migrates between harts, the destination hart must use the CSK of the source; the OS and hypervisor should ensure that M-mode establishes it there, by a platform-dependent mechanism outside the scope of this specification.
 Under the fourth model, this is possible only within the subsystem that shares the CSK.
 Unless software handles the differences, it may migrate a process only between harts whose KLEE units have identical `klmvendorid`, `klmarchid`, `klmimpid` and `klmaxiobuflen`, and implement the same extensions and Machines.
 ====
