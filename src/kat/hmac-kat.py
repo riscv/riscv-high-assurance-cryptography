@@ -202,7 +202,7 @@ class Hmac:
         s.keep_cumul, s.max_len = keep_cumul, 0  # max_len: none enforced
         s.reset(KL_STATE_UNCONFIGURED)
 
-    def reset(s, st=KL_STATE_INVALID):  # SGR11 for an Error State
+    def reset(s, st=KL_STATE_INVALID):  # GR21 for an Error State
         s.st, s.K0, s.has_key = st, 0, False
         s.h.ready()
         s.h.state = 0
@@ -245,16 +245,16 @@ class Hmac:
         h = s.h
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
-                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # SGR5: restarts the load
+                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR15: restarts the load
                    (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MGR11: K0 loaded
                    (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): True}  # none from _Hash_Output_ (MGR17)
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
-            raise IllegalInstruction  # SGR8
+            raise IllegalInstruction  # GR18
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
         elif s.st == KL_STATE_UNCONFIGURED:
-            raise IllegalInstruction  # SGR16
+            raise IllegalInstruction  # GR26
         elif s.st in ERROR_STATES:
             pass
         elif immed == KL_STATE_READY:  # K0 kept, unless its load was left incomplete (MGR9)
@@ -286,7 +286,7 @@ class Hmac:
         if s.st == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction
         if s.st in ERROR_STATES:
-            return 'noop', bytes(nbytes)  # SGR15
+            return 'noop', bytes(nbytes)  # GR25
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
         if form == 'B' and s.st == KL_STATE_SET_KEY:
             r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
@@ -301,10 +301,10 @@ class Hmac:
             if p:  # not an interruption point: the MAC reaches _Success_ before any
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # SGR15
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR25
             return 'retired', s.output(nbytes, prior)
         else:
-            r = 'invalid'  # SGR6, SGR10, MGR1
+            r = 'invalid'  # GR16, GR20, MGR1
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -322,18 +322,18 @@ class Hmac:
         return v2b(OUT, nbytes)
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, DER6)
-    or NIK `K0` in _Set_Key_ (DER6 key derivation, unrestricted), loaded through process_VLI as by kl.exec (DER8)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR40)
+    or NIK `K0` in _Set_Key_ (GR40 key derivation, unrestricted), loaded through process_VLI as by kl.exec (GR42)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = dst.st == KL_STATE_SET_KEY
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, key or dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # DER1 items 1-2
+        c.reset()  # GR35 items 1-2
     if bad:
         return 'refused'
     if key and min(length, (src.d - src.h.block_base) // 8) < dst.b // 8:
-        dst.reset()  # DER1 item 5
+        dst.reset()  # GR35 item 5
         return 'refused'
     if not length:
         return 'noop'
@@ -477,14 +477,14 @@ for label, variant, ops in [
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
         ('NIK kl.exec after K0 is complete (MGR9)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
-        ('kl.exec in _Ready_ (SGR6)', 'KIP', (B(data7),)),
+        ('kl.exec in _Ready_ (GR16)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (MGR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
         ('same-State kl.setst to _Hash_Output_ (MGR17)', 'KIP', (A, B(data7), O, O)),
-        ('kl.exec in _Success_ (SGR10), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
+        ('kl.exec in _Success_ (GR20), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (SGR15)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR25)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
 cl, res = fresh(key=key7, ops=(A, B(data7), O)), []
 for ks in (32, 40, 4):
@@ -494,7 +494,7 @@ check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klst
       '_Invalid_, [4, 32) zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
 cl = fresh(key=key7, ops=(A,))
-check('kl.setst #kl_state_success raises, State kept (SGR8)',
+check('kl.setst #kl_state_success raises, State kept (GR18)',
       raises(cl.setst, KL_STATE_SUCCESS) and cl.st == KL_STATE_HASH_ABSORB)
 cl = fresh(variant='NIK', key=None)
 r = run(cl, SK, B(K0_7 + b'\xde\xad\xbe\xef' * 4))[0]
@@ -518,13 +518,13 @@ cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
 check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MGR9)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
 run(cl, SK)
-check('NIK same-State kl.setst to _Set_Key_ restarts the load (SGR5): K0 and cumul_len zeroed',
+check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR15): K0 and cumul_len zeroed',
       (cl.st, cl.K0, cl.h.cumul_len) == (KL_STATE_SET_KEY, 0, 0))
 check('... and a full reload gives the RFC 4231 tag', None, run(cl, B(K0_7), A, B(data7), O, C(32))[1], TAG7)
 cl = fresh(key=key7)
 check('KLLEN > d: tag, excess bits cleared, _Success_', None,
       (run(cl, A, B(data7), O, C(40))[1], cl.st), (TAG7 + bytes(8), KL_STATE_SUCCESS))
-check('KIP _Success_ -> _Ready_ keeps K0: second tag (SGR9)', None, run(cl, R, A, B(data7), O, C(32))[1], TAG7)
+check('KIP _Success_ -> _Ready_ keeps K0: second tag (GR19)', None, run(cl, R, A, B(data7), O, C(32))[1], TAG7)
 
 section('Serialized Content')
 for name in HASHES:
@@ -555,7 +555,7 @@ check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb, between "prefix" and "suffix
 for length in (64, 80):
     src, dst = fresh('SHA-512', key=k2, ops=(A, B(m2), O)), fresh(variant='NIK', key=None, ops=(SK,))
     r = kl_derive(dst, src, length)
-    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (DER6 key derivation): b/8 = 64 B, '
+    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR40 key derivation): b/8 = 64 B, '
           'load complete (cumul_len = b), source _Success_; then tags under K0 = tag',
           (r, dst.h.cumul_len, src.st) == ('done', 512, KL_STATE_SUCCESS)
           and run(dst, A, B(data7), O, C(32))[1] == ref_hmac('SHA-256', TAG2_512, data7))
@@ -564,8 +564,8 @@ for s512, variant, ops, length in [(1, 'NIK', (), 64), (1, 'KIP', (), 64), (1, '
     src = fresh('SHA-512' if s512 else 'SHA-256', key=k2, ops=(A, B(m2), O))
     dst = fresh(variant=variant, key=key7 if variant == 'KIP' else None, ops=(R, *ops))
     res.append((kl_derive(dst, src, length), dst.st, src.st, src.h.block_base))
-check('K0 destination: NIK/KIP in _Ready_ (DER1 item 2), length 32 < b/8, source output 32 < b/8 '
-      '(DER1 item 5): destination _Invalid_, source untouched', None, res,
+check('K0 destination: NIK/KIP in _Ready_ (GR35 item 2), length 32 < b/8, source output 32 < b/8 '
+      '(GR35 item 5): destination _Invalid_, source untouched', None, res,
       [('refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0)] * 4)
 
 section('Negative controls')

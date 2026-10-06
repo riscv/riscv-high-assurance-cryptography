@@ -71,7 +71,7 @@ def build_pi(cipher, key_field, policy=POL_BOTH, keytype=0, **mdh):
         + v2b(key_field, pad16(k))
 
 def narrow(dst, src):
-    """<<KLEE-DER-narrowing>>: the narrowed destination MDH, or None (destination Invalid)."""
+    """<<KLEE-GR-narrowing>>: the narrowed destination MDH, or None (destination Invalid)."""
     u, us = fld(dst, 'UsagePolicy'), fld(src, 'UsagePolicy')
     lo, ls = fld(dst, 'Locality'), fld(src, 'Locality')
     if fld(dst, 'SCProtection') < fld(src, 'SCProtection'):
@@ -94,7 +94,7 @@ class EcbLocker:
     cipher = property(lambda s: CIPHERS[CIPHER_OF[fld(s.mdh, 'Machine')]])
     key_width = property(lambda s: 64 if s.keytype == 1 else s.cipher[2])
 
-    def invalidate(self):                     # <<KLEE-SGR-clear-locker-content-error-state>>
+    def invalidate(self):                     # <<KLEE-GR-clear-locker-content-error-state>>
         self.mdh, self.key, self.skid = put(self.mdh, 'State', KL_STATE_INVALID), None, None
 
     def _install(self, field, importing):     # <<KLEE-KeyType-field>>, <<KLEE-MVR-open>>
@@ -126,7 +126,7 @@ class EcbLocker:
 
     def setst(self, immed):
         if self.state in ERROR_STATES:
-            return                            # <<KLEE-SGR-usage-locker-error-state>>
+            return                            # <<KLEE-GR-usage-locker-error-state>>
         pol = fld(self.mdh, 'MachinePolicy')
         if (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
@@ -141,7 +141,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # SGR6; MGR2 (<<KLEE-CSR-klstart>>: length first)
+            self.invalidate()                 # GR16; MGR2 (<<KLEE-CSR-klstart>>: length first)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
@@ -159,21 +159,21 @@ class EcbLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>);
-        `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (DER5) or 'drbg' (DER7)."""
-        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: DER1 items 1-2
+        `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (GR39) or 'drbg' (GR41)."""
+        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR35 items 1-2
             return src.invalidate()
         kind, data, src_mdh = src
         n = self.cipher[2] // 8
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # DER1 item 2 (DER4), item 5
-        if kind == 'shared':                  # restricted: DER2; DRBG is unrestricted: DER3
+            return self.invalidate()          # GR35 item 2 (GR38), item 5
+        if kind == 'shared':                  # restricted: GR36; DRBG is unrestricted: GR37
             m = narrow(self.mdh, src_mdh)
             if m is None:
                 return self.invalidate()
             self.mdh = m
-        self.key = b2v(data[:n])              # exactly dest_length bytes (DER1 item 5, DER8)
+        self.key = b2v(data[:n])              # exactly dest_length bytes (GR35 item 5, GR42)
         return True
 
 def blocks_value(data):                       # cat() lists the most significant block first
@@ -289,13 +289,13 @@ out = run(cl, pt)[0]
 cl.setst(DEC)
 eq("Encrypt -> Decrypt directly (from any valid state)", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
 cl.setst(DEC)
-eq("same-State kl.setst (SGR5)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
+eq("same-State kl.setst (GR15)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
 cl.setst(RDY)
-eq("back to Ready (SGR4)", cl.state, RDY)
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR6, SGR11, SGR15)",
+eq("back to Ready (GR14)", cl.state, RDY)
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR16, GR21, GR25)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)
-eq("Invalid locker: kl.setst and kl.exec perform no operation (SGR15)", (cl.state, cl.exec(v, 512)[0]),
+eq("Invalid locker: kl.setst and kl.exec perform no operation (GR25)", (cl.state, cl.exec(v, 512)[0]),
    (INV, 0))
 for pol, immed, want in ((POL_DEC, DEC, DEC), (POL_DEC, ENC, INV), (POL_ENC, DEC, INV),
                          (POL_BOTH, KL_STATE_OPERATE, INV)):
@@ -307,7 +307,7 @@ eq("MGR2: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[
    (0, INV))
 eq("Form D substitution (kliobuftop = 64): output in place of input",
    v2b(new_cl(ci, k, state=ENC).exec(b2v(pt), 512)[0], 64).hex(), c)
-for q in (1, 2, 3):                           # <<KLEE-IRR-block-iterated-instructions>>
+for q in (1, 2, 3):                           # <<KLEE-GR-block-iterated-instructions>>
     cl = new_cl(ci, k, state=ENC)
     part, ks = run(cl, pt, halt_after=q)
     res, ks2 = cl.exec(b2v(part), 512, klstart=ks)
@@ -357,7 +357,7 @@ eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, N
 cl.import_scc(put(put(put(m192, 'KeyType', 0), 'State', ENC), 'StateExtension', 1), H(SP38A_F1[1][2]))
 eq("SCC in Encrypt with a StateExtension ECB does not use -> Invalid", (cl.state, cl.key), (INV, None))
 
-section("kl.derive into `key` (destination in Ready; DER1-DER5, DER7, DER8)")
+section("kl.derive into `key` (destination in Ready; GR35-GR39, GR41, GR42)")
 _, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 secret = H(k) + H("a5" * 8)
 SRC = mdh_pack(UsagePolicy=0b00010, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
@@ -376,17 +376,17 @@ def derived(kind='shared', length=32, data=secret, state=None, keytype=0, src=SR
 for kind, length in (('shared', 32), ('shared', 24), ('drbg', 32)):
     eq(f"{kind}, length {length} >= 24: exactly 24 bytes become the key, F.1.3",
        derived(kind, length)[:3], (True, ENC, c))
-eq("shared secret (restricted, DER2): UsagePolicy, Locality, ExpirationDate narrowed",
+eq("shared secret (restricted, GR36): UsagePolicy, Locality, ExpirationDate narrowed",
    narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
-eq("DRBG output (unrestricted, DER3): destination MDH not narrowed",
+eq("DRBG output (unrestricted, GR37): destination MDH not narrowed",
    narrowed(derived('drbg')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
-for label, kw in (("length 16 < 24 (DER1 item 5, no zero-fill)", dict(length=16)),
-                  ("length 0 (DER1 item 5 fails before DER8)", dict(length=0)),
-                  ("source field of 16 bytes < 24 (DER1 item 5)", dict(data=secret[:16])),
-                  ("destination in Encrypt (DER1 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (DER4, DER1 item 2)", dict(keytype=1)),
-                  ("source SCProtection above destination (DER2)", dict(src=put(SRC, 'SCProtection', 2))),
-                  ("differing Boot Session entries (DER2)", dict(src=put(SRC, 'Locality', 0b0_10_00_00)))):
+for label, kw in (("length 16 < 24 (GR35 item 5, no zero-fill)", dict(length=16)),
+                  ("length 0 (GR35 item 5 fails before GR42)", dict(length=0)),
+                  ("source field of 16 bytes < 24 (GR35 item 5)", dict(data=secret[:16])),
+                  ("destination in Encrypt (GR35 item 2)", dict(state=ENC)),
+                  ("KeyType 1 destination (GR38, GR35 item 2)", dict(keytype=1)),
+                  ("source SCProtection above destination (GR36)", dict(src=put(SRC, 'SCProtection', 2))),
+                  ("differing Boot Session entries (GR36)", dict(src=put(SRC, 'Locality', 0b0_10_00_00)))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
 src_cl, dst_cl = new_cl(ci, k), new_cl(ci, "00" * 24)
 dst_cl.derive_key(src_cl, 24)

@@ -86,7 +86,7 @@ class Sha2:
         s.bswap_words, s.klstart_bits = bswap_words, klstart_bits
         s.reset(KL_STATE_UNCONFIGURED)
 
-    def reset(s, st=KL_STATE_INVALID):  # SGR11 for an Error State
+    def reset(s, st=KL_STATE_INVALID):  # GR21 for an Error State
         s.st, s.state, s.block, s.block_base = st, 0, 0, 0
         if st == KL_STATE_READY:
             s.state = sum(bswap(bin_(h, s.w), s.w // 8) << (i * s.w) for i, h in enumerate(IV[s.name]))
@@ -112,12 +112,12 @@ class Sha2:
 
     def setst(s, immed, form='A'):  # <<KLEE-instruction-setst>>
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
-            raise IllegalInstruction  # SGR8
+            raise IllegalInstruction  # GR18
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
         elif s.st == KL_STATE_UNCONFIGURED:
-            raise IllegalInstruction  # SGR16
+            raise IllegalInstruction  # GR26
         elif s.st in ERROR_STATES:
             pass
         elif immed == KL_STATE_READY:
@@ -137,7 +137,7 @@ class Sha2:
         if s.st == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction
         if s.st in ERROR_STATES:
-            return 'noop', bytes(nbytes)  # SGR15
+            return 'noop', bytes(nbytes)  # GR25
         if s.st == KL_STATE_HASH_OUTPUT and form == 'C':
             p, prior = HART.klstart, prior or bytes(nbytes)
             if p >= nbytes:
@@ -146,10 +146,10 @@ class Sha2:
             if p:  # not an interruption point: a hash reaches _Success_ before any
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # SGR15
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR25
             return 'retired', s.output(nbytes, prior)
         r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
-            s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # SGR6, SGR10, MGR1
+            s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR16, GR20, MGR1
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -188,24 +188,24 @@ class KeyDest:
     def reset(s): s.st, s.key = KL_STATE_INVALID, None
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, DER6)
-    or a KeyDest (DER6 key derivation, unrestricted)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR40)
+    or a KeyDest (GR40 key derivation, unrestricted)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = isinstance(dst, KeyDest)
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # DER1 items 1-2
+        c.reset()  # GR35 items 1-2
     if not bad and key:
         if min(length, (src.t - src.block_base) // 8) < dst.n:
-            dst.reset()  # DER1 item 5
+            dst.reset()  # GR35 item 5
             return 'refused'
         dst.key = src.exec('C', nbytes=dst.n)[1]
         return 'done'
     if bad or not length:
         return 'refused' if bad else 'noop'
-    dst.exec('B', src.exec('C', nbytes=length)[1])  # DER8: each endpoint advances as kl.exec would
+    dst.exec('B', src.exec('C', nbytes=length)[1])  # GR42: each endpoint advances as kl.exec would
     return 'done'
 
 # ---------------------------------------------------------------- vectors
@@ -322,7 +322,7 @@ PAD_ABC = M_ABC + fips_pad(3, 32)
 DIG_ABC = bytes.fromhex(VEC['SHA-256'][M_ABC])
 for label, ops in [
         ('entering _Hash_Output_ with block_base != 0', (A, B(b'abc'), O)),
-        ('kl.exec in _Ready_ (SGR6)', (B(PAD_ABC),)),
+        ('kl.exec in _Ready_ (GR16)', (B(PAD_ABC),)),
         ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
         ('same-State kl.setst to _Hash_Output_ (MGR17)', (A, B(PAD_ABC), O, O)),
@@ -330,11 +330,11 @@ for label, ops in [
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (MGR1), output zeroed', (A, C(16))),
         ('Form B kl.exec in _Hash_Output_ (MGR1)', (A, B(PAD_ABC), O, B(bytes(64)))),
-        ('kl.exec in _Success_ (SGR10), output zeroed', (A, B(PAD_ABC), O, C(32), C(32)))]:
+        ('kl.exec in _Success_ (GR20), output zeroed', (A, B(PAD_ABC), O, C(32), C(32)))]:
     cl = Sha2().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (SGR15)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR25)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
 cl, res = outputting(), []
 for ks in (32, 40, 4):
@@ -344,16 +344,16 @@ check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klst
       '_Invalid_, [4, 32) zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
 cl = absorbing()
-check('kl.setst #kl_state_success raises, State kept (SGR8)',
+check('kl.setst #kl_state_success raises, State kept (GR18)',
       raises(cl.setst, KL_STATE_SUCCESS) and cl.st == KL_STATE_HASH_ABSORB)
 cl.setst(KL_STATE_UNCONFIGURED)
-check('kl.clear; a later kl.exec raises (SGR16)',
+check('kl.clear; a later kl.exec raises (GR26)',
       raises(cl.exec, 'B', bytes(4)) and cl.st == KL_STATE_UNCONFIGURED and cl.state == 0)
 cl = outputting('SHA-224')
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(32)(cl)[1], cl.st),
       (bytes.fromhex(VEC['SHA-224'][M_ABC]) + bytes(4), KL_STATE_SUCCESS))
 cl = outputting()
-check('_Success_ -> _Ready_ (SGR9), second digest', None,
+check('_Success_ -> _Ready_ (GR19), second digest', None,
       run(cl, C(32), R, A, B(PAD_ABC), O, C(32))[1], DIG_ABC)
 cl, ready = absorbing('SHA-384', (M2_64 + fips_pad(len(M2_64), 64))[:132]), Sha2('SHA-384').provision()
 dirty = cl.block_base and cl.state != ready.state
@@ -383,12 +383,12 @@ check('destination in _Ready_: refused, destination _Invalid_, source untouched'
       kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID
       and (src.st, src.block_base) == (KL_STATE_HASH_OUTPUT, 0))
 dst = absorbing()
-check('length 0: nothing transferred, no State change (DER8)', kl_derive(dst, src, 0) == 'noop'
+check('length 0: nothing transferred, no State change (GR42)', kl_derive(dst, src, 0) == 'noop'
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0) and C(32)(src)[1] == DIG_ABC)
 
 src, dst, s224, d224 = outputting(), KeyDest(32), outputting('SHA-224'), KeyDest(32)
-check('DER6 key derivation: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
-      'a 32-byte key (DER1 item 5): destination _Invalid_, source untouched', None,
+check('GR40 key derivation: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
+      'a 32-byte key (GR35 item 5): destination _Invalid_, source untouched', None,
       (kl_derive(dst, src, 40), dst.key, src.st, kl_derive(d224, s224, 32), d224.st, s224.st),
       ('done', DIG_ABC, KL_STATE_SUCCESS, 'refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
 
