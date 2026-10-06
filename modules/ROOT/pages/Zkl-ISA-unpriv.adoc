@@ -2135,7 +2135,6 @@ Once cleared, a locker stays _Unconfigured_ until software reopens it, so the ch
 [[KLEE-GR-opening-locker-when,GR29]]GR29:: _When a locker can be opened for import or export:_
 Opening a locker for provisioning or import, and executing `kl.clear`, is allowed in every State, since the
 locker is zeroized first; opening it for export is allowed in every Complete or Configuration State, and performs no operation on an _Unconfigured_ locker (Rule <<KLEE-GR-cleared-under-management>>).
-+
 No Machine may set conditions under which a locker can be opened for export or import, or cleared.
 
 [[KLEE-GR-config-instructions-config-state,GR30]]GR30:: The following configuration instructions, which Usage Control policies do not gate, are also allowed on a locker in a Configuration State:
@@ -2187,7 +2186,7 @@ Any further transfer that a Machine defines must respect these restrictions.
 into a key field of a symmetric Machine, a private key field of a public-key Machine, or the `kl.exec` input of a hash, MAC or XOF is a _restricted transfer_.
 It is admitted whenever both endpoints are defined (Rule <<KLEE-GR-checks>> items 1 and 2); a key field receives the first `dest_length` bytes of the secret (Rule <<KLEE-GR-checks>> item 5).
 
-[[KLEE-GR-exec-implies-unrestricted,GR40]]GR40:: The _`kl.exec` output_ of a source locker, listed in <<Zkl-ISA-machines.adoc#KLEE-derive-endpoints>> as a source endpoint, is the data that the Form C `kl.exec` instructions permitted in its current _State_ would emit; the tag of an AEAD Machine is not such output, unless that Machine explicitly allows it.
+[[KLEE-GR-exec-implies-unrestricted,GR40]]GR40:: The `kl.exec` _output_ of a source locker, listed in <<Zkl-ISA-machines.adoc#KLEE-derive-endpoints>> as a source endpoint, is the data that the Form C `kl.exec` instructions permitted in its current _State_ would emit; the tag of an AEAD Machine is not such output, unless that Machine explicitly allows it.
 The `kl.exec` output can always be moved, as an _unrestricted transfer_, into a destination endpoint that Form B `kl.exec` instructions load in the current _State_ of the destination, such as the `kl.exec` input of a hash function, MAC or XOF, or the `Scalar` of an ECC Machine in State _Set_Scalar_: the transfer is a shortcut for `kl.exec` instructions that software could issue on both lockers.
 +
 NOTE: Such transfers are allowed and unrestricted because in these cases the source data can be obtained
@@ -2318,7 +2317,7 @@ A Machine may nevertheless keep in the architected Content a value that the algo
 * a read or write of a GPR or vector register that the operation writes; or
 * a write to a vector register or to the KLIOBUF that the operation reads, including the issue of a `kl.input` targeting it. Scalar operands in GPRs are captured at issue, so accessing them is not a conflicting access.
 
-Rules <<KLEE-GR-resumability-options>> and <<KLEE-GR-conflicting-access-rule>> make asynchronous execution by the KLEE unit invisible to same-hart program order, as <<KLEE-Memory-Model>> requires. Beyond them, the architecture specifies only the allowed interruption points of its instructions and Machines.
+This Rule and Rule <<KLEE-GR-resumability-options>> make asynchronous execution by the KLEE unit invisible to same-hart program order, as <<KLEE-Memory-Model>> requires. Beyond them, the architecture specifies only the allowed interruption points of its instructions and Machines.
 --
 
 [[KLEE-GR-which-resumable-instructions,GR55]]GR55:: The resumable instructions are `kl.exec`, vector `kl.mv`, `kl.derive`, `kl.load`, `kl.store`, `kl.input` and `kl.output`, which architecturally process their input units serially. On a precise halt, the completed prefix is committed, the failing and subsequent units have no effect, `klstart` records a prefix-complete point, and the instruction does not retire, `xepc` holding its address. If the instruction transitions its locker to an Error State after partial progress, the completed prefix remains committed, the unwritten part of its output window is zeroed (Rule <<KLEE-GR-usage-locker-error-state>>), and the instruction retires (<<KLEE-CSR-klstart>>).
@@ -2326,10 +2325,10 @@ Rules <<KLEE-GR-resumability-options>> and <<KLEE-GR-conflicting-access-rule>> m
 [[KLEE-GR-block-iterated-instructions,GR56]]GR56:: For a block-iterated `kl.exec`, `kl.mv` or `kl.derive`, the fully processed blocks remain written or transferred, at both endpoints of a transfer, and `klstart` records their total byte count. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would commit, including the locker, `klstart`, and the `*llockerstatus` and effective `KLS` fields, so that context save, restore and resumption remain consistent. Implementations must honor `klstart` for `kl.exec` and `kl.derive`; a handler must not reset it to zero to force a restart, which is UNSPECIFIED and may transition the locker to _Invalid_.
 
 [[KLEE-GR-memory-instructions,GR57]]GR57:: KLEE memory instructions are RISC-V memory instructions: one completes, and may retire or take a trap with `xepc` past it, only after every component access has passed address translation and permission checks and have been performed.
-Otherwise, as for vector memory operations, the implementation triggers a precise exception, with `klstart` at a prefix-complete point that the instruction allows, and raises the corresponding load/store page-fault, guest-page-fault or access-fault exception synchronously for that execution attempt.
+Otherwise, as for vector memory operations, the implementation triggers a precise load/store page-fault, guest-page-fault or access-fault exception for that execution attempt, with `klstart` at a prefix-complete point that the instruction permits.
 
-NOTE: After each `kl.load`, the caller checks whether the locker is _Unconfigured_. If it is, a handler has cleared it, and the software restarts the entire configuration operation, not only the `kl.load`.
-A `kl.load` issued or resumed after the locker was cleared performs no operation, so the caller always reaches this check (Rule <<KLEE-GR-cleared-under-management>>).
+NOTE: After each `kl.load`/`kl.store`/`kl.mv`, the caller checks whether the locker is _Unconfigured_. If it is, a handler has cleared it, and the software restarts the entire configuration operation, not only the memory operation.
+A memory operation issued or resumed after the locker was cleared performs no operation, so the caller always reaches this check (Rule <<KLEE-GR-cleared-under-management>>).
 // +
 // NOTE: Clearing a locker in an exporting State (<<KLEE-instruction-setst>>) calls for particular care from an
 // exception handler, because until the export completes, the ciphertext the locker holds may be the only copy of
