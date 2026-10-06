@@ -858,7 +858,7 @@ KLEE has no intrinsic element length, and no counterpart of the Element Group Wi
 Like `vstart` in the V extension, `klstart` is the position within the transfer window at which processing starts or resumes; for a KLIOBUF operand the window is [0, `kliobuftop`-1] (<<KLEE-CSR-kliobuftop>>).
 The KLEE implementation writes it:
 
-. on a precise exception, with a prefix-complete point of the transfer (<<KLEE-Memory-Model>>): the point of progress, or 0 for an  interrupt in an implementation that selects the restart option of Rule <<KLEE-GR-resumability-options>> for `kl.load`, `kl.store`, `kl.input` and `kl.output`, which then transfer the prefix again when re-executed; and
+. on a precise exception, with a prefix-complete point of the transfer (more precise statement in <<KLEE-rule-memory-instruction-decomposed>>): the point of progress, or 0 for an  interrupt in an implementation that selects the restart option of Rule <<KLEE-GR-resumability-options>> for `kl.load`, `kl.store`, `kl.input` and `kl.output`, which then transfer the prefix again when re-executed; and
 . with 0 when an instruction that honors `klstart` retires, except `kl.mv`, which advances `klstart` by the bytes transferred and keeps it across instructions, to support piecewise transfers (<<KLEE-instruction-mv>>); a vector `kl.mv` tracks its progress within the vector register in `vstart`, whose value depends on the element size chosen.
 
 Issuing Form A, B or C of `kl.exec` with `klstart` {ne} `vstart` {times} `SEW` / 8 raises an illegal-instruction exception.
@@ -965,7 +965,7 @@ NOTE: The uninterruptible vector-form instructions, which Rule <<KLEE-GR-vector-
 
 _This section is informative and non-normative._
 
-Setting error handling aside, *management* operations consists of the following three steps:
+Setting error handling aside, *management* operations consists of the following three steps, where the first and the last one consist of a single KLEE  instruction, and the second step consists of one or more `kl.mv` (alternatively, `kl.load`/`kl.store`) instructions:
 
 . `kl.mgmt` (<<KLEE-instruction-mgmt>>) prepares the locker for the management operation.
 . One or more `kl.mv` (<<KLEE-instruction-mv>>) load the rest of the information to be read into the locker, or store the information in the locker to memory.
@@ -1190,45 +1190,42 @@ occupies the register field unused by the corresponding `kl.exec` Form: `rd` in 
 _Description_::
 +
 --
-`kl.mv` transfers the Content of a locker which is in a Configuration State.
-It does not transfer the MDH, which `kl.mgmt` and `kl.getmd*` carry.
+`kl.mv` transfers the `Content` of a locker in a Configuration State: one being provisioned or imported, to accept information, or exported, to output it.
+// Rules <<KLEE-GR-zkl-load-mv-allowed>> and <<KLEE-GR-zkl-store-mv-allowed>> list the admitted States.
+It does not transfer the MDH, which `kl.mgmt` and `kl.getmd*` carry; for provisioning or import, the `kl.mgmt` that opened the locker (<<KLEE-instruction-mgmt>>) must already have loaded it.
 The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of the image that `kl.mv` transfers; while the locker is under management, they are held in the three authentication registers of <<KLEE-KLF>>.
 
-The locker must be being provisioned or imported, to accept information, or being exported, to output it.
-// Rules <<KLEE-GR-zkl-load-mv-allowed>> and <<KLEE-GR-zkl-store-mv-allowed>> list the admitted States.
-In any Valid State, or if `klstart` is not a multiple of 16, an illegal-instruction exception is raised.
-On an _Unconfigured_ or Error-State locker, however, every variant performs no operation, whatever the value of `klstart`, and a variant that reads the locker (Form III or IV) writes zeros to its destination (Rule <<KLEE-GR-cleared-under-management>>).
-For provisioning or import, the `kl.mgmt` that opened the locker (<<KLEE-instruction-mgmt>>) must already have loaded the MDH.
+An illegal-instruction exception is raised in any Valid State, if `klstart` is not a multiple of 16, or, for a vector variant, if `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16; the V-enabled check is performed first.
+On an _Unconfigured_ or Error-State locker, however, every variant performs no operation, whatever the value of `klstart`, and Forms III and IV, which read the locker, write zeros to their destination (Rule <<KLEE-GR-cleared-under-management>>).
 
 Let `content_size` be the length in bytes of the serialized `Content` of the locker, that of a PI or of an SCC according to the base type of the image the locker holds (<<KLEE-length-rule>>).
-`kl.mv` determines it from the MDH: that of the locker being exported, or the one the caller supplied for provisioning or import.
+`kl.mv` determines it from the MDH of the locker being exported, or from the one the caller supplied for provisioning or import.
 
-The `Content` starts at a _ContentOffset_ of 0, 16 or 48 in the external formats, depending on the MDH, the current operation and the base type of the image:
+In the external formats, the `Content` starts at a _ContentOffset_ that depends on the MDH, the current operation and the base type of the image:
 // the same case distinction of `kl.size` (<<KLEE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
 
-. if MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`: 16 if _AuxDataLen_ = 0, and 48 if _AuxDataLen_ {ge} 2;
+. if MDH._State_ is a Valid State, `kl_cfg_importing` or `kl_cfg_exporting`: 16 if _AuxDataLen_ = 0, and 48 if _AuxDataLen_ {ge} 2;
 . if MDH._State_ is `kl_cfg_provisioning`, `kl_cfg_ppi_importing`, or `kl_cfg_ppi_exporting`: 0.
 
-The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively, and its size is `image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
+The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively.
+Its size is `image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
 
-Let `max_admissible` be the length of the longest image of the locker's current base type that the implementation can hold for the Machine: for an SCC base type, `content1_size` plus the largest `content2_size` that the implementation supports; for a PI base type, `pi_content_size` (these sizes are defined in <<KLEE-instruction-size>>). With _ADSDropped_ = 1, `content2_size` is zero, so the image contains no `Content2` byte. Bytes of an SCC beyond `max_admissible` belong to a discarded ADS (<<KLEE-SCC-import>>), and are neither read from memory nor written to the locker.
+Let `max_admissible` be the length of the longest image of the locker's current base type that the implementation can hold for the Machine: `pi_content_size` for a PI base type, and `content1_size` plus the largest supported `content2_size` for an SCC base type (<<KLEE-instruction-size>>).
+With _ADSDropped_ = 1, `content2_size` is replaced by zero, so the image contains no `Content2` byte.
+Bytes of an SCC beyond `max_admissible` belong to a discarded ADS (<<KLEE-SCC-import>>), and are neither read from memory nor written to the locker.
 Let
 
 {fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
 
-`kl.mv` transfers only 16-byte aligned 16-byte blocks, lying below `image_end`.
-Each `kl.mv`  advances `klstart` by 16.
-A block at an offset `klstart` below `image_end` is transferred.
-If `klstart` {ge} `image_end`, the locker-writing variants write nothing, and the locker-reading variants write zero to their
-destination GPR operand, resp. to every element of `Vd` from `vstart` to `vl` − 1; `klstart` is unchanged in all variants.
+`kl.mv` transfers only 16-byte blocks, at 16-byte aligned offsets below `image_end`: the block at offset `klstart` is transferred if `klstart` < `image_end`, and `klstart` then advances by 16.
+If `klstart` {ge} `image_end`, `klstart` is unchanged, the locker-writing variants write nothing, and the locker-reading variants write zero to their
+destination GPR operand, resp. to every element of `Vd` from `vstart` to `vl` − 1.
 
-Vector variants also track progress in vector elements, in `vstart`: each 16-byte block advances it, for instance, by 4 for 32-bit elements or by 2 for 64-bit elements.
-If a vector transfer is interrupted, `klstart` records the total number of bytes transferred, and `vstart` the first untransferred vector element.
-Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `klstart` + (_k_ − `vstart`) × `SEW`/8 of the serialized image `S`.
-If `vstart` {ge} `vl`, the instruction performs no operation and leaves `klstart` unchanged.
+The vector variants also track progress in `vstart`, in vector elements: each 16-byte block advances it by 128/`SEW`, for instance by 4 for 32-bit elements or by 2 for 64-bit elements.
+Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `klstart` + (_k_ − `vstart`) × `SEW`/8 of `S`.
+If a vector transfer is interrupted, `klstart` records the total number of bytes transferred, and `vstart` the first untransferred element; if `vstart` {ge} `vl`, the instruction performs no operation and leaves `klstart` unchanged.
 
 The following table lists the four variants, and the States that admit each.
-A vector variant for which `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16 also raises an illegal-instruction exception; the V-enabled check is performed first.
 
 [[KLEE-mv-variants]]
 .Variants of `kl.mv`
@@ -2251,7 +2248,7 @@ GR44:: At the instruction level, KLEE memory instructions follow RVWMO, and, wit
 GR45:: KLEE memory instructions support only idempotent memory: they make no component access to a non-idempotent or side-effecting PMA region.
 An instruction whose component access would touch such a region halts precisely at the last prefix-complete point before the offending byte, which may not be 0 (<<KLEE-GR-resumability-options>>), with the completed prefix committed (Rule <<KLEE-GR-which-resumable-instructions>>), and raises a load, resp. store, access-fault exception, with `xepc` at the instruction and `xtval` holding the offending address. Re-execution raises the same exception before any component access, unless the offending byte no longer maps to such a region.
 
-GR46:: A KLEE memory instruction may be decomposed into component memory operations of any granularity, issued in any order that the memory model and the semantics of
+[[KLEE-rule-memory-instruction-decomposed,GR46]]GR46:: A KLEE memory instruction may be decomposed into component memory operations of any granularity, issued in any order that the memory model and the semantics of
 `kl.exec`, `kl.load`, `kl.store`, `kl.input` and `kl.output` allow, and none is required to be atomic; ordering within one instruction follows RVWMO, even with `Ztso`.
 On a precise interruption, `klstart` records a _prefix-complete_ point of the transfer: an offset below which every component access has been performed, and at or beyond which none has had an architecturally visible effect.
 
