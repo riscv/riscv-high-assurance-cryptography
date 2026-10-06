@@ -219,7 +219,7 @@ class Gcm:
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
-                s.klstart, s.halted = 16 * i, True       # GR55
+                s.klstart, s.halted = 16 * i, True       # GR56
                 return out
             blk = sl(INPUT, 128 * i + 127, 128 * i)
             if st == HA:
@@ -228,7 +228,7 @@ class Gcm:
             ctr = s._next_ctr()
             if ctr is None:
                 s._invalid()
-                return out                               # GR54
+                return out                               # GR55
             if st == DEC:
                 s._absorb(blk)
             s._set_ctr(ctr)
@@ -501,14 +501,14 @@ check('GR14: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MGR2); '
      'kl.setst out of the state part-way discards the IV (MGR9)')
 
-section('multi-block kl.exec, GR54/GR55')
+section('multi-block kl.exec, GR55/GR56')
 for n in (2, 3):
     check(f'{n} blocks per kl.exec', kl_encrypt(K, IV, A, P, nblk=n)[:2] == (RC, RT))
 cl = at('enc')
 o1 = cl.exec('A', b2v(P[:48]), 384, None, 1)
 h = (cl.halted, cl.klstart)
 o2 = cl.exec('A', b2v(P[:48]), 384, 16)
-check('GR55: Encrypt halted after one block (klstart = 16) and resumed',
+check('GR56: Encrypt halted after one block (klstart = 16) and resumed',
       h == (True, 16) and cl.klstart == 0 and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) == RC[:48])
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
@@ -603,7 +603,7 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('GR54/GR25: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('GR55/GR25: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
 check('GR21/GR22: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))

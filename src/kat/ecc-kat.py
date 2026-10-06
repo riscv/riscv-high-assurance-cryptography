@@ -104,7 +104,7 @@ class Locker:
         self.has.discard('rnd')
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR52)."""
+        """Precise halt of the current long-running kl.exec (GR53)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 13:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':

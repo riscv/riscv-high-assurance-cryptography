@@ -1028,7 +1028,7 @@ class Unit:
         while j < end:
             f = fault(j)
             if f or (halt_after is not None and j - self.klstart >= halt_after):
-                self.klstart = 0 if restart and not f else j        # GR51: no restart on a fault
+                self.klstart = 0 if restart and not f else j        # GR52: no restart on a fault
                 if f: raise Trap(f[0], tval=f[1])
                 return 'halted'
             act(j)
@@ -2030,7 +2030,7 @@ def t_transfers():
     r += [trap_of(w.load, 0, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR45: access fault at the byte, prefix committed; restart option for interrupts only (GR51)',
+    eq('GR45: access fault at the byte, prefix committed; restart option for interrupts only (GR52)',
        r + [w.load(0, mem, BASE, halt_after=16, restart=True), w.klstart, w.load(0, mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     u, out, ref = rc(), Memory(), Memory()
@@ -2652,7 +2652,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR49); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR50); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 
