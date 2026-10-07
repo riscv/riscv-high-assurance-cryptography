@@ -4,7 +4,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bin_, bxor, MASK128, montmul, aes_encrypt, selftest,
-                    ERROR_STATES, section, check, control, info, done,
+                    ERROR_STATES, IllegalInstruction, raises, section, check, control, info, done,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
                     KL_STATE_ENC_LAST_BLOCK as ELB, KL_STATE_DEC_LAST_BLOCK as DLB,
@@ -163,6 +163,8 @@ class Siv:
             return s._ready()
         if st in (SUCC, FAIL) or FORMS.get((st, immed)) != form:
             return s._invalid()                          # GR26/GR25, MGR1
+        if st == immed and st in (ELB, DLB) and not s.last_blk_len:
+            return s._invalid()                          # GR21: no second final block (MGR10)
         if immed in (ETF, DEC) and not s.policy & (1 if immed == ETF else 2):
             return s._invalid()
         if immed == SAV:
@@ -181,7 +183,10 @@ class Siv:
         s.halted, st = False, s.state
         if st in ERROR_STATES:
             return 0                                     # GR32
-        if {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st) != form:
+        want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
+        if want == 'A' and form in 'BC':
+            raise IllegalInstruction(form)               # vector and KLIOBUF operands mixed: a forbidden substitution
+        if want != form:
             return s._invalid()                          # GR22, GR26, MGR1
         if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
             return s._invalid()                          # MGR2: length first (<<KLEE-CSR-klstart>>)
@@ -573,6 +578,13 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MGR8); '
           'a second kl.exec -> _Invalid_, output zeroed (MGR10)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
+    m = at(where)
+    m.setst(last, 'B', 64)
+    m.setst(last, 'B', 32)
+    ok = m.last_blk_len == 32 and m.exec('A', b2v(bytes(range(1, 17))), 128)
+    m.setst(last, 'B', 32)
+    check(f'GR21: same-State kl.setst into {nm}_Last_Block replaces last_blk_len before its kl.exec, '
+          'and is _Invalid_ after it (MGR10)', ok and m.state == INV)
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
 m.exec('B', b2v(p10), 384, None, 2)
@@ -590,7 +602,6 @@ section('general rules')
 LB0 = len_block(b'', b'')
 for name, where, ops, *kw in [
         ('MGR1: Form C kl.setst to Enc_Tag_Finalize', 'ha', [('setst', ETF, 'C', LB0)]),
-        ('MGR1: Form B kl.exec in Enc_Tag_Finalize', 'etf', [('exec', 'B', LB0, 128)]),
         ('MGR1: Form A kl.exec in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'A', LB0, 128)]),
         ('MGR1: Form C kl.setst to Decrypt', 'ha', [('setst', DEC, 'C', 0)]),
         ('MGR1: Form A kl.setst to Set_Aux_Value', 'ready', [('setst', SAV)]),
@@ -615,6 +626,10 @@ for name, where, ops, *kw in [
     m = at(where, **(kw[0] if kw else {}))
     outs = [getattr(m, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
+ms = [at(w) for w in ('etf', 'enc', 'dec')]
+check('a Form B kl.exec where Form A is expected (Enc_Tag_Finalize, Encrypt, Decrypt): illegal-instruction exception, '
+      'State kept', True, ([raises(x.exec, 'B', LB0, 128) for x in ms], [x.state for x in ms]),
+      ([True] * 3, [ETF, ENC, DEC]))
 m = at('enc')
 snap = dict(vars(m))
 check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',

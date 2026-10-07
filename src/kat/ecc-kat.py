@@ -107,6 +107,9 @@ class Locker:
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
+    def drop_ads(self):                 # kl.clearads (GR23), or an import that completes without Content2 (GR60)
+        self.discard()
+
     def halt(self, progress=1, k=None):
         """Precise halt of the current long-running kl.exec (GR60)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 13:
@@ -170,8 +173,8 @@ class Locker:
         self.state = t
 
     def restrictl_policy(self, sign, verify):
-        """kl.restrictl on _MachinePolicy_ (<<KLEE-instruction-restrict>>): narrowing only; clearing both bits
-        erases Hash and Signature and their flags (<<KLEE-ECC>>)."""
+        """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLEE-instruction-restrict>>): narrowing only; clearing
+        both bits erases Hash and Signature and their flags (<<KLEE-ECC>>)."""
         if sign > self.policy[0] or verify > self.policy[1]:
             raise Invalid('widening _MachinePolicy_')
         signing = self.state == SIGN_GEN or self.state == MSG_ABSORB and self.pass_xs in (0, 1)
@@ -765,6 +768,12 @@ for t in (READY, OUTPUT, SIGN_GEN):
     cr.halt(7, K0)
     cr.setst(t)
     check(f'kl.setst #{t} from a halted Sign_Generate discards Progress and RndNum', cleared(cr))
+for how in ('kl.clearads', 'an import without Content2'):
+    cr = armed()
+    cr.halt(7, K0)
+    cr.drop_ads()
+    check(f'{how} on a halted Sign_Generate discards Progress, RndNum, HasRndNum; State kept',
+          cleared(cr) and cr.state == SIGN_GEN)
 cr = armed()
 cr.halt(9, 0xDEAD)
 cr.setst(READY)

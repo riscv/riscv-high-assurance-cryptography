@@ -6,7 +6,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT,
                     KL_STATE_DECRYPT, KL_STATE_INVALID, KL_STATE_PRIV_VIOLATION, ERROR_STATES,
-                    section, check, control, info, done)
+                    IllegalInstruction, raises, section, check, control, info, done)
+
+RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
 
 # ---------------------------------------------------------------- SM4 (GB/T 32907-2016)
 # S-box: OpenSSL crypto/sm4/sm4.c SM4_S[256]; anchored below on the GB/T vectors.
@@ -123,6 +125,8 @@ class EcbLocker:
         self._install(sl(b2v(c1), self.key_width - 1, 0), True)
 
     def setst(self, immed):
+        if immed in RESERVED_IMMED:                # GR24, reserved Error States: first group, before any State check
+            raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return                            # <<KLEE-GR-usage-locker-error-state>>
         pol = fld(self.mdh, 'MachinePolicy')
@@ -397,6 +401,10 @@ dst_cl.derive_key(src_cl, 24)
 eq("ECB locker as source (no source endpoint) -> only the source Invalid", (src_cl.state, dst_cl.state),
    (INV, KL_STATE_READY))
 info("kl.derive into `key`: byte t of the transfer is byte t of the key.")
+
+cl = new_cl(ci, k, state=ENC)
+check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,
+      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 4, ENC))
 
 section("<<KLEE-pseudocode-ECB-encryption>> [informative]: its Error State test")
 eq("'48 <= X1 <= 55' passes every Valid State and catches every Error State",

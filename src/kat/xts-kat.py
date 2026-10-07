@@ -8,7 +8,9 @@ from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, 
                     KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, done)
+                    IllegalInstruction, raises, section, check, control, info, done)
+
+RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
 
 B, ONES64 = 128, (1 << 64) - 1
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLEE-Machine-field>>
@@ -105,6 +107,8 @@ class XexLocker:
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
         """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
+        if immed in RESERVED_IMMED:                # GR24, reserved Error States: first group, before any State check
+            raise IllegalInstruction(immed)
         if s.state in ERROR_STATES:               # GR32
             return
         pol = fget(s.mdh, 'MachinePolicy')
@@ -499,6 +503,11 @@ for length in list(range(16, 80)) + [128, 129, 255, 256]:
         rt &= (kl_xts(k41, k42, seq, payload) == ref == kl_xts(k41, k42, seq, payload, per_block=True)
                and kl_xts(k41, k42, seq, ref, False) == payload == ref_xts(k41, k42, seq, ref, False))
 check("KLEE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
+
+cl = new_xex(k1, k2)
+st = cl.state
+check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,
+      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 4, st))
 
 section("negative controls")
 control("OCB3 big-endian `double` for update_mask",

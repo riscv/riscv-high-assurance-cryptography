@@ -6,7 +6,10 @@ import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
-                    KL_STATE_INVALID, ERROR_STATES, section, check, control, info, done)
+                    KL_STATE_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, info,
+                    done)
+
+RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
 
 B, ONES64 = 128, (1 << 64) - 1
 RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATE_INVALID
@@ -92,6 +95,8 @@ class KsLocker:
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
         """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
+        if immed in RESERVED_IMMED:                # GR24, reserved Error States: first group, before any State check
+            raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return
         _, _, n, j = self.params()
@@ -397,4 +402,8 @@ eq("GR47: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT;
 cl = ctr_cl(key)
 derive_to_hash(cl, hashlib.sha256(), 40)
 eq("GR47 with the source in Ready (no source endpoint, GR42 items 1-2) -> only the source Invalid", cl.state, INV)
+cl = ctr_cl(key)
+st = cl.state
+check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,
+      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 4, st))
 done()

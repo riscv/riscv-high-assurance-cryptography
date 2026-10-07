@@ -4,7 +4,8 @@ against McGrew-Viega / SP 800-38D test cases 1-6 and 13-18 and a byte-string SP 
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bswap, bxor, MASK128, aes_encrypt, gmul_ghash, kl_galoismul,
-                    selftest, ERROR_STATES, section, check, control, info, spec_note, done,
+                    selftest, ERROR_STATES, IllegalInstruction, raises, section, check, control, info, spec_note,
+                    done,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_HASH_VERIFY as HV,
                     KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
@@ -140,7 +141,7 @@ class Gcm:
         t = {(HA, HA): 'A', (HA, ENC): 'A', (HA, DEC): 'A', (ENC, ENC): 'A', (DEC, DEC): 'A',
              (DTF, HV): 'C'}
         for c, l, f in ((ENC, ELB, ETF), (DEC, DLB, DTF)):
-            t.update({(c, l): 'B', (l, l): 'B', (c, f): 'C', (l, f): 'C', (f, f): 'C'})
+            t.update({(c, l): 'B', (l, l): 'B', (c, f): 'C', (l, f): 'C'})   # no (f, f): GR21
         if s.set_iv:
             t[READY, HA] = 'A'
         else:
@@ -148,11 +149,17 @@ class Gcm:
         return t.get((st, immed))
 
     def setst(s, immed, form='A', aux=0):
+        """form 'A/iobuf': a Form A kl.setst with `aux` the KLIOBUF bytes [0, kliobuftop-1]; where the State
+        expects Form C it is a substitution that reads its input there (<<KLEE-usage-input-output>>)."""
         st = s.state
+        if immed in (46, 47, 54, 55):                    # reserved #immed7 (GR24): first group, State kept
+            raise IllegalInstruction(immed)
         if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, GR30
-            return s._error(immed if immed < 54 else INV)
+            return s._error(immed)
         if st in ERROR_STATES:
             return                                       # GR32
+        if form == 'A/iobuf':                            # klstart ignored; truncated to 128 bits below (MGR7)
+            form, aux = ('C', b2v(aux)) if s._form(st, immed) == 'C' else ('A', 0)
         if immed == READY and form == 'A':               # GR25, GR20
             if st == SAV:                                # IV left incomplete: discarded, no finalize() (MGR9)
                 s.tag = s.J0 = s.len = s.block_base = s.cumul_len = 0
@@ -160,6 +167,8 @@ class Gcm:
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
             return s._invalid()                          # GR26/GR25, MGR1
+        if st == immed and st in (ELB, DLB) and not s.last_blk_len:
+            return s._invalid()                          # GR21: no second final block (MGR10)
         if immed in (ENC, DEC) and not s.policy & (1 if immed == ENC else 2):
             return s._invalid()
         if immed == SAV:
@@ -196,7 +205,10 @@ class Gcm:
         s.halted = False
         if s.state in ERROR_STATES:
             return 0                                     # GR32
-        if {SAV: 'B', HA: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C'}.get(s.state) != form:
+        want = {SAV: 'B', HA: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C'}.get(s.state)
+        if want == 'A' and form in 'BC':
+            raise IllegalInstruction(form)               # vector and KLIOBUF operands mixed: a forbidden substitution
+        if want != form:
             return s._invalid()                          # GR22, GR26, MGR1
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
                 KLLEN < s.last_blk_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
@@ -320,31 +332,35 @@ def crypt(cl, text, nblk=1, last=ELB):
         out += v2b(cl.exec('A', b2v(text[n:]), 8 * len(text[n:])), len(text[n:]))
     return out
 
-def finish(cl, ad, pt, nblk=1, swap=False):
+def form_c(value, subst=False, extra=b''):
+    """Arguments of a Form C kl.setst, or of the Form A one that substitutes it with the KLIOBUF."""
+    return ('A/iobuf', v2b(value, 16) + extra) if subst else ('C', value)
+
+def finish(cl, ad, pt, nblk=1, swap=False, subst=False):
     feed(cl, pad16(ad), 4096)
     cl.setst(ENC)
     ct = crypt(cl, pt, nblk)
-    cl.setst(ETF, 'C', len_block(8 * len(pt), 8 * len(ad), swap))
+    cl.setst(ETF, *form_c(len_block(8 * len(pt), 8 * len(ad), swap), subst))
     return ct, v2b(cl.exec('C', 0, 128), 16), cl
 
-def kl_encrypt(key, iv, ad, pt, cl=None, iv_chunk=16, iv_stop=None, nblk=1, swap=False, **kw):
+def kl_encrypt(key, iv, ad, pt, cl=None, iv_chunk=16, iv_stop=None, nblk=1, swap=False, subst=False, **kw):
     cl = cl or Gcm.provisioned(key, **kw)
     if cl.set_iv:
         cl.setst(HA)
     else:
         cl.setst(SAV, 'B', 8 * len(iv))
         feed(cl, iv, iv_chunk, iv_stop)
-    return finish(cl, ad, pt, nblk, swap)
+    return finish(cl, ad, pt, nblk, swap, subst)
 
-def kl_decrypt(key, iv, ad, ct, tag, cl=None, **kw):
+def kl_decrypt(key, iv, ad, ct, tag, cl=None, subst=False, extra=b'', **kw):
     cl = cl or Gcm.provisioned(key, **kw)
     cl.setst(SAV, 'B', 8 * len(iv))
     feed(cl, iv)
     feed(cl, pad16(ad), 4096)
     cl.setst(DEC)
     pt = crypt(cl, ct, max(1, len(ct) // 16), DLB)
-    cl.setst(DTF, 'C', len_block(8 * len(ct), 8 * len(ad)))
-    cl.setst(HV, 'C', b2v(tag))
+    cl.setst(DTF, *form_c(len_block(8 * len(ct), 8 * len(ad)), subst, extra))
+    cl.setst(HV, *form_c(b2v(tag), subst, extra))
     return pt, cl.state, cl
 
 # ---------------------------------------------------------------- vectors
@@ -453,6 +469,14 @@ for label, *hx in VECTORS:
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
 check('key given by a SKID (GR65): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('Form A kl.setst substituting each Form C one (Enc/Dec_Tag_Finalize, Hash_Verify), its input in the KLIOBUF: '
+      'tc4 tag and verification; KLIOBUF bytes beyond 16 ignored (MGR7); a wrong tag fails', True,
+      (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],
+       kl_decrypt(K, IV, A, RC, RT, subst=True, extra=b'\x5a' * 16)[1],
+       kl_decrypt(K, IV, A, RC, bytes(16), subst=True)[1]), ((RC, RT), (P, SUCC), SUCC, FAIL))
+cl = at('enc')
+check('kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept', True,
+      ([raises(cl.setst, i) for i in (46, 47, 54, 55)], cl.state), ([True] * 4, ENC))
 for n in (1, 8, 15, 21):
     check(f'{n}-byte plaintext matches REF', kl_encrypt(K, IV, A, P[:n])[:2] == ref_gcm(K, IV, A, P[:n]))
 
@@ -561,6 +585,22 @@ cl = at('dec')
 cl.setst(DLB, 'B', 96)
 check('second kl.exec in Dec_Last_Block (MGR10): _Invalid_, output zeroed',
       cl.exec('A', b2v(P[:12]), 96) and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
+for where, last in (('enc', ELB), ('dec', DLB)):
+    cl = at(where)
+    cl.setst(last, 'B', 64)
+    cl.setst(last, 'B', 96)
+    ok = cl.last_blk_len == 96 and cl.exec('A', b2v(P[:12]), 96)
+    cl.setst(last, 'B', 96)
+    check(f'GR21: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block replaces last_blk_len '
+          'before its kl.exec, and is _Invalid_ after it (MGR10)', ok and cl.state == INV)
+for fin in (ETF, DTF):
+    cl = at('enc' if fin == ETF else 'dec')
+    lb = len_block(0, 8 * len(A))
+    cl.setst(fin, 'C', lb)
+    ok = cl.state == fin
+    cl.setst(fin, 'C', lb)
+    check(f'GR21: same-State kl.setst into {"Enc" if fin == ETF else "Dec"}_Tag_Finalize -> _Invalid_',
+          ok and cl.state == INV)
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
 check('Enc_Last_Block with KLLEN = 256: one block, excess ignored (MGR3, MGR8)',
@@ -654,8 +694,6 @@ for name, where, ops, *kw in [
         ('GR26/GR25: kl.setst Encrypt in Success', 'success', [('setst', ENC)]),
         ('MGR1: GCM Ready -> Hash_Absorb', 'ready', [('setst', HA)]),
         ('MGR1: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', B16, 128)]),
-        ('MGR1: Form B kl.exec in Encrypt', 'enc', [('exec', 'B', B16, 128)]),
-        ('MGR1: Form B kl.exec in Decrypt', 'dec', [('exec', 'B', B16, 128)]),
         ('MGR1: Form B kl.setst to Encrypt', 'ha', [('setst', ENC, 'B', 5)]),
         ('MGR1: Form B kl.setst to Enc_Tag_Finalize', 'enc', [('setst', ETF, 'B', 5)]),
         ('MGR1: Encrypt -> Hash_Verify', 'enc', [('setst', HV, 'C', 0)]),
@@ -670,6 +708,10 @@ for name, where, ops, *kw in [
     cl = at(where, **(kw[0] if kw else {}))
     outs = [getattr(cl, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', cl.state == INV and not any(outs))
+cls = [at(w) for w in ('enc', 'dec', 'enc', 'dec')]
+check('a Form B or C kl.exec where Form A is expected (Encrypt, Decrypt): illegal-instruction exception, State kept',
+      True, ([raises(c.exec, f, B16, 128) for c, f in zip(cls, 'BBCC')], [c.state for c in cls]),
+      ([True] * 4, [ENC, DEC] * 2))
 cl = at('enc')
 snap = dict(vars(cl))
 check('klstart >= KLLEN/8 in Encrypt (16 of 128, 64 of 384): empty window, only klstart = 0',

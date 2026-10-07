@@ -83,11 +83,12 @@ def unpack(data, lay):
     return out
 
 class Ocb:
-    # (immed, Form) -> States it is allowed from (GR21 included); VERIFY Form A: KLIOBUF substitution
-    SETST = {(SET_AUX, 'B'): (READY, SET_AUX), (ABSORB, 'B'): (SET_AUX, ABSORB),
-             (LAST, 'B'): (ABSORB, LAST), (ENC_LAST, 'B'): (ENCRYPT, ENC_LAST),
-             (DEC_LAST, 'B'): (DECRYPT, DEC_LAST), (ENCRYPT, 'A'): (LAST, ENCRYPT),
-             (DECRYPT, 'A'): (LAST, DECRYPT), (VERIFY, 'C'): (VERIFY,), (VERIFY, 'A'): (VERIFY,),
+    # (immed, Form) -> States it is allowed from (GR21 included, but not into Hash_Absorb,
+    # Hash_Absorb_Last_Block, Encrypt or Decrypt); VERIFY Form A: KLIOBUF substitution
+    SETST = {(SET_AUX, 'B'): (READY, SET_AUX), (ABSORB, 'B'): (SET_AUX,),
+             (LAST, 'B'): (ABSORB,), (ENC_LAST, 'B'): (ENCRYPT, ENC_LAST),
+             (DEC_LAST, 'B'): (DECRYPT, DEC_LAST), (ENCRYPT, 'A'): (LAST,),
+             (DECRYPT, 'A'): (LAST,), (VERIFY, 'C'): (VERIFY,), (VERIFY, 'A'): (VERIFY,),
              (TAG_FIN, 'A'): (TAG_FIN,)}
     def __init__(s, key, policy=0b11, skid=None, **nc):
         s.key, s.skid, s.policy, s.state = key, skid, policy, READY
@@ -484,6 +485,11 @@ INVALID_CASES = [
     ("KLLEN = 136 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MGR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
     ("KLLEN = 56 < last_blk_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
+    ("same-State kl.setst #hash_absorb (GR21)", at_absorb, lambda c: c.setst(ABSORB, 'B', 128)),
+    ("same-State kl.setst #hash_last_block after its kl.exec (GR21, MGR10)", last_done,
+     lambda c: c.setst(LAST, 'B', 64)),
+    ("same-State kl.setst #encrypt (GR21)", at_crypt, lambda c: c.setst(ENCRYPT, 'A')),
+    ("same-State kl.setst #decrypt (GR21)", lambda: at_crypt(True), lambda c: c.setst(DECRYPT, 'A')),
 ] + [(f"last_blk_len = {n}", at_absorb, lambda c, n=n: c.setst(LAST, 'B', n))
      for n in (4, 12, 124, 128, 136)]
 for name, mk, act in INVALID_CASES:

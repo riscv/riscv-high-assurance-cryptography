@@ -33,6 +33,7 @@ def ref_cmac(K, M):
 
 # ---------------------------------------------------------------- KLEE model
 class Invalid(Exception): pass
+class Unsupported(Exception): pass
 SKS = {}
 
 def layout(kbits):
@@ -54,8 +55,10 @@ def unpack(data, lay):
     return out
 
 class Cmac:
-    def __init__(s, key, skid=None, policy=3, **nc):
-        """policy: _MachinePolicy_, bit 0 tag output, bit 1 verification (<<KLEE-CMAC-mode>>, MGR11)."""
+    def __init__(s, key, skid=None, policy=0, **nc):
+        """policy: _MachinePolicy_, unused by CMAC: a non-zero value is unsupported Metadata (<<KLEE-CMAC-mode>>)."""
+        if policy:
+            raise Unsupported('MachinePolicy')
         s.key, s.skid, s.state, s.policy = key, skid, READY, policy
         s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False), **nc)
         if skid is not None:
@@ -83,12 +86,13 @@ class Cmac:
             return
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MGR1, GR25
-        if immed == VERIFY and not s.policy & 2:
-            s._invalid('MachinePolicy[1] clear')  # MGR11
         if immed == LAST:
             if aux > B or aux % 8:
                 s._invalid('Xs')
             s.last_blk_len = aux
+            if aux == 0:                          # empty final block: padded, absorbed, no kl.exec
+                s.hash, s.state = s.enc(s.hash ^ cat((0, B - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), OUTPUT
+                return
         s.state = immed if immed != VERIFY else SUCCESS if sl(aux, B - 1, 0) == s.hash else FAILURE
     def exec(s, form, INPUT=0, klen=B):
         st = s.state
@@ -104,8 +108,6 @@ class Cmac:
                 s.hash = s.enc(s.hash ^ sl(INPUT, i + B - 1, i))
             return 0
         if st == OUTPUT:
-            if not s.policy & 1:
-                s._invalid('MachinePolicy[0] clear')  # MGR11
             s.state = SUCCESS
             return s.hash & ((1 << klen) - 1)     # MGR8
         n = s.last_blk_len
@@ -115,8 +117,8 @@ class Cmac:
         _, K1, K2 = s.gen_subkeys()
         if n == B:
             tmp = INPUT ^ (K2 if s.nc['k2full'] else K1)
-        else:                                     # n = 0: INPUT is not read
-            tmp = cat((0, B - 8 - n), (0x80, 8), (sl(INPUT, n - 1, 0) if n else 0, n)) ^ K2
+        else:                                     # 0 < n < B (n = 0 never reaches a kl.exec)
+            tmp = cat((0, B - 8 - n), (0x80, 8), (sl(INPUT, n - 1, 0), n)) ^ K2
         s.hash, s.state = s.enc(s.hash ^ tmp), OUTPUT
         return 0
     def lay(s):
@@ -151,7 +153,7 @@ def derive(src, dst, length):
         return dst.exec('B', b2v(data[:length]), 8 * length)
     dst.key = data[:len(dst.key)]
 
-def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, dummy=0, cl=None,
+def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
         skid=None, **nc):
     """<<KLEE-pseudocode-CMAC>> up to _Hash_Output_; hop exports/imports after every instruction."""
     fB = 'D' if subst else 'B'
@@ -165,10 +167,10 @@ def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, dummy=0,
         cl.exec(fB, b2v(M[16 * a:16 * e]), 128 * (e - a)); cl = nxt(cl)
     tail = M[16 * nfull:]
     cl.setst(LAST, 'B', 8 * len(tail)); cl = nxt(cl)
-    if junk:
+    if tail and junk:
         cl.exec(fB, b2v(tail) | junk_above(8 * len(tail)), 2 * B)
-    else:
-        cl.exec(fB, *((b2v(tail), 8 * len(tail)) if tail else (dummy, B)))
+    elif tail:
+        cl.exec(fB, b2v(tail), 8 * len(tail))
     return nxt(cl)
 
 def tag(*a, **kw):
@@ -230,7 +232,11 @@ for lab, K, M, W in VEC:
             ("export/import after every instruction", tag(K, M, hop=True), W)):
         check(f"{lab} {name}", True, got, want)
 for lab, K, M, W in (v for v in VEC if not v[2]):
-    check(f"{lab}: last_blk_len = 0 does not read INPUT", True, tag(K, M, dummy=MASK128), W)
+    cl = Cmac(K)
+    cl.setst(ABSORB)
+    cl.setst(LAST, 'B', 0)
+    check(f"{lab}: Xs = 0 enters _Hash_Output_ directly, without a kl.exec", True, (cl.state, v2b(cl.exec('C'), 16)),
+          (OUTPUT, W))
 
 section("Form B kl.setst #hash_last_block: Xs")
 def at_absorb(K=K128, **kw):
@@ -240,7 +246,8 @@ def at_absorb(K=K128, **kw):
 for Xs, bad in [(x, True) for x in (136, 129, 4, 12, 127)] + [(x, False) for x in (0, 8, 64, 120, 128)]:
     cl = at_absorb()
     check(f"Xs = {Xs} {'-> Invalid' if bad else 'admissible'}", True,
-          (raises(cl.setst, LAST, 'B', Xs, exc=Invalid), cl.state), (bad, INVALID if bad else LAST))
+          (raises(cl.setst, LAST, 'B', Xs, exc=Invalid), cl.state),
+          (bad, INVALID if bad else OUTPUT if Xs == 0 else LAST))
 
 section("Serialized Content")
 info("<<KLEE-CMAC-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
@@ -279,12 +286,6 @@ INVALID_CASES = [
     ("kl.setst #hash_absorb in Failure (GR25)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
     ("MGR17: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
-INVALID_CASES += [
-    ("tag output with MachinePolicy = 0b10 (MGR11)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=2)),
-     lambda c: c.exec('C')),
-    ("kl.setst #hash_verify with MachinePolicy = 0b01 (MGR11)", lambda: run(K128, MSG[:40], cl=Cmac(K128, policy=1)),
-     lambda c: c.setst(VERIFY, 'C', b2v(W4))),
-]
 for name, mk, act in INVALID_CASES:
     cl = mk()
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
@@ -297,14 +298,12 @@ cl = run(K128, MSG[:40], subst=True)
 cl.setst(VERIFY, 'A', b2v(W4))
 check("Form D kl.exec, Form A kl.setst #hash_verify substitutions: all vectors",
       subst and cl.state == SUCCESS)
-vcl = run(K128, MSG[:40], cl=Cmac(K128, policy=2))
+vcl = run(K128, MSG[:40])
 vcl.setst(VERIFY, 'C', b2v(W4))
-z_out, z_ver = run(K128, MSG[:40], cl=Cmac(K128, policy=0)), run(K128, MSG[:40], cl=Cmac(K128, policy=0))
-check("MachinePolicy = 0b10 verifies, 0b01 emits the tag; MachinePolicy = 0 is admissible but useless: "
-      "provisioned and absorbs, then both output and verification -> Invalid (MGR11)", True,
-      (vcl.state, tag(None, MSG[:40], cl=Cmac(K128, policy=1)), z_out.state,
-       raises(z_out.exec, 'C', exc=Invalid), raises(z_ver.setst, VERIFY, 'C', b2v(W4), exc=Invalid)),
-      (SUCCESS, W4, OUTPUT, True, True))
+check("MachinePolicy is unused: with it zero, a locker both emits and verifies the tag; any non-zero value is "
+      "unsupported Metadata", True,
+      (vcl.state, tag(K128, MSG[:40]), [raises(Cmac, K128, policy=p, exc=Unsupported) for p in (1, 2, 3)]),
+      (SUCCESS, W4, [True] * 3))
 check("truncated 64-bit tag -> Failure (all b bits compared)", True,
       done_ok(b2v(W4[:8])).state, FAILURE)
 for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
