@@ -270,8 +270,9 @@ field _W_ (e.g., _MachineUse_ of the MDH).
 Each such state names the field _W_ and its unit, bits or bytes.
 +
 Upon entering State _X_, _W_ is zeroed.
-_W_ rises monotonically by the amount of data transferred by
-`kl.exec` (i.e., `KLLEN` or `KLLEN/8`), and is not reset when the field completes.
+_W_ rises monotonically by the amount of data actually transferred, in the unit of _W_: by `KLLEN` or `KLLEN/8` for a
+`kl.exec` that completes, and by the bytes of the committed prefix for one that halts (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>), so that its
+resumption adds only the remainder. _W_ is not reset when the field completes.
 +
 Entering a loading state also zeroes the field, so that reloading replaces it.
 +
@@ -994,10 +995,9 @@ Besides `max_len`, `block`, and `state`, which are fixed for the duration of the
 +
 --
 . If `max_len != 0` and `cumul_len >= max_len`, then the locker transitions to Error State _Invalid_.
-. If starting a ``kl.exec`` instruction, then `input_base <- 0`
-. If resuming a ``kl.exec`` instruction, then `input_base <- 8` {interpunct} `klstart`.
+. `input_base <- 8` {interpunct} `klstart`, which is 0 when the instruction starts and the point of progress when it resumes.
   `input_base` is counted in bits (see *Units* above) while `klstart` is a number of bytes
-  (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>), hence the conversion.
+  (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>), hence the conversion; no other information distinguishes a start from a resumption.
 . While `(input_base < KLLEN)` do
 .. If `max_len` != 0 then `amount <- min(KLLEN - input_base, b - block_base, max_len - cumul_len)`,
    else `amount <- min(KLLEN - input_base, b - block_base)`.
@@ -1017,6 +1017,8 @@ Besides `max_len`, `block`, and `state`, which are fixed for the duration of the
  ... The instruction is terminated, even if `input_base < KLLEN`.
 .. *Here*, and only here, the instruction may be interrupted, with
    `klstart <- input_base / 8`.
+   Every iteration but the last of a window ends with a full block, so a halt here always leaves `block_base` = 0.
+   The interruption points of _Current_State_ (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>) are therefore 0 and every multiple of `granularity` (every byte offset without one) at which the `block_base` that the locker holds is 0: they are determined by architected state alone, without the value that `block_base` had when the halted instruction started.
    `input_base` is a whole number of bytes at this point, so the division is exact; the
    procedure defines no interruption point at a finer granularity, so `klstart` never has
    to describe a position inside a byte. The conversion matches the one State
@@ -2359,7 +2361,7 @@ The state then transitions to _Hash_Absorb_Last_Block_.
     * `amount : int`, `{nbsp}` amount of data to copy from `block` to `OUTPUT`
 
 []
-   . `output_base <- 0` // upon resumption, `output_base <- 8 {interpunct} klstart`
+   . `output_base <- 8 {interpunct} klstart` // 0 when the instruction starts
     . while (`output_base` < `KLLEN`) do: // as long as there is room in the OUTPUT
      .. `amount <- min(KLLEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
@@ -2372,6 +2374,7 @@ The state then transitions to _Hash_Absorb_Last_Block_.
       ... `update()`
       ... `block_base <- 0`
       ... *Here* the instruction can be interrupted, with `klstart <- output_base / 8`.
+          A halt here leaves `block_base` = 0. The interruption points of _Hash_Output_ are therefore, for an XOF, 0 and every byte offset at which `block_base` is 0; a hash function, which emits its whole output in one instruction, has 0 only.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -4082,6 +4085,10 @@ If `ctxlen` {ne} 0, the `ctx` value is then loaded with
   *** `mode` is
    `assign` for ed25519, whose `H` is `SHA-512` (<<KLEE-SHA-2>>), and `xor_accumulate` for ed448,
    whose `H` is `SHAKE256` (<<KLEE-SHA-3>>).
++
+In signing pass 2, `H` and `H'` absorb the same bytes, but their blocks start at different offsets.
+The interruption points of _Msg_Absorb_ are those of `H`: 0, and every byte offset at which the `block_base` of `H` is 0.
+`H'` may then hold a partial block, which is architected (Position xiii), so a halt there is consistent.
 
 ** Leaving State _Msg_Absorb_ — by the same-state re-entry above or by a transition to
    another state — finalizes the current pass:

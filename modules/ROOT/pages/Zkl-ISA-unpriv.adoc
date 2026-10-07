@@ -867,13 +867,13 @@ They do not apply to `kl.mvin` and `kl.mvout`, whose vector window is [`vstart`,
   This prevents, for instance, the use of a locker in an inconsistent state and the release of plaintext in place of ciphertext.
 
 An _interruption point_ of a Machine in a given State is a `klstart` value that the Machine can itself produce on a precise halt in that State: unless the Machine states a coarser or a different set, the whole multiples of its granularity within the transfer window, or 0 for an asynchronous interrupt in an implementation that selects to restart.
-Procedure `process_VLI` (<<Zkl-ISA-machines.adoc#KLEE-process-VLI>>) defines its own, at the boundaries at which its inner loop may yield.
+Procedure `process_VLI` (<<Zkl-ISA-machines.adoc#KLEE-process-VLI>>) defines its own: 0, and any multiple of its granularity at which the `block_base` that the locker holds is 0, as it is after every halt of its inner loop.
 
 For the locker-directed transfers `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout`, `klstart` is bounded above by the length in bytes of the serialized image `S` (<<KLEE-instruction-mv>>), determined from the first 8 bytes of the MDH; each of these instructions states the bound it applies.
 
 Software should not write 0 to `klstart` to force a full restart of `kl.exec` or `kl.derive`
-once per-block state effects have been committed; Rule
-<<KLEE-GR-block-iterated-instructions>> states the consequence.
+once per-block state effects have been committed, and must not do so for the Machines that Rule
+<<KLEE-GR-block-iterated-instructions>> names, which states the consequence.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2175,6 +2175,7 @@ without carrying state from an internal partial transfer of `max(p,q)` bytes to 
 +
 The interruption points of a `kl.derive` (<<KLEE-CSR-klstart>>) are the `klstart` values that
 are interruption points of both endpoints, each in its current State.
+A key-field destination (Rule <<KLEE-GR-checks>> item 5) has no interruption point other than 0: the key is written in full, and the initialization that the Machine performs in State _Ready_ completes, within one uninterrupted execution, so that no locker is ever usable with a partly written key.
 
 [[KLEE-Memory-Model]]
 === Memory Model Rules
@@ -2265,6 +2266,7 @@ This Rule and Rule <<KLEE-GR-resumability-options>> make asynchronous execution 
 [[KLEE-GR-which-resumable-instructions,GR56]]GR56:: The resumable instructions are `kl.exec`, vector `kl.mvin` and `kl.mvout`, `kl.derive`, `kl.load`, `kl.store`, `kl.input` and `kl.output`, which architecturally process their input units serially. On a precise halt, the completed prefix is committed, the failing and subsequent units have no effect, `klstart` records a prefix-complete point, and the instruction does not retire, `xepc` holding its address. If the instruction transitions its locker to an Error State after partial progress, the completed prefix remains committed, the unwritten part of its output window is zeroed (Rule <<KLEE-GR-usage-locker-error-state>>), and the instruction retires (<<KLEE-CSR-klstart>>).
 
 [[KLEE-GR-block-iterated-instructions,GR57]]GR57:: For a block-iterated `kl.exec`, `kl.mvin`, `kl.mvout` or `kl.derive`, the fully processed blocks remain written or transferred, at both endpoints of a transfer, and `klstart` records their total byte count. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would commit, including the locker, `klstart`, and the `*llockerstatus` and effective `KLS` fields, so that context save, restore and resumption remain consistent. Implementations must honor `klstart` for `kl.exec` and `kl.derive`. A handler that resets `klstart` to 0 causes the instruction to execute as a new instruction over its whole window, from the state that the completed prefix committed; its output then differs from that of an uninterrupted execution.
+For a Machine whose per-block keystream or tweak advances with each block, such as the _Encrypt_ State of GCM-SIV (<<Zkl-ISA-machines.adoc#KLEE-GCM-SIV-mode>>) and the XEX/XTS modes (<<Zkl-ISA-machines.adoc#KLEE-XEX-XTS-modes>>), the re-executed window is processed with the keystream or tweak values of later blocks; another encryption of the same message then uses those values for different plaintext blocks, which defeats the misuse resistance of GCM-SIV and the tweak uniqueness of XEX/XTS. Software must not reset `klstart` to 0 for such a Machine once per-block effects have been committed.
 No Machine shall define intra-instruction state outside this model: the state that a halted instruction leaves is described entirely by the locker, `klstart`, `vstart` and, for the long-running operations of Rule <<KLEE-GR-long-running-no-data>>, the progress recorded in _MachineUse_ and the ADS.
 
 [[KLEE-GR-memory-instructions,GR58]]GR58:: KLEE memory instructions are RISC-V memory instructions: one completes, and may retire or take a trap with `xepc` past it, only after every component access has passed address translation and permission checks and have been performed.
