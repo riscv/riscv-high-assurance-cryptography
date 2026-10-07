@@ -215,13 +215,6 @@ Like GPRs or vector registers, lockers are per-hart architectural state, and the
 Unlike a conventional register, a locker can be _unconfigured_, that is hold no CC.
 
 A locker is addressed like a conventional register, by a 5-bit immediate.
-With `Zklind`, a locker can also be addressed indirectly, by a GPR value, and an encoding bit selects the mode.
-`kl.clone`, `kl.rename` and `kl.swap` (<<KLEE-instruction-clone>>) always support indirect addressing, with or without `Zklind`.
-
-[NOTE]
-====
-Register renaming of lockers remains possible with indirect addressing, but would add much microarchitectural complexity for little benefit: lockers are redefined far less often than GPRs or FP registers, rarely take one key or another conditionally, and speculation on cryptographic results usually creates security issues.
-====
 
 The CC in a configured locker consists of a Metadata Header (MDH) and `Content` (<<KLEE-concepts>>).
 The _i_-th locker is denoted `K(i)`, its MDH `K(i).MDH`, and its content `K(i).Content`.
@@ -914,8 +907,7 @@ When mentioning rules is necessary to describe the behavior of an instruction, t
 
 In every encoding, fields shown with fixed values must hold them. Any other value of such a field, and any unlisted combination of field values, is a reserved encoding and raises an illegal-instruction exception (first group of <<KLEE-illegal-instruction-grounds>>).
 
-`K(Xd)` denotes the locker whose index GPR `Xd` holds.
-`Kn|K(Xn)` denotes two alternative encodings: a 5-bit immediate locker index `Kn`, or a locker index in GPR `Xn`.
+`Kn` denotes a 5-bit immediate locker index `Kn`.
 Where an encoding offers both, bit `r`, the _locker indexing mode selector_, chooses between them: with `r` = 0 the 5-bit register field is the locker index, and with `r` = 1 it is the number of the GPR holding the index.
 `kl.load` and `kl.store` select with `funct3` instead, and `kl.clone`, `kl.rename`, `kl.swap` and `kl.derive` with field `R` (<<KLEE-instruction-clone>>, <<KLEE-instruction-derive>>).
 
@@ -937,18 +929,14 @@ GR2:: _`X0` as a destination or source register, but not as a locker index:_ wri
 When the lowest register of a
 pair or quartet is `X0`, no register of the group is written, and the group reads as zero.
 
-[[KLEE-GR-GPR-indirect,GR3]]GR3:: _Use of a GPR as indirect locker index:_
-An indirect locker index outside [0..31] raises an illegal-instruction exception, and so does `X0` as the indirect locker index register, except in the encoding of `kl.clearall` (<<KLEE-instruction-clearall>>).
-Without `Zklind`, an encoding that selects indirect locker addressing (`r` = 1, `R` {ne} `00`, or `funct3` = 7) is reserved and raises an illegal-instruction exception, except for `kl.clone`, `kl.rename` and `kl.swap`, which always offer indirect addressing (<<KLEE-instruction-clone>>), and for the encoding of `kl.clearall`.
-
-[[KLEE-GR-vector-MDH-operand,GR4]]GR4:: Where a KLEE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.restrictv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
+[[KLEE-GR-vector-MDH-operand,GR3]]GR3:: Where a Form of a KLEE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.restrictv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
 <<KLEE-extensions-overview-unpriv>> records which vector extensions provide such a register.
 The same requirement applies to an MDH taken from the KLIOBUF: `kliobuftop` {ge} 16.
 
-[[KLEE-GR-vector-legality,GR5]]GR5:: A vector register (group) operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
+[[KLEE-GR-vector-legality,GR4]]GR4:: A vector register (group) operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
 Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires, and on a precise halt sets it as <<KLEE-CSR-klstart>> and Rule <<KLEE-GR-klstart-vstart>> prescribe. An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size` and `kl.avail`, `kl.setst` and `kl.mgmt`), issued with `vstart` {ne} 0, either raises an illegal-instruction exception, as RVV 1.0 {sect}3.7 permits for a `vstart` value that the instruction can never produce, or ignores `vstart`; which of the two is implementation-defined.
 
-[[KLEE-GR-klstart-vstart,GR6]]GR6:: KLEE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each by its own semantics: both denote the same point of progress, `klstart` in bytes and `vstart` in elements of the width in effect, and neither is derived from the other.
+[[KLEE-GR-klstart-vstart,GR5]]GR5:: KLEE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each by its own semantics: both denote the same point of progress, `klstart` in bytes and `vstart` in elements of the width in effect, and neither is derived from the other.
 Each unit thus keeps its own information, and the two values can still be explicitly "`desynced`", as in locker management operations.
 +
 NOTE: For Forms A–C of `kl.exec`, an illegal-instruction exception is raised if `klstart` and `vstart` denote different points (<<KLEE-CSR-klstart>>). `kl.mv` keeps the two independent by design: its `klstart` is a locker offset that accumulates across instructions, while `vstart` tracks the vector register.
@@ -1006,7 +994,7 @@ _Mnemonic_::
 (((KLEE, instruction, kl.avail)))
 
 [upperalpha]
-. `kl.{avail,size}  Xd, Ks|K(Xs)` - Size from a context.
+. `kl.{avail,size}  Xd, Ks` - Size from a context.
 . `kl.{avail,size}  Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
 . `kl.{avail,size}  Xd, Vs` - Size from MDH in one vector register.
 --
@@ -1023,10 +1011,10 @@ Bit 25, `q`, selects `kl.size` (`q` = 0) or `kl.avail` (`q` = 1).
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
-    { bits:  5, name: 'Ks/K(Xs)/Xs/Vs' },
+    { bits:  5, name: 'Ks/Xs/Vs' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 'q' },
-    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'F' },
     { bits:  2, name: 0x0, attr: ['funct2'] },
@@ -1036,7 +1024,6 @@ Bit 25, `q`, selects `kl.size` (`q` = 0) or `kl.avail` (`q` = 1).
 Field `F` and bit `r` select the Form:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A, from a context `Ks`.
-* `F` = `0b00`, `r` = `1` {implies} Form A, from a context given indirectly as `K(Xs)` (Rule <<KLEE-GR-GPR-indirect>>).
 * `F` = `0b01`, `r` = `0` {implies} Form B, from an MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C, from an MDH in a 128-bit vector register.
 --
@@ -1086,10 +1073,10 @@ _Mnemonic_::
 (((KLEE, instruction, kl.exec)))
 
 [upperalpha]
-. `kl.exec  Vd, Kn|K(Xn), Vs2` {nbsp} reads an input vector and writes an output vector.
-. `kl.exec  {fournbsp} Kn|K(Xn), Vs2` {nbsp} reads an input vector and writes no output vector.
-. `kl.exec  Vd, Kn|K(Xn) {fournbsp}{nbsp}` {nbsp} reads no input vector and writes an output vector.
-. `kl.exec  {fournbsp} Kn|K(Xn) {fournbsp}{nbsp}` {nbsp} reads no input vector and writes no output vector.
+. `kl.exec  Vd, Kn, Vs2` {nbsp} reads an input vector and writes an output vector.
+. `kl.exec  {fournbsp} Kn, Vs2` {nbsp} reads an input vector and writes no output vector.
+. `kl.exec  Vd, Kn {fournbsp}{nbsp}` {nbsp} reads no input vector and writes an output vector.
+. `kl.exec  {fournbsp} Kn {fournbsp}{nbsp}` {nbsp} reads no input vector and writes no output vector.
 --
 
 _Encoding_::
@@ -1103,10 +1090,10 @@ _Encoding_::
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
     { bits:  5, name: 'rd', attr: ['Vd','—','Vd','—'] },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
-    { bits:  5, name: "'rs1' (n)", attr: ['Kn|K(Xn)'] },
+    { bits:  5, name: "'rs1' (n)", attr: ['Kn'] },
     { bits:  5, name: 'rs2', attr: ['Vs2','Vs2','—','—'] },
     { bits:  1, name: 0x0 },
-    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
     { bits:  1, name: 0x0 },
     { bits:  2, name: 'Form', attr: ['0    0','0    1','1    0','1    1'] },
     { bits:  2, name: 0x0, attr: ['funct2'] },
@@ -1122,15 +1109,13 @@ The encodings of Forms A–D are:
 . `Form` = `0b11` and `rd` = `rs2` = `0b00000`.
 
 The locker operand is always in `rs1`. An unused register field, `rd` without an output vector and `rs2` without an input vector, must be zero; non-zero values in it are reserved, except for encodings that `Zklmv` assigns to it (<<KLEE-instruction-mv>>).
-
-`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 --
 
 _Description_::
 +
 --
-Performs the cryptographic operation that the Machine in locker `Kn` or `K(Xn)` defines, possibly taking an input and producing an output.
-When it performs no operation, on an _Unconfigured_, Error-State or expired locker, or when it transitions the locker to an Error State, it zeroes the unwritten part of its output window instead of producing output (Rule <<KLEE-GR-usage-locker-error-state>>).
+Performs the cryptographic operation that the Machine in locker `Kn` defines, possibly taking an input and producing an output.
+When it performs no operation, on an _Unconfigured_, Error-State or expired locker, or when it transitions the locker to an Error State, it zeroes the unwritten part of its output window instead of producing output (Rule <<KLEE-SGR-usage-locker-error-state>>).
 
 In Form A, `Vd` and `Vs2` may be the same register group; any other overlap is reserved.
 `Vd` = `Vs2` is allowed only for an operation whose output blocks have the length of its input blocks, each block's output then replacing its input at the same offset; for any other operation it raises an illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>).
@@ -1247,10 +1232,10 @@ _Mnemonic_::
 (((KLEE, instruction, kl.setst)))
 +
 [upperalpha]
-. `kl.setst Kd|K(Xd), #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `kl.setst Kd|K(Xd), #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
-. `kl.setst Kd|K(Xd), #immed7, Vs{nbsp}` — in a vector register.
-. `kl.setst Kd|K(Xd), #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+. `kl.setst Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `kl.setst Kd, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
+. `kl.setst Kd, #immed7, Vs{nbsp}` — in a vector register.
+. `kl.setst Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
 
 //
 
@@ -1263,19 +1248,15 @@ The encodings with `#immed7`[6:3] = `0b0111` belong to `kl.mgmt` (<<KLEE-instruc
 ....
 {reg:[
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
-    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  5, name: 'Kd' },
     { bits:  3, name: 0x3, attr: ['kl.setst'] },
     { bits:  5, name: 'rs1' },
-    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
     { bits:  2, name: 'F' },
     { bits:  2, name: 0x0 },
     { bits:  7, name: 'immed7' },
 ]}
 ....
-
-`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
-
-With `r` = 1 and `X0` as the locker register, Form A with `#immed7` = 0 is `kl.clearall` (<<KLEE-instruction-clear>>), and every other combination of Form and `#immed7` is reserved.
 
 The encodings of the four Forms are:
 [upperalpha]
@@ -1290,7 +1271,7 @@ The encodings of the four Forms are:
 _Description_::
 +
 --
-`kl.setst` advances the Machine of locker `Kd` or `K(Xd)` from one stage to another, for instance from initializing a hash
+`kl.setst` advances the Machine of locker `Kd` from one stage to another, for instance from initializing a hash
 function to absorbing data and finalizing the digest. It normally reaches the State that `#immed7` names, but some States transition automatically to another
 State when the instruction completes. <<KLEE-State-management>> and the specification of each Machine give the allowed transitions.
 `kl.setst` may also set state information orthogonal to these stages, possibly as a prerequisite for entering another State.
@@ -1316,7 +1297,7 @@ GPRs or in a vector register (group) `Vs`.
 --
 
 [[KLEE-instruction-clear]]
-==== kl.clear
+==== `kl.clear`
 
 `kl.clear Kd` is `kl.setst` (<<KLEE-instruction-setst>>) with no auxiliary operand and `#immed7` = `kl_state_unconfigured` (<<KLEE-State-field>>).
 It sets the _State_ of the locker to _Unconfigured_, and releases its resources in the KLF.
@@ -1324,7 +1305,7 @@ It sets the _State_ of the locker to _Unconfigured_, and releases its resources 
 Clearing a locker not already _Unconfigured_, or whose `*llockerstatus` field in effect is _Off_ (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), sets to _Dirty_ the `*llockerstatus` fields in effect for the current privilege mode and the `KLS` fields in effect.
 
 [[KLEE-instruction-clearall]]
-==== kl.clearall
+==== `kl.clearall`
 
 `kl.clearall` unconfigures every locker, as `kl.clear` on each would; unconfigures the KLIOBUF, zeroing the buffer and setting
 `kliobuflen`, `kliobuftop` and `klstart` to 0; zeroizes the three authentication registers of <<KLEE-KLF>>; and writes 32 to `klmanagedlocker`.
@@ -1335,7 +1316,7 @@ It is encoded with `r` = `1` and `rs1` = `rd` = `0`.
 [[KLEE-instruction-clearads]]
 ==== kl.clearads
 
-`kl.clearads Kd|K(Xd)` deletes any ADS from locker `Kd` or `K(Xd)`, and sets _AuxDataLen_ and _ADSDropped_ to 0.
+`kl.clearads Kd` deletes any ADS from locker `Kd`, and sets _AuxDataLen_ and _ADSDropped_ to 0.
 It is `kl.setst` (<<KLEE-instruction-setst>>) with no auxiliary operand and `#immed7` = `kl_cfg_clear_ads` (64).
 
 Software uses it before exporting a locker for another target, possibly a different implementation: the export then produces a more compact, ADS-free SCC, whose ADS a destination with a different KLEE unit might have to drop anyway.
@@ -1361,7 +1342,7 @@ _Description_::
 +
 --
 `kl.mgmt` brackets the body of a locker management operation (<<KLEE-management-operations>>):
-it opens a provisioning, an export or an import on locker `Kd` or `K(Xd)`, and completes it.
+it opens a provisioning, an export or an import on locker `Kd`, and completes it.
 Like `kl.setst` it changes the _State_ of the locker, but with different semantics, hence a separate instruction.
 The State reached depends on both the previous State of the locker and `#immed7`.
 Besides the command in `#immed7`, `kl.mgmt` receives an MDH: when opening, it selects the variant of the operation and may become the MDH of the locker; when completing an import or an export, it restores, from the copy the caller saved, the _State_ the locker had when the operation started.
@@ -1386,7 +1367,7 @@ The Forms supply the MDH as follows:
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-instruction-getmd]]
-=== kl.getmd, kl.getmdl, and kl.getmdv
+=== `kl.getmd`, `kl.getmdl`, and `kl.getmdv`
 
 _Synopsis_::
 Export the MDH of a locker.
@@ -1395,9 +1376,9 @@ _Mnemonics_::
 +
 --
 [%hardbreaks]
-`kl.getmdl{nbsp}Xd, Ks|K(Xs)`(((KLEE, instruction, kl.getmdl)))
-`kl.getmd{nbsp}{nbsp}Xd, Ks|K(Xs)`(((KLEE, instruction, kl.getmd)))
-`kl.getmdv{nbsp}Vd, Ks|K(Xs)`(((KLEE, instruction, kl.getmdv)))
+`kl.getmdl{nbsp}Xd, Ks`(((KLEE, instruction, kl.getmdl)))
+`kl.getmd{nbsp}{nbsp}Xd, Ks`(((KLEE, instruction, kl.getmd)))
+`kl.getmdv{nbsp}Vd, Ks`(((KLEE, instruction, kl.getmdv)))
 --
 
 
@@ -1412,18 +1393,16 @@ _Encoding_::
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
-    { bits:  5, name: 'rs1', attr: ['Ks|K(Xs)'] },
+    { bits:  5, name: 'rs1', attr: ['Ks'] },
     { bits:  5, name: 0x00  },
     { bits:  1, name: 0x0 },
-    { bits:  1, name: 'r' },
+    { bits:  1, name: '0' },
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'h' },
     { bits:  1, name: 'v' },
     { bits:  2, name: 0x3, attr: ['funct2'] },
 ]}
 ....
-
-`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 With bit `v` (bit 29) = 0, bit `h` (bit 28) selects `kl.getmdl` (`h` = 0) or `kl.getmd` (`h` = 1), and the result goes to GPRs: one GPR on RV64 and a pair on RV32 for `kl.getmdl`, a pair on RV64 and a quartet on RV32 for `kl.getmd` (Rule <<KLEE-GR-multiple-GPRs>>).
 With `v` = 1, the instruction is `kl.getmdv`, which writes the entire MDH to the lowest 128 bits of a vector register (group); `h` must then be 0, and `v` = `h` = 1 is reserved.
@@ -1432,7 +1411,7 @@ With `v` = 1, the instruction is `kl.getmdv`, which writes the entire MDH to the
 _Description_::
 +
 --
-These instructions copy the MDH of locker `Ks` or `K(Xs)`, which is all-zero for an _Unconfigured_ locker:
+These instructions copy the MDH of locker `Ks`, which is all-zero for an _Unconfigured_ locker:
 
 * `kl.getmdl` copies bits [63:0] to GPR `Xd` on RV64, and to the pair `X[d+1] @ X[d]` on RV32.
 * `kl.getmd` copies bits [127:0]: on RV64, bits [63:0] to `Xd` and bits [127:64] to `X[d+1]`; on RV32, to the quartet `X[d+3] @ X[d+2] @ X[d+1] @ X[d]`.
@@ -1448,21 +1427,21 @@ The instructions do not check the validity of the MDH (<<KLEE-Metadata-validity>
 
 The pseudo-instructions
 (((KLEE, instruction, kl.getst)))
-`kl.getst Xd, Ks|K(Xs)`
+`kl.getst Xd, Ks`
 (((KLEE, instruction, kl.getstx)))
-`kl.getstx Xd, Ks|K(Xs)`
+`kl.getstx Xd, Ks`
 return the _State_, resp. _StateExtension_, field of the MDH of the source locker, for instance to determine whether it is in an Error State (<<KLEE-State-field>>).
 They read the MDH with `kl.getmdl`, and extract the field by shifting and masking.
 
 On RV64, `kl.getst` expands to
 
-. `kl.getmdl Xd, Ks` or `K(Xs)`
+. `kl.getmdl Xd, Ks`
 . `srli  Xd, Xd, 19`
 . `andi  Xd, Xd, 0x3F`
 
 and `kl.getstx` to
 
-. `kl.getmdl Xd, Ks` or `K(Xs)`
+. `kl.getmdl Xd, Ks`
 . `srli  Xd, Xd, 25`
 . `andi  Xd, Xd, 0x0F`
 
@@ -1480,9 +1459,9 @@ _Mnemonic_::
 +
 --
 [%hardbreaks]
-`kl.restrictl{nbsp}{nbsp}Kd|K(Xd), Xs1`(((KLEE, instruction, kl.restrict)))
-`kl.restricth{nbsp}{nbsp}Kd|K(Xd), Xs1`
-`kl.restrictv{nbsp}{nbsp}Kd|K(Xd), Vs1`
+`kl.restrictl{nbsp}{nbsp}Kd, Xs1`(((KLEE, instruction, kl.restrict)))
+`kl.restricth{nbsp}{nbsp}Kd, Xs1`
+`kl.restrictv{nbsp}{nbsp}Kd, Vs1`
 --
 
 _Encoding_::
@@ -1493,20 +1472,18 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
-    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  5, name: 'Kd' },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
     { bits:  5, name: 'Xs1' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 0x0 },
-    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'h' },
     { bits:  1, name: 'v' },
     { bits:  2, name: 0x1, attr: ['funct2'] },
 ]}
 ....
-
-`r` is the locker indexing mode selector (Rule <<KLEE-GR-GPR-indirect>>).
 
 With bit `v` (bit 29) = 0, bit `h` (bit 28) selects `kl.restrictl` (`h` = 0) or `kl.restricth` (`h` = 1), and the input comes from a GPR (a GPR pair on RV32).
 With `v` = 1, the instruction is `kl.restrictv`, `h` must be 0, and the input comes from the lowest 128 bits of a vector register (group); `v` = `h` = 1 is reserved.
@@ -1517,7 +1494,7 @@ With `v` = 1, the instruction is `kl.restrictv`, `h` must be 0, and the input co
 _Description_::
 +
 --
-These instructions narrow the policies of the CC in locker `Kd` or `K(Xd)`, whose MDH is `md`,
+These instructions narrow the policies of the CC in locker `Kd`, whose MDH is `md`,
 as the operand `Xs1` (`Vs1` for `kl.restrictv`), in the format of an MDH, requests.
 For _Locality_, _UsagePolicy_ and _ExpirationDate_ the result is the narrowing of `md` by `Xs1`
 (Metadata Narrowing Rule <<KLEE-MNR>>), except that a request weaker than `md`, which a narrowing would silently override,
@@ -1586,7 +1563,7 @@ _Synopsis_::
 Copy, move or exchange the CCs of lockers.
 
 _Mnemonic_::
-`kl.{clone, rename, swap} Kd|K(Xd), Ks|K(Xs)`
+`kl.{clone, rename, swap} Kd, Ks`
 (((KLEE, instruction, kl.clone)))
 (((KLEE, instruction, kl.rename)))
 (((KLEE, instruction, kl.swap)))
@@ -1598,9 +1575,9 @@ These are R-type instructions that share the opcode and `funct3` of `kl.exec`, w
 ....
 {reg:[
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
-    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  5, name: 'Kd' },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
-    { bits:  5, name: 'Ks|K(Xs)' },
+    { bits:  5, name: 'Ks' },
     { bits:  5, name: 0x0 },
     { bits:  2, name: 'R' },
     { bits:  2, name: 'T' },
@@ -1614,11 +1591,6 @@ Field `R` (bits [26:25]) selects how the lockers are given:
 
 [upperalpha]
 . `00`{nbsp}{nbsp} source and destination both as immediates;
-. `01`{nbsp}{nbsp} source as an immediate, destination through a GPR;
-. `10`{nbsp}{nbsp} source through a GPR, destination as an immediate;
-. `11`{nbsp}{nbsp} source and destination both through GPRs.
-
-_Indirect locker addressing is always available for these instructions, `kl.rename` and `kl.swap` included, even without `Zklind`._
 
 Field `T` (bits [28:27]) selects the instruction:
 
@@ -1665,7 +1637,7 @@ _Synopsis_::
 Transfer data from one locker into another without exposing it to software.
 
 _Mnemonic_::
-`kl.derive Kd|K(Xd), Ks1|K(Xs1), Xs2`
+`kl.derive Kd, Ks1, Xs2`
 (((KLEE, instruction, kl.derive)))
 
 _Encoding_::
@@ -1677,9 +1649,9 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
-    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  5, name: 'Kd' },
     { bits:  3, name: 0x4, attr: ['kl.exec'] },
-    { bits:  5, name: 'Ks1|K(Xs1)' },
+    { bits:  5, name: 'Ks1' },
     { bits:  5, name: 'Xs2' },
     { bits:  2, name: 'R' },
     { bits:  2, name: 0x3 },
@@ -1688,7 +1660,11 @@ _Encoding_::
 ]}
 ....
 
-Field `R` (bits [26:25]) is encoded as for `kl.clone` (<<KLEE-instruction-clone>>), but indirect locker addressing is available only with `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
+Field `R` (bits [26:25]) selects how the lockers are given:
+
+[upperalpha]
+. `00`{nbsp}{nbsp} source and destination both as immediates;
+
 The auxiliary input is always a GPR: `kl.derive` has no form without one, and no vector form.
 --
 
@@ -1748,23 +1724,23 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x67, attr: ['JALR'] },
-    { bits:  5, name: 'context', attr: ['Kd','K(Xd)'] },
+    { bits:  5, name: 'context', attr: ['Kd'] },
     { bits:  3, name: 'kl.load', attr: [0x6,0x7] },
     { bits:  5, name: 'Xs1' },
     { bits: 12, name: 'immed12' },
 ]}
 ....
 +
-With `funct3` = 6 the `context` field is the locker index, and with `funct3` = 7 it names the GPR holding the index; indirect locker addressing requires `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
+With `funct3` = 6 the `context` field is the locker index.
 
 _Mnemonics_::
-`kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xs1)`
+`kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd, %offset(Xs1)`
 
 _Description_::
 +
 --
-`kl.load` imports the Content of a PI or an SCC into locker `Kd` or `K(Xd)`.
-It is never used on a locker in an Error State (Rule <<KLEE-GR-error-state-locker-is-only-MDH>>, <<KLEE-error-state-transfer>>), and does not transfer the MDH, which `kl.mgmt` carries.
+`kl.load` imports the Content of a PI or an SCC into locker `Kd`.
+It is never used on a locker in an Error State (Rule <<KLEE-SGR-error-state-locker-is-only-MDH>>, <<KLEE-error-state-transfer>>), and does not transfer the MDH, which `kl.mgmt` carries.
 As for `kl.mv`, the leading bytes of the image are the authentication fields `SIV`, `IMPQUAL` and `SIV2`, which `kl.load` writes to the authentication registers of <<KLEE-KLF>>.
 
 Transfers follow the constraints of `kl.mv` (<<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>), with `S`, `image_end` and _ContentOffset_ as defined there.
@@ -1790,22 +1766,22 @@ _Encoding_::
     { bits:  5, name: 'immed[4:0]' },
     { bits:  3, name: 'kl.store', attr: [0x6,0x7] },
     { bits:  5, name: 'Xs1' },
-    { bits:  5, name: 'context', attr: ['Ks2','K(Xs2)'] },
+    { bits:  5, name: 'context', attr: ['Ks2'] },
     { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
 +
-With `funct3` = 6 the `context` field is the locker index, and with `funct3` = 7 it names the GPR holding the index; indirect locker addressing requires `Zklind` (Rule <<KLEE-GR-GPR-indirect>>).
+With `funct3` = 6 the `context` field is the locker index.
 
 _Mnemonic_::
-`kl.store %offset(Xs1), Ks2|K(Xs2)`
+`kl.store %offset(Xs1), Ks2`
 (((KLEE, instruction, kl.store)))
 
 _Description_::
 +
 --
-`kl.store` exports the serialized image `S` of locker `Ks2` or `K(Xs2)` to memory.
-It is never used on a locker in an Error State (Rule <<KLEE-GR-error-state-locker-is-only-MDH>>, <<KLEE-error-state-transfer>>), and does not transfer the MDH, which `kl.getmd*` extracts.
+`kl.store` exports the serialized image `S` of locker `Ks2`.
+It is never used on a locker in an Error State (Rule <<KLEE-SGR-error-state-locker-is-only-MDH>>, <<KLEE-error-state-transfer>>), and does not transfer the MDH, which `kl.getmd*` extracts.
 As for `kl.mv`, the leading bytes of the image are the authentication fields `SIV`, `IMPQUAL` and `SIV2`, which `kl.store` reads from the authentication registers of <<KLEE-KLF>>.
 
 Transfers follow the constraints of `kl.mv` (<<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>), with `S`, _ContentOffset_, `image_size` and `image_end` as defined there.
@@ -1894,6 +1870,551 @@ _Description_:: {empty}
 --
 The output counterpart of `kl.input`: the <<KLEE-iobuf-transfer-window>> of <<KLEE-instruction-input>> applies.
 --
+
+== `Zklind`: Indirect locker addressing
+
+`Zklind` adds indirect locker addressing to all instructions, by a GPR value,
+and an encoding bit selects the mode. `K(Xd)` denotes the locker whose index
+GPR `Xd`. The extension was developed with the intent of reducing code size in
+libraries that make use of multiple locker's.
+
+[NOTE]
+====
+Register renaming of lockers remains possible with indirect addressing, but
+would add much microarchitectural complexity for little benefit: lockers are
+redefined far less often than GPRs or FP registers, rarely take one key or
+another conditionally, and speculation on cryptographic results usually creates
+security issues.
+====
+
+Unless stated otherwise, the indirect instruction semantics are equivalent to
+the direct instruction semantics.
+
+Besides the general rules defined in <<KLEE-general-rules-instructions>>,
+`Zklind` defines an extra rule.
+
+[[KLEE-GR-GPR-indirect,GR_IND_1]]GR_IND_1:: _Use of a GPR as indirect locker
+index:_ An indirect locker index outside [0..31] raises an illegal-instruction
+exception, and so does `X0` as the indirect locker index register, except in
+the encoding of `kl.clearall` (<<KLEE-instruction-clearall>>). Without
+`Zklind`, an encoding that selects indirect locker addressing (`r` = 1, `R`
+{ne} `00`, or `funct3` = 7) is reserved and raises an illegal-instruction
+exception, except for `kl.clone`, `kl.rename` and `kl.swap`, which always offer
+indirect addressing (<<KLEE-instruction-clone>>), and for the encoding of
+`kl.clearall`.
+
+[[KLEE-Zklind-instruction-load]]
+==== kl.load
+
+_Encoding_::
+`kl.load` is an I-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x67, attr: ['JALR'] },
+    { bits:  5, name: 'context', attr: ['K(Xd)'] },
+    { bits:  3, name: 'kl.load', attr: [0x6,0x7] },
+    { bits:  5, name: 'Xs1' },
+    { bits: 12, name: 'immed12' },
+]}
+....
++
+With `funct3` = 7 it names the GPR holding the index.
+
+_Mnemonics_::
+`kl.load{fournbsp}{nbsp}{nbsp}{nbsp}K(Xd), %offset(Xs1)`
+
+_Description_::
++
+--
+`kl.load` imports the Content of a PI or an SCC into `K(Xd)`.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-Zklind-instruction-store]]
+==== kl.store
+
+_Encoding_::
+`kl.store` is an S-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x23, attr: ['STORE'] },
+    { bits:  5, name: 'immed[4:0]' },
+    { bits:  3, name: 'kl.store', attr: [0x6,0x7] },
+    { bits:  5, name: 'Xs1' },
+    { bits:  5, name: 'context', attr: ['K(Xs2)'] },
+    { bits:  7, name: 'immed[11:5]' },
+]}
+....
++
+With `funct3` = 7 it names the GPR holding the index.
+
+_Mnemonic_::
+`kl.store %offset(Xs1), K(Xs2)`
+(((KLEE, instruction, kl.store)))
+
+_Description_::
++
+--
+`kl.store` exports the serialized image `S` of locker `K(Xs2)` to memory.
+--
+
+[[KLEE-Zklind-instruction-size]]
+=== `kl.avail` and `kl.size`
+
+_Synopsis_::
+`kl.avail` returns 1 if the Machine encoded in the MDH is available in the
+requested variant, and 0 otherwise. `kl.size` returns the size in bytes of the
+memory buffer needed for the data of a PI or SCC, or 0 on error, such as an
+unsupported Machine or an invalid MDH.
+
+_Mnemonic_::
++
+--
+`kl.avail` and `kl.size` have three Forms:
+(((KLEE, instruction, kl.size)))
+(((KLEE, instruction, kl.avail)))
+
+[upperalpha]
+. `kl.{avail,size}  Xd, K(Xs)` - Size from a context.
+--
+
+_Encoding_::
++
+--
+
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: 'K(Xs)' },
+    { bits:  5, name: 0x0 },
+    { bits:  1, name: 'q' },
+    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x1 },
+    { bits:  2, name: 'F' },
+    { bits:  2, name: 0x0, attr: ['funct2'] },
+]}
+....
+
+Field `F` and bit `r` select the Form:
+
+* `F` = `0b00`, `r` = `1` {implies} Form A, from a context given indirectly as `K(Xs)`.
+--
+
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-Zklind-instruction-exec]]
+=== `kl.exec`
+
+_Synopsis_::
+Perform a cryptographic operation in the KLEE unit.
+
+_Mnemonic_::
++
+--
+`kl.exec` has four Forms:
+(((KLEE, instruction, kl.exec)))
+
+[upperalpha]
+. `kl.exec  Vd, K(Xn), Vs2` {nbsp} reads an input vector and writes an output vector.
+. `kl.exec  {fournbsp} K(Xn), Vs2` {nbsp} reads an input vector and writes no output vector.
+. `kl.exec  Vd, K(Xn) {fournbsp}{nbsp}` {nbsp} reads no input vector and writes an output vector.
+. `kl.exec  {fournbsp} K(Xn) {fournbsp}{nbsp}` {nbsp} reads no input vector and writes no output vector.
+--
+
+_Encoding_::
+`kl.exec` is an R-type instruction.
++
+--
+[wavedrom, , svg]
+....
+
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'rd', attr: ['Vd','—','Vd','—'] },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: "'rs1' (n)", attr: [K(Xn)] },
+    { bits:  5, name: 'rs2', attr: ['Vs2','Vs2','—','—'] },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 0x0 },
+    { bits:  2, name: 'Form', attr: ['0    0','0    1','1    0','1    1'] },
+    { bits:  2, name: 0x0, attr: ['funct2'] },
+]}
+....
+--
+
+_Description_::
++
+--
+Performs the cryptographic operation that the Machine in locker `K(Xn)`
+defines, possibly taking an input and producing an output.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-Zklind-instruction-mv]]
+=== `kl.mv`
+
+_Synopsis_::
+  Move content between scalar/vector registers and a locker in a Configuration State.
+
+_Mnemonics_::
++
+--
+`kl.mv` has four variants:
+(((KLEE, instruction, kl.mv)))
+
+[upperroman]
+. `kl.mv  K(Xd), Xs2` copies 128 bits of content from two or four GPRs into a locker.
+. `kl.mv  K(Xd), Vs2` copies one or more 128-bit blocks of content from a vector register into a locker.
+. `kl.mv  Xd,  K(Xs1)` extracts 128 bits of content from a locker into two or four GPRs.
+. `kl.mv  Vd,  K(Xs1)` extracts one or more 128-bit blocks of content from a locker into a vector register.
+--
+
+_Encodings_::
++
+--
+The encodings are variants of `kl.exec` Forms B and C: the locker is encoded in `rs1`, and the sub-opcode
+occupies the register field unused by the corresponding `kl.exec` Form: `rd` in Form B, `rs2` in Form C.
+
+[upperroman]
+. `kl.mv  K(Xd), Xs2`   is encoded as `Form` = `0b01` and `rd` = `0b00001`.
+. `kl.mv  K(Xd), Vs2`   is encoded as `Form` = `0b01` and `rd` = `0b00010`.
+. `kl.mv  Xd,  K(Xs1)` is encoded as `Form` = `0b10` and `rs2` = `0b00001`.
+. `kl.mv  Vd,  K(Xs1)` is encoded as `Form` = `0b10` and `rs2` = `0b00010`.
+
+`r` is the locker indexing mode selector.
+--
+//
+// In the mnemonics of variants A and B the locker is written first because it is the
+// destination of the move; it is nonetheless encoded in `rs1`, not in `rd`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-setst]]
+=== kl.setst
+
+_Synopsis_::
+Change the state of the Machine encoded in the CC in a locker.
+
+_Mnemonic_::
+`kl.setst` has four Forms:
+(((KLEE, instruction, kl.setst)))
++
+[upperalpha]
+. `kl.setst K(Xd), #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `kl.setst K(Xd), #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
+. `kl.setst K(Xd), #immed7, Vs{nbsp}` — in a vector register.
+. `kl.setst K(Xd), #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+
+//
+
+_Encoding_::
+`kl.setst` is an R-type instruction.
+The encodings with `#immed7`[6:3] = `0b0111` belong to `kl.mgmt` (<<KLEE-instruction-mgmt>>), a separate instruction; all others are `kl.setst`.
++
+--
+[wavedrom, ,svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'K(Xd)' },
+    { bits:  3, name: 0x3, attr: ['kl.setst'] },
+    { bits:  5, name: 'rs1' },
+    { bits:  1, name: 'r' },
+    { bits:  2, name: 'F' },
+    { bits:  2, name: 0x0 },
+    { bits:  7, name: 'immed7' },
+]}
+....
+
+`r` is the locker indexing mode selector.
+
+With `r` = 1 and `X0` as the locker register, Form A with `#immed7` = 0 is
+`kl.clearall` (<<KLEE-instruction-clear>>), and every other combination of Form
+and `#immed7` is reserved.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+_Description_::
++
+--
+`kl.setst` advances the Machine of locker `K(Xd)` from one stage to another,
+for instance from initializing a hash function to absorbing data and finalizing
+the digest.
+--
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-clearads]]
+==== `kl.clearads`
+
+`kl.clearads K(Xd)` deletes any ADS from locker `K(Xd)`, and sets _AuxDataLen_
+and _ADSDropped_ to 0.
+
+[[KLEE-instruction-mgmt]]
+=== `kl.mgmt`
+
+_Synopsis_::
+Open or complete a management operation on a locker.
+
+_Mnemonic_::
+`kl.mgmt` is a separate instruction, with only Forms A, C and D of `kl.setst`.
+(((KLEE, instruction, kl.mgmt)))
+
+//
+
+_Encoding_::
+`kl.mgmt` is an R-type instruction with the encoding of `kl.setst` (<<KLEE-instruction-setst>>) and `#immed7`[6:3] = `0b0111`, that is, `#immed7` in 56–63.
++
+--
+[wavedrom, ,svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'K(Xd)' },
+    { bits:  3, name: 0x3, attr: ['kl.setst'] },
+    { bits:  5, name: 'rs1' },
+    { bits:  1, name: 'r' },
+    { bits:  2, name: 'F' },
+    { bits:  2, name: 0x0 },
+    { bits:  7, name: '0x7' },
+]}
+....
+
+`r` is the locker indexing mode selector.
+
+_Description_::
++
+--
+`kl.mgmt` brackets the body of a locker management operation (<<KLEE-management-operations>>):
+it opens a provisioning, an export or an import on locker `K(Xd)`, and completes it.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-getmd]]
+=== `kl.getmd`, `kl.getmdl`, and `kl.getmdv`
+
+_Synopsis_::
+Export the MDH of a locker.
+
+_Mnemonics_::
++
+--
+[%hardbreaks]
+`kl.getmdl{nbsp}Xd, K(Xs)`(((KLEE, instruction, kl.getmdl)))
+`kl.getmd{nbsp}{nbsp}Xd, K(Xs)`(((KLEE, instruction, kl.getmd)))
+`kl.getmdv{nbsp}Vd, K(Xs)`(((KLEE, instruction, kl.getmdv)))
+--
+
+
+_Encoding_::
++
+--
+`kl.getmd*` are R-type instructions that share the opcode and `funct3` of `kl.exec`, with `funct2` = `0b11`.
+
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: 'rs1', attr: ['K(Xs)'] },
+    { bits:  5, name: 0x00  },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'h' },
+    { bits:  1, name: 'v' },
+    { bits:  2, name: 0x3, attr: ['funct2'] },
+]}
+....
+
+`r` is the locker indexing mode selector.
+--
+
+_Description_::
++
+--
+These instructions copy the MDH of locker `K(Xs)`.
+--
+
+//
+
+[[KLEE-instruction-getst]]
+==== `kl.getst`, `kl.getstx`
+
+The pseudo-instructions
+(((KLEE, instruction, kl.getst)))
+`kl.getst Xd, K(Xs)`
+(((KLEE, instruction, kl.getstx)))
+`kl.getstx Xd, K(Xs)`
+return the _State_, resp. _StateExtension_, field of the MDH of the source locker, for instance to determine whether it is in an Error State (<<KLEE-State-field>>).
+They read the MDH with `kl.getmdl`, and extract the field by shifting and masking.
+
+On RV64, `kl.getst` expands to
+
+. `kl.getmdl Xd, K(Xs)`
+. `srli  Xd, Xd, 19`
+. `andi  Xd, Xd, 0x3F`
+
+and `kl.getstx` to
+
+. `kl.getmdl Xd, K(Xs)`
+. `srli  Xd, Xd, 25`
+. `andi  Xd, Xd, 0x0F`
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-restrict]]
+=== `kl.restrictl`, `kl.restricth`, and `kl.restrictv`
+
+_Synopsis_::
+Restrict the policies encoded in a CC in a locker.
+
+_Mnemonic_::
++
+--
+[%hardbreaks]
+`kl.restrictl{nbsp}{nbsp}K(Xd), Xs1`(((KLEE, instruction, kl.restrict)))
+`kl.restricth{nbsp}{nbsp}K(Xd), Xs1`
+`kl.restrictv{nbsp}{nbsp}K(Xd), Vs1`
+--
+
+_Encoding_::
++
+--
+`kl.restrict*` are R-type instructions that share the opcode and `funct3` of `kl.exec`, with `funct2` (the two msbs of `funct7`) = `0b01`.
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'K(Xd)' },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: 'Xs1' },
+    { bits:  5, name: 0x0 },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'r' },
+    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'h' },
+    { bits:  1, name: 'v' },
+    { bits:  2, name: 0x1, attr: ['funct2'] },
+]}
+....
+
+`r` is the locker indexing mode selector.
+--
+
+// comment
+
+_Description_::
++
+--
+These instructions narrow the policies of the CC in locker `K(Xd)`, whose MDH is `md`,
+as the operand `Xs1` (`Vs1` for `kl.restrictv`), in the format of an MDH, requests.
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-clone]]
+=== `kl.clone`, `kl.rename`, and `kl.swap`
+
+_Synopsis_::
+Copy, move or exchange the CCs of lockers.
+
+_Mnemonic_::
+`kl.{clone, rename, swap} Kd|K(Xd), Ks|K(Xs)`
+(((KLEE, instruction, kl.clone)))
+(((KLEE, instruction, kl.rename)))
+(((KLEE, instruction, kl.swap)))
+
+_Encoding_::
+These are R-type instructions that share the opcode and `funct3` of `kl.exec`, with `funct2` = 2.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: 'Ks|K(Xs)' },
+    { bits:  5, name: 0x0 },
+    { bits:  2, name: 'R' },
+    { bits:  2, name: 'T' },
+    { bits:  1, name: 0x0 },
+    { bits:  2, name: 0x2, attr: ['funct2'] },
+]}
+....
++
+--
+Field `R` (bits [26:25]) selects how the lockers are given:
+
+[upperalpha]
+. `01`{nbsp}{nbsp} source as an immediate, destination through a GPR;
+. `10`{nbsp}{nbsp} source through a GPR, destination as an immediate;
+. `11`{nbsp}{nbsp} source and destination both through GPRs.
+
+--
+
+// Comment to ensure proper indentation in the next Description
+
+_Description_::
++
+--
+`kl.clone`:::
+Clones the source locker `Ks` (or the locker indexed by `Xs`) into the
+destination locker `Kd` (or the locker indexed by `Xd`):
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-derive]]
+=== `kl.derive`
+
+_Synopsis_::
+Transfer data from one locker into another without exposing it to software.
+
+_Mnemonic_::
+`kl.derive Kd|K(Xd), Ks1|K(Xs1), Xs2`
+(((KLEE, instruction, kl.derive)))
+
+_Encoding_::
++
+--
+`kl.derive` is an R-type instruction.
+
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0F, attr: ['MISC-MEM'] },
+    { bits:  5, name: 'Kd|K(Xd)' },
+    { bits:  3, name: 0x4, attr: ['kl.exec'] },
+    { bits:  5, name: 'Ks1|K(Xs1)' },
+    { bits:  5, name: 'Xs2' },
+    { bits:  2, name: 'R' },
+    { bits:  2, name: 0x3 },
+    { bits:  1, name: 0x0 },
+    { bits:  2, name: 0x2, attr: ['funct2'] },
+]}
+....
+
+--
+
+_Description_::
++
+--
+`kl.derive` moves up to `length` bytes, which the auxiliary GPR carries, from
+an endpoint of the source locker to an endpoint of the destination locker,
+without making them visible to software: the output of one Machine becomes an
+input, possibly a key or another Content field, of another.
 
 // ////////////////////////////////////////////////////////////////////
 
