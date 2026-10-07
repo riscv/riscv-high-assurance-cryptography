@@ -213,8 +213,8 @@ def double_ocb(v: int) -> int:
 # <<KLEE-metadata-header>>: (name, hi, lo); None marks a Reserved field.
 MDH_FIELDS = [
     ('Machine', 11, 0), ('MachinePolicy', 13, 12), ('MachineExtension', 15, 14),
-    ('SCProtection', 18, 16), ('State', 24, 19), ('StateExtension', 28, 25),
-    ('KeyType', 30, 29), (None, 31, 31), ('AuxDataLen', 45, 32), (None, 46, 46),
+    ('SCProtection', 17, 16), ('State', 23, 18), ('StateExtension', 27, 24),
+    ('KeyType', 29, 28), (None, 31, 30), ('AuxDataLen', 45, 32), (None, 46, 46),
     ('ADSDropped', 47, 47), ('MachineUse', 61, 48), ('Version', 63, 62),
     ('UsagePolicy', 68, 64), ('Locality', 77, 69), (None, 79, 78),
     ('AuxInfo', 95, 80), ('ExpirationDate', 115, 96), (None, 127, 116),

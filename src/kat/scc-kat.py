@@ -162,7 +162,7 @@ class Unit:
     def _set_managed(self, cl):                # common step 2
         self.klmanagedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR32, GR33
+    def _check_transfer(self, cl):             # GR38, GR39
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klmanagedlocker:
             raise IllegalInstruction
 
@@ -189,13 +189,13 @@ class Unit:
     def metadata_check(self, M, base, at_import=False, low_only=False):
         """<<KLEE-Metadata-validity>>: None, 'unsupported' or 'invalid'; low_only: MDH[63:0] only."""
         if (fld(M, 'MachineExtension') or fld(M, 'Machine') != AES256_ECB
-                or fld(M, 'SCProtection') not in self.SC_LEVELS):
+                or fld(M, 'SCProtection') not in self.SC_LEVELS + (3,)):        # 3 is reserved: invalid
             return 'unsupported'
         st, loc = fld(M, 'State'), fld(M, 'Locality')
-        custom = fld(M, 'Machine') >= 3072 or fld(M, 'SCProtection') >= 6 or fld(M, 'Version') == 3
+        custom = fld(M, 'Machine') >= 3072 or fld(M, 'Version') == 3
         invalid = (any(sl(M, hi, lo) for hi, lo in RESERVED if hi < 64) or fld(M, 'AuxDataLen') == 1
                    or base == 'pi' and (fld(M, 'ADSDropped') or fld(M, 'AuxDataLen'))
-                   or fld(M, 'MachinePolicy') == 0 or fld(M, 'KeyType') >= 2
+                   or fld(M, 'MachinePolicy') == 0 or fld(M, 'KeyType') >= 2 or fld(M, 'SCProtection') == 3
                    or fld(M, 'Version') not in self.VERSIONS or st in (54, 55)
                    or is_valid(st) and (st not in ECB_STATES or fld(M, 'StateExtension'))   # ECB uses none
                    or at_import and st in (0, 61, 62, 63))
@@ -248,9 +248,9 @@ class Unit:
 
     def load(self, cl, mem, at=16):            # kl.load: step 6
         if cl.state == UNCONF or cl.state in ERROR_STATES:
-            return                             # GR29: no operation
+            return                             # GR35: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
-            raise IllegalInstruction           # GR32
+            raise IllegalInstruction           # GR38
         self._check_transfer(cl)
         off, c1 = content_offset(cl.mdh), self.content1_size(cl.mdh)
         end = off + min(c1 + content2_size(cl.mdh), self.max_admissible(cl.mdh))   # image_end
@@ -265,7 +265,7 @@ class Unit:
     def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLEE-SCC-export>>
         self._check_managed(cl)
         st = cl.state
-        if st == UNCONF:                       # GR29: common steps only
+        if st == UNCONF:                       # GR35: common steps only
             self.klmanagedlocker = 32
             return
         if is_valid(st):
@@ -284,9 +284,9 @@ class Unit:
 
     def store(self, cl):                       # kl.store
         if cl.state == UNCONF:
-            return b''                         # GR29: no operation
+            return b''                         # GR35: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
-            raise IllegalInstruction           # GR33
+            raise IllegalInstruction           # GR39
         self._check_transfer(cl)
         S = v2b(self.reg_SIV, 16) + (v2b(self.reg_IMPQUAL, 16) + v2b(self.reg_SIV2, 16)
                                      if content_offset(cl.mdh) == 48 else b'')
@@ -298,7 +298,7 @@ class Unit:
         """kl_cfg_management_end for base type scc: <<KLEE-SCC-import>> steps 7-15. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
-        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR29: common steps only
+        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR35: common steps only
             self.klmanagedlocker = 32
             return
         st = fld(ml, 'State')
@@ -446,24 +446,24 @@ AUX_LEN = 2 + len(CONTENT2)
 LOC_SETS = [(), (2,), (1, 4, 6, 8, 9, 10)]      # none, one, the maximum of six
 # Regression vectors of this model (self-generated): Locality set -> (MDH, SIV, first Content1 block)
 REGRESSION = {
-    (): ('20100800000000000000000000000000',
-         '196751c2843a12d162a60ce9b19df8c2',
-         'a31c0e23e516c7846b1d737a73510540'),
-    (2,): ('20100800000000006000000000000000',
-           '3c57b39eef6f198ad7f220d6059da41f',
-           '8e5935c8f80d9b0a9a7f0cb409c1ac7e'),
-    (1, 4, 6, 8, 9, 10): ('2010080000000000403b000000000000',
-                          'cc2dda526d4eb89c17875489b78e055a',
-                          '3520073eea6486e61c99fb0a000c24b9'),
+    (): ('20100400000000000000000000000000',
+         '0d9f0e3fcb063781bb68983a9e4614b6',
+         'd296113f566edbab7bb4ac1caa29f51a'),
+    (2,): ('20100400000000006000000000000000',
+           'd6647d709ae9b04d66010cdb3ec25cd1',
+           '085846e6c0fa9dad85e6977219f399b8'),
+    (1, 4, 6, 8, 9, 10): ('2010040000000000403b000000000000',
+                          '785422c077ef79150600caa4c9c3bf9a',
+                          '1a28e4d4d7bb321c24240038b1db2a65'),
 }
 REGRESSION_ADS = {  # AuxDataLen = 4, LOC_SETS[2]
-    'MDH': '2010080004000000403b000000000000',
-    'SIV': '3a668ccb7faad708d200a55b3f8bcfbc',
+    'MDH': '2010040004000000403b000000000000',
+    'SIV': '590eecfaad2db45379fca238916f9c64',
     'IMPQUAL': '89040000018000000403020100000000',
-    'SIV2': '54302cd496d39e24ddfbd4d9b4bbbee8',
-    'C2[0]': 'f9a885e5330ad74234fda0d67a1ad7a1',
+    'SIV2': '0710ba75b06702fa4d986a7b8756db59',
+    'C2[0]': '85e6a5e475dbd8fbd8fcf8e2c7238c69',
 }
-REGRESSION_ERROR_IMAGE = '2010980100000000403b000000000000'   # after a failed import: State 51
+REGRESSION_ERROR_IMAGE = '2010cc0000000000403b000000000000'   # after a failed import: State 51
 
 # ---------------------------------------------------------------- checks
 def eq(name, got, want):
@@ -523,8 +523,8 @@ section("the MDH (<<KLEE-metadata-header>>)")
 eq("the MDH fields tile bits [127:0]", sorted(b for _, hi, lo in MDH_FIELDS for b in range(lo, hi + 1)),
    list(range(128)))
 probe = make_mdh(State=0x2A, StateExtension=0x9)
-eq("kl.getst / kl.getstx expansions (srli 19, andi 0x3F; srli 25, andi 0x0F)",
-   ((probe & M32) >> 19 & 0x3F, (probe & M32) >> 25 & 0x0F), (0x2A, 0x9))
+eq("kl.getst / kl.getstx expansions (srli 18, andi 0x3F; srli 24, andi 0x0F)",
+   ((probe & M32) >> 18 & 0x3F, (probe & M32) >> 24 & 0x0F), (0x2A, 0x9))
 check("every length/capacity field and Version lies in [63:0] (<<KLEE-length-rule>>, kl.size Form B)",
       all(MDH_FIELD[f][0] < 64 for f in ('Machine', 'MachinePolicy', 'KeyType', 'StateExtension',
                                          'AuxDataLen', 'ADSDropped', 'SCProtection', 'Version')))
@@ -599,12 +599,12 @@ for bit in (b for b in range(128) if b != 47):
     cl, res = import_image(unit, Mem(img))
     name, hi, lo = field_at(bit)
     value = sl(b2v(img[:16]), hi, lo)
-    if name in ('Machine', 'MachineExtension') or name == 'SCProtection' and value not in Unit.SC_LEVELS:
+    if name in ('Machine', 'MachineExtension') or name == 'SCProtection' and value not in Unit.SC_LEVELS + (3,):
         want = ('kl_exc_unsupported', (0, (), None))
     elif (name in ('Reserved', 'Version') or name == 'MachinePolicy' and value == 0
           or name == 'KeyType' and value >= 2 or name == 'AuxDataLen' and value == 1
           or name == 'Locality' and sl(value, 5, 4) == 3 or name == 'State' and value not in ECB_STATES
-          or name == 'StateExtension'):
+          or name == 'StateExtension' or name == 'SCProtection' and value == 3):
         want = (INV_MD, (put(0, 'State', INVALID), (), None))
     else:
         want = (AUTH_F, (err_mdh(b2v(img[:16]), AUTH), (), None))
@@ -796,7 +796,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klmanagedlocker follows (2 -> 5)",
    (u.klmanagedlocker, klf[2].snapshot()), (5, snap5))
 u.klmanagedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR33)",
+check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR39)",
       raises(u.store, klf[5]))
 u.klmanagedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
@@ -807,7 +807,7 @@ u.mgmt_open_import(klf[7], mdh_i)
 klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
 snap1 = klf[1].snapshot()
 kl_rename(u, klf, 1, 7)
-eq("kl.rename onto the managed locker discards its import (GR13); klmanagedlocker -> 32",
+eq("kl.rename onto the managed locker discards its import (GR18); klmanagedlocker -> 32",
    (u.klmanagedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
 u.mgmt_open_import(klf[4], mdh_i)
 u.load(klf[4], Mem(tampered(scc_i, 8 * (off1 + 6))))
@@ -819,7 +819,7 @@ section("Error States (<<KLEE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))
 cl_fail, res = import_image(unit, Mem(bad_c1))
 failed = err_mdh(mdh_i, AUTH)
-eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR22); "
+eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR28); "
    "also after a dropped ADS", (res, cl_fail.snapshot(), import_image(small, Mem(bad_c1))[0].snapshot()),
    (AUTH_F, (failed, (), None), (failed, (), None)))
 before = (unit.reg_SIV, unit.reg_IMPQUAL, unit.reg_SIV2)
@@ -835,10 +835,10 @@ far = new_unit(LST_NO_SLOC, ids=IDS_NEXT_REV, csk=CSK ^ 7, max_aux=0)
 cl_e, res = import_image(far, Mem(img_e))
 far.mgmt_complete(cl_e, cl_e.mdh)
 far.load(cl_e, Mem(img_e))
-eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR29)",
+eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR35)",
    (res, cl_e.snapshot()), (AUTH_F, snap))
 dirty = make_mdh(Machine=0xFFF, MachinePolicy=0, KeyType=3, AuxDataLen=5, ADSDropped=1, UsagePolicy=0b10101,
-                 MachineExtension=2, SCProtection=7, StateExtension=0xF, AuxInfo=0x155, MachineUse=0x2EEF,
+                 MachineExtension=2, SCProtection=3, StateExtension=0xF, AuxInfo=0x155, MachineUse=0x2EEF,
                  ExpirationDate=0xFFFFF, Version=2) | 0x1FF << 69
 dirty |= sum(((1 << (hi - lo + 1)) - 1) << lo for hi, lo in RESERVED)
 bad = []
