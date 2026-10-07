@@ -111,7 +111,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # SGR6; <<KLEE-CSR-klstart>>: invalid length (MGR2), also output only
+        if self.state != OP or KLLEN % B:     # GR16; <<KLEE-CSR-klstart>>: invalid length (MGR2), also output only
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -135,22 +135,22 @@ class KsLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker or DRBG output bytes
-        (DER7, unrestricted: no narrowing)."""
+        (GR41, unrestricted: no narrowing)."""
         n = self.params()[0] // 8
-        if isinstance(src, KsLocker):         # DER1 items 1-2, then item 3: keystream is no hash/MAC/XOF
-            if src.state != OP:               # output, so DER6 key derivation does not admit it into a key
+        if isinstance(src, KsLocker):         # GR35 items 1-2, then item 3: keystream is no hash/MAC/XOF
+            if src.state != OP:               # output, so GR40 key derivation does not admit it into a key
                 return src.invalidate()
             return self.invalidate() if self.state != RDY or self.keytype == 1 else (src.invalidate(), self.invalidate())
         if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
-            return self.invalidate()          # DER1 item 2 (DER4), item 5
+            return self.invalidate()          # GR35 item 2 (GR38), item 5
         self.key = b2v(src[:n])
         return True
 
 
 def derive_to_hash(cl, h, length):
-    """DER6: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (DER8)."""
+    """GR40: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (GR42)."""
     if cl.state != OP:
-        return cl.invalidate()                # DER1 items 1-2
+        return cl.invalidate()                # GR35 items 1-2
     return h.update(keystream(cl, length)) or True
 
 def keystream(cl, nbytes, per_block=False):
@@ -298,7 +298,7 @@ section("States, transitions and general rules (F.5.1)")
 eq("State values Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49", (RDY, OP, AUX, INV), (1, 2, 13, 49))
 cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (SGR6)",
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR16)",
    (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
 for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
                     ("#kl_state_operate in Form B (Form C required)", (OP, 'B', T1 & ONES64)),
@@ -315,9 +315,9 @@ eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
    (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, NONCE, 32, 0, PT)))
 cl = ctr_cl(key, 0x1234, C0)
 cl.setst(OP, 'C', T1)
-eq("Operate -> Operate (SGR5): IV replaced, ctr kept; F.5.1",
+eq("Operate -> Operate (GR15): IV replaced, ctr kept; F.5.1",
    (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
-info("a same-State kl.setst #kl_state_operate (SGR5) replaces IV and keeps ctr (Ready is not entered).")
+info("a same-State kl.setst #kl_state_operate (GR15) replaces IV and keeps ctr (Ready is not entered).")
 cl = ctr_cl(key)
 cl.setst(OP, 'A/iobuf', SP38A_ICB)
 cl.setst(AUX, 'B', C0)
@@ -336,7 +336,7 @@ cl = ctr_cl(key, T1, C0)
 for ks in (64, 80):
     eq(f"KLLEN = 512, klstart = {ks}: empty window, only klstart = 0",
        (cl.exec(512, klstart=ks, out=7), cl.state, cl.ctr), ((7, 0), OP, C0))
-eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (SGR15)",
+eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (GR25)",
    (cl.exec(512, klstart=8, out=(1 << 512) - 1)[0], cl.state), ((1 << 64) - 1, INV))
 for q in (1, 2, 3):
     for iob in (False, True):
@@ -381,20 +381,20 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, C0), 64), PT).hex()
     return cl.state, cl.key
 
-eq("DRBG output (DER7), length 32, into the 16-byte key (DER1 item 5), then F.5.1", derived(32), (RDY, c))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (DER4, DER1 item 2)", (32, 1)),
-                    ("destination in Operate (DER1 item 2)", (32, 0, True))):
+eq("DRBG output (GR41), length 32, into the 16-byte key (GR35 item 5), then F.5.1", derived(32), (RDY, c))
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR38, GR35 item 2)", (32, 1)),
+                    ("destination in Operate (GR35 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst = ctr_cl(key, T1, C0), ctr_cl(key)
 dst.derive_key(src, 16)
-eq("CTR keystream into a CTR key (DER6 key derivation covers hash/MAC/XOF output only: DER1 item 3) -> both Invalid",
+eq("CTR keystream into a CTR key (GR40 key derivation covers hash/MAC/XOF output only: GR35 item 3) -> both Invalid",
    (src.state, dst.state), (INV, INV))
 cl, h = ctr_cl(key, T1, C0), hashlib.sha256()
 ok = derive_to_hash(cl, h, 40)
-eq("DER6: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
+eq("GR40: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
    (ok, h.hexdigest(), bxor(keystream(cl, 16), PT[48:]).hex()),
    (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
 cl = ctr_cl(key)
 derive_to_hash(cl, hashlib.sha256(), 40)
-eq("DER6 with the source in Ready (no source endpoint, DER1 items 1-2) -> only the source Invalid", cl.state, INV)
+eq("GR40 with the source in Ready (no source endpoint, GR35 items 1-2) -> only the source Invalid", cl.state, INV)
 done()
