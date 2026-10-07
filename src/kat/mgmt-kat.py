@@ -86,10 +86,18 @@ def decode(w, zklind=False):
         f2 = b(31, 30)
         if f2 == 0 and not b(27, 27):
             if b(25, 25): raise Trap('illegal', 1)
-            form, k = b(29, 28), lk(b(26, 26), rs1)
+            form, r = b(29, 28), b(26, 26)
+            if form == 3 and rd:                                    # kl.mvin / kl.mvout: rd selects the variant
+                if r: raise Trap('illegal', 1)                      # no locker is encoded: r = 0
+                if rd in (1, 2, 3) and rs1 == 0 and (rd != 3 or rs2 == 0):
+                    return ('kl.mvin', ('I', 'II', 'III')[rd - 1], ('X', 'V', 'KLIOBUF')[rd - 1] + str(rs2) * (rd != 3))
+                if rd in (5, 6, 7) and rs2 == 0 and (rd != 7 or rs1 == 0):
+                    return ('kl.mvout', ('IV', 'V', 'VI')[rd - 5], ('X', 'V', 'KLIOBUF')[rd - 5] + str(rs1) * (rd != 7))
+                raise Trap('illegal', 1)
+            k = lk(r, rs1)
             if form == 0: return ('kl.exec', 'A', k)
-            if form == 1 and rd < 3: return ('kl.exec', 'B', k) if rd == 0 else ('kl.mv', ('I', 'II')[rd - 1], k)
-            if form == 2 and rs2 < 3: return ('kl.exec', 'C', k) if rs2 == 0 else ('kl.mv', ('III', 'IV')[rs2 - 1], k)
+            if form == 1 and rd == 0: return ('kl.exec', 'B', k)
+            if form == 2 and rs2 == 0: return ('kl.exec', 'C', k)
             if form == 3 and rd == rs2 == 0: return ('kl.exec', 'D', k)
             raise Trap('illegal', 1)
         if f2 == 0:                                                 # kl.size, kl.avail
@@ -120,9 +128,8 @@ def decode(w, zklind=False):
         if imm in (SUCCESS, FAILURE):                               # GR19
             raise Trap('illegal', 1)
         return ({0: 'kl.clear', CLEAR_ADS: 'kl.clearads'}.get(imm, 'kl.setst'), 'ABCD'[F], k, imm)
-    if op in (0x67, 0x23) and f3 in (6, 7):
-        return ('kl.load' if op == 0x67 else 'kl.store', lk(f3 == 7, rd if op == 0x67 else rs2))
-    return {(0x03, 7): ('kl.input',), (0x23, 5): ('kl.output',)}.get((op, f3))
+    # kl.load / kl.input and kl.store / kl.output share one encoding each; klmanagedlocker selects the target (GR4)
+    return {(0x03, 7): ('kl.load', f'X{rd}'), (0x23, 5): ('kl.store', f'X{rs2}')}.get((op, f3))
 
 def decoded(w, zklind=False):
     try:
@@ -136,8 +143,9 @@ def enc_r(f2, hi5, rs2=0, rs1=0, rd=0):
 def enc_setst(imm, F=0, r=0, rs1=0, rd=0):
     return (imm << 25) | (F << 21) | (r << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | 0x0F
 
-def enc_ls(store, f3, ctx, rs1=2):
-    return (ctx << 20 | rs1 << 15 | f3 << 12 | 0x23) if store else (rs1 << 15 | f3 << 12 | ctx << 7 | 0x67)
+def enc_ls(store, xl=0, rs1=2, f3=None):
+    f3 = (5 if store else 7) if f3 is None else f3
+    return (xl << 20 | rs1 << 15 | f3 << 12 | 0x23) if store else (rs1 << 15 | f3 << 12 | xl << 7 | 0x03)
 
 # ---------------------------------------------------------------- stand-ins and SCC sealing
 
@@ -1013,14 +1021,13 @@ class Unit:
             setattr(self, ('siv', 'impqual', 'siv2')[j // 16], b2v(bytes(blk)))
         elif j < iend:
             cl.img[j - off:j - off + 16] = bytes(blk)
-    def _xfer_pre(self, k, writing):                                # GR32, GR33
-        k = self._idx(k)
+    def _xfer_pre(self, writing):                                   # GR4, GR32, GR33
+        k = self.klmanagedlocker                                    # the locker is never an operand
         self._pre()
         self._off(k)
         st = self.lockers[k].mdh['State']
         if st == UNCONF or st in ERROR_STATES: return None          # GR29: no operation
-        if st not in ((PROV, IMP, PPI_IMP) if writing else (EXP, PPI_EXP)) or self.klstart % 16 \
-                or (st in (IMP, EXP) and self.klmanagedlocker != k):
+        if st not in ((PROV, IMP, PPI_IMP) if writing else (EXP, PPI_EXP)) or self.klstart % 16:
             raise Trap('illegal', 2)
         return k
     def _serial(self, end, step, fault, act, halt_after, restart):
@@ -1035,9 +1042,16 @@ class Unit:
             j += step
         self.klstart = 0
         return 'done'
-    def _mem(self, k, mem, addr, halt_after=None, restart=False, store=False):       # <<KLEE-instruction-load>>, -store
+    def _mem(self, mem, addr, xl=0, halt_after=None, restart=False, store=False):   # <<KLEE-instruction-load>>, -store
+        if self.klmanagedlocker == NONE:                            # GR4: no managed locker: kl.input / kl.output
+            if xl == 0:                                             # GR29: a no-op, before Zklio and GR9
+                self._pre()
+                self.klstart = 0
+                return 'empty'
+            return self._io(mem, addr, xl, halt_after, restart, out=store)
         if not self.zklmem_hw: raise Trap('illegal', 1)
-        k = self._xfer_pre(k, not store)
+        if xl: raise Trap('illegal', 2)                             # Xl must be 0 for a locker transfer
+        k = self._xfer_pre(not store)
         kind = 'store' if store else 'load'
         if addr % 16: raise Trap(f'{kind}_misaligned', tval=addr)
         if k is None:                                               # GR29: an empty transfer window
@@ -1054,26 +1068,30 @@ class Unit:
         return self._serial(isize if store else iend, 16, lambda j: mem.fault(addr + j, 16, kind), act,
                             halt_after, restart)
     load, store = functools.partialmethod(_mem, store=False), functools.partialmethod(_mem, store=True)
-    def _mv_pre(self, k, writing, vec_len=None, sew=8):
+    input_, output = load, store                                    # kl.input, kl.output: aliases (GR4)
+    def _mv_pre(self, writing, vec_len=None, sew=8):
         if not self.zklmv or (vec_len is not None and not self.zklv): raise Trap('illegal', 1)
         if vec_len is not None and (vec_len % 16 or self.vstart * sew // 8 % 16): raise Trap('illegal', 1)
-        k = self._xfer_pre(k, writing)
+        if self.klmanagedlocker == NONE:                            # GR29: no locker under management: a no-op
+            self._pre()
+            return None, None
+        k = self._xfer_pre(writing)
         return k, None if k is None else self.layout(self.lockers[k].mdh)[3]
-    def mv_in(self, k, value):                                      # kl.mv Kd, Xs2
-        k, iend = self._mv_pre(k, True)
+    def mv_in(self, value):                                         # kl.mvin Xs2
+        k, iend = self._mv_pre(True)
         if k is None: return 'noop'
         if self.klstart >= iend: return 'nothing'
         self._s_put(k, self.klstart, v2b(value, 16))
         self.klstart += 16
         self._dirty(k)
         return 'moved'
-    def mv_out(self, k):                                            # kl.mv Xd, Ks1
-        k, iend = self._mv_pre(k, False)
+    def mv_out(self):                                               # kl.mvout Xd
+        k, iend = self._mv_pre(False)
         if k is None or self.klstart >= iend: return 0
         self.klstart += 16
         return b2v(self._s_get(k, self.klstart - 16))
-    def mv_vec(self, k, vec, sew=8, halt_after=None, out=False):    # kl.mv Kd, Vs2 / kl.mv Vd, Ks1
-        k, iend = self._mv_pre(k, not out, len(vec), sew)
+    def mv_vec(self, vec, sew=8, halt_after=None, out=False):       # kl.mvin Vs2 / kl.mvout Vd
+        k, iend = self._mv_pre(not out, len(vec), sew)
         nb = sew // 8
         if k is None:
             if out:
@@ -1103,6 +1121,35 @@ class Unit:
         if not out:
             self._dirty(k)
         return 'moved'
+    def mv_iobuf(self, out=False):                                  # kl.mvin KLIOBUF / kl.mvout KLIOBUF
+        if not self.zklmv or not self.zklio: raise Trap('illegal', 1)
+        self._pre()
+        if self.klmanagedlocker == NONE:                            # GR29: a no-op; kl.mvout zeros its destination
+            if out:
+                self.kliobuf[:self.kliobuftop] = bytes(self.kliobuftop)
+            return 'noop'
+        if not self.kliobuflen: raise self._exc('unconfigured_buffer')
+        if self.kliobuftop % 16: raise Trap('illegal', 2)
+        k, n = self._xfer_pre(not out), self.kliobuftop
+        if k is None:
+            if out:
+                self.kliobuf[:n] = bytes(n)
+            return 'noop'
+        iend, j = self.layout(self.lockers[k].mdh)[3], self.klstart
+        if j >= iend:
+            if out:
+                self.kliobuf[:n] = bytes(n)
+            return 'zeros' if out else 'nothing'
+        for pos in range(0, n, 16):                                 # a vector variant with vstart 0, vl*SEW/8 = top
+            if out:
+                self.kliobuf[pos:pos + 16] = self._s_get(k, j) if j < iend else bytes(16)
+            elif j < iend:
+                self._s_put(k, j, self.kliobuf[pos:pos + 16])
+            j = min(j + 16, max(iend, j))
+        self.klstart = j
+        if not out:
+            self._dirty(k)
+        return 'moved'
 
     # -- KLIOBUF  <<KLEE-iobuf-transfer-window>>
     def _io(self, mem, addr, xl, halt_after=None, restart=False, out=False):
@@ -1120,7 +1167,6 @@ class Unit:
                 self.kliobuf[j] = mem.buf[addr + j]
         return self._serial(end, 1, lambda j: mem.fault(addr + j, 1, 'store' if out else 'load'), act,
                             halt_after, restart)
-    input_, output = functools.partialmethod(_io, out=False), functools.partialmethod(_io, out=True)
 
 # ---------------------------------------------------------------- software sequences
 
@@ -1143,13 +1189,13 @@ def provision(u, k, m, content=None, via='load', form='D', done_form='A'):
     u.mgmt(k, PROV, m, form=form)
     if u.lockers[k].mdh['State'] == PROV:
         if via == 'load':
-            u.load(k, Memory(content), BASE)
+            u.load(Memory(content), BASE)
         elif via == 'mv':
             for o in range(0, len(content), 16):
-                u.mv_in(k, b2v(content[o:o + 16]))
+                u.mv_in(b2v(content[o:o + 16]))
         else:
             u.vstart = 0
-            u.mv_vec(k, bytearray(content), sew=32)
+            u.mv_vec(bytearray(content), sew=32)
         u.mgmt(k, END, form=done_form)
     return u.lockers[k].mdh['State']
 
@@ -1158,10 +1204,11 @@ def listing_provision(clear_at=lambda s: False, m=None, on_trap=None, limit=8, e
     on_trap(u, tag) a handler that returns past a trapping opening kl.mgmt."""
     u, m, step = fresh(), m or cipher(), 0
     def opening():
+        u.csrs(klmanagedlocker=0)                                   # csrw klmanagedlocker, t0 at restart
         tag = trap_of(u.mgmt, 0, PROV, m)
         if tag:
             on_trap(u, tag)
-    ops = (opening, lambda: u.load(0, Memory(pi_content(m)), BASE), lambda: u.mgmt(0, END))
+    ops = (opening, lambda: u.load(Memory(pi_content(m)), BASE), lambda: u.mgmt(0, END))
     for restarts in range(limit):
         for op in ops:
             for act in (op, None):                                  # the instruction, then its kl.getst
@@ -1171,7 +1218,7 @@ def listing_provision(clear_at=lambda s: False, m=None, on_trap=None, limit=8, e
                     u.setst(0, OOM)                                 # a handler sets an Error State
                 step += 1
                 if act:
-                    act()
+                    trap_of(act)                                    # a trap returns to the listing's kl.getst
             if u.getst(0) == UNCONF:
                 break                                               # beqz t2, restart
             if u.getst(0) in ERROR_STATES:
@@ -1195,9 +1242,9 @@ def listing_export(clear_at=lambda s: False, error_at=None):
     tick()
     m = u.getmd(0)
     if not n or m['State'] == UNCONF: return 'lost', None           # kl.size 0, or State 0 in the fetched MDH
-    for op in (lambda: u.mgmt(0, EXP), lambda: u.store(0, mem, BASE), lambda: u.mgmt(0, END, m)):
+    for op in (lambda: u.mgmt(0, EXP), lambda: u.store(mem, BASE), lambda: u.mgmt(0, END, m)):
         tick()
-        op()
+        trap_of(op)                                                 # a trap returns to the listing's kl.getst
         tick()
         if u.getst(0) == UNCONF: return 'lost', None                # beqz t2, handle_errors
         if u.getst(0) in ERROR_STATES: return 'error', u.getst(0)   # beq t3, t2, handle_errors
@@ -1219,10 +1266,10 @@ def export(u, k, via='store', form='D'):
     u.mgmt(k, EXP)
     if via == 'store':
         mem = Memory()
-        u.store(k, mem, BASE)
+        u.store(mem, BASE)
         img = mem.read(BASE, n - 16)
     else:
-        img = b''.join(v2b(u.mv_out(k), 16) for _ in range(16, n, 16))
+        img = b''.join(v2b(u.mv_out(), 16) for _ in range(16, n, 16))
     if form == 'A':
         u.kliobuf[:16] = mdh_bytes(m)
     u.mgmt(k, END, m, form=form)
@@ -1235,17 +1282,17 @@ def import_(u, k, img, via='load', form='D', halt_after=None):
     u.mgmt(k, IMP, ml, form=form)
     if u.lockers[k].mdh['State'] not in CONFIG: return u.lockers[k].mdh['State']
     if via == 'load':
-        if u.load(k, Memory(img[16:]), BASE, halt_after=halt_after) == 'halted': return 'halted'
+        if u.load(Memory(img[16:]), BASE, halt_after=halt_after) == 'halted': return 'halted'
     else:
         for o in range(16, len(img), 16):
-            u.mv_in(k, b2v(img[o:o + 16]))
+            u.mv_in(b2v(img[o:o + 16]))
     u.mgmt(k, END, ml, form=form)
     return u.lockers[k].mdh['State']
 
 def export_pccc(u, k, saved):
     """Store a locker already opened for a nested export and complete it with `saved`."""
     n, out = u.size(k=k), Memory()
-    u.store(k, out, BASE)
+    u.store(out, BASE)
     u.mgmt(k, END, saved)
     return mdh_bytes(saved) + out.read(BASE, n - 16)
 
@@ -1286,7 +1333,7 @@ def interrupted_import(u, k, halt_after, decrypt=False):
     scc = export(src, 0)
     ml, mem = unpack(b2v(scc[:16])), Memory(scc[16:])
     u.mgmt(k, IMP, ml)
-    u.load(k, mem, BASE, halt_after=halt_after)
+    u.load(mem, BASE, halt_after=halt_after)
     return src, ml, mem, scc
 
 def ex(u, k, form='A', n=16, **kw):
@@ -1677,7 +1724,7 @@ def t_mgmt():
        (u.mgmt(0, PROV, m), u.getst(0), u.getmd(0)['Locality'], u.klmanagedlocker, u.klstart,
         (u.siv, u.impqual, u.siv2), u.size(k=0)), ('opened', PROV, loc(hw1=2), 0, 0, (1, 2, 3), 48))
     eq('kl.load, then Form A completion: Ready, fields zeroed, klmanagedlocker 32, ADS, Content',
-       (u.load(0, Memory(content), BASE), u.klstart, u.mgmt(0, END, form='A'), u.getst(0), u.getstx(0),
+       (u.load(Memory(content), BASE), u.klstart, u.mgmt(0, END, form='A'), u.getst(0), u.getstx(0),
         u.getmd(0)['MachineUse'], u.klmanagedlocker, u.getmd(0)['AuxDataLen'], len(u.lockers[0].c2), u.lockers[0].c1,
         u.size(k=0)), ('done', 0, 'completed', READY, 0, 0, NONE, ADS_BLOCKS, 32, content, 128))
     ref, got = (u.getmd(0), u.lockers[0].c1, u.lockers[0].c2), []
@@ -1688,12 +1735,12 @@ def t_mgmt():
             w.csrs(klstart=5)
         provision(w, 0, m, via=via, form=form)
         got.append((w.getmd(0), w.lockers[0].c1, w.lockers[0].c2))
-    eq('provisioning via kl.mv, vector kl.mv (Form C), Form A (klstart ignored) agree', got, [ref] * 3)
+    eq('provisioning via kl.mvin, vector kl.mvin (Form C), Form A (klstart ignored) agree', got, [ref] * 3)
     w, starts = opened(m=m), []
     for o in (0, 16):
         starts.append(w.klstart)
-        w.mv_in(0, b2v(content[o:o + 16]))
-    eq('kl.mv accumulates klstart; the completing kl.mgmt clears it',
+        w.mv_in(b2v(content[o:o + 16]))
+    eq('kl.mvin accumulates klstart; the completing kl.mgmt clears it',
        (starts, w.klstart, w.mgmt(0, END), w.klstart), ([0, 16], 32, 'completed', 0))
     md0 = u.getmd(0)
     u.mgmt(0, EXP)
@@ -1701,7 +1748,7 @@ def t_mgmt():
        (u.getst(0), u.klmanagedlocker, u.klstart, dict(u.getmd(0), State=0), bool(u.siv), u.impqual, bool(u.siv2)),
        (EXP, 0, 0, dict(md0, State=0), True, u.impqual_value(), True))
     out, n = Memory(), u.size(k=0)
-    u.store(0, out, BASE)
+    u.store(out, BASE)
     img = mdh_bytes(md0) + out.read(BASE, n - 16)
     eq('kl.store: SIV, IMPQUAL, SIV2 lead S; Content is ciphertext; only klstart changes',
        ([b2v(img[16 + 16 * i:32 + 16 * i]) for i in range(3)], img[64:96] != content, u.getst(0), u.klstart),
@@ -1713,12 +1760,12 @@ def t_mgmt():
     eq('kl.size Form B is the image length; opening an import leaves the registers unchanged, State 58',
        (v.size('B', lo=b2v(img[:8])), v.mgmt(1, IMP, unpack(b2v(img[:16]))), v.siv, v.impqual, v.siv2, v.getst(1),
         v.klmanagedlocker), (len(img), 'opened', 7, 7, 7, IMP, 1))
-    v.load(1, Memory(img[16:]), BASE)
+    v.load(Memory(img[16:]), BASE)
     eq('kl.load fills the registers; the import round trips MDH, Content1, ADS',
        ((v.siv, v.impqual, v.siv2), v.mgmt(1, END, md0), v.getmd(1), v.lockers[1].c1, v.lockers[1].c2),
        ((u.siv, u.impqual, u.siv2), 'completed', md0, content, u.lockers[0].c2))
     w1, w2, w3 = fresh(), fresh().csrs(kliobuflen=64, kliobuftop=16), fresh()
-    eq('import via kl.mv, Form A, Form C agree; export via kl.mv agrees with kl.store',
+    eq('import via kl.mvin, Form A, Form C agree; export via kl.mvout agrees with kl.store',
        [(import_(w1, 2, img, via='mv'), w1.getmd(2), w1.lockers[2].c1),
         (import_(w2, 2, img, form='A'), w2.getmd(2), w2.lockers[2].c1),
         (w3.mgmt(2, IMP, md0, form='C'), import_(w3, 2, img)), export(v, 1, via='mv') == img],
@@ -1740,7 +1787,7 @@ def t_mgmt():
     eq('a modified Content1 byte: Authentication Failed, no exception, klmanagedlocker 32',
        (import_(v, 0, bytes(t)), v.getmd(0)['AuxDataLen'], v.klmanagedlocker), (AUTH, 0, NONE))
     v = opened(IMP, st_md)
-    v.load(0, Memory(img[16:]), BASE)
+    v.load(Memory(img[16:]), BASE)
     u2 = pv(fresh(), 0, cipher())
     u2.mgmt(0, EXP)
     u2.siv ^= 1
@@ -1825,7 +1872,7 @@ def t_nested():
     m = cipher(Locality=loc(hw2=2))
     content = pi_content(m, 0x51)
     u, mem = opened(m=m, k=4), Memory(content)
-    u.load(4, mem, BASE, halt_after=16)
+    u.load(mem, BASE, halt_after=16)
     saved, k0 = u.getmd(4), u.klstart
     eq('provisioning halted at 16; nested export opens 59, keeps klmanagedlocker; PI size',
        (k0, u.mgmt(4, EXP), u.getst(4), u.klmanagedlocker, u.klstart, u.size(k=4)), (16, 'opened', PPI_EXP, 4, 0, 48))
@@ -1836,16 +1883,16 @@ def t_nested():
     inner = u.getmd(4)
     r = [u.mgmt(4, EXP), u.getst(4), u.mgmt(4, END, inner), u.getst(4), u.mgmt(4, END, saved), u.getst(4),
          u.mgmt(4, EXP), trap_of(u.mgmt, 4, END, dict(saved, State=READY)), u.mgmt(4, END, saved), u.setst(4, 0),
-         u.klmanagedlocker, u.mgmt(4, IMP, saved), u.getst(4), u.klmanagedlocker, u.load(4, Memory(pccc[16:]), BASE),
-         u.mgmt(4, END, saved), u.getst(4), u.csrs(klstart=k0).load(4, mem, BASE), u.mgmt(4, END), u.lockers[4].c1]
+         u.klmanagedlocker, u.mgmt(4, IMP, saved), u.getst(4), u.klmanagedlocker, u.load(Memory(pccc[16:]), BASE),
+         u.mgmt(4, END, saved), u.getst(4), u.csrs(klstart=k0).load(mem, BASE), u.mgmt(4, END), u.lockers[4].c1]
     eq('double nesting stays 59; Complete ml illegal on pi; PCCC re-import 60 -> 56; resumption completes', r,
        ['opened', PPI_EXP, 'completed', PPI_EXP, 'completed', PROV, 'opened', 'illegal/2', 'completed', 'cleared',
         NONE, 'opened', PPI_IMP, 4, 'done', 'completed', PROV, 'done', 'completed', content])
     u = opened(m=cipher(KeyType=1))
-    u.mv_in(0, ONES64)
+    u.mv_in(ONES64)
     s0 = u.getmd(0)
     u.mgmt(0, EXP)
-    pv_ = [u.mv_out(0) for _ in range(u.size(k=0) // 16 - 1)]
+    pv_ = [u.mv_out() for _ in range(u.size(k=0) // 16 - 1)]
     u.mgmt(0, END, s0)
     u.mgmt(0, END)
     eq('all-ones SKID: the PCCC carries only the SKID; the key comes from the completing kl.mgmt',
@@ -1860,9 +1907,9 @@ def t_nested():
     eq('SCC-shaped PCCC: registers, loaded ciphertext, zeros; nested completion returns to 58',
        (pc[16:], u.getst(2), u.klmanagedlocker), (scc[16:80] + bytes(len(scc) - 80), IMP, 2))
     export(rc(9, u.csrs(klmanagedlocker=32)), 9)
-    r = [u.siv != regs[0], u.setst(2, 0), u.mgmt(2, IMP, s1), u.getst(2), u.load(2, Memory(pc[16:]), BASE),
+    r = [u.siv != regs[0], u.setst(2, 0), u.mgmt(2, IMP, s1), u.getst(2), u.load(Memory(pc[16:]), BASE),
          u.mgmt(2, END, s1), u.getst(2), (u.siv, u.impqual, u.siv2), u.klmanagedlocker,
-         u.csrs(klstart=ks).load(2, mem, BASE), u.mgmt(2, END, ml), u.getmd(2), u.lockers[2].c1, u.lockers[2].c2]
+         u.csrs(klstart=ks).load(mem, BASE), u.mgmt(2, END, ml), u.getmd(2), u.lockers[2].c1, u.lockers[2].c2]
     eq('registers overwritten elsewhere; PCCC re-import restores 58 and them; the import completes', r,
        [True, 'cleared', 'opened', IMP, 'done', 'completed', IMP, regs, 2, 'done', 'completed', src.getmd(0),
         src.lockers[0].c1, src.lockers[0].c2])
@@ -1870,14 +1917,14 @@ def t_nested():
         u = pv(fresh(), 1, sig(AuxInfo=3))
         base_md, out = u.getmd(1), Memory()
         u.mgmt(1, EXP)
-        u.store(1, out, BASE, halt_after=32)
+        u.store(out, BASE, halt_after=32)
         ks, s2 = u.klstart, u.getmd(1)
         u.mgmt(1, EXP)
         st = u.getst(1)
         pc = bytearray(export_pccc(u, 1, s2))
         pc[40] ^= 0x80 * tamper
-        r = [st, u.setst(1, 0), u.mgmt(1, IMP, s2), u.load(1, Memory(pc[16:]), BASE), u.mgmt(1, END, s2), u.getst(1),
-             u.csrs(klstart=ks).store(1, out, BASE), u.mgmt(1, END, base_md), u.getst(1)]
+        r = [st, u.setst(1, 0), u.mgmt(1, IMP, s2), u.load(Memory(pc[16:]), BASE), u.mgmt(1, END, s2), u.getst(1),
+             u.csrs(klstart=ks).store(out, BASE), u.mgmt(1, END, base_md), u.getst(1)]
         if tamper:
             eq('interrupted export via a tampered nested PCCC: detected at export completion', r,
                [EXP, 'cleared', 'opened', 'done', 'completed', EXP, 'done', 'completed', AUTH])
@@ -1912,9 +1959,10 @@ def t_error_states():
     u.setst(0, EXPIRED)
     provision(u, 1, cipher())
     before, vo = u.getmd(0), bytearray(b'\xAA' * 16)
-    eq('export opening: unchanged, nothing opened, klstart 0; kl.load/store/mv and end no-ops (GR29)',
+    eq('export opening: unchanged, nothing opened, klstart 0; with klmanagedlocker naming it, kl.load/store/mvin/mvout '
+       'and end are no-ops (GR29)',
        [u.csrs(klstart=16).mgmt(0, EXP), u.getmd(0) == before, u.klmanagedlocker, u.klstart,
-        u.load(0, Memory(), BASE), u.store(0, Memory(), BASE), u.mv_in(0, 1), u.mv_out(0), u.mgmt(0, END),
+        u.csrs(klmanagedlocker=0).load(Memory(), BASE), u.store(Memory(), BASE), u.mv_in(1), u.mv_out(), u.mgmt(0, END),
         u.getst(0)], ['unchanged', True, 32, 0, 'noop', 'noop', 'noop', 0, 'noop', EXPIRED])
     eq('use is a no-op with output zeroed; kl.restrict* narrows; Error-State kl.setst changes it',
        [u.exec_(0, 'A', vin=bytearray(16), vout=vo), bytes(vo), u.setst(0, READY), u.setst(0, CLEAR_ADS),
@@ -1949,7 +1997,7 @@ def t_ads():
     t[:16], t[32:64] = mdh_bytes(dm), bytes(32)
     v = opened(IMP, dm)
     lay = v.layout(v.getmd(0))[:2]
-    v.load(0, Memory(t[16:]), BASE)
+    v.load(Memory(t[16:]), BASE)
     v.mgmt(0, END, dm)
     eq('ADSDropped set in memory: offset 48, no Content2, Content1 and policies intact, ADS regenerated',
        (lay, v.size('C', m=dm), v.getst(0), v.lockers[0].c1, dict(v.getmd(0), AuxDataLen=0), v.getmd(0)['AuxDataLen']),
@@ -1961,7 +2009,7 @@ def t_ads():
     mem = Memory(v2b(siv, 16) + v2b(iq, 16) + v2b(siv2, 16) + from_blocks(ct1) + from_blocks(ct2))
     big.mgmt(0, IMP, bm)
     eq('AuxDataLen above the maximum: ADSDropped at opening, kl.load stops at image_end, Content1 only',
-       (big.getmd(0)['ADSDropped'], big.load(0, mem, BASE), mem.accesses, big.mgmt(0, END, bm), big.getst(0),
+       (big.getmd(0)['ADSDropped'], big.load(mem, BASE), mem.accesses, big.mgmt(0, END, bm), big.getst(0),
         big.lockers[0].c1, big.getmd(0)['ADSDropped']),
        (1, 'done', (48 + c1) // 16, 'completed', ToyCipher.ENCRYPT, u.lockers[0].c1, 0))
     w = rc(SCProtection=1)
@@ -1970,108 +2018,129 @@ def t_ads():
         w.getmd(0)['AuxDataLen']), ('ads cleared', 0, b'', ToyCipher.ENCRYPT, 32 + c1, 'done', ADS_BLOCKS))
 
 def t_transfers():
-    section('kl.load, kl.store, kl.mv  <<KLEE-instruction-load>>, <<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>')
-    eq('kl.mv into a locker only in 56, 58, 60 (GR32), out of one only in 57, 59 (GR33); no trap in 0, 48-55 '
-       '(GR29)',
-       ([s for s in range(64) if trap_of(white_box(s).mv_in, 0, 1) is None],
-        [s for s in range(64) if trap_of(white_box(s).mv_out, 0) is None]),
+    section('kl.load, kl.store, kl.mvin, kl.mvout  <<KLEE-instruction-load>>, <<KLEE-instruction-mv>>, '
+            '<<KLEE-Memory-Alignment>>')
+    eq('kl.mvin into the managed locker only in 56, 58, 60 (GR32), kl.mvout only in 57, 59 (GR33); no trap in 0, '
+       '48-55 (GR29)',
+       ([s for s in range(64) if trap_of(white_box(s).csrs(klmanagedlocker=0).mv_in, 1) is None],
+        [s for s in range(64) if trap_of(white_box(s).csrs(klmanagedlocker=0).mv_out) is None]),
        ([0, *range(48, 56), 56, 58, 60], [0, *range(48, 56), 57, 59]))
     u, v = opened(), rc()
-    r = [trap_of(u.store, 0, Memory(), BASE), u.mgmt(0, EXP), trap_of(u.load, 0, Memory(), BASE), v.mgmt(0, EXP),
-         trap_of(v.csrs(klmanagedlocker=32).store, 0, Memory(), BASE), trap_of(v.mv_out, 0),
-         v.csrs(klmanagedlocker=0).store(0, Memory(), BASE)]
+    r = [trap_of(u.store, Memory(), BASE), u.mgmt(0, EXP), trap_of(u.load, Memory(), BASE), v.mgmt(0, EXP),
+         v.csrs(klmanagedlocker=32).store(Memory(), BASE), v.mv_out(),
+         v.csrs(klmanagedlocker=0).store(Memory(), BASE)]
     for k, imm, ml in ((1, IMP, cipher(State=1)), (2, PROV, cipher())):
         v.csrs(klmanagedlocker=32).mgmt(k, imm, ml)
-    v.csrs(klmanagedlocker=32)
-    eq("kl.store in 56, kl.load in 57 illegal; in 57/58 only klmanagedlocker's locker, not in 56",
-       r + [trap_of(v.mv_in, 1, 1), v.mv_in(2, 1)],
-       ['illegal/2', 'opened', 'illegal/2', 'opened', 'illegal/2', 'illegal/2', 'done', 'illegal/2', 'moved'])
+    eq('kl.store in 56, kl.load in 57 illegal; klmanagedlocker = 32: kl.store (Xl = 0), kl.mvout, kl.mvin are no-ops '
+       '(GR29); klmanagedlocker alone selects the locker (GR4), in 58 as in 56',
+       r + [v.csrs(klmanagedlocker=32).mv_in(1), v.csrs(klmanagedlocker=1).mv_in(1),
+            v.csrs(klmanagedlocker=2).mv_in(1)],
+       ['illegal/2', 'opened', 'illegal/2', 'opened', 'empty', 0, 'done', 'noop', 'moved', 'moved'])
     u = opened().csrs(klstart=8)
-    eq('klstart not a multiple of 16; no Zklmv; an emulated kl.load',
-       [trap_of(u.load, 0, Memory(), BASE), trap_of(u.mv_in, 0, 1),
-        trap_of(fresh(zklmv=False).mv_in, 0, 1), trap_of(fresh(zklmem_hw=False).load, 0, Memory(), BASE)],
-       ['illegal/2'] * 2 + ['illegal/1'] * 2)
+    eq('klstart not a multiple of 16; Xl != 0; no Zklmv; an emulated kl.load',
+       [trap_of(u.load, Memory(), BASE), trap_of(u.mv_in, 1), trap_of(opened().load, Memory(), BASE, 16),
+        trap_of(fresh(zklmv=False).mv_in, 1), trap_of(opened(zklmem_hw=False).load, Memory(), BASE)],
+       ['illegal/2'] * 3 + ['illegal/1'] * 2)
     mem, vec, vo = Memory(), bytearray(b'\xAA' * 16), bytearray(b'\xAA' * 16)
-    r = [u.mv_in(5, 1), u.mv_out(5), u.csrs(vstart=0).mv_vec(5, vec), u.mv_vec(5, vo, out=True), bytes(vo), u.klstart,
-         u.load(5, mem, BASE), u.klstart, u.csrs(klstart=8).store(5, mem, BASE), u.klstart, mem.accesses,
-         trap_of(u.load, 5, mem, BASE + 1), trap_of(u.store, 5, mem, BASE + 1), u.klmanagedlocker, u.getst(5)]
-    eq('GR29, Unconfigured locker: kl.mv a no-op, zeros read, klstart (8) kept; kl.load, kl.store an empty '
+    u.csrs(klmanagedlocker=5).vstart = 0                            # K5 is Unconfigured
+    r = [u.mv_in(1), u.mv_out(), u.mv_vec(vec), u.mv_vec(vo, out=True), bytes(vo), u.klstart,
+         u.load(mem, BASE), u.klstart, u.csrs(klstart=8).store(mem, BASE), u.klstart, mem.accesses,
+         trap_of(u.load, mem, BASE + 1), trap_of(u.store, mem, BASE + 1), u.klmanagedlocker, u.getst(5)]
+    eq('GR29, Unconfigured locker: kl.mvin/kl.mvout a no-op, zeros read, klstart (8) kept; kl.load, kl.store an empty '
        'window: no access, klstart 0, misalignment still raised; klmanagedlocker kept', r,
-       ['noop', 0, 'noop', 'noop', bytes(16), 8, 'noop', 0, 'noop', 0, 0, 'load_misaligned', 'store_misaligned', 0,
+       ['noop', 0, 'noop', 'noop', bytes(16), 8, 'noop', 0, 'noop', 0, 0, 'load_misaligned', 'store_misaligned', 5,
         UNCONF])
     for at in ('opened', 'loaded'):                                 # the check-then-use race
         u = opened()
         if at == 'loaded':
-            u.mv_in(0, 1)
+            u.mv_in(1)
         u.clear(0)                                                  # a handler clears instead of saving
-        r = [u.klmanagedlocker, u.mv_in(0, 2), u.load(0, Memory(), BASE), u.mgmt(0, END), u.getst(0),
+        r = [u.klmanagedlocker, u.mv_in(2), u.load(Memory(), BASE), u.mgmt(0, END), u.getst(0),
              provision(u, 0, cipher())]
-        eq(f'GR29: locker cleared after the check ({at}): the next kl.mv, kl.load, end are no-ops; restart '
-           'provisions', r, [32, 'noop', 'noop', 'noop', UNCONF, READY])
+        eq(f'GR29: locker cleared after the check ({at}): the clear leaves klmanagedlocker = 32, and the next kl.mvin, '
+           'kl.load (Xl = 0) and end are no-ops; restart provisions', r, [32, 'noop', 'empty', 'noop', UNCONF, READY])
+    vo = bytearray(b'\xAA' * 16)
+    eq('klmanagedlocker = 32: kl.load/kl.store with Xl = 0 are no-ops before the Zklio and KLIOBUF checks, klstart 0; '
+       'with Xl != 0 they are kl.input/kl.output (GR9, Zklio); kl.mvout zeros its destination',
+       [fresh().csrs(klstart=16).load(Memory(), BASE), fresh().load(Memory(), BASE + 1), fresh().klstart,
+        trap_of(fresh().store, Memory(), BASE, 16), fresh(zklio=False).store(Memory(), BASE),
+        trap_of(fresh(zklio=False).load, Memory(), BASE, 16), fresh().mv_vec(vo, out=True), bytes(vo),
+        fresh().mv_iobuf(out=True)],
+       ['empty', 'empty', 0, 'unconfigured_buffer', 'empty', 'illegal/1', 'noop', bytes(16), 'noop'])
     pc = pi_content(cipher())
     u, mem = opened(), Memory(pc)
     img = lambda w: bytes(w.lockers[0].img)
-    r = [trap_of(u.load, 0, mem, BASE + 4), img(u), trap_of(u.csrs(klstart=32).load, 0, mem, BASE + 8),
-         u.load(0, mem, BASE), img(u), u.klstart]
+    r = [trap_of(u.load, mem, BASE + 4), img(u), trap_of(u.csrs(klstart=32).load, mem, BASE + 8),
+         u.load(mem, BASE), img(u), u.klstart]
     eq('misaligned kl.load: nothing moved, also with an empty window; klstart >= image_end retires', r,
        ['load_misaligned', bytes(32), 'load_misaligned', 'done', bytes(32), 0])
     mem.unmapped.append((BASE + 16, BASE + 32))
-    r = [trap_of(u.load, 0, mem, BASE, tval=True), u.klstart, img(u)[:16] == pc[:16], trap_of(u.load, 0, mem, BASE),
+    r = [trap_of(u.load, mem, BASE, tval=True), u.klstart, img(u)[:16] == pc[:16], trap_of(u.load, mem, BASE),
          u.klstart]
     mem.unmapped.clear()
     eq('page fault: precise halt, xtval; re-execution faults again; resumes once mapped',
-       r + [u.load(0, mem, BASE), img(u) == pc], [('load_page_fault', BASE + 16), 16, True, 'load_page_fault', 16,
+       r + [u.load(mem, BASE), img(u) == pc], [('load_page_fault', BASE + 16), 16, True, 'load_page_fault', 16,
                                                   'done', True])
     u, w = opened(), opened()
     mem.nonidem.append((BASE + 20, BASE + 21))
-    r = [trap_of(u.load, 0, mem, BASE, tval=True), u.klstart]
+    r = [trap_of(u.load, mem, BASE, tval=True), u.klstart]
     mem.nonidem.clear()
     mem.unmapped.append((BASE + 16, BASE + 32))
-    r += [trap_of(w.load, 0, mem, BASE, restart=True), w.klstart]
+    r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
     eq('GR46: access fault at the byte, prefix committed; restart option for interrupts only (GR53)',
-       r + [w.load(0, mem, BASE, halt_after=16, restart=True), w.klstart, w.load(0, mem, BASE), img(w) == pc],
+       r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     u, out, ref = rc(), Memory(), Memory()
     u.mgmt(0, EXP)
     out.unmapped.append((BASE + 32, BASE + 48))
-    r = [trap_of(u.store, 0, out, BASE + 2), trap_of(u.store, 0, out, BASE), u.klstart]
+    r = [trap_of(u.store, out, BASE + 2), trap_of(u.store, out, BASE), u.klstart]
     out.unmapped.clear()
-    u.store(0, out, BASE)
-    u.store(0, ref, BASE)
+    u.store(out, BASE)
+    u.store(ref, BASE)
     eq('kl.store: misaligned; fault halts at 32; resumption writes the same image; empty window retires',
-       r + [out.read(BASE, 64) == ref.read(BASE, 64), u.csrs(klstart=128).store(0, out, BASE), u.klstart],
+       r + [out.read(BASE, 64) == ref.read(BASE, 64), u.csrs(klstart=128).store(out, BASE), u.klstart],
        ['store_misaligned', 'store_page_fault', 32, True, 'done', 0])
     u = opened()
-    r = [u.mv_in(0, 1), u.mv_in(0, 2), u.mv_in(0, 3), u.klstart, u.mgmt(0, END), u.mgmt(0, EXP)]
-    vals = [u.mv_out(0) for _ in range(4)]
-    eq('kl.mv past image_end writes nothing, reads zero, klstart stays; SIV is read first',
+    r = [u.mv_in(1), u.mv_in(2), u.mv_in(3), u.klstart, u.mgmt(0, END), u.mgmt(0, EXP)]
+    vals = [u.mv_out() for _ in range(4)]
+    eq('kl.mvin past image_end writes nothing, kl.mvout reads zero, klstart stays; SIV is read first',
        r + [vals[0] == u.siv, vals[3], u.klstart], ['moved', 'moved', 'nothing', 32, 'completed', 'opened', True, 0,
                                                     48])
     vd, vd2, vd3 = bytearray(b'\xEE' * 64), bytearray(b'\xEE' * 32), bytearray(b'\xEE' * 32)
-    r = [u.csrs(klstart=32).mv_vec(0, vd, out=True), vd[:16] == v2b(vals[2], 16), bytes(vd[16:]), u.klstart, u.vstart,
-         u.csrs(klstart=48).mv_vec(0, vd2, out=True), bytes(vd2), u.klstart]
+    r = [u.csrs(klstart=32).mv_vec(vd, out=True), vd[:16] == v2b(vals[2], 16), bytes(vd[16:]), u.klstart, u.vstart,
+         u.csrs(klstart=48).mv_vec(vd2, out=True), bytes(vd2), u.klstart]
     u.csrs(klstart=0).vstart = 4
-    r += [u.mv_vec(0, vd3, sew=64, out=True), bytes(vd3), u.klstart]
+    r += [u.mv_vec(vd3, sew=64, out=True), bytes(vd3), u.klstart]
     u.vstart = 1
-    r += [trap_of(u.mv_vec, 0, bytearray(32), out=True)]
+    r += [trap_of(u.mv_vec, bytearray(32), out=True)]
     u.vstart = 0
-    r += [trap_of(u.mv_vec, 0, bytearray(24), out=True), trap_of(fresh(zklv=False).mv_vec, 0, bytearray(16))]
-    eq('vector kl.mv across image_end, from beyond it, vstart >= vl, 16-byte multiples, Zklv', r,
+    r += [trap_of(u.mv_vec, bytearray(24), out=True), trap_of(fresh(zklv=False).mv_vec, bytearray(16))]
+    eq('vector kl.mvout across image_end, from beyond it, vstart >= vl, 16-byte multiples, Zklv', r,
        ['moved', True, bytes(48), 48, 0, 'zeros', bytes(32), 48, 'noop', b'\xEE' * 32, 0] + ['illegal/1'] * 3)
     content, imgs = pi_content(xof(), 0x10), []
     for sew in (8, 16, 32, 64):
         w = opened(m=xof())
-        w.mv_vec(0, bytearray(content), sew=sew, halt_after=16)
+        w.mv_vec(bytearray(content), sew=sew, halt_after=16)
         h = (w.klstart, w.vstart)
-        imgs.append((h, w.mv_vec(0, bytearray(content), sew=sew), img(w), w.klstart, w.vstart))
-    eq('interrupted vector kl.mv: klstart in bytes, vstart in elements; same image for every SEW', imgs,
+        imgs.append((h, w.mv_vec(bytearray(content), sew=sew), img(w), w.klstart, w.vstart))
+    eq('interrupted vector kl.mvin: klstart in bytes, vstart in elements; same image for every SEW', imgs,
        [((16, 16 // (s // 8)), 'moved', content, 32, 0) for s in (8, 16, 32, 64)])
+    u = opened(m=xof()).csrs(kliobuflen=64, kliobuftop=32)
+    u.kliobuf[:32] = content[:32]
+    r = [u.mv_iobuf(), u.klstart, img(u)[:32] == content[:32], trap_of(u.csrs(kliobuftop=24).mv_iobuf),
+         fresh().csrs(kliobuflen=64).mv_iobuf(), trap_of(opened(zklio=False).mv_iobuf),
+         trap_of(opened().mv_iobuf), u.csrs(kliobuftop=32).mgmt(0, END), u.mgmt(0, EXP), u.mv_iobuf(out=True),
+         bytes(u.kliobuf[:16]) == v2b(u.siv, 16), u.klstart]
+    eq('KLIOBUF variants: kliobuftop bytes (a multiple of 16) between KLIOBUF[0, top) and S from klstart, both ways; '
+       'kliobuftop % 16 illegal/2; klmanagedlocker 32 a no-op; no Zklio illegal/1; unconfigured KLIOBUF', r,
+       ['moved', 32, True, 'illegal/2', 'noop', 'illegal/1', 'unconfigured_buffer', 'completed', 'opened', 'moved',
+        True, 32])
     w, mem = opened(m=xof()), Memory(v2b(0xEF, 16) + v2b(0xCD, 16))
-    w.mv_in(0, 0xAB)
-    eq('kl.mv and kl.load combined: each byte holds the value last written',
-       (w.csrs(klstart=16).load(0, mem, BASE), img(w), w.mv_in(0, 0x77), img(w)[:16]),
+    w.mv_in(0xAB)
+    eq('kl.mvin and kl.load combined: each byte holds the value last written',
+       (w.csrs(klstart=16).load(mem, BASE), img(w), w.mv_in(0x77), img(w)[:16]),
        ('done', v2b(0xAB, 16) + v2b(0xCD, 16), 'moved', v2b(0x77, 16)))
 
 def t_kliobuf():
@@ -2448,9 +2517,10 @@ def t_errors():
     u.mode, u.llstatus = 'S', {0: 'off', 5: 'off'}
     eq('Off locker: each access traps; first group precedes; precedes the second group; source never exempt',
        [trap_of(u.getmd, 0), trap_of(u.size, k=0), trap_of(u.exec_, 0, 'D'), trap_of(u.restrict, 0, 0, 'h'),
-        trap_of(u.clone, 1, 0), trap_of(u.mgmt, 0, EXP), trap_of(u.load, 0, Memory(), BASE), trap_of(u.mv_in, 0, 1),
-        trap_of(u.setst, 0, 46), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
+        trap_of(u.clone, 1, 0), trap_of(u.mgmt, 0, EXP), trap_of(u.csrs(klmanagedlocker=0).load, Memory(), BASE),
+        trap_of(u.mv_in, 1), trap_of(u.setst, 0, 46), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
        ['locker_off'] * 8 + ['illegal/1', 'locker_off', 'locker_off'])
+    u.csrs(klmanagedlocker=32)
     u.llstatus.update({0: 'clean', 6: 'off', 7: 'clean', 8: 'off', 9: 'off'})
     L = u.llstatus
     eq('exempt accesses execute and set Dirty; none before the zeroizing step',
@@ -2480,18 +2550,19 @@ def build_context(u):
     pv(u, 1, cipher()).setst(1, EXPIRED)
     pv(u, 7, sig()).restrict(7, md(UsagePolicy=1), 'h')
     u.mgmt(5, PROV, xof())
-    u.mv_in(5, 0x1111)
+    u.mv_in(0x1111)
     src, ml, mem, _ = interrupted_import(u.csrs(klmanagedlocker=32), 2, 64, decrypt=True)
-    u.csrs(klstart=0, kliobuflen=64).input_(Memory(bytes(5 * i + 1 & 0xFF for i in range(64))), BASE, 64)
-    u.csrs(kliobuftop=40, klstart=64)
+    u.csrs(klmanagedlocker=32, klstart=0, kliobuflen=64).input_(Memory(bytes(5 * i + 1 & 0xFF for i in range(64))),
+                                                                BASE, 64)
+    u.csrs(kliobuftop=40, klstart=64, klmanagedlocker=2)
     return src, ml, mem
 
 def save_context(u):
-    """<<KLEE-state-save-and-restore-order>>, with 32 written before each export."""
+    """<<KLEE-state-save-and-restore-order>>, with 32 written before the KLIOBUF save and before each export (GR4)."""
     ctx = {c: u.csr_read(c) for c in ('klstart', 'klmanagedlocker', 'kliobuflen', 'kliobuftop')}
     if ctx['kliobuflen']:
         mem = Memory()
-        u.csrs(klstart=0, kliobuftop=ctx['kliobuflen']).output(mem, BASE, ctx['kliobuflen'])
+        u.csrs(klmanagedlocker=32, klstart=0, kliobuftop=ctx['kliobuflen']).output(mem, BASE, ctx['kliobuflen'])
         ctx['kliobuf'] = mem.read(BASE, ctx['kliobuflen'])
     mc, ctx['images'] = ctx['klmanagedlocker'], {}
     if mc < 32 and u.getmd(mc)['State'] != UNCONF:
@@ -2513,7 +2584,7 @@ def restore_context(u, ctx, managed_first=False):
             u.csrs(klmanagedlocker=32)
     u.csrs(kliobuflen=ctx['kliobuflen'])
     if ctx['kliobuflen']:
-        u.csrs(klstart=0).input_(Memory(ctx['kliobuf']), BASE, ctx['kliobuflen'])
+        u.csrs(klmanagedlocker=32, klstart=0).input_(Memory(ctx['kliobuf']), BASE, ctx['kliobuflen'])
     u.csrs(kliobuftop=ctx['kliobuftop'], klmanagedlocker=mc, klstart=ctx['klstart'])
 
 def t_save_restore():
@@ -2536,9 +2607,9 @@ def t_save_restore():
     u.csrs(kliobuflen=16, klmanagedlocker=3, klstart=8).siv = 99
     u.clearall()
     restore_context(u, ctx)
-    r = [snapshot(u) == before, u.load(2, mem, BASE), u.mgmt(2, END, ml),
+    r = [snapshot(u) == before, u.load(mem, BASE), u.mgmt(2, END, ml),
          (u.getmd(2), u.lockers[2].c1, u.lockers[2].c2) == (src.getmd(0), src.lockers[0].c1, src.lockers[0].c2),
-         u.csrs(klstart=16).mv_in(5, 0x2222), u.mgmt(5, END), u.getst(5), u.lockers[5].c1]
+         u.csrs(klstart=16, klmanagedlocker=5).mv_in(0x2222), u.mgmt(5, END), u.getst(5), u.lockers[5].c1]
     eq('the restore is exact; the import authenticates; the abandoned provisioning resumes', r,
        [True, 'done', 'completed', True, 'moved', 'completed', READY, v2b(0x1111, 16) + v2b(0x2222, 16)])
     u, w = pv(fresh(), 0, cipher()), fresh().csrs(klmanagedlocker=0)
@@ -2550,11 +2621,11 @@ def t_save_restore():
     u, out = pv(fresh(), 3, cipher(SCProtection=1)), Memory()
     base = u.getmd(3)
     u.mgmt(3, EXP)
-    u.store(3, out, BASE, halt_after=32)
+    u.store(out, BASE, halt_after=32)
     before, ctx = snapshot(u), save_context(u)
     u.clearall()
     restore_context(u, ctx)
-    r = [snapshot(u) == before, u.store(3, out, BASE), u.mgmt(3, END, base), u.getst(3)]
+    r = [snapshot(u) == before, u.store(out, BASE), u.mgmt(3, END, base), u.getst(3)]
     eq('an interrupted export survives save and restore, completes, and its SCC imports',
        r + [import_(fresh(), 0, mdh_bytes(base) + out.read(BASE, u.size(k=3) - 16))],
        [True, 'done', 'completed', READY, READY])
@@ -2572,34 +2643,44 @@ def t_encodings():
         d(16, rs1=6, rd=7)),
        ([(n, 'K(X7)', 'K(X6)') for n in ('kl.clone', 'kl.rename', 'kl.swap')], ['illegal/1'] * 3,
         ('kl.derive', 'K7', 'K6', 'X9'), ('kl.derive', 'K(X7)', 'K(X6)', 'X9'), 'illegal/1', 'illegal/1'))
-    words = {'kl.exec': enc_r(0, 2, rs2=2, rs1=6, rd=3), 'kl.mv': enc_r(0, 10, rs2=4, rs1=6, rd=1),
+    words = {'kl.exec': enc_r(0, 2, rs2=2, rs1=6, rd=3),
              'kl.size': enc_r(0, 6, rs1=6, rd=3), 'kl.restrictl': enc_r(1, 2, rs1=4, rd=6),
              'kl.getmdl': enc_r(3, 2, rs1=6, rd=3), 'kl.setst': enc_setst(2, F=1, r=1, rs1=4, rd=6),
-             'kl.mgmt': enc_setst(PROV, F=3, r=1, rs1=4, rd=6), 'kl.load': enc_ls(False, 7, 6),
-             'kl.store': enc_ls(True, 7, 6)}
-    eq('other instructions address indirectly only with Zklind; kl.load/kl.store select with funct3',
+             'kl.mgmt': enc_setst(PROV, F=3, r=1, rs1=4, rd=6)}
+    eq('other instructions address indirectly only with Zklind; kl.load/kl.input and kl.store/kl.output share one '
+       'encoding each with Xl (GR4); the former funct3 = 6 encodings are not KLEE',
        ({n: (decoded(w), decoded(w, zklind=True)[0]) for n, w in words.items()},
-        [decoded(enc_ls(s, 6, 6)) for s in (False, True)]),
-       ({n: ('illegal/1', n) for n in words}, [('kl.load', 'K6'), ('kl.store', 'K6')]))
+        [decoded(enc_ls(st, 6)) for st in (False, True)], [decoded(enc_ls(st, f3=6)) for st in (False, True)]),
+       ({n: ('illegal/1', n) for n in words}, [('kl.load', 'X6'), ('kl.store', 'X6')], [None, None]))
     eq('kl.clearall is r=1, rs1=rd=0 without Zklind; other X0 forms reserved; GR3 X0 index',
        [decoded(enc_setst(0, r=1)), decoded(enc_setst(1, r=1)), decoded(enc_setst(0, F=1, r=1)),
         decoded(enc_r(0, 2, rs1=0), zklind=True), d(3, rs1=0, rd=7)],
        [('kl.clearall',), 'illegal/1', 'illegal/1', 'illegal/1', 'illegal/1'])
-    eq('kl.mv sub-opcodes in the unused register field of kl.exec Forms B and C',
-       [decoded(enc_r(0, f << 3, rs2=s, rs1=6, rd=r))[:2] for f, r, s in ((1, 0, 5), (1, 1, 5), (1, 2, 5), (2, 5, 0),
-                                                                           (2, 5, 1), (2, 5, 2))],
-       [('kl.exec', 'B'), ('kl.mv', 'I'), ('kl.mv', 'II'), ('kl.exec', 'C'), ('kl.mv', 'III'), ('kl.mv', 'IV')])
+    two = lambda w: (lambda d: d if isinstance(d, str) else d[:2])(decoded(w))
+    eq('the unused register field of kl.exec Forms B and C must be zero: the former kl.mv sub-opcodes are reserved',
+       [two(enc_r(0, f << 3, rs2=s, rs1=6, rd=r)) for f, r, s in ((1, 0, 5), (1, 1, 5), (1, 2, 5), (2, 5, 0),
+                                                                   (2, 5, 1), (2, 5, 2))],
+       [('kl.exec', 'B'), 'illegal/1', 'illegal/1', ('kl.exec', 'C'), 'illegal/1', 'illegal/1'])
+    eq('kl.mvin / kl.mvout: Form D with rd 1-3 (rs1 = 0) or 5-7 (rs2 = 0); rd 4, a stray register field or r = 1 '
+       'reserved',
+       [decoded(enc_r(0, 24, rs2=9, rd=1)), decoded(enc_r(0, 24, rs2=9, rd=2)), decoded(enc_r(0, 24, rd=3)),
+        decoded(enc_r(0, 24, rs1=9, rd=5)), decoded(enc_r(0, 24, rs1=9, rd=6)), decoded(enc_r(0, 24, rd=7)),
+        decoded(enc_r(0, 24, rs1=6)), decoded(enc_r(0, 24, rd=4)), decoded(enc_r(0, 24, rs1=1, rd=1)),
+        decoded(enc_r(0, 24, rs2=1, rd=3)), decoded(enc_r(0, 24, rs2=1, rd=5)),
+        decoded(enc_r(0, 26, rs2=9, rd=1), zklind=True)],
+       [('kl.mvin', 'I', 'X9'), ('kl.mvin', 'II', 'V9'), ('kl.mvin', 'III', 'KLIOBUF'), ('kl.mvout', 'IV', 'X9'),
+        ('kl.mvout', 'V', 'V9'), ('kl.mvout', 'VI', 'KLIOBUF'), ('kl.exec', 'D', 'K6')] + ['illegal/1'] * 5)
     names = [decoded(enc_setst(i, F=3, rs1=4, rd=6)) for i in range(128)]
     eq('#immed7: 0111xxx kl.mgmt (59-62, Form B reserved); 46, 47 reserved; 0, 64, 65-127',
        ([i for i in range(128) if names[i][0] == 'kl.mgmt'], [i for i in range(128) if names[i] == 'illegal/1'],
         decoded(enc_setst(56, F=1, rs1=4, rd=6)), names[0][0], names[64][0], {names[i][0] for i in range(65, 128)}),
        ([56, 57, 58, 63], [46, 47, 59, 60, 61, 62], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
     u, v = rc(), rc(4, fresh(zklind=True))
-    eq('model: indirect getmd, derive, load need Zklind; clone, rename, swap do not; Zklind selects',
-       ([trap_of(u.getmd, Ind(0)), trap_of(u.derive, Ind(1), 0, 32), trap_of(u.load, Ind(0), Memory(), BASE)],
+    eq('model: indirect getmd, derive need Zklind; clone, rename, swap do not; Zklind selects',
+       ([trap_of(u.getmd, Ind(0)), trap_of(u.derive, Ind(1), 0, 32)],
         (u.clone(Ind(1), Ind(0)), u.rename(Ind(2), Ind(1)), u.swap(Ind(3), Ind(2)), u.getst(3), u.getst(2)),
         (v.getst(Ind(4)), v.size(k=Ind(4)) == v.size(k=4))),
-       (['illegal/1'] * 3, ('cloned', 'renamed', 'swapped', ToyCipher.ENCRYPT, 0), (ToyCipher.ENCRYPT, True)))
+       (['illegal/1'] * 2, ('cloned', 'renamed', 'swapped', ToyCipher.ENCRYPT, 0), (ToyCipher.ENCRYPT, True)))
 
 def t_rename_swap():
     section('kl.rename and kl.swap  <<KLEE-instruction-clone>>')
@@ -2632,12 +2713,13 @@ def t_rename_swap():
     regs, w = (u.siv, u.impqual, u.siv2), rc(4)
     w.mgmt(3, PROV, cipher())
     r = [u.rename(7, 2), u.getst(7), u.getst(2), u.klmanagedlocker, u.klstart, (u.siv, u.impqual, u.siv2) == regs,
-         u.load(2, mem, BASE), u.load(7, mem, BASE), u.mgmt(7, END, ml), u.getmd(7) == src.getmd(0),
+         u.csrs(klmanagedlocker=2).load(mem, BASE), u.csrs(klmanagedlocker=7).load(mem, BASE), u.mgmt(7, END, ml),
+         u.getmd(7) == src.getmd(0),
          u.lockers[7].c1 == src.lockers[0].c1, w.swap(3, 4), w.klmanagedlocker, w.getst(3), w.getst(4), w.swap(0, 1),
          w.klmanagedlocker, w.rename(4, 3), w.klmanagedlocker, w.getst(4), w.mgmt(8, PROV, cipher()),
          trap_of(w.clone, 9, 8), w.swap(9, 8), w.rename(8, 9), w.getst(8), w.klmanagedlocker]
     eq('klmanagedlocker follows rename and swap, 32 when overwritten; Configuration CC moves (GR34, GR31); '
-       'kl.load on the vacated index is a no-op (GR29)', r,
+       'kl.load with klmanagedlocker naming the vacated index is a no-op (GR29)', r,
        ['renamed', IMP, 0, 7, 48, True, 'noop', 'done', 'completed', True, True, 'swapped', 4, ToyCipher.ENCRYPT,
         PROV, 'swapped', 4, 'renamed', 32, ToyCipher.ENCRYPT, 'opened', 'privilege_violation', 'swapped', 'renamed',
         PROV, 8])
@@ -2669,12 +2751,12 @@ def t_controls():
     src = pv(fresh(), 0, sig())
     img = export(src, 0)
     ml, mem, v, w = unpack(b2v(img[:16])), Memory(img[16:]), opened(IMP, unpack(b2v(img[:16])), k=1), fresh()
-    v.load(1, mem, BASE, halt_after=32)
+    v.load(mem, BASE, halt_after=32)
     k = v.klstart
-    v.csrs(klstart=48).load(1, mem, BASE)
+    v.csrs(klstart=48).load(mem, BASE)
     v.mgmt(1, END, ml)
     eq('an import halted at 32 and resumed correctly round trips',
-       (k, import_(w, 1, img, halt_after=32), w.load(1, mem, BASE), w.mgmt(1, END, ml), w.lockers[1].c1),
+       (k, import_(w, 1, img, halt_after=32), w.load(mem, BASE), w.mgmt(1, END, ml), w.lockers[1].c1),
        (32, 'halted', 'done', 'completed', src.lockers[0].c1))
     control('an import resumed at a later klstart fails authentication', (v.getst(1), v.lockers[1].c1) == (AUTH, b''))
     u = pv(fresh(), 0, cipher(SCProtection=1))
@@ -2693,7 +2775,7 @@ def t_controls():
     ctx = save_context(u)
     u.clearall()
     restore_context(u, ctx, managed_first=True)
-    u.load(2, mem, BASE)
+    u.load(mem, BASE)
     u.mgmt(2, END, ml)
     control('restoring the managed locker first loses its SIV (Authentication Failed)', u.getst(2) == AUTH)
     runs = {}
@@ -2704,9 +2786,13 @@ def t_controls():
             u.rename(9, 2)
         else:
             u.lockers[9], u.lockers[2] = u.lockers[2], Locker()
-        runs[faithful] = trap_of(u.load, 9, mem, BASE)
-    eq('after kl.rename the interrupted import resumes on the new index', runs[True], None)
-    control('a rename leaving klmanagedlocker behind strands the import (GR32)', runs[False] == 'illegal/2')
+        try:
+            runs[faithful] = u.load(mem, BASE)
+        except Trap as t:
+            runs[faithful] = t.tag
+    eq('after kl.rename the interrupted import resumes on the new index', runs[True], 'done')
+    control('a rename leaving klmanagedlocker behind strands the import: kl.load is a no-op on the vacated index '
+            '(GR4, GR29)', runs[False] == 'noop')
     eq('a handler clear at any one boundary of the provisioning listing: Ready after at most one restart (GR29)',
        [listing_provision(lambda s, at=at: s == at) for at in range(6)], [(READY, 0)] + [(READY, 1)] * 5)
     eq('a handler Error State at any boundary after the opening: the next instruction is a no-op, the listing '
@@ -2723,9 +2809,9 @@ def t_controls():
     m, n = u.getmd(0), u.size(k=0)
     u.mgmt(0, EXP)
     u.clear(0)
-    r = [u.store(0, mem, BASE), u.mgmt(0, END, m), u.getst(0)]
-    control('an export cleared before kl.store and not checked: the image fails authentication at import',
-            r == ['noop', 'noop', UNCONF]
+    r = [u.store(mem, BASE), u.mgmt(0, END, m), u.getst(0)]
+    control('an export cleared before kl.store and not checked: nothing is stored, and the image fails authentication '
+            'at import', r == ['empty', 'noop', UNCONF]
             and import_(fresh(), 3, mdh_bytes(m) + mem.read(BASE, n - 16)) == AUTH)
     absent = md(Machine=M_ABSENT, MachinePolicy=1)
     eq('a handler past a trapping opening kl.mgmt sets the Error State: the listing reaches handle_errors',
