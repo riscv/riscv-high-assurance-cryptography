@@ -21,23 +21,35 @@ These examples are being rewritten. They are not yet definitive.
 ====
 
 This subsection illustrates the intended instruction sequences for locker configuration and export operations.
+They show the main operation logic and error detection, but not application-specific error management, and can be packaged into libraries or OS APIs to avoid increasing application code size.
 
-These code fragments include the main operation logic and error detection, omitting application-specific error management.
-After each management instruction, the code reads the _State_ of the locker. If a handler has cleared the locker in the meantime, or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, other than an opening, performs no operation; the code then restarts a provisioning or an import whose locker was cleared, and abandons the operation otherwise (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>>).
-Only the check after the last instruction is required; the earlier checks only react sooner.
-The error handling at `handle_errors` is not shown. It writes 0 to `klstart`, which a `kl.mvin` or `kl.mvout` loop leaves at its last transfer point; if the locker is still in a Configuration State, it clears a locker being provisioned or imported, and completes the export of a locker being exported with the saved MDH, which restores the locker.
-The code may bound the number of restarts, and branch to its error handling once the bound is reached. This is a matter of robustness only: system software must let the operation complete (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-no-unconditional-clear>>).
-These sequences can be packaged into libraries or OS APIs to avoid increasing application code size.
-They are written as routines that never name the locker: on entry they save `klmanagedlocker` and write the locker number to it, and every KLEE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>).
+Registers:::
+GPR `t0` holds the number of the locker to be provisioned, imported or exported, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLEE-instructions-memory>>).
+The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-multiple-GPRs>>).
+
+Naming the locker:::
+The routines never name the locker: on entry they save `klmanagedlocker` and write the locker number to it, and every KLEE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>).
 `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand, and `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name the managed locker `KLML`, which requires no `Zklind`.
-After a clear, which resets `klmanagedlocker` to 32, `KLML` reads as an _Unconfigured_ locker, so the `kl.getst` that follows finds _State_ 0: a provisioning or an import restarts, and an export, whose CC the clear has destroyed, branches to `handle_errors`; after the completing `kl.mgmt`, or an Error State, `KLML` still names the locker, so the same check reads its final _State_.
-The restore of `klmanagedlocker` on exit is the write that the architecture requires of software that has finished a management operation (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-klmanagedlocker-finish>>).
-The routines write `klmanagedlocker` before every opening, at `restart` for a provisioning or an import, since a clear resets it to 32: a `KLML` opening raises an illegal-instruction exception when `klmanagedlocker` = 32, and otherwise opens the locker it names, a Valid one included (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>).
-They restore the saved value on exit, so that a routine can be called from a handler that has saved the interrupted operation (<<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>), including for a nested export or import of the locker that operation manages.
-The error handling at `handle_errors`, not shown, restores it in the same way.
+Since a clear resets `klmanagedlocker` to 32, the routines write it again before every opening, at `restart` for a provisioning or an import: a `KLML` opening raises an illegal-instruction exception when `klmanagedlocker` = 32, and otherwise opens the locker it names, a Valid one included (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>).
+On exit they restore the saved value, as Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-klmanagedlocker-finish>> requires of software that has finished a management operation; a routine can thus be called from a handler that has saved the interrupted operation (<<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>), including for a nested export or import of the locker that operation manages.
 
-In these examples, GPR `t6` points to the 16-byte aligned memory location where a PI or SCC is stored (<<Zkl-ISA-unpriv.adoc#KLEE-instructions-memory>>), and GPR `t0` contains the number of the locker to be provisioned, imported or exported.
-The listings are written for RV64: the MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32, it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-multiple-GPRs>>).
+Checking the _State_:::
++
+--
+After each management instruction, the code reads the _State_ of the locker with `kl.getst`.
+If a handler has meanwhile cleared the locker or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, other than an opening, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>>), and the check detects the change:
+
+* after a clear, `KLML` reads as an _Unconfigured_ locker, so the check finds _State_ 0: a provisioning or an import restarts, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
+* after an Error State, or the completing `kl.mgmt`, `KLML` still names the locker, so the check reads its final _State_, and an Error State abandons the operation.
+
+Only the check after the last instruction is required; the earlier checks only react sooner.
+The code may bound the number of restarts and branch to its error handling once the bound is reached; this is a matter of robustness only, since system software must let the operation complete (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-no-unconditional-clear>>).
+--
+
+Error handling:::
+The code at `handle_errors` is not shown.
+It writes 0 to `klstart`, which a `kl.mvin` or `kl.mvout` loop leaves at its last transfer point, and restores `klmanagedlocker` as the routines do on exit.
+If the locker is still in a Configuration State, it clears a locker being provisioned or imported, and completes the export of a locker being exported with the saved MDH, which restores the locker.
 
 === Provisioning
 
