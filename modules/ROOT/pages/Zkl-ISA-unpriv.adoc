@@ -606,7 +606,7 @@ The _ExpirationDate_ of a locker that is not in a Valid State is not evaluated: 
 The evaluation proceeds as follows:
 
 . If _ExpirationDate_ is zero, the instruction proceeds.
-. If the secure clock cannot be read, the instruction raises a KLEE no-secure-clock exception (<<Zkl-ISA-priv.adoc#KLEE-exception-codes>>) and leaves the _State_ unchanged.
+. If the secure clock cannot be read, the instruction raises a KLEE clock-unavailable exception (<<Zkl-ISA-priv.adoc#KLEE-exception-codes>>) and leaves the _State_ unchanged.
 . The secure clock's date is converted to the _ExpirationDate_ format; a reading earlier than 00:00 UTC, 1 January 2027, converts to 0, and one at or after 2^20^ − 1 hours converts to 2^20^ − 1.
 . If the converted value is at least _ExpirationDate_, the locker transitions to Error State `kl_state_expired`; otherwise the instruction proceeds.
 
@@ -1904,8 +1904,10 @@ Implementation-specific values of _MachineUse_ and _AuxInfo_ are exempt from thi
 === Randomness
 
 [horizontal]
-[[KLEE-GR-rbg-failure,GR16]]GR16:: _RBG failure:_ if the entropy source has failed permanently (for `Zkr`, the DEAD state) or failed a health test, an operation that needs random bits is not performed, and its locker transitions to _Invalid_, not _Failure_.
-If the bits are only temporarily unavailable, the instruction waits, or is interrupted and restarted (option 3 of Rule <<KLEE-GR-uninterruptible-instructions>>, option 5 of Rule <<KLEE-GR-resumability-options>>); past an implementation-defined bound, it performs no operation and leaves the _State_ unchanged.
+[[KLEE-GR-rbg-failure,GR16]]GR16:: _RBG failure:_ if the entropy source has failed permanently (for `Zkr`, the DEAD state) or failed a health test, then an operation that needs random bits is not performed, and its locker transitions to _Invalid_, not _Failure_.
+If the bits are only temporarily unavailable, the instruction waits, or is interrupted and restarted (option 3 of Rule <<KLEE-GR-uninterruptible-instructions>>, option 5 of Rule <<KLEE-GR-resumability-options>>); past an implementation-defined bound, it raises a KLEE RBG-unavailable exception and leaves the _State_ unchanged.
++
+NOTE: Such an event should be extremely rare since for most applications Machines will need fresh bits from a DBRG and not directly from a conditioned entropy source.
 
 [[KLEE-State-management]]
 === Rules Governing the _State_ Field and its Transitions
@@ -2026,7 +2028,7 @@ A locker in an Error State holds only its MDH, and its size (<<KLEE-instruction-
 [[KLEE-GR-usage-locker-error-state,GR32]]GR32:: An attempt to _use_ a locker in an Error State performs no operation, and in particular leaves the _State_ unchanged.
 Although such an attempt is an error that would otherwise transition the locker to _Invalid_, keeping the _State_ lets software address the original error condition; the architecture keeps no history of Error States.
 +
-A usage instruction with an output operand that performs no operation under this Rule or under <<KLEE-GR-gate-order>> (_Unconfigured_, Error State, expiration, or random bits unavailable within the bound of Rule <<KLEE-GR-rbg-failure>>), or that transitions its locker to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output.
+A usage instruction with an output operand that performs no operation under this Rule or under <<KLEE-GR-gate-order>> (_Unconfigured_, Error State, or expiration), or that transitions its locker to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output.
 An in-place operation thus never leaves its input in place of the output it did not produce.
 
 [[KLEE-GR-transition-to-from-unconfigured,GR33]]GR33:: Only a configuration instruction can transition a locker from _Unconfigured_ to a Complete State.
@@ -2292,7 +2294,8 @@ The following table gives the Error State that the handler of a KLEE exception s
 | Unsupported-Metadata              | _Unsupported_.
 | Out-of-memory                     | _Out of Memory_.
 | Privilege-violation               | _Privilege Violation_; none for a locker in a Configuration State, which keeps its _State_ (Rule <<KLEE-GR-usage-locker-config-state>>).
-| No-secure-clock (<<KLEE-Metadata-expiration-date>>) | _Expired_.
+| Clock-unavailable (<<KLEE-Metadata-expiration-date>>) | _Expired_.
+| RBG-unavailable (Rule <<KLEE-GR-rbg-failure>>) | _Invalid_.
 | Unconfigured-KLIOBUF              | None: Rule <<KLEE-SR-handler-duty>> does not apply.
 |===
 
@@ -2384,9 +2387,10 @@ The remaining exceptions, in the order of <<Zkl-ISA-priv.adoc#KLEE-exception-cod
 . *Locker marked _Off_.* A KLEE locker-Off exception on any access to the locker other than by a <<KLEE-destructive-config,destructive configuration instruction>> (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), before any condition that depends on its contents.
   M-mode resolves it or forwards it to the mode that owns the _Off_ field.
 . *Usage Control.* A KLEE privilege-violation exception for a usage instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in a mode that the _UsagePolicy_ excludes, and for any use, cloning or restriction of a locker in a Configuration State (Rule <<KLEE-GR-usage-locker-config-state>>).
-. *Unreadable secure clock.* A KLEE no-secure-clock exception for a usage instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read, the _State_ unchanged (<<KLEE-Metadata-expiration-date>>).
+. *Unreadable secure clock.* A KLEE clock-unavailable exception for a usage instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read, raised while leaving the _State_ unchanged (<<KLEE-Metadata-expiration-date>>).
 . *Insufficient KLF capacity.* A KLEE out-of-memory exception for a `kl.mgmt` opening a provisioning or an import (<<KLEE-locker-management>>) or for `kl.clone` (<<KLEE-instruction-clone>>).
 . *Unconfigured KLIOBUF.* An unconfigured-KLIOBUF exception (Rule <<KLEE-GR-iobuf-configured>>).
+. *Random bits unavailable.* A KLEE RBG-unavailable exception for an operation whose random bits remain unavailable past the implementation-defined bound of Rule <<KLEE-GR-rbg-failure>>, raised while leaving the _State_ unchanged.
 . *Memory exceptions.* The load/store address-breakpoint, address-misaligned, page-fault, guest-page-fault and access-fault exceptions of the component accesses of `kl.load`, `kl.store`, `kl.input` and `kl.output`, ordered as in <<KLEE-instructions-memory>>, with a precise halt (<<KLEE-resumability>>); an access to a non-idempotent region is an access fault (<<KLEE-Memory-Model>>).
 --
 
@@ -2403,7 +2407,7 @@ The following conditions set an Error State, or make the instruction perform no 
 . *Policy violation without an exception.* _Privilege Violation_, for a failed narrowing of the Usage Control policies (<<KLEE-Metadata-narrowing>>), whether by the policies of an SKS (<<KLEE-system-keys>>), of a system-specific format (<<KLEE-Machine-version>>) or of the source of a restricted transfer (Rule <<KLEE-GR-narrowing>>); for a `kl.restrict*` request that would widen _Locality_, or make it name an unconfigured entry without a configured substitute (<<KLEE-instruction-restrict>>); and for a restricted `kl.derive` into a locker whose _SCProtection_ is lower than that of its source (Rule <<KLEE-GR-narrowing>>).
 . *Use of an _Unconfigured_ or Error-State locker.* No operation, and the _State_ is unchanged (Rules <<KLEE-GR-transition-to-from-unconfigured>> and <<KLEE-GR-usage-locker-error-state>>, <<KLEE-insns-on-unconf-or-error-locker>>).
 . *Explicit Error State.* The Error State that a `kl.setst` immediate names (<<KLEE-instruction-setst>>).
-. *RBG failure.* _Invalid_, for an operation whose entropy source has failed permanently or failed a health test (Rule <<KLEE-GR-rbg-failure>>). Temporarily unavailable random bits are not an error: the instruction waits for them and, past the implementation-defined bound of that Rule, performs no operation, zeroes its output and leaves the _State_ unchanged.
+. *RBG failure.* _Invalid_, for an operation whose entropy source has failed permanently or failed a health test (Rule <<KLEE-GR-rbg-failure>>).
 . *Unusable ADS.* Dropped at import, without rejecting the SCC (<<KLEE-SCC-import>>).
 
 On a locker in an Error State, a `kl.restrict*` request that would set an Error State performs no operation instead, and the Error State is kept (<<KLEE-instruction-restrict>>).
@@ -2436,7 +2440,7 @@ The conditions on the locker follow in this order, and the first that applies de
 . Configuration State: KLEE privilege-violation exception, the _State_ unchanged (Rule <<KLEE-GR-usage-locker-config-state>>);
 . a forbidden KLIOBUF substitution: illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>);
 . _UsagePolicy_: KLEE privilege-violation exception (Rule <<KLEE-GR-usage-policy>>);
-. _ExpirationDate_: transition to Error State `kl_state_expired`, then no operation; if the secure clock cannot be read, KLEE no-secure-clock exception, the _State_ unchanged (<<KLEE-Metadata-expiration-date>>);
+. _ExpirationDate_: transition to Error State `kl_state_expired`, then no operation; if the secure clock cannot be read, KLEE clock-unavailable exception, the _State_ unchanged (<<KLEE-Metadata-expiration-date>>);
 . a KLIOBUF required by a substitution but unconfigured: unconfigured-KLIOBUF exception (Rule <<KLEE-GR-iobuf-configured>>);
 . the Machine's own rules.
 
@@ -3358,7 +3362,7 @@ Code that must interleave them, for instance in several threads of one process, 
 === Requirements on Exception Handlers
 
 [horizontal]
-[[KLEE-SR-handler-duty,SR15]]SR15:: A handler that can neither resolve nor forward to another handler, an in-process one included, a KLEE unsupported-Metadata, out-of-memory, privilege-violation or no-secure-clock exception, or any exception that a `kl.mgmt` opening a provisioning or an import raises once it has zeroized the locker, and does not terminate the process that caused it, must:
+[[KLEE-SR-handler-duty,SR15]]SR15:: A handler that can neither resolve nor forward to another handler, an in-process one included, a KLEE unsupported-Metadata, out-of-memory, privilege-violation, clock-unavailable or RBG-unavailable exception, or any exception that a `kl.mgmt` opening a provisioning or an import raises once it has zeroized the locker, and does not terminate the process that caused it, must:
 +
 --
 . unless the locker on which the exception was raised is in a Configuration State, which it keeps so that the management operation under way can complete (Rule <<KLEE-GR-usage-locker-config-state>>), set the _State_ of that locker to the corresponding Error State of <<KLEE-exception-error-correspondence>>, or to _Invalid_ where that table gives none, by the short import of <<KLEE-error-state-transfer>> where the instruction left the locker _Unconfigured_, as Rule <<KLEE-GR-transition-to-from-unconfigured>> requires; a locker left _Unconfigured_ would make software restart the operation (Rule <<KLEE-GR-cleared-under-management>>) and trap again without end.

@@ -28,6 +28,9 @@ class Invalid(Exception):
         super().__init__(msg)
         self.who = who
 
+class RbgUnavailable(Exception):
+    """KLEE RBG-unavailable exception (GR16): random bits unavailable past the bound; State unchanged."""
+
 class PrivViolation(Invalid):
     """Transition to Error State _Privilege Violation_ (GR43: a destination at a weaker level)."""
 
@@ -290,11 +293,11 @@ class Locker:
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR16: bits unavailable within the bound: no operation,
-                self.rnd = entry[0]                 # State unchanged, retryable
+            if k is TIMEOUT:                        # GR16: bits unavailable past the bound: KLEE
+                self.rnd = entry[0]                 # RBG-unavailable exception, State unchanged, retryable
                 if not entry[1]:
                     self.has.discard('rnd')
-                return TIMEOUT
+                raise RbgUnavailable()
             if k is None:                           # GR16: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
@@ -730,10 +733,10 @@ cr.exec_run([3])
 check('RBG failure in _Sign_Generate_ -> Invalid (GR16)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
-r = [ct.exec_run([TIMEOUT]), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
+r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
-check('RBG timeout in _Sign_Generate_: no operation, State unchanged, no RndNum; the reissue signs (GR16)',
-      r == [TIMEOUT, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+check('RBG timeout in _Sign_Generate_: KLEE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
+      'signs (GR16)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))

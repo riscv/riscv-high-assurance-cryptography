@@ -29,7 +29,7 @@ CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klmanagedlocker: no locker managed
 VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
-EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'no_secure_clock': EXPIRED}
+EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
 RES_MASK = sum(((1 << hi - lo + 1) - 1) << lo for n, hi, lo in MDH_FIELDS if n is None)
 
 def eq(name, got, want):
@@ -491,7 +491,7 @@ class Unit:
         if not self.zklexpire or not m['ExpirationDate']: return False
         hours = min(max(0, self.clock), (1 << 20) - 1) if self.clock is not None else None   # 0 before the epoch,
         return hours is not None and hours >= m['ExpirationDate']                       # saturated at 2^20 - 1
-    def clock_unreadable(self, m):                                  # kl_exc_no_secure_clock, State unchanged
+    def clock_unreadable(self, m):                                  # kl_exc_clock_unavailable, State unchanged
         return self.zklexpire and bool(m['ExpirationDate']) and self.clock is None
 
     # -- gates
@@ -820,7 +820,7 @@ class Unit:
         if m['State'] in PARTIAL: return self._exc_config(k)
         if forbidden_sub: raise Trap('illegal', 2)
         if not self.usage_allowed(m): return self._exc_locker(k, 'privilege_violation')
-        if self.clock_unreadable(m): raise self._exc('no_secure_clock')
+        if self.clock_unreadable(m): raise self._exc('clock_unavailable')
         if self.expired(m):
             self._enter_error(k, EXPIRED)
             return 'expired'
@@ -984,7 +984,7 @@ class Unit:
             if self.lockers[e].mdh['State'] in PARTIAL: return self._exc_config(e)
         for e in ends:
             if not self.usage_allowed(self.lockers[e].mdh): return self._exc_locker(e, 'privilege_violation')
-        if any(self.clock_unreadable(self.lockers[e].mdh) for e in ends): raise self._exc('no_secure_clock')
+        if any(self.clock_unreadable(self.lockers[e].mdh) for e in ends): raise self._exc('clock_unavailable')
         exp = [e for e in ends if self.expired(self.lockers[e].mdh)]
         for e in exp:
             self._enter_error(e, EXPIRED)
@@ -2519,11 +2519,11 @@ def t_expiration():
        ('invalid', 'invalid', INVALID, 'illegal/1', ToyCipher.ENCRYPT))
     u, out = rc(1, eu(0, ed=1 << 19)), bytearray(b'\x22' * 16)
     u.clock = None
-    eq('an unreadable clock: a usage instruction on a non-zero date raises kl_exc_no_secure_clock, output and State '
+    eq('an unreadable clock: a usage instruction on a non-zero date raises kl_exc_clock_unavailable, output and State '
        'kept, usable again once the clock reads; date 0 unaffected',
        (trap_of(u.exec_, 0, 'A', vin=bytearray(16), vout=out), u.getst(0), bytes(out), u.setst(1, READY),
         (setattr(u, 'clock', 0), u.exec_(0, 'A', vin=bytearray(16), vout=bytearray(16)))[1]),
-       ('no_secure_clock', ToyCipher.ENCRYPT, b'\x22' * 16, 'ok', 'done'))
+       ('clock_unavailable', ToyCipher.ENCRYPT, b'\x22' * 16, 'ok', 'done'))
     u.lockers[0].mdh['UsagePolicy'] = 8
     u.clock = None
     eq('UsagePolicy precedes the unreadable clock (Gate Order Rule)', trap_of(u.exec_, 0, 'A', vin=bytearray(16),
@@ -2531,9 +2531,9 @@ def t_expiration():
     h = rc(1, eu(0, ed=1 << 19))
     h.clock = None
     tag = trap_of(h.exec_, 0, 'A', vin=bytearray(16), vout=bytearray(16))
-    eq('SR15: a handler that cannot resolve kl_exc_no_secure_clock sets Expired by a kl.setst, which is no usage '
+    eq('SR15: a handler that cannot resolve kl_exc_clock_unavailable sets Expired by a kl.setst, which is no usage '
        'instruction and reads no clock', (tag, (h.setst(0, EXC_STATE[tag]), h.getst(0))[1]),
-       ('no_secure_clock', EXPIRED))
+       ('clock_unavailable', EXPIRED))
 
 def t_derive():
     section('kl.derive  <<KLEE-instruction-derive>>, <<KLEE-derive-endpoints>>')
