@@ -269,7 +269,8 @@ A State _X_ that loads a long field from `INPUT`, or emits one to `OUTPUT`, over
 . *Entry.* Entering _X_ zeroes _W_; entering a loading State also zeroes the field, so that reloading replaces it.
 . *Progress.* _W_ rises monotonically by the amount of data actually transferred, in its unit: by `KLLEN` or `KLLEN`/8 for a `kl.exec` that completes, and by the committed prefix for one that halts (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>), so that its resumption adds only the remainder.
 . *Completion.* The transfer is complete once _W_ reaches the size of the field, and _W_ is not reset then.
-  Unless the Machine defines another transition at that point, an emitting State then transitions to _Success_, and a loading State admits no further `kl.exec` (Rule <<KLEE-MGR-not-allowed-instructions>>).
+  An emitting State then transitions to _Success_, and a loading State admits no further `kl.exec` (Rule <<KLEE-MGR-not-allowed-instructions>>),
+  unless the Machine defines another transition at that point.
 . *Excess.* Excess data in the final loading transfer is ignored; an emitting `kl.exec` that would carry _W_ past the field size transitions the locker to Error State _Invalid_.
 . *Incomplete load.* A `kl.setst` that leaves a loading State _X_ before the transfer is complete leaves the field unconfigured: the field, and any length of it that the Machine set on entering _X_, are zeroed, and the flag, if any, that records that the field holds a value stays clear.
   A same-State `kl.setst`, which restarts the load (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>>), and `kl.clearads`, which leaves the _State_ unchanged, do not leave _X_.
@@ -281,69 +282,47 @@ A State _X_ that loads a long field from `INPUT`, or emits one to `OUTPUT`, over
 . *`kl.restrict*`.* Where _W_ is a field of the MDH, `kl.restrict*` cannot write it (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-restrict>>).
 
 [[KLEE-MGR-single-last-block,MR10]]MR10:: _Single final block._
-A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_,
-admits at most one `kl.exec`, which processes that block (Rule <<KLEE-MGR-one-klexec-per-block>>).
-No `kl.exec` is needed to feed an empty input to a Machine, such as an empty final block of the AD of OCB (<<KLEE-OCB-mode>>), and a `kl.exec` whose transfer window is empty does not reach the Machine, so it is not the `kl.exec` that the State admits (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>).
-Unless the Machine defines a transition of its own on completion of that `kl.exec`, the locker remains in the State,
-and any further `kl.exec` issued in it transitions the locker to Error State _Invalid_, its output window being zeroed
-(Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>>): a second final block is not a continuation of the input
-but an attempt to manipulate the internal state of the Machine.
+A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_, admits at most one `kl.exec` (Rule <<KLEE-MGR-one-klexec-per-block>>).
+Unless the Machine defines a transition of its own on its completion, the locker stays in the State, and a further `kl.exec` transitions it to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-instructions>>), with its output window zeroed (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>>): a second final block is not a continuation of the input but an attempt to manipulate the internal state of the Machine.
+An empty input needs no `kl.exec`, as for an empty final block of the AD of OCB (<<KLEE-OCB-mode>>), and a `kl.exec` whose transfer window is empty does not reach the Machine, so it is not the `kl.exec` that the State admits (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>).
 
 [[KLEE-MGR-policy-gate,MR11]]MR11:: _Policy gate and entry conditions._
-Each Machine states which bit of _MachinePolicy_, if any, enables the operation of each of its States, and the conditions
-that must hold on entering a State.
-A `kl.setst` into a State whose operation _MachinePolicy_ disables, or whose stated entry conditions are not met,
-transitions the locker to Error State _Invalid_.
-Where a Machine says that a transition is possible "if encryption is allowed", resp. "if decryption is allowed", the operation
-is enabled by _MachinePolicy_[0], resp. _MachinePolicy_[1]; where encryption and decryption are the same operation, as in
-<<KLEE-keystream-modes>>, either bit enables it. A signature Machine is gated by _MachinePolicy_[0] for signature
-generation and _MachinePolicy_[1] for verification (<<Zkl-ISA-unpriv.adoc#KLEE-Machine-field>>).
-A Machine states what a State requires — the `Has` flags, the mode, and the other configuration of the CC that the State
-uses — as entry conditions of that State. An instruction executed in the State checks a condition only if the condition
-can change while the locker is in the State, or if it is a check of Rule <<KLEE-MGR-check-on-read>>; such a condition is
-stated with the instruction, and its violation also transitions the locker to Error State _Invalid_, unless it is a data
-error (Rule <<KLEE-MGR-config-data-error>>).
++
+--
+Each Machine states, for each of its States:
+
+* the bit of _MachinePolicy_, if any, that enables the operation of the State (<<Zkl-ISA-unpriv.adoc#KLEE-Machine-field>>):
+** _MachinePolicy_[0] where the Machine says "if encryption is allowed", and for signature generation;
+** _MachinePolicy_[1] where it says "if decryption is allowed", and for signature verification;
+** either bit where encryption and decryption are the same operation, as in <<KLEE-keystream-modes>>; and
+* its _entry conditions_: what the State requires, such as the `Has` flags, the mode, and the other configuration of the CC that the State uses.
+
+A `kl.setst` into a State whose operation _MachinePolicy_ disables, or whose entry conditions do not hold, transitions the locker to Error State _Invalid_.
+An instruction executed in the State checks a condition only if the condition can change while the locker is in the State, or if it is a check of Rule <<KLEE-MGR-check-on-read>>; the Machine states such a condition with the instruction, and its violation also transitions the locker to _Invalid_, unless it is a data error (Rule <<KLEE-MGR-config-data-error>>).
+--
 
 [[KLEE-MGR-config-data-error,MR12]]MR12:: _Configuration errors and data errors._
-A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard
-rejects, such as a malformed private key, or a value whose encoding violates a constraint of its representation, such as the
-zero most significant bits of secp521r1 (<<KLEE-ECC>>). It transitions the locker to Error State _Invalid_, and the CC
-must be reconfigured before it can be used.
-A _data error_ is a ciphertext, tag, signature, message representative or public key that is malformed or does not
-verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses — a peer's point,
-a public key or a generator — that is not a valid point of the curve.
-It transitions the state machine to _Failure_, which is a Valid State.
-Each Machine states which of its checks are of which kind.
+Each Machine states which of its checks detect which of these two kinds of error:
+
+* A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard rejects, such as a malformed private key, or a value whose encoding violates a constraint of its representation, such as the zero most significant bits of secp521r1 (<<KLEE-ECC>>).
+  It transitions the locker to Error State _Invalid_, so the CC cannot be used until it is reconfigured.
+* A _data error_ is a ciphertext, tag, signature, message representative or public key that is malformed or does not verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses (a peer's point, a public key or a generator) that is not a valid point of the curve.
+  It transitions the state machine to _Failure_, which is a Valid State.
 
 [[KLEE-MGR-check-on-read,MR13]]MR13:: _Checks when a field is read._
-When an operation reads a field, it performs the checks that depend on the operation or on more than one field
-— for instance the validity of a point in the role the operation gives it, the range of `Scalar` against the group
-order, or the consistency of a public key with a private key — before it changes any state. A failure is classified
-by Rule <<KLEE-MGR-config-data-error>>: a data error leads to _Failure_, a configuration error to Error State _Invalid_.
-A check that depends only on the field itself is made when the field is written (Rule <<KLEE-MGR-check-on-write>>) and need not be
-repeated when it is read, since the KLF guarantees the integrity of the locker (<<Zkl-ISA-unpriv.adoc#KLEE-KLF>>);
-a Machine may nevertheless require a repeat as a means to detect a corruption of the KLF, as secp521r1 does
-(<<KLEE-ECC>>), and a repeated check that fails transitions the locker to Error State _Invalid_.
+An operation that reads a field performs, before it changes any state, the checks that depend on the operation or on more than one field, such as the validity of a point in the role the operation gives it, the range of `Scalar` against the group order, or the consistency of a public key with a private key; Rule <<KLEE-MGR-config-data-error>> classifies a failure.
+A check that depends only on the field is made when the field is written (Rule <<KLEE-MGR-check-on-write>>), and need not be repeated when it is read, since the KLF guarantees the integrity of the locker (<<Zkl-ISA-unpriv.adoc#KLEE-KLF>>).
+A Machine may nevertheless require a repeat to detect a corruption of the KLF, as secp521r1 does (<<KLEE-ECC>>); a repeated check that fails transitions the locker to Error State _Invalid_.
 
 [[KLEE-MGR-check-on-write,MR14]]MR14:: _Checks when a field is written._
-A check that a Machine attaches to a field and that depends on that field alone — such as the zero most significant
-bits of secp521r1, the well-formedness of an ML-DSA `privkey`, or the input checks of cite:[nist-fips-203] on an
-ML-KEM key — is performed whenever the field is written: at the completion of its load (Rule <<KLEE-MGR-load-long-field>>),
-of a `kl.derive` into it, of the provisioning that carries it, and of an import that restores it. A failure is
-classified by Rule <<KLEE-MGR-config-data-error>>: for a private key or another configuring field it is a configuration error, and the
-locker transitions to Error State _Invalid_; for a public key it is a data error, and the state machine transitions
-to _Failure_.
-The validity of a curve point is not checked when the point is written: it depends on the role that an operation gives
-the point, and is checked when the point is read (Rule <<KLEE-MGR-check-on-read>>).
+A check that a Machine attaches to a field and that depends on that field alone, such as the zero most significant bits of secp521r1, the well-formedness of an ML-DSA `privkey`, or the input checks of cite:[nist-fips-203] on an ML-KEM key, is performed whenever the field is written: at the completion of its load (Rule <<KLEE-MGR-load-long-field>>), of a `kl.derive` into it, of the provisioning that carries it, and of an import that restores it.
+Rule <<KLEE-MGR-config-data-error>> classifies a failure: a configuration error for a private key or another configuring field, a data error for a public key.
+The validity of a curve point is not checked when the point is written, since it depends on the role that an operation gives the point: it is checked when the point is read (Rule <<KLEE-MGR-check-on-read>>).
 
 [[KLEE-MGR-tag-verify,MR15]]MR15:: _Verification of a tag._
-A Machine that verifies a tag or a MAC without disclosing the value it computes does so by a Form C `kl.setst` naming
-_Hash_Verify_, whose auxiliary operand carries the expected value. The comparison takes a time independent of the values
-compared, and transitions the state machine to _Success_ if they match and to _Failure_ otherwise (Rule
-<<KLEE-MGR-config-data-error>>). Where the Machine enters _Hash_Verify_ by itself, for instance on completing its last
-block, the `kl.setst` naming _Hash_Verify_ is a same-State `kl.setst` that performs the comparison. The exception is a
-Machine whose tag is an input of the decryption itself, the SIV of <<KLEE-GCM-SIV-mode>>: the tag is supplied before the
-decryption, and the `kl.exec` that completes the tag computation performs the comparison.
+A Machine that verifies a tag or a MAC without disclosing the value it computes performs the verification in a constant time, and then transitions the state machine to _Success_ if the verification succeeds and to _Failure_ otherwise (Rule <<KLEE-MGR-config-data-error>>).
+The instruction that provides the tag or MAC to verify performs the verification: a Form C `kl.setst` naming _Hash_Verify_, whose auxiliary operand carries the expected value, or, where the expected value is supplied first, as the SIV of GCM-SIV is (<<KLEE-GCM-SIV-mode>>), the `kl.exec` that completes the internal tag computation.
+Where the Machine enters _Hash_Verify_ by itself, for instance on completing its last block, the `kl.setst` naming _Hash_Verify_ is a same-State `kl.setst`.
 
 // ////////////////////////////////////////////////////////////////////
 

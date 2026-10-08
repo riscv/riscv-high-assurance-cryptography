@@ -1865,25 +1865,24 @@ A _usage_ instruction that would violate the Usage Control policies does not per
 +
 [[KLEE-instruction-properties]]
 .State modification and usage control, per instruction
-[width="100%",cols="<18%,^14%,^14%,^14%,<40%",options="header"]
+[width="100%",cols="<18%,^16%,^14%,^14%,<38%",options="header"]
 |===
-| Instruction(s)              | May modify KLEE state | May modify other state | Usage instruction | Notes
+| Instructions                | May modify KLEE state | May modify other state | Usage instruction | Notes
 
 | `kl.load`                   | Yes             | No  | No^*^                | Updates `klstart`.
-| `kl.store`                  | Only `klstart`  | Yes | No^*^                | Updates `klstart`.
+| `kl.store`                  | Only `klstart`       | Yes | No^*^                | Updates `klstart`.
 | `kl.exec`                   | Yes             | Yes | Yes                  | {empty}
 | `kl.mvin`, `kl.mvout`       | Yes             | Yes | No^*^                | The direction determines which state changes. Both advance `klstart` by the bytes transferred.
-| `kl.setst`                  | Yes             | No  | Yes, except as noted | Not a usage instruction when the immediate is `kl_state_unconfigured` (`kl.clear`, <<KLEE-instruction-clear>>), `kl_cfg_clearall` (`kl.clearall`, <<KLEE-instruction-clearall>>) or an Error State.
-// Either may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
+| `kl.setst`                  | Yes             | No  2+<| Yes, except when the immediate is `kl_state_unconfigured` (`kl.clear`), `kl_cfg_clearall` (`kl.clearall`) or an Error State, in which case it is not a usage instruction.
 | `kl.mgmt`                   | Yes             | No  | No                   | {empty}
 | `kl.getmd*`, `kl.getst`, `kl.getstx`    | No  | Yes | No                   | {empty}
-| `kl.restrict*`              | Yes             | No  | No                   | Every change it can make narrows the CC's policies (<<KLEE-instruction-restrict>>).
+| `kl.restrict*`              | Yes             | No  | No                   | {empty}
 | `kl.clone`, `kl.rename`, `kl.swap`      | Yes | No  | No                   | {empty}
 | `kl.derive`                 | Yes             | No  | Yes                  | The _UsagePolicy_ of the source and destination lockers are evaluated independently (<<KLEE-instruction-derive>>).
 | `kl.size`, `kl.avail`       | No              | Yes | No                   | {empty}
 | `kl.input`                  | Yes             | No  | No                   | Modifies the KLIOBUF and `klstart`, but no locker.
-| `kl.output`                 | Only `klstart`  | Yes | No                   | Modifies `klstart`, but no locker.
-| `kl.clear`, `kl.clearall`   | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
+| `kl.output`                 | Only `klstart`       | Yes | No                   | Modifies `klstart`, but no locker.
+| `kl.clear(all)`             | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
 | `kl.clearads`               | Yes             | No  | Yes
 5+| ^*^ Usable only in the States admitted by Rule <<KLEE-GR-zkl-load-mv-allowed>>, resp. Rule <<KLEE-GR-zkl-store-mv-allowed>>; on an _Unconfigured_ or Error-State locker they perform no operation (Rule <<KLEE-GR-cleared-under-management>>).
 |===
@@ -1897,7 +1896,7 @@ The *destructive configuration instructions* are the configuration instructions 
 === Custom Metadata
 
 [horizontal]
-[[KLEE-GR-custom-locality,GR15]]GR15:: A CC whose MDH carries a custom _Machine_ (values 3072–4095, <<KLEE-Machine-field>>) or a system-specific _Version_ (3, <<KLEE-Machine-version>>) must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (<<KLEE-Metadata-validity>>).
+[[KLEE-GR-custom-locality,GR15]]GR15:: A CC whose MDH carries a custom _Machine_ or a system-specific _Version_ must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid.
 Implementation-specific values of _MachineUse_ and _AuxInfo_ are exempt from this Rule: the ADS and `IMPQUAL` bind them to the implementation (<<KLEE-MachineUse>>).
 
 === Randomness
@@ -2357,11 +2356,12 @@ Unsupported Metadata:::
 +
 --
 Unsupported Metadata at provisioning or import raises a KLEE unsupported-Metadata exception and leaves the locker _Unconfigured_, with `klmanagedlocker` naming it (<<KLEE-CSR-klmanagedlocker>>).
-A handler below M-mode, to which M-mode forwards the exception, cannot emulate the Machine and treats the exception as unresolvable.
+
+A handler below M-mode cannot emulate the Machine and treats the exception as unresolvable.
 
 An M-mode handler that emulates the Machine instead sets the locker's `*llockerstatus` field to _Off_ (<<Zkl-ISA-priv.adoc#KLEE-CSR-llockerstatus>>), so that every later access to the locker, except by a <<KLEE-destructive-config,destructive configuration instruction>>, traps.
 The emulator then holds the locker in its own protected memory and services every operation on it, including SCC import and export.
-For these, it needs either the CSK and the Locality Secrets of the HW Binding Group, inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<KLEE-SCC-AEAD>>) that it cannot otherwise obtain, or implementation-specific primitives that compute these functions for it; an implementation that provides neither cannot emulate Machines and reports the KLEE unsupported-Metadata exception to software instead.
+For these, it needs either (a) the CSK and the Locality Secrets of the HW Binding Group, inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<KLEE-SCC-AEAD>>) that it cannot otherwise obtain, or (b) implementation-specific primitives that compute these functions for it.
 
 An emulator keeps one copy per locker slot and replaces it:
 
@@ -2902,7 +2902,7 @@ Software uses Form A, C or D of `kl.mgmt` to supply the MDH value `ml` saved whe
 .. if the `SIV` check fails, the locker transitions to Error State _Authentication Failed_, and the instruction terminates without an exception; otherwise, if _KeyType_ = 1, the SKID is resolved, and the narrowing of <<KLEE-system-keys>> is applied.
 . If `ml`._State_ is not a Complete State, the locker's contents are not changed further.
 
-NOTE: At the end, in place of decrypting and authenticating the contents of the locker, implementation may instead restore the clear contents from an internal copy, if it can guarantee that the outcome is identical. The specification defines no internal mechanism for this.
+NOTE: In place of decrypting and authenticating the locker's contents in Step 2.a, implementation may instead restore the clear contents from an internal copy, if it can guarantee that the outcome is identical. The specification defines no mechanism for this.
 
 // ////////////////////////////////////////////////////////////////////
 
