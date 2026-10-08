@@ -263,41 +263,22 @@ the granularity of the state (Rule <<KLEE-MGR-granularity>>). The width is not n
 cleared. This concerns the bits *within* the operand; the elements beyond `VL` are governed by the
 tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLEE-KLV>>.
 
-[[KLEE-MGR-load-long-field,MR9]]MR9:: A State _X_ that loads a long field from `INPUT`, or emits one to
-`OUTPUT`, using multiple `kl.exec` instructions records the amount transferred so far in a state
-field _W_ (e.g., _MachineUse_ of the MDH).
-+
-Each such state names the field _W_ and its unit, bits or bytes.
-+
-Upon entering State _X_, _W_ is zeroed.
-_W_ rises monotonically by the amount of data actually transferred, in the unit of _W_: by `KLLEN` or `KLLEN/8` for a
-`kl.exec` that completes, and by the bytes of the committed prefix for one that halts (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>), so that its
-resumption adds only the remainder. _W_ is not reset when the field completes.
-+
-Entering a loading state also zeroes the field, so that reloading replaces it.
-+
-Where the loading is performed by `process_VLI`
-(<<KLEE-process-VLI>>), it is invoked with `block` = `state` = the field, `max_len` = `b` = `n` = its
-size, `cumul_len` = _W_, `mode` = `assign`, and `process_block` and `finalize` both equal to `None`.
-+
-Once _W_ reaches the size of the field, the transfer is complete. A State that emits a field then
-transitions to _Success_, unless the Machine defines another transition at that point. In a loading State,
-unless State _X_ defines a transition of its own at that point, no further `kl.exec` is allowed in it and
-issuing one transitions the locker to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
-emitting `kl.exec` that would carry _W_ past the field size invalidates the locker. Where _W_ is a
-field of the MDH, `kl.restrict*` may not write it (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-restrict>>).
-+
-A `kl.setst` that leaves a loading State _X_ before _W_ reaches the size of the field leaves the field
-unconfigured: the field, and any length of it that the Machine set on entering _X_, are zeroed, and the flag,
-if any, that records that the field holds a value stays clear. A same-State `kl.setst`, which restarts the load
-(Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>>), and `kl.clearads`, which leaves the _State_ unchanged, do not
-leave _X_. A Machine whose next State needs the field states this as an entry condition (Rule <<KLEE-MGR-policy-gate>>).
-+
-A Machine may keep in _StateExtension_ a flag per loaded field, recording that the field holds a configured value,
-such as the `Has` flags of the ECC, ML-KEM and ML-DSA Machines and the `HasKey` of HMAC. Unless the Machine states otherwise, such a flag is
-cleared on entering the loading State of its field, set when the load completes and passes the checks of Rule
-<<KLEE-MGR-check-on-write>>, and also set by an operation of the Machine that computes the field; it is readable with
-`kl.getstx`. Each Machine lists its flags, their bit positions, and any departure from this pattern.
+[[KLEE-MGR-load-long-field,MR9]]MR9:: _Long fields transferred by several `kl.exec`._
+A State _X_ that loads a long field from `INPUT`, or emits one to `OUTPUT`, over several `kl.exec` names a state field _W_, such as _MachineUse_ of the MDH, and its unit, bits or bytes, and records in _W_ the amount transferred so far:
+
+. *Entry.* Entering _X_ zeroes _W_; entering a loading State also zeroes the field, so that reloading replaces it.
+. *Progress.* _W_ rises monotonically by the amount of data actually transferred, in its unit: by `KLLEN` or `KLLEN`/8 for a `kl.exec` that completes, and by the committed prefix for one that halts (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>), so that its resumption adds only the remainder.
+. *Completion.* The transfer is complete once _W_ reaches the size of the field, and _W_ is not reset then.
+  Unless the Machine defines another transition at that point, an emitting State then transitions to _Success_, and a loading State admits no further `kl.exec` (Rule <<KLEE-MGR-not-allowed-instructions>>).
+. *Excess.* Excess data in the final loading transfer is ignored; an emitting `kl.exec` that would carry _W_ past the field size transitions the locker to Error State _Invalid_.
+. *Incomplete load.* A `kl.setst` that leaves a loading State _X_ before the transfer is complete leaves the field unconfigured: the field, and any length of it that the Machine set on entering _X_, are zeroed, and the flag, if any, that records that the field holds a value stays clear.
+  A same-State `kl.setst`, which restarts the load (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>>), and `kl.clearads`, which leaves the _State_ unchanged, do not leave _X_.
+  A Machine whose next State needs the field states this as an entry condition (Rule <<KLEE-MGR-policy-gate>>).
+. *Flags.* A Machine may keep in _StateExtension_ a flag per loaded field, recording that the field holds a configured value, such as the `Has` flags of the ECC, ML-KEM and ML-DSA Machines and the `HasKey` flag of HMAC.
+  Unless the Machine states otherwise, such a flag is cleared on entering the loading State of its field, and set when the load completes and passes the checks of Rule <<KLEE-MGR-check-on-write>>, or when an operation of the Machine computes the field; `kl.getstx` reads it.
+  Each Machine lists its flags, their bit positions, and any departure from this pattern.
+. *`process_VLI`.* A load performed by `process_VLI` (<<KLEE-process-VLI>>) invokes it with `block` = `state` = the field, `max_len` = `b` = `n` = its size, `cumul_len` = _W_, `mode` = `assign`, and `process_block` = `finalize` = `None`.
+. *`kl.restrict*`.* Where _W_ is a field of the MDH, `kl.restrict*` cannot write it (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-restrict>>).
 
 [[KLEE-MGR-single-last-block,MR10]]MR10:: _Single final block._
 A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_,
