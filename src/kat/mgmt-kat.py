@@ -1031,7 +1031,7 @@ class Unit:
         self._dirty(kd)
         return 'transferred'
 
-    # -- the serialized image S and the locker transfers
+    # -- the serialized image S (<<KLEE-serialized-image>>) and the locker transfers
     def _s_get(self, k, j):
         cl = self.lockers[k]
         off, _, _, iend = self.layout(cl.mdh)
@@ -1045,7 +1045,7 @@ class Unit:
             setattr(self, ('siv', 'impqual', 'siv2')[j // 16], b2v(bytes(blk)))
         elif j < iend:
             cl.img[j - off:j - off + 16] = bytes(blk)
-    def _xfer_pre(self, writing, xl=0):                             # GR7, GR38, GR39
+    def _xfer_pre(self, writing, xl=0):                             # GR7; <<KLEE-mv-locker-checks>>: GR38, GR39
         k = self.klmanagedlocker                                    # the locker is never an operand
         self._pre()
         self._off(k)
@@ -2141,7 +2141,7 @@ def t_ads():
 
 def t_transfers():
     section('kl.load, kl.store, kl.mvin, kl.mvout  <<KLEE-instruction-load>>, <<KLEE-instruction-mv>>, '
-            '<<KLEE-Memory-Alignment>>')
+            '<<KLEE-instructions-memory>>')
     eq('kl.mvin into the managed locker only in 56, 58, 60 (GR38), kl.mvout only in 57, 59 (GR39); no trap in 0, '
        '48-55 (GR35)',
        ([s for s in range(64) if trap_of(white_box(s).csrs(klmanagedlocker=0).mv_in, 1) is None],
