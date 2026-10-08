@@ -30,7 +30,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: R69)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR67)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -74,7 +74,7 @@ class XexLocker:
     keytype = property(lambda s: fget(s.mdh, 'KeyType'))
     k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
     widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
-    def invalidate(s):                            # R30
+    def invalidate(s):                            # GR28
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
     def _install(s, field, key2, importing):
@@ -84,7 +84,7 @@ class XexLocker:
             s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
             s.mdh = fset(s.mdh, 'KeyType', 0)
         elif field != ONES64 and field in s.sks:
-            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (R69)
+            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR67)
         else:
             s.invalidate()                        # <<KLEE-MVR-open>>
     def provision(s, pi):
@@ -107,22 +107,22 @@ class XexLocker:
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
         """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
-        if immed in RESERVED_IMMED:                # R26, reserved Error States: first group, before any State check
+        if immed in RESERVED_IMMED:                # GR24, reserved Error States: first group, before any State check
             raise IllegalInstruction(immed)
-        if s.state in ERROR_STATES:               # R34
+        if s.state in ERROR_STATES:               # GR32
             return
         pol = fget(s.mdh, 'MachinePolicy')
         if immed == READY and form == 'A':
             s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
         elif (immed in (ENCRYPT, DECRYPT) and form in ('C', 'A/iobuf')
               and (s.state == READY and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)
-                   or s.state == immed)):         # R23: same State re-tweaks
+                   or s.state == immed)):         # GR21: same State re-tweaks
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
-            s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MGR7)
+            s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MR7)
             s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
             s.mdh = fset(s.mdh, 'State', immed)
         else:
-            s.invalidate()                        # MGR1
+            s.invalidate()                        # MR1
 
     def exec(s, inp, KLLEN, klstart=0, out=None, halt_after=None):
         """Form A kl.exec (or its Form D substitution, Vd = Vs2); returns (output operand, klstart)."""
@@ -130,8 +130,8 @@ class XexLocker:
         lo = 8 * klstart
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
-            return out & ~window, 0               # R34
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # R24, MGR1; MGR2 (<<KLEE-CSR-klstart>>: length first)
+            return out & ~window, 0               # GR32
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR22, MR1; MR2 (<<KLEE-CSR-klstart>>: length first)
             s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -140,7 +140,7 @@ class XexLocker:
             s.invalidate()
             return out & ~window, 0
         f, key1 = aes_encrypt if s.state == ENCRYPT else aes_decrypt, v2b(s.key1, s.k // 8)
-        pos = list(range(lo, KLLEN, B))           # MGR3
+        pos = list(range(lo, KLLEN, B))           # MR3
         for q, i in enumerate(reversed(pos) if s.msb_first else pos):
             if q == halt_after:
                 return out, i // 8                # precise halt
@@ -162,14 +162,14 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # R44 items 2, 5; R47
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # GR42 items 2, 5; GR45
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX defines no source endpoint (R44 items 1-2)."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (GR42 items 1-2)."""
     if isinstance(src, XexLocker):
         return src.invalidate() or False
     return dst.derive_dest(src, length)
@@ -359,7 +359,7 @@ check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
 
 section("KLEE XEX locker, full blocks (tweak = bin(i, 128))")
 for name, k1, k2, i, p, c in FULL:
-    check(f"{name}: encrypt (one multi-block kl.exec, MGR3), decrypt, one kl.exec per block", True,
+    check(f"{name}: encrypt (one multi-block kl.exec, MR3), decrypt, one kl.exec per block", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
           (c, p, c))
 
@@ -410,16 +410,16 @@ check("Encrypt -> Ready zeroes the mask; the CC is reusable with a new tweak", T
       (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
 cl = tw(new_xex(k1, k2), t=0xdead)
 cl_run(cl, data)
-check("same-State kl.setst (R23) re-tweaks: mask index back to 0", True,
+check("same-State kl.setst (GR21) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 info("a same-State kl.setst is read as the Form C transition into that State: it sets the tweak afresh.")
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
-check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MGR7)", True, cl_run(cl, data)[0], c)
+check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MR7)", True, cl_run(cl, data)[0], c)
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'A/iobuf', v2b(bin_(i, B), 16))
 check("Form A kl.setst and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
-for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MGR2): Invalid, window zeroed"),
+for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MR2): Invalid, window zeroed"),
                             (256, 8, (INVALID, b2v(data[:8]), 0), "klstart = 8, no interruption point: Invalid"),
                             (256, 32, (ENCRYPT, b2v(data), 0), "klstart = KLLEN/8: empty window, only klstart = 0"),
                             (256, 48, (ENCRYPT, b2v(data), 0), "klstart = 48 > KLLEN/8: empty window"),
@@ -478,11 +478,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (R44 item 5)", None, src, 16),
-                        ("length 0 (R44 item 5)", None, src, 0),
-                        ("24-byte source (R44 item 5)", None, src[:24], 32),
-                        ("destination in Encrypt (R44 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (R47, R44 item 2)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR42 item 5)", None, src, 16),
+                        ("length 0 (GR42 item 5)", None, src, 0),
+                        ("24-byte source (GR42 item 5)", None, src[:24], 32),
+                        ("destination in Encrypt (GR42 item 2)", tw, src, 32),
+                        ("KeyType 1 destination (GR45, GR42 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))

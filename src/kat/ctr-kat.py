@@ -95,7 +95,7 @@ class KsLocker:
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
         """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
-        if immed in RESERVED_IMMED:                # R26, reserved Error States: first group, before any State check
+        if immed in RESERVED_IMMED:                # GR24, reserved Error States: first group, before any State check
             raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return
@@ -108,7 +108,7 @@ class KsLocker:
         elif immed == AUX and self.state in (RDY, OP) and form == 'B':
             self.ctr = bin_(operand, j)                           # bin(Xs, j), State unchanged
         else:
-            self.invalidate()                                     # MGR1
+            self.invalidate()                                     # MR1
 
     def exec(self, KLLEN, klstart=0, out=0, halt_after=None, iobuf=False):
         """Form C kl.exec (output only), or Form D into the KLIOBUF; returns (output, klstart)."""
@@ -116,7 +116,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # R24; <<KLEE-CSR-klstart>>: invalid length (MGR2), also output only
+        if self.state != OP or KLLEN % B:     # GR22; <<KLEE-CSR-klstart>>: invalid length (MR2), also output only
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -125,7 +125,7 @@ class KsLocker:
             self.invalidate()                 # not an interruption point
             return out & ~window, 0
         k, mode, n, j = self.params()
-        key, pos = v2b(self.key, k // 8), list(range(lo, KLLEN, B))   # MGR3
+        key, pos = v2b(self.key, k // 8), list(range(lo, KLLEN, B))   # MR3
         for q, i in enumerate(pos if self.order == 'spec' else pos[::-1]):
             if q == halt_after:
                 return out, i // 8
@@ -140,22 +140,22 @@ class KsLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker or DRBG output bytes
-        (R50, unrestricted: no narrowing)."""
+        (GR48, unrestricted: no narrowing)."""
         n = self.params()[0] // 8
-        if isinstance(src, KsLocker):         # R44 items 1-2, then item 3: keystream is no hash/MAC/XOF
-            if src.state != OP:               # output, so R49 key derivation does not admit it into a key
+        if isinstance(src, KsLocker):         # GR42 items 1-2, then item 3: keystream is no hash/MAC/XOF
+            if src.state != OP:               # output, so GR47 key derivation does not admit it into a key
                 return src.invalidate()
             return self.invalidate() if self.state != RDY or self.keytype == 1 else (src.invalidate(), self.invalidate())
         if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
-            return self.invalidate()          # R44 item 2 (R47), item 5
+            return self.invalidate()          # GR42 item 2 (GR45), item 5
         self.key = b2v(src[:n])
         return True
 
 
 def derive_to_hash(cl, h, length):
-    """R49: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (R51)."""
+    """GR47: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (GR49)."""
     if cl.state != OP:
-        return cl.invalidate()                # R44 items 1-2
+        return cl.invalidate()                # GR42 items 1-2
     return h.update(keystream(cl, length)) or True
 
 def keystream(cl, nbytes, per_block=False):
@@ -255,7 +255,7 @@ for name, k, c in SP38A_F5:
 F51 = [(H(k), c) for _, k, c in SP38A_F5]
 control("counter without bswap (little-endian in the trailing bytes) misses F.5",
         all(kl_ctr(key, T1, PT, C0, variant='neg').hex() != c for key, c in F51))
-control("blocks filled most significant first (MGR3 reversed) misses F.5",
+control("blocks filled most significant first (MR3 reversed) misses F.5",
         all(kl_ctr(key, T1, PT, C0, order='neg').hex() != c for key, c in F51))
 key, c = F51[0]
 
@@ -303,14 +303,14 @@ section("States, transitions and general rules (F.5.1)")
 eq("State values Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49", (RDY, OP, AUX, INV), (1, 2, 13, 49))
 cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (R24)",
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR22)",
    (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
 for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
                     ("#kl_state_operate in Form B (Form C required)", (OP, 'B', T1 & ONES64)),
                     ("#kl_state_set_aux_value in Form C (Form B only)", (AUX, 'C', C0))):
     cl = ctr_cl(key)
     cl.setst(*args)
-    eq(f"{label} -> Invalid (MGR1)", cl.state, INV)
+    eq(f"{label} -> Invalid (MR1)", cl.state, INV)
 cl = ctr_cl(key, T1, C0)
 keystream(cl, 64)
 cl.setst(RDY)
@@ -320,16 +320,16 @@ eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
    (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, NONCE, 32, 0, PT)))
 cl = ctr_cl(key, 0x1234, C0)
 cl.setst(OP, 'C', T1)
-eq("Operate -> Operate (R23): IV replaced, ctr kept; F.5.1",
+eq("Operate -> Operate (GR21): IV replaced, ctr kept; F.5.1",
    (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
-info("a same-State kl.setst #kl_state_operate (R23) replaces IV and keeps ctr (Ready is not entered).")
+info("a same-State kl.setst #kl_state_operate (GR21) replaces IV and keeps ctr (Ready is not entered).")
 cl = ctr_cl(key)
 cl.setst(OP, 'A/iobuf', SP38A_ICB)
 cl.setst(AUX, 'B', C0)
 eq("Form A kl.setst and Form D kl.exec with the KLIOBUF (kliobuftop 16, 64): F.5.1",
    bxor(v2b(cl.exec(512, iobuf=True)[0], 64), PT).hex(), c)
 cl = ctr_cl(key, T1, C0)
-eq("MGR2 (vector): KLLEN = 136 -> Invalid, window zeroed",
+eq("MR2 (vector): KLLEN = 136 -> Invalid, window zeroed",
    (cl.exec(136, out=(1 << 136) - 1)[0], cl.state), (0, INV))
 rows = []
 for ks in (0, 8, 17):
@@ -341,7 +341,7 @@ cl = ctr_cl(key, T1, C0)
 for ks in (64, 80):
     eq(f"KLLEN = 512, klstart = {ks}: empty window, only klstart = 0",
        (cl.exec(512, klstart=ks, out=7), cl.state, cl.ctr), ((7, 0), OP, C0))
-eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (R34)",
+eq("klstart = 8 (output only, no interruption point) -> Invalid, [8, 64) zeroed (GR32)",
    (cl.exec(512, klstart=8, out=(1 << 512) - 1)[0], cl.state), ((1 << 64) - 1, INV))
 for q in (1, 2, 3):
     for iob in (False, True):
@@ -375,7 +375,7 @@ cl = KsLocker(SKS)
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
 eq("all-ones SKID: random key, KeyType 0, Content1 32 B",
    (cl.state, cl.keytype, len(cl.content1())), (RDY, 0, 32))
-info("_Operate_ is enabled by either MachinePolicy bit (MGR11), and one must be set: the gate always passes.")
+info("_Operate_ is enabled by either MachinePolicy bit (MR11), and one must be set: the gate always passes.")
 
 section("kl.derive (<<KLEE-derive-endpoints>>, <<KLEE-instruction-derive>>)")
 drbg = key + H("5a" * 16)
@@ -386,22 +386,22 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, C0), 64), PT).hex()
     return cl.state, cl.key
 
-eq("DRBG output (R50), length 32, into the 16-byte key (R44 item 5), then F.5.1", derived(32), (RDY, c))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (R47, R44 item 2)", (32, 1)),
-                    ("destination in Operate (R44 item 2)", (32, 0, True))):
+eq("DRBG output (GR48), length 32, into the 16-byte key (GR42 item 5), then F.5.1", derived(32), (RDY, c))
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR45, GR42 item 2)", (32, 1)),
+                    ("destination in Operate (GR42 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst = ctr_cl(key, T1, C0), ctr_cl(key)
 dst.derive_key(src, 16)
-eq("CTR keystream into a CTR key (R49 key derivation covers hash/MAC/XOF output only: R44 item 3) -> both Invalid",
+eq("CTR keystream into a CTR key (GR47 key derivation covers hash/MAC/XOF output only: GR42 item 3) -> both Invalid",
    (src.state, dst.state), (INV, INV))
 cl, h = ctr_cl(key, T1, C0), hashlib.sha256()
 ok = derive_to_hash(cl, h, 40)
-eq("R49: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
+eq("GR47: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
    (ok, h.hexdigest(), bxor(keystream(cl, 16), PT[48:]).hex()),
    (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
 cl = ctr_cl(key)
 derive_to_hash(cl, hashlib.sha256(), 40)
-eq("R49 with the source in Ready (no source endpoint, R44 items 1-2) -> only the source Invalid", cl.state, INV)
+eq("GR47 with the source in Ready (no source endpoint, GR42 items 1-2) -> only the source Invalid", cl.state, INV)
 cl = ctr_cl(key)
 st = cl.state
 check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,

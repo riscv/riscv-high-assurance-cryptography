@@ -11,7 +11,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw that the bound of R18 cut short
+TIMEOUT = object()                                  # an RBG draw that the bound of GR16 cut short
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLEE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -29,10 +29,10 @@ class Invalid(Exception):
         self.who = who
 
 class PrivViolation(Invalid):
-    """Transition to Error State _Privilege Violation_ (R45: a destination at a weaker level)."""
+    """Transition to Error State _Privilege Violation_ (GR43: a destination at a weaker level)."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
-    """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, R23, R22."""
+    """kl.setst targets: <<KLEE-ECC>> transitions, <<KLEE-EdDSA>> changes, GR21, GR20."""
     if xdh:                                  # <<KLEE-X25519-X448>>: the States without a signature scheme
         sets = {SET_GEN, SET_SCALAR, SET_SECONDPT}
         t = {READY: sets | {POINT_MUL}, POINT_MUL: {OUTPUT, READY}, OUTPUT: {READY}, SUCCESS: {READY},
@@ -103,15 +103,15 @@ class Locker:
     def machine_use(self):              # <<KLEE-ECC-MachineUse>>
         return int(self.out_type) | self.progress << 1
 
-    def discard(self):                  # MGR6
+    def discard(self):                  # MR6
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
-    def drop_ads(self):                 # kl.clearads (R25), or an import that completes without Content2 (R63)
+    def drop_ads(self):                 # kl.clearads (GR23), or an import that completes without Content2 (GR61)
         self.discard()
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (R62)."""
+        """Precise halt of the current long-running kl.exec (GR60)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 13:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
@@ -122,15 +122,15 @@ class Locker:
     def setst(self, t, xs=0, rand=None):
         """kl.setst #t; Form A is modelled as xs = 0."""
         if t in (SUCCESS, FAILURE):
-            raise IllegalInstruction                                  # R26
+            raise IllegalInstruction                                  # GR24
         if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit, self.mode == 'xdh'):
-            raise Invalid('transition not allowed')                   # MGR1
+            raise Invalid('transition not allowed')                   # MR1
         if t in (SET_HASH, SET_SIG) and not any(self.policy):
-            raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MGR11
+            raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MR11
         if self.state == MSG_ABSORB:
             self._finalize_pass()
         f = self.loading
-        if f and self.bb < self.size[f]:            # MGR9: a load left incomplete leaves the field unconfigured
+        if f and self.bb < self.size[f]:            # MR9: a load left incomplete leaves the field unconfigured
             if f == 'ctx':
                 self.ctx, self.size['ctx'] = b'', 0
             else:
@@ -208,7 +208,7 @@ class Locker:
         self.msg_pass, self.ctx, self.r, self.kp = 0, b'', None, None
 
     def exec_in(self, data):
-        """Form B kl.exec: MGR9 loading with W = block_base, or message absorption."""
+        """Form B kl.exec: MR9 loading with W = block_base, or message absorption."""
         if self.state == MSG_ABSORB:
             self.absorb += data
             return
@@ -227,7 +227,7 @@ class Locker:
 
     def exec_run(self, rbg=(), bad=None, be=False):
         """Form D kl.exec; `bad(attempt)` forces a degenerate draw, `be` mis-encodes EdDSA S."""
-        # secp521r1: the zero msbs of every value used are checked again (MGR13: KLF corruption)
+        # secp521r1: the zero msbs of every value used are checked again (MR13: KLF corruption)
         used = {POINT_MUL: ('scalar', 'sec' if 'sec' in self.has else 'gen'),
                 SIGN_GEN: ('scalar', 'hash', 'gen') + ('rnd',) * bool(self.progress and 'rnd' in self.has),
                 SIGN_VER: ('sig', 'hash', 'sec', 'gen')}.get(self.state, ())
@@ -236,7 +236,7 @@ class Locker:
         if self.state == POINT_MUL:
             return self._point_mul()
         if self.state == SIGN_GEN:
-            if self.mode != 'eddsa' and not self.valid(self.gen):   # MGR12; EdDSA signs over B
+            if self.mode != 'eddsa' and not self.valid(self.gen):   # MR12; EdDSA signs over B
                 return self._fail()
             return self._eddsa_sign(be) if self.mode == 'eddsa' else self._sign(rbg, bad)
         if self.state == SIGN_VER:
@@ -256,7 +256,7 @@ class Locker:
         P = self.dec(data)
         return P is not None and self.c.in_subgroup(P)
 
-    def _fail(self):                                # MGR12 data error: _Failure_, a Valid State
+    def _fail(self):                                # MR12 data error: _Failure_, a Valid State
         self.discard()
         self.state = FAILURE
 
@@ -265,7 +265,7 @@ class Locker:
             if not any(self.scalar):
                 raise Invalid('no configured private key')
             R = self.c.x(self.scalar, self.sec if 'sec' in self.has else self.gen)
-            if not any(R):                          # all-zero result: data error (MGR12), SecondPt unchanged
+            if not any(R):                          # all-zero result: data error (MR12), SecondPt unchanged
                 return self._fail()
             self.sec = R
             self._to_output(False, 'sec')
@@ -274,7 +274,7 @@ class Locker:
         if not k or self.mode != 'eddsa' and k >= self.c.n:
             raise Invalid('no configured seed / Scalar out of range')
         base = self.sec if 'sec' in self.has else self.gen
-        if not self.valid(base):                    # not a valid point: data error (MGR12)
+        if not self.valid(base):                    # not a valid point: data error (MR12)
             return self._fail()
         P = self.dec(base)
         R = self.c.mul(self.keys()[0] if self.mode == 'eddsa' else k, P)
@@ -283,19 +283,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (R18)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR16)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`, not the curve's default
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # R18: bits unavailable within the bound: no operation,
+            if k is TIMEOUT:                        # GR16: bits unavailable within the bound: no operation,
                 self.rnd = entry[0]                 # State unchanged, retryable
                 if not entry[1]:
                     self.has.discard('rnd')
                 return TIMEOUT
-            if k is None:                           # R18: RBG failure
+            if k is None:                           # GR16: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -328,13 +328,13 @@ class Locker:
         return X is not None and X[0] % n == r
 
     def exec_out(self, nbytes, pad=False):
-        """Form C kl.exec in _Output_, then _Success_; MGR9: carrying W past the field invalidates
-        (`pad`: a kl.derive source, zero-padded under R51)."""
+        """Form C kl.exec in _Output_, then _Success_; MR9: carrying W past the field invalidates
+        (`pad`: a kl.derive source, zero-padded under GR49)."""
         if self.state != OUTPUT:
             raise Invalid('output transfer outside _Output_')
         buf = self.sig if self.out_type else self.sec
         if self.bb + nbytes > len(buf) and not pad:
-            raise Invalid('emitting kl.exec past the end of the field (MGR9)')
+            raise Invalid('emitting kl.exec past the end of the field (MR9)')
         chunk = buf[self.bb:self.bb + nbytes]
         self.bb += nbytes
         if self.bb >= len(buf):
@@ -682,7 +682,7 @@ for label, st, data in (('Scalar with bit 521 set', SET_SCALAR, v2b(1 << 521, 72
                         ('all-ones SecondPt (no infinity sentinel any more)', SET_SECONDPT, b'\xff' * 144)):
     check(f'{label} -> Invalid at load', invalid(load, Locker(c), st, data))
 (r, s), sig521, _, _ = sign(c, V521, 7, [99])
-for label, st, f, loads, rbg in (               # bit 575 set by a corruption of the locker file (MGR13)
+for label, st, f, loads, rbg in (               # bit 575 set by a corruption of the locker file (MR13)
         ('Point_Mul uses a Generator', POINT_MUL, 'gen', [sc(V521, 72)], ()),
         ('Sign_Generate uses a Hash', SIGN_GEN, 'hash', [sc(V521, 72), H7], [99]),
         ('a resumed Sign_Generate uses a RndNum', SIGN_GEN, 'rnd', [sc(V521, 72), H7], []),
@@ -706,7 +706,7 @@ for label, k, want in (('n-1: accepted, result -G', P256.n - 1, (P256.G[0], P256
 off = v2b(P256.G[0], 32) + v2b(P256.G[1] + 1, 32)
 cr = locker(P256, sc(2), (SET_SECONDPT, off), to=POINT_MUL)
 cr.exec_run()
-check('off-curve SecondPt in _Point_Mul_ -> Failure (MGR12 data error), SecondPt unchanged',
+check('off-curve SecondPt in _Point_Mul_ -> Failure (MR12 data error), SecondPt unchanged',
       (cr.state, cr.sec) == (FAILURE, off))
 check('Sign_Verify with an off-curve public key -> Failure', verify(P256, off, 1, v2b(1, 32) * 2) == FAILURE)
 cr = locker(P256, sc(2), (SET_SECONDPT, b'\xff' * 64), to=POINT_MUL)
@@ -717,22 +717,22 @@ cr.exec_run()
 check('off-curve Generator in _Point_Mul_ -> Failure', cr.state == FAILURE)
 cr = locker(P256, sc(2), (SET_GEN, Locker(P256).gen[:40]), to=POINT_MUL)
 cr.exec_run()
-check('Generator load left incomplete: Generator zeroed (MGR9), not a valid point: _Point_Mul_ -> Failure',
+check('Generator load left incomplete: Generator zeroed (MR9), not a valid point: _Point_Mul_ -> Failure',
       cr.state == FAILURE and cr.gen == bytes(64))
 cr = locker(P256, (SET_SCALAR, v2b(5, 32)[:16]), to=POINT_MUL)
-check('Scalar load left incomplete: Scalar zeroed (MGR9), _Point_Mul_ -> Invalid',
+check('Scalar load left incomplete: Scalar zeroed (MR9), _Point_Mul_ -> Invalid',
       cr.scalar == bytes(32) and invalid(cr.exec_run))
 cr = locker(P256, (SET_SECONDPT, pt(P256, P256.mul_g(3))[:32]), to=SET_HASH)
-check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt clear (MGR9)',
+check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt clear (MR9)',
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (R18)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR16)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [ct.exec_run([TIMEOUT]), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
-check('RBG timeout in _Sign_Generate_: no operation, State unchanged, no RndNum; the reissue signs (R18)',
+check('RBG timeout in _Sign_Generate_: no operation, State unchanged, no RndNum; the reissue signs (GR16)',
       r == [TIMEOUT, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
@@ -803,7 +803,7 @@ for label, kw, loads, t in (
         ('no HasSignature: Sign_Verify', {}, [(SET_SECONDPT, PUB256), H1], SIGN_VER),
         ('MachinePolicy[1] clear: Sign_Verify', dict(verify=False), [(SET_SECONDPT, PUB256), H1, (SET_SIG, SIG0)],
          SIGN_VER),
-        ('Ready -> Output (MGR1)', {}, [], OUTPUT)):
+        ('Ready -> Output (MR1)', {}, [], OUTPUT)):
     check(f'{label} -> Invalid', invalid(locker(P256, *loads, **kw).setst, t))
 cr = locker(P256, sc(2), to=POINT_MUL, sign=False, verify=False)
 check('MachinePolicy 0 on a generic ECC Machine: Point_Mul still available', True,
@@ -826,14 +826,14 @@ check('Output: block_base-tracked, 24 + 24 + 16 bytes, then Success',
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.exec_run()
 cr.exec_out(24), cr.exec_out(24)
-check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MGR9)', invalid(cr.exec_out, 24))
+check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MR9)', invalid(cr.exec_out, 24))
 for t in (SUCCESS, FAILURE):
     cr = Locker(P256)
-    check(f'kl.setst #{t}: illegal instruction, State unchanged (R26)', raises(cr.setst, t) and cr.state == READY)
+    check(f'kl.setst #{t}: illegal instruction, State unchanged (GR24)', raises(cr.setst, t) and cr.state == READY)
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.halt(3)
 cr.setst(POINT_MUL)
-check('same-State kl.setst admitted (R23), zeroes Progress (MGR6)', (cr.state, cr.progress) == (POINT_MUL, 0))
+check('same-State kl.setst admitted (GR21), zeroes Progress (MR6)', (cr.state, cr.progress) == (POINT_MUL, 0))
 
 def reach(eddsa, sig_exit=True):
     """Whether Sign_Verify is reachable by kl.setst from every Set state."""
@@ -981,7 +981,7 @@ B2 = c.encode(c.mul(2, c.B))
 check('EdDSA signs and verifies over B whatever `Generator` holds (here 2B): the RFC 8032 signature, verified',
       None, (ed_sign(c, seed1, msg1, gen=B2)[0].hex(), ed_verify(c, pk1, sig1, msg1, gen=B2)), (sig1.hex(), SUCCESS))
 cr = locker(c, (SET_CTX, b'abcd', None, 10), to=READY)
-check('ctx load left incomplete (4 of 10 bytes): ctx and ctxlen zeroed (MGR9)', (cr.ctx, cr.size['ctx']) == (b'', 0))
+check('ctx load left incomplete (4 of 10 bytes): ctx and ctxlen zeroed (MR9)', (cr.ctx, cr.size['ctx']) == (b'', 0))
 check('_AuxInfo_ = 1 without pure mode, or a reserved bit of [15:3] (8): kl_exc_unsupported at provisioning; '
       'bits [2:1] of a PI (6) are ignored and zeroed', True,
       [raises(Locker, c, aux_info=1, pure_impl=False, exc=Unsupported), raises(Locker, c, aux_info=8, exc=Unsupported),
@@ -1127,7 +1127,7 @@ class Dest:
         self.state = state or (HASH_ABSORB if kind == 'hash' else READY)
 
 class HashSrc:
-    """A hash in _Hash_Output_: a R49 source whose kl.exec output is `out` (its MDH: `mdh`)."""
+    """A hash in _Hash_Output_: a GR47 source whose kl.exec output is `out` (its MDH: `mdh`)."""
     def __init__(self, out, **mdh):
         self.sig, self.bb, self.has, self.out_type, self.mdh = out, 0, set(), True, mdh
 
@@ -1137,35 +1137,35 @@ class HashSrc:
 
 def kl_derive(dest, src, length):
     """ECC source by State (<<KLEE-derive-endpoints>>): `SecondPt` wherever HasSecondPt is set, except _Output_
-    with OutputType = True, whose (signature) kl.exec output is the source (R49); or a HashSrc."""
+    with OutputType = True, whose (signature) kl.exec output is the source (GR47); or a HashSrc."""
     ecc, kdf = isinstance(dest, Locker), isinstance(src, HashSrc)
     field = 'sec' in src.has and not (src.state == OUTPUT and src.out_type)
     kind = 'scalar' if ecc else dest.kind
     if not field and not kdf and src.state != OUTPUT:
-        raise Invalid(who='source')                                 # R44 items 1-2: source first
+        raise Invalid(who='source')                                 # GR42 items 1-2: source first
     if kind == 'none' or dest.state != {'scalar': SET_SCALAR, 'key': READY}.get(kind, HASH_ABSORB) \
             or kind != 'hash' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='destination')                            # R44 items 1-2; R47
+        raise Invalid(who='destination')                            # GR42 items 1-2; GR45
     if kind == 'key' and not field and not kdf:
-        raise Invalid(who='both')                                   # R44 item 3: R49 is hash/MAC/XOF only
+        raise Invalid(who='both')                                   # GR42 item 3: GR47 is hash/MAC/XOF only
     if kind != 'hash':
         size = dest.fw if ecc else dest.size
         if length < size or (len(src.sec) if field else len(src.sig) - src.bb) < size:
-            raise Invalid(who='destination')                        # R44 item 5
-    if field:                                                       # R48 restricted, also into a hash: R45
+            raise Invalid(who='destination')                        # GR42 item 5
+    if field:                                                       # GR46 restricted, also into a hash: GR43
         s, d = src.mdh, dest.mdh
         if d.get('SCProtection', 0) < s.get('SCProtection', 0):
-            raise PrivViolation('weaker destination level', who='destination')     # R45
+            raise PrivViolation('weaker destination level', who='destination')     # GR43
         d['UsagePolicy'] = (s['UsagePolicy'] | d['UsagePolicy']) & 0xF | s['UsagePolicy'] & d['UsagePolicy'] & 0x10
         d['ExpirationDate'] = min([x for x in (s['ExpirationDate'], d['ExpirationDate']) if x] or [0])
-    if kind == 'hash':                                              # R51
+    if kind == 'hash':                                              # GR49
         dest.data += src.sec[:length].ljust(length, b'\0') if field else src.exec_out(length, pad=True)
         return
     data = src.sec[:size] if field else src.exec_out(size, pad=True)
     if ecc:
-        if not dest.repr_ok(data):                                  # MGR14: checked when written
+        if not dest.repr_ok(data):                                  # MR14: checked when written
             raise Invalid('Scalar violates the b-bit representation', who='destination')
-        dest.scalar, dest.bb = data, size                           # R51: as a completing kl.exec
+        dest.scalar, dest.bb = data, size                           # GR49: as a completing kl.exec
     else:
         dest.data = data
 
@@ -1208,19 +1208,19 @@ check('in _Output_ with OutputType = False: SecondPt (a field) into a hash, sour
 cr.output_all()
 h = Dest('hash', UsagePolicy=5)
 kl_derive(h, cr, 0)
-check('length = 0 transfers nothing (R51)', h.data == b'' and cr.state == SUCCESS)
+check('length = 0 transfers nothing (GR49)', h.data == b'' and cr.state == SUCCESS)
 kl_derive(h, cr, 80)
-check('in _Success_ with HasSecondPt: 80 bytes into a hash, zero-padded (R51)',
+check('in _Success_ with HasSecondPt: 80 bytes into a hash, zero-padded (GR49)',
       (h.data, cr.state) == (cr.sec + bytes(16), SUCCESS))
 cr, _ = ecdh(UsagePolicy=0b00010, ExpirationDate=700)
 h = Dest('hash', UsagePolicy=0b10101, ExpirationDate=900)
 kl_derive(h, cr, 64)
-check('SecondPt into a hash is restricted (R48): the hash locker is narrowed (R45)', True,
+check('SecondPt into a hash is restricted (GR46): the hash locker is narrowed (GR43)', True,
       (h.mdh['UsagePolicy'], h.mdh['ExpirationDate'], h.data), (0b0111, 700, cr.sec))
 cr, _ = ecdh(UsagePolicy=0b10011, ExpirationDate=900, SCProtection=1)
 k = Dest('key', UsagePolicy=0b10100, ExpirationDate=1200, SCProtection=2)
 kl_derive(k, cr, 64)
-check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH narrowed (R48, R45)',
+check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH narrowed (GR46, GR43)',
       (k.data, k.mdh['UsagePolicy'], k.mdh['ExpirationDate']) == (cr.sec[:32], 0b10111, 900))
 cr, k = ecdh(SCProtection=1)[0], Dest('key')
 try:
@@ -1228,12 +1228,12 @@ try:
     got = 'transferred'
 except PrivViolation as e:
     got = e.who
-check('key with a lower SCProtection than the source: Privilege Violation of the destination, nothing moved (R45)',
+check('key with a lower SCProtection than the source: Privilege Violation of the destination, nothing moved (GR43)',
       got == 'destination' and k.data == b'')
 cr, Z = ecdh(UsagePolicy=0b00011, ExpirationDate=900)
 d = scalar_dest(UsagePolicy=0b00100)
 kl_derive(d, cr, 64)
-check('SecondPt into another ECC `Scalar` in _Set_Scalar_: x(Z), field complete, MDH narrowed (R48)',
+check('SecondPt into another ECC `Scalar` in _Set_Scalar_: x(Z), field complete, MDH narrowed (GR46)',
       (b2v(d.scalar), d.mdh['UsagePolicy'], d.mdh['ExpirationDate']) == (Z[0], 0b00111, 900)
       and invalid(d.exec_in, b'\0'))
 d.setst(POINT_MUL)
@@ -1244,7 +1244,7 @@ check('signature output into an ECC `Scalar`: r, source advanced as by Form C, n
       (d.scalar, cr.bb, cr.state, d.mdh['UsagePolicy']) == (cr.sig[:32], 32, OUTPUT, 0))
 sp, k = with_second(), Dest('key')
 kl_derive(k, sp, 64)
-check('in _Set_SecondPt_ with HasSecondPt: SecondPt into a `key` (R48)', k.data == sp.sec[:32])
+check('in _Set_SecondPt_ with HasSecondPt: SecondPt into a `key` (GR46)', k.data == sp.sec[:32])
 sp, h = with_second(sign=True), Dest('hash')
 kl_derive(h, sp, 64)
 check('signature _Output_ with HasSecondPt: the source is the kl.exec output (r || s), never SecondPt',
@@ -1253,14 +1253,14 @@ for label, dest, src, n, who in (
         ('source without HasSecondPt', Dest('hash'), locker(P256, hs(0, 0)), 64, 'source'),
         ('hash destination in _Ready_', Dest('hash', READY), ecdh()[0], 64, 'destination'),
         ('key destination outside _Ready_', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
-        ('key with length < key size (R44 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
-        ('key of KeyType 1 (R47)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
-        ('ECC Scalar of KeyType 1 (R47)', scalar_dest(KeyType=1), ecdh()[0], 64, 'destination'),
+        ('key with length < key size (GR42 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
+        ('key of KeyType 1 (GR45)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('ECC Scalar of KeyType 1 (GR45)', scalar_dest(KeyType=1), ecdh()[0], 64, 'destination'),
         ('ECC destination in _Ready_', scalar_dest(READY), ecdh()[0], 64, 'destination'),
-        ('ECC Scalar with length < b/8 (R44 item 5)', scalar_dest(), ecdh()[0], 31, 'destination'),
+        ('ECC Scalar with length < b/8 (GR42 item 5)', scalar_dest(), ecdh()[0], 31, 'destination'),
         ('Machine without a destination endpoint', Dest('none'), ecdh()[0], 64, 'destination'),
-        ('signature output into a `key` (not hash/MAC/XOF output: R44 item 3)', Dest('key'), signing(), 64, 'both'),
-        ('signature output with HasSecondPt into a `key` (R44 item 3)', Dest('key'), with_second(True), 64, 'both')):
+        ('signature output into a `key` (not hash/MAC/XOF output: GR42 item 3)', Dest('key'), signing(), 64, 'both'),
+        ('signature output with HasSecondPt into a `key` (GR42 item 3)', Dest('key'), with_second(True), 64, 'both')):
     check(f'{label} -> Invalid ({who}), nothing transferred',
           derive_who(dest, src, n) == who and not any(dest.scalar if isinstance(dest, Locker) else dest.data))
 dg = hashlib.sha256(b'KLEE kl.derive').digest()
@@ -1270,16 +1270,16 @@ kl_derive(k, HashSrc(hashlib.sha512(dg).digest(), UsagePolicy=0b10011), 40)
 d.setst(POINT_MUL)
 d521, ok521 = locker(EC.P521, to=SET_SCALAR), locker(EC.P521, to=SET_SCALAR)
 top, fine = bytes(71) + b'\x02', v2b(12345, 72)                 # bit 569 set / a 14-bit value
-check('MGR14: a kl.derive into a secp521r1 `Scalar` with a top bit set: destination _Invalid_; a value with the '
+check('MR14: a kl.derive into a secp521r1 `Scalar` with a top bit set: destination _Invalid_; a value with the '
       '55 msbs zero is accepted', True,
       (derive_who(d521, HashSrc(top), 72), derive_who(ok521, HashSrc(fine), 72), ok521.scalar),
       ('destination', None, fine))
-check('R49 key derivation: SHA-256 output -> ECC `Scalar` in _Set_Scalar_ (b/8 bytes), SHA-512 output -> AES-256 '
+check('GR47 key derivation: SHA-256 output -> ECC `Scalar` in _Set_Scalar_ (b/8 bytes), SHA-512 output -> AES-256 '
       '`key` (first 32 B); unrestricted, not narrowed; the Scalar drives _Point_Mul_', True,
       (d.mdh['UsagePolicy'], k.data, k.mdh['UsagePolicy'], d.exec_run()),
       (0, hashlib.sha512(dg).digest()[:32], 0, P256.mul_g(b2v(dg))))
-info('reading: SecondPt is a field source (R51 truncation / zero-pad, source State unchanged), '
-     'the R48 shared secret.')
+info('reading: SecondPt is a field source (GR49 truncation / zero-pad, source State unchanged), '
+     'the GR46 shared secret.')
 
 section('X25519 and X448 (<<KLEE-X25519-X448>>, RFC 7748)')
 X25, X4 = EC.X25519, EC.X448
@@ -1363,9 +1363,9 @@ for name, c in EC.MONTGOMERY_CURVES.items():
           (ca.sec, kb, ca.out_type, 'sec' in ca.has), (K, K, False, True))
     key = Dest('key', size=32)
     kl_derive(key, ca, n)
-    check(f'{name}: SecondPt (K) is a kl.derive source in _Output_ (R48): K never output', True,
+    check(f'{name}: SecondPt (K) is a kl.derive source in _Output_ (GR46): K never output', True,
           (key.data, ca.state), (K[:32], OUTPUT))
-    check(f'{name}: a zero Scalar is not a configured private key: _Point_Mul_ -> _Invalid_ (MGR13)',
+    check(f'{name}: a zero Scalar is not a configured private key: _Point_Mul_ -> _Invalid_ (MR13)',
           invalid(locker(c, to=POINT_MUL).exec_run))
     small = [0, 1, c.p - 1]                                 # order 2; order 4, on the curve or on its twist
     res = [xdh(c, a, v2b(u, n))[1:] for u in small]
@@ -1375,7 +1375,7 @@ for name, c in EC.MONTGOMERY_CURVES.items():
     check(f'{name}: non-canonical u = p + {c.G} accepted and reduced; no check on write or on read', True,
           xdh(c, a, v2b(big, n))[:2], (A, SUCCESS))
     check(f'{name}: _Sign_Generate_, _Sign_Verify_, _Set_Hash_, _Set_Signature_ (and the EdDSA States) are not '
-          'defined: kl.setst -> _Invalid_ (MGR1)',
+          'defined: kl.setst -> _Invalid_ (MR1)',
           all(invalid(Locker(c).setst, t) for t in (SIGN_GEN, SIGN_VER, SET_HASH, SET_SIG, MSG_ABSORB, SET_CTX)))
     check(f'{name}: a non-zero _MachinePolicy_ is unsupported Metadata',
           all(raises(Locker, c, exc=Unsupported, **kw) for kw in (dict(sign=True), dict(verify=True))))
