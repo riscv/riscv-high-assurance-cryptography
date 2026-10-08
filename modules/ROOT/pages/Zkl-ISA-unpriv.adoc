@@ -367,7 +367,7 @@ cite:[riscvPlatformSecurityModel] defines the security concepts and requirements
 
 [[KLEE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
-[float="center",align="center",cols="^8%,<92%",options="header"]
+[float="center",align="center",cols="^7%,<93%",options="header"]
 |===
 | Value  | Description
 |   0    | No timing leakage: the same cryptographic operation on the same number of input units takes the same time in the KLEE unit, whatever the input data.
@@ -375,13 +375,11 @@ cite:[riscvPlatformSecurityModel] defines the security concepts and requirements
 |   2    | No timing leakage; side-channel protection;
 detection of injected faults, followed either by completion with the correct result and no other physical leakage, or by
 a transition to a fatal error condition (see <<KLEE-error-architecture>>).
-|   3    | Reserved.
 |===
 
-NOTE: This specification is not the place to provide precise definitions or profiles for these three values.
-When a CC provider sets requirements for their own keys and transports them to a secure receiver, such as a TEE applet whose purpose is to redirect the CC to the software environment that will consume it, provider and secure receiver will negotiate the appropriate level of protection using a system specific agreement mechanism.
-As a rule of thumb, implementations are likely to be expected to follow standards such as: ISO/IEC 19790:2025 cite:[ISOIEC-19790-2025], Clauses 7.8.2–7.8.4, and Annex F, i.e. ISO/IEC 17825:2024 cite:[ISOIEC-17825-2024], Clause 7.3.4; tests and documentation as per ISO/IEC 24759:2025 cite:[ISOIEC-24759-2025], Clauses 6.7, 6.8.1–6.8.3. Equivalently: FIPS 140-3 cite:[nist-fips-140-3] Levels 1–4 align with ISO/IEC 19790:2025, with the Cryptographic Module Validation Program (CMVP) metrics of NIST SP 800-140F cite:[nist-SP-800-140F].
-The choice between Levels 1-3 (protected against roughly one day of analysis) and Level 4 (protected against multiple days of analysis) is one of the aspects that is left to the negotiation between the provider and secure receiver.
+NOTE: This specification gives no precise definitions or profiles for these values.
+Implementations will likely be expected to follow ISO/IEC 19790:2025 cite:[ISOIEC-19790-2025], Clauses 7.8.2–7.8.4 and Annex F, that is, ISO/IEC 17825:2024 cite:[ISOIEC-17825-2024], Clause 7.3.4, tested and documented per ISO/IEC 24759:2025 cite:[ISOIEC-24759-2025], Clauses 6.7 and 6.8.1–6.8.3, or equivalently FIPS 140-3 cite:[nist-fips-140-3], whose Levels 1–4 align with ISO/IEC 19790:2025, with the CMVP metrics of NIST SP 800-140F cite:[nist-SP-800-140F].
+A CC provider that sends its keys to a secure receiver, such as a TEE applet that forwards the CC to the software consuming it, negotiates the protection level with it by a system-specific mechanism, including the choice between Levels 1–3 (resisting about one day of analysis) and Level 4 (several days).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -472,18 +470,20 @@ A locker being provisioned, exported or imported is in one of the following _Con
 [[KLEE-Auxiliary-Data-Section]]
 === _AuxDataLen_ and _ADSDropped_ Fields
 
-_AuxDataLen_ gives the length, in 128-bit blocks, of the _Auxiliary Data Section_ (ADS), the variable-size, implementation-specific part of the content; with _ADSDropped_ = 1, it keeps the length before `Content2` was dropped. Zero means no ADS, and 1 is invalid; the maximum, 2^14^-1, is 262,128 bytes.
+_AuxDataLen_ gives the length, in 128-bit blocks, of the _Auxiliary Data Section_ (ADS), the variable-size, implementation-specific part of the content; with _ADSDropped_ = 1, it keeps the length before `Content2` was dropped.
+Zero means no ADS; the maximum, 2^14^-1, is 262,128 bytes.
 
 If _AuxDataLen_ {ge} 2, the SCC includes a copy of the implementation qualifier of the originating implementation (<<KLEE-CSR-impl-ids>>),
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ klmimpid @ klmarchid @ klmvendorid``,
 
 which the importing implementation uses to decide whether it can use the ADS.
-_AuxDataLen_ counts these 16 bytes and the separate 16-byte authentication tag of the ADS, so its minimum is 2 (32 bytes).
+_AuxDataLen_ counts these 16 bytes and the 16-byte authentication tag of the ADS, so its minimum is 2, and 1 is invalid.
 
-_ADSDropped_ is an unauthenticated format hint, ignored when _AuxDataLen_ = 0. When _AuxDataLen_ {ge} 2 and _ADSDropped_ = 1, `Content2` is absent, and `IMPQUAL` and `SIV2` remain as non-authoritative padding that keeps the offset of `Content1` unchanged. First-segment authentication clears bit 47 only in its local copy of the MDH.
-
-Toggling _ADSDropped_ cannot affect `Content1` or any policy: setting it drops the optional `Content2`, and clearing it requests second-segment processing, whose failure drops `Content2` without rejecting the authenticated `Content1` (<<KLEE-SCC-import>>). Dropping `Content2` can at most make an interrupted long-running operation restart (Rule <<KLEE-GR-long-running-progress>>). Manipulating it can therefore lose the optional ADS or cause a failed second-segment attempt, but cannot make an unauthenticated `Content2` usable or bypass first-segment authentication.
+_ADSDropped_, bit 47 of the MDH, is an unauthenticated format hint, ignored when _AuxDataLen_ = 0; first-segment authentication clears it only in its local copy of the MDH.
+With _AuxDataLen_ {ge} 2 and _ADSDropped_ = 1, `Content2` is absent, and `IMPQUAL` and `SIV2` remain as non-authoritative padding that keeps the offset of `Content1` unchanged.
+Setting _ADSDropped_ drops the optional `Content2`; clearing it requests second-segment processing, whose failure drops `Content2` without rejecting the authenticated `Content1` (<<KLEE-SCC-import>>).
+Toggling it therefore cannot affect `Content1` or any policy, make an unauthenticated `Content2` usable, or bypass first-segment authentication; dropping `Content2` can at most make an interrupted long-running operation restart (Rule <<KLEE-GR-long-running-progress>>).
 
 // The format of the ADS is described in <<KLEE-data-formats>>.
 
@@ -493,9 +493,8 @@ Toggling _ADSDropped_ cannot affect `Content1` or any policy: setting it drops t
 === _UsagePolicy_ Field
 
 _UsagePolicy_ determines which modes may use the locker.
-A _usage instruction_ is one that uses the Machine in a locker to operate on the locker's internal state, or to expose that state, as a `kl.exec` that produces output does.
-Usage Control applies only to usage instructions; <<KLEE-instruction-properties>> lists them.
-Bits 0–3, when set, disallow usage in U-mode, VS-mode, HS-mode and M-mode, respectively; bit 0 also governs VU-mode, and bit 2 governs S-mode whether or not the H extension is implemented. Bit 4, when set, grants usage in Debug mode.
+A _usage instruction_ uses the Machine in a locker to operate on the locker's internal state, or to expose it, as a `kl.exec` that produces output does; Usage Control applies only to these instructions, listed in <<KLEE-instruction-properties>>.
+Bits 0–3, when set, disallow usage in U-mode (VU-mode included), VS-mode, S-mode (HS-mode with the H extension) and M-mode, respectively; bit 4, when set, grants usage in Debug mode.
 `mstatus.MPRV` is not considered, and the bit of a mode that is unsupported or not enabled is ignored.
 
 // ////////////////////////////////////////////////////////////////////
@@ -503,11 +502,14 @@ Bits 0–3, when set, disallow usage in U-mode, VS-mode, HS-mode and M-mode, res
 [[KLEE-Localities]]
 === _Locality_ Field
 
-_Locality_ names 128-bit Locality Secrets (LSs), listed in <<KLEE-locality-indexes>> and stored in a possibly virtual Locality Secrets Table (LST). Some entries are fixed, or configurable only through an implementation-specific, authenticated hardware process, and are shared by all KLEE units of an SoC; the others are software-programmable, per-hart architectural state.
+_Locality_ names 128-bit Locality Secrets (LSs), listed in <<KLEE-locality-indexes>> and stored in a possibly virtual Locality Secrets Table (LST).
+Some entries are fixed, or configurable only by an implementation-specific, authenticated hardware process, and shared by all KLEE units of an SoC; the others are software-programmable, per-hart architectural state.
 
-At SCC export and import, the Localities named in _Locality_ cryptographically bind the SCC to the _current_ hardware and software environments. The binding ends when the SCC is imported; if a Locality Secret changes later, the next export binds its SCC to the new value. Software must prevent unauthorized parties from accessing the lockers directly (Rule <<KLEE-SR-clear-before-lower-mode>>).
+At SCC export and import, the Localities named in _Locality_ cryptographically bind the SCC to the _current_ hardware and software environments.
+The binding ends at import: if a Locality Secret changes later, the next export binds its SCC to the new value.
+Software must prevent unauthorized parties from accessing the lockers directly (Rule <<KLEE-SR-clear-before-lower-mode>>).
 
-Eleven LST entries are architected: entries 0–5 form the _HW Binding Group_, which binds SCCs to the hardware; entries 6–7 the _Boot Session Group_; and entries 8–10 the _SW Filter Group_. <<KLEE-locality-indexes>> gives, for each, its LST index, domain (SoC, device, VM or process), configurability, bit field and value.
+Eleven LST entries are architected: entries 0–5 form the _HW Binding Group_, which binds SCCs to the hardware; entries 6–7 the _Boot Session Group_; and entries 8–10 the _SW Filter Group_.
 
 [[KLEE-locality-indexes]]
 .Architected Localities. Bits refer to the _Locality_ field in the MDH.
@@ -537,15 +539,14 @@ Regenerated by H or higher at each virtual boot of a VM (see <<Zkl-ISA-priv.adoc
 |===
 
 Of the HW Binding Group, only _ChipFamScrt_ and _DevScrt_ must be populated.
-An unconfigured entry is transparently replaced by the next configured entry of its chain: _SiPScrt_ {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow} _ProdScrt_ {rightarrow} _DevScrt_.
-A requested Locality may be substituted but never dropped: if the requested entry and every later entry of its chain are unconfigured, the Metadata is invalid (<<KLEE-Metadata-validity>>).
-
+An unconfigured entry of that Group is transparently replaced by the next configured entry of its chain: _SiPScrt_ {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow} _ProdScrt_ {rightarrow} _DevScrt_.
 As for the CSK (<<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>), a Locality Secret of the Boot Session or SW Filter Group whose CSR group (<<Zkl-ISA-priv.adoc#KLEE-locality-CSR-groups>>) is not implemented or holds `zeros(128)` is _unconfigured_.
-A PI or SCC whose _Locality_ names an unconfigured entry, or carries the reserved value `3` in bits [5:4], is invalid Metadata (<<KLEE-Metadata-validity>>).
+A requested Locality may be substituted but never dropped: a PI or SCC whose _Locality_ names an unconfigured entry without a configured substitute, or carries the reserved value `3` in bits [5:4], is invalid Metadata (<<KLEE-Metadata-validity>>).
 
 // Entry 9, _HLocality_, is the CSR group `hkllocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<Zkl-ISA-priv.adoc#KLEE-locality-CSR-groups>>). Entry 10, _SLocality_, is the CSR group `skllocality`.
 
-Up to six architected Localities may be active at once: up to two of the HW Binding Group, at most one of _PhysBootScrt_ and _VirtBootScrt_, and up to three of the SW Filter Group. The SCC generation and import algorithms (<<KLEE-CC-management>>) enforce their policies.
+Up to six architected Localities may be active at once: up to two of the HW Binding Group, at most one of _PhysBootScrt_ and _VirtBootScrt_, and up to three of the SW Filter Group.
+The SCC generation and import algorithms (<<KLEE-CC-management>>) enforce their policies.
 
 ////
 [[KLEE-Metadata-locality-interoperability]]
@@ -678,7 +679,7 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _KeyType_ is 1 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 2 or 3;
 * _SCProtection_ is 3, a reserved value (<<KLEE-SCProtection-field>>);
-* _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<KLEE-Localities>>);
+* _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret without a configured substitute (<<KLEE-Localities>>);
 * the MDH carries a custom _Machine_ or a system-specific _Version_ without naming _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<KLEE-GR-custom-locality>>);
 * _State_ is not _Unconfigured_ at provisioning;
 * _State_ is _Unconfigured_ or 61–63 at import (<<KLEE-State-management>>);
@@ -707,7 +708,7 @@ fields replaced; a policy field that _B_ does not carry leaves that field of _A_
 * _Locality_ (<<KLEE-locality-indexes>>): each HW Binding subfield (bits [1:0] and [3:2]) takes the larger value, that is the stricter entry of its chain, zero meaning no binding; the Boot Session subfield (bits [5:4]) takes the non-zero value if only one is non-zero; and bits 6–8 are OR-ed.
 * _ExpirationDate_, with `Zklexpire`: the smaller non-zero value, or 0 if both are 0.
 
-If both Boot Session subfields are non-zero and differ, or if the resulting _Locality_ names an unconfigured entry (<<KLEE-Localities>>), the policies cannot be met, and the narrowing _fails_; each operation that narrows states the outcome.
+If both Boot Session subfields are non-zero and differ, or if the resulting _Locality_ names an unconfigured entry without a configured substitute (<<KLEE-Localities>>), the policies cannot be met, and the narrowing _fails_; each operation that narrows states the outcome.
 Narrowing changes neither _SCProtection_ nor _MachinePolicy_; only `kl.restrictl` and `kl.restrictv` narrow _MachinePolicy_, under Rule <<KLEE-GR-policy-narrowing-state>>.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1322,8 +1323,9 @@ It also unconfigures the KLIOBUF, zeroing the buffer and setting `kliobuflen`, `
 `kl.clearads Kd` deletes any ADS from locker `Kd`, and sets _AuxDataLen_ and _ADSDropped_ to 0.
 It is `kl.setst` (<<KLEE-instruction-setst>>) with no auxiliary operand and `#immed7` = `kl_cfg_clear_ads` (64).
 
-Software uses it before exporting a locker for another target, possibly a different implementation, to obtain a more compact, ADS-free SCC; a destination with a different KLEE unit might have to drop the ADS anyway.
-The first usage instruction that needs the ADS regenerates it.
+Software uses it before exporting a locker for another target to make the SCC smaller.
+A destination with a different KLEE unit would drop the ADS anyway.
+// The first usage instruction that needs the ADS regenerates it.
 `kl.clearads` is permitted in every Valid State, and may cause an interrupted operation to restart (Rule <<KLEE-GR-clearads>>).
 
 // ////////////////////////////////////////////////////////////////////
@@ -1532,7 +1534,7 @@ Each non-zero field of `Xs1` is handled as follows:
 
 Validity of the result:::
 Validity (<<KLEE-Metadata-validity>>) is evaluated on the changed fields only.
-A request that would produce an unsupported or invalid value, such as a non-zero _ExpirationDate_ without `Zklexpire`, transitions the locker to _Invalid_; one that would make _Locality_ name an unconfigured entry, to _Privilege Violation_; one that does both, to _Invalid_.
+A request that would produce an unsupported or invalid value, such as a non-zero _ExpirationDate_ without `Zklexpire`, transitions the locker to _Invalid_; one that would make _Locality_ name an unconfigured entry without a configured substitute, to _Privilege Violation_; one that does both, to _Invalid_.
 
 States:::
 The instructions may be issued in any Complete State; in an Error State, a request that would transition the locker to an Error State performs no operation instead.
@@ -1827,7 +1829,7 @@ For `klmanagedlocker` = 32:::
 
 _This subsection is informative and non-normative._
 
-The design allows locker management software subroutines to work independently of the locker number.:::
+The design allows locker management software subroutines independent of the locker number.:::
 //  By Rules <<KLEE-GR-locker-less-transfers>> and <<KLEE-GR-klmanagedlocker-override>>,
   The opening `kl.mgmt` either records its named locker in `klmanagedlocker`, or uses the `klmanagedlocker` set by software.
   The transfers that follow and the closing `kl.mgmt` need no locker number.
@@ -2390,7 +2392,7 @@ The following conditions set an Error State, or make the instruction perform no 
 . *Instruction not allowed in the current State.* _Invalid_, for a `kl.exec` or `kl.setst` not allowed in the current _State_ and _StateExtension_, including an unsupported `#immed7` (Rules <<KLEE-GR-no-exec-in-ready>>, <<KLEE-GR-success-failure>>, <<Zkl-ISA-machines.adoc#KLEE-MGR-not-allowed-instructions>> and <<Zkl-ISA-machines.adoc#KLEE-MGR-policy-gate>>, <<KLEE-instruction-setst>>), and for a `kl.derive` that fails its checks (<<KLEE-instruction-derive>>).
 . *Invalid length.* _Invalid_, for an operand whose transfer-window length (`kliobuftop`, or `VL` {times} `SEW` / 8) the Machine does not accept (<<KLEE-CSR-klstart>>, <<KLEE-usage-input-output>>).
 . *Expiration.* _Expired_, for a usage instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) on an expired locker, which then performs no operation; no operation, with the _State_ unchanged, if the secure clock cannot be read (<<KLEE-Metadata-expiration-date>>).
-. *Policy violation without an exception.* _Privilege Violation_, for a failed narrowing of the Usage Control policies (<<KLEE-Metadata-narrowing>>), whether by the policies of an SKS (<<KLEE-system-keys>>), of a system-specific format (<<KLEE-Machine-version>>) or of the source of a restricted transfer (Rule <<KLEE-GR-narrowing>>); for a `kl.restrict*` request that would widen _Locality_, or make it name an unconfigured entry (<<KLEE-instruction-restrict>>); and for a restricted `kl.derive` into a locker whose _SCProtection_ is lower than that of its source (Rule <<KLEE-GR-narrowing>>).
+. *Policy violation without an exception.* _Privilege Violation_, for a failed narrowing of the Usage Control policies (<<KLEE-Metadata-narrowing>>), whether by the policies of an SKS (<<KLEE-system-keys>>), of a system-specific format (<<KLEE-Machine-version>>) or of the source of a restricted transfer (Rule <<KLEE-GR-narrowing>>); for a `kl.restrict*` request that would widen _Locality_, or make it name an unconfigured entry without a configured substitute (<<KLEE-instruction-restrict>>); and for a restricted `kl.derive` into a locker whose _SCProtection_ is lower than that of its source (Rule <<KLEE-GR-narrowing>>).
 . *Use of an _Unconfigured_ or Error-State locker.* No operation, and the _State_ is unchanged (Rules <<KLEE-GR-transition-to-from-unconfigured>> and <<KLEE-GR-usage-locker-error-state>>, <<KLEE-insns-on-unconf-or-error-locker>>).
 . *Explicit Error State.* The Error State that a `kl.setst` immediate names (<<KLEE-instruction-setst>>).
 . *RBG failure.* _Invalid_, for an operation whose entropy source has failed permanently or failed a health test (Rule <<KLEE-GR-rbg-failure>>). Temporarily unavailable random bits are not an error: the instruction waits for them and, past the implementation-defined bound of that Rule, performs no operation, zeroes its output and leaves the _State_ unchanged.

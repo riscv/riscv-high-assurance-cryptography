@@ -1754,6 +1754,9 @@ def t_localities():
        [fresh(hw_missing=(0,)).lst_eff(0), fresh(hw_missing=(0, 1)).lst_eff(0), fresh(hw_missing=(3, 4)).lst_eff(3),
         fresh(hw_missing=(2,)).locality_problem(loc(hw1=3)), u.sealing_ad(cipher(Locality=loc(hw1=1, hw2=1)))[1:]],
        [_secret(b'hw', 1), _secret(b'hw', 2), _secret(b'hw', 5), 'unconfigured LST entry 2', [u.hw[1], u.hw[4]]])
+    eq('an unconfigured entry with a configured substitute is valid Metadata (<<KLEE-Metadata-validity>>)',
+       [fresh(hw_missing=(0,)).locality_problem(loc(hw1=1)), fresh(hw_missing=(3, 4)).locality_problem(loc(hw2=1))],
+       [None, None])
     nh = fresh(h_ext=False)
     eq('zero PhysBootScrt/MLocality/SLocality unconfigured; without H entries 7, 9 unconfigured',
        ([fresh(**{a: 0}).locality_problem(v) is not None for a, v in (('physbootscrt', loc(boot=1)),
