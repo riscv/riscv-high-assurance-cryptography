@@ -1240,7 +1240,7 @@ def listing_provision(clear_at=lambda s: False, m=None, on_trap=None, limit=8, e
     if start is not None:
         provision(u, 0, start)
     def opening():
-        u.csrs(klmanagedlocker=0)                                   # csrw klmanagedlocker, t0 at restart
+        u.csrs(klmanagedlocker=0)                                   # kl.setml t0 at restart
         tag = trap_of(u.mgmt, 'KLML', PROV, m)
         if tag:
             on_trap(u, tag)
@@ -1274,7 +1274,7 @@ def listing_export(clear_at=lambda s: False, error_at=None):
         if step == error_at:
             u.setst(0, OOM)
         step += 1
-    u.csrs(klmanagedlocker=0)                                       # csrw klmanagedlocker, t0
+    u.csrs(klmanagedlocker=0)                                       # kl.setml t0
     tick()
     n = u.size(k='KLML')
     tick()
@@ -1308,7 +1308,7 @@ def listing_checked(kind, checks, at, event='clear', via='load'):
                 u.setst(0, OOM)
         step += 1
     if kind == 'exp':
-        u.csrs(klmanagedlocker=0)                                   # csrw klmanagedlocker, t0
+        u.csrs(klmanagedlocker=0)                                   # kl.setml t0
         n, m, mem, out = u.size(k='KLML'), u.getmd('KLML'), Memory(), []
         xfer = [lambda: u.store(mem, BASE)] if via == 'load' else [lambda: out.append(u.mv_out())] * ((n - 16) // 16)
         ops = [lambda: u.mgmt('KLML', EXP)] + xfer + [lambda: u.mgmt('KLML', END, m)]
@@ -1321,7 +1321,7 @@ def listing_checked(kind, checks, at, event='clear', via='load'):
     checked = range(len(ops)) if checks == 'each' else [len(ops) - (1 if checks == 'last' else 2)]
     for restarts in range(4):
         if kind != 'exp':
-            u.csrs(klmanagedlocker=0)                               # csrw klmanagedlocker, t0 at restart
+            u.csrs(klmanagedlocker=0)                               # kl.setml t0 at restart
         restart = False
         for i, op in enumerate(ops):
             boundary()
