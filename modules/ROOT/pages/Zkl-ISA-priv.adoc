@@ -93,8 +93,8 @@ The KLEE fatal-error exception precedes every exception that depends on the stat
 [float="center",align="center",width="100%",cols="^10%,<24%,<66%",options="header"]
 |===
 |Exception Code(s) | Mnemonic/RISC-V type           | Examples in KLEE (((KLEE, error codes)))
-|  3   | Instruction address breakpoint | {empty}
-| 12, 1   | Instruction page fault, instruction access fault | As ordered by the Privileged Specification: first during instruction address translation, then on the physical address.
+|  3   | Instruction address breakpoint | As per the by the Privileged Specification.
+| 12, 1   | Instruction page fault, instruction access fault | As per the by the Privileged Specification.
 |  2   | Illegal-instruction            | The KLEE grounds decided without accessing the state of the KLEE unit, such as a reserved encoding or a `KLS` field in effect that is Off, listed first in <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>.
 | TBD  | *KLEE fatal-error*             | Fatal system failure in the KLEE unit.
 | TBD  | *KLEE missing-CSK*             | Use of the KLEE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>>, <<KLEE-CSR-mklcsk>>). Only M-mode can establish a CSK.
@@ -104,31 +104,18 @@ For a usage instruction, a forbidden KLIOBUF substitution is evaluated in the or
 // For a usage instruction, the _Unconfigured_, Error-State and Configuration-State conditions of <<Zkl-ISA-unpriv.adoc#KLEE-GR-gate-order>> precede the grounds that depend on the operation of the State, namely a forbidden KLIOBUF substitution: on an _Unconfigured_ or Error-State locker the instruction performs no operation, and in a Configuration State it raises a KLEE privilege-violation exception.
 | TBD  | *KLEE unsupported-Metadata*    | Unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>) when opening a provisioning or import.
 | TBD  | *KLEE privilege-violation*     | A _usage_ instruction that would violate the Usage Control policies (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata>>), including any attempt to use, clone or restrict a locker in a Configuration State (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-config-state>>), which is forbidden at all privilege levels.
-| TBD  | *KLEE clock-unavailable*         | With `Zklexpire`, a _usage_ instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-expiration-date>>); the _State_ is unchanged.
+| TBD  | *KLEE clock-unavailable*         | With `Zklexpire`, a _usage_ instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-expiration-date>>).
 | TBD  | *KLEE out-of-memory*           | Insufficient KLF capacity when opening a provisioning or import, or cloning.
 | TBD  | *Unconfigured-KLIOBUF*         | Use of the KLIOBUF as an input or an output while it is unconfigured. Where the MDH is taken from the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-mgmt>>), evaluated before every condition that depends on that MDH.
-| TBD  | *KLEE RBG-unavailable*         | Random bits that an operation needs remain unavailable past the implementation-defined bound of Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>; the _State_ is unchanged.
+| TBD  | *KLEE RBG-unavailable*         | Random bits that an operation needs remain unavailable past the implementation-defined bound of Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>.
 |  3   | Load/store address breakpoint  | On the address of a component access of `kl.load`, `kl.store`, `kl.input` or `kl.output`, when that access is about to be performed; for the first component access, before the address-misaligned check.
 |  4   | Load/store address misaligned  | On the effective address of `kl.load`, resp. `kl.store`, before any component access (<<Zkl-ISA-unpriv.adoc#KLEE-instructions-memory>>); for `kl.input` and `kl.output`, as for an ordinary access on the implementation.
 | 13, 15, 21, 23, 5, 7 | Load/store page fault, load/store guest-page fault, load/store access fault | Per component access, in offset order, as ordered by the Privileged Specification.
 |===
 
-// Remark about KLEE locker-Off.:::
-// A KLEE unsupported-Metadata exception arises only from a `kl.mgmt` that opens a provisioning or an import, which <<KLEE-CSR-llockerstatus>> exempts from this gate: an unsupported Machine provisioned or imported into an _Off_ locker is reported to the emulator by a KLEE unsupported-Metadata exception, and every later, non-exempt access to the locker by a KLEE locker-Off exception (<<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>).
-
 The relative order of the standard exceptions is that of the Privileged Specification, reproduced for reference only; the load/store address breakpoint and the load/store faults are evaluated per component access, because the component addresses of a KLEE memory instruction are determined from the state of the KLEE unit.
 
-The `medeleg` and `hedeleg` bits of all KLEE exception causes are read-only zero: KLEE exceptions are never delegated below M-mode.
-// Those corresponding to KLEE unsupported-Metadata exception,
-// KLEE fatal-error exception, KLEE missing-CSK exception and KLEE locker-Off exception  KLEE out-of-memory exception, KLEE privilege-violation exception and unconfigured-KLIOBUF exception are writable wherever `medeleg`, resp. `hedeleg`, is implemented, so that these causes can be delegated to S-mode and, with the H extension, to VS-mode.
-
-// [NOTE]
-// ====
-// KLEE memory instructions are allowed to trap so that implementations have more
-// flexibility when loading/storing large KLEE contexts, for instance implementing
-// by trapping-and-emulating.
-// The hardware then raises an illegal-instruction exception for the emulated instruction, before any condition of this table is evaluated (<<KLEE-extensions-overview-unpriv>>). An M-mode emulator of a KLEE instruction reproduces this table in full: it evaluates the `Smstateen` bits, the `KLS` fields, the CSK state and the `*llockerstatus` gates, then the second-group grounds and the remaining conditions, in this order, sets the `*llockerstatus` and `KLS` fields the instruction would set, and raises or forwards the resulting exception as the hardware and the M-mode handler would.
-// ====
+The `medeleg` bits of all KLEE exceptions causes are read-only zero: KLEE exceptions are never delegated below M-mode.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -167,7 +154,6 @@ None of these CSRs, the `mklcsk` group included, is available without the KLEE e
 (<<KLEE-KL-field-in-misa>>, <<KLEE-KLS-field-in-mstatus>>, <<KLEE-KLS-field-VS>>):
 an access then raises an illegal-instruction exception, a condition evaluated after the `Smstateen` check below, where implemented, and before the privilege check.
 An access from a mode below the privilege of the CSR also raises an illegal-instruction exception.
-// , except that, as the hypervisor extension prescribes, an access from VS-mode or VU-mode to a CSR that would be accessible in HS-mode, or from VU-mode to a CSR that would be accessible in VS-mode, raises a virtual-instruction exception.
 Where `Smstateen` is implemented, the KLEE bit (to be allocated) of `mstateen0`, `hstateen0` and `sstateen0` gates every KLEE instruction and every KLEE CSR, including the identification CSRs, in the modes below the register's own: a clear bit makes the instruction or access raise an illegal-instruction exception, as that extension prescribes.
 These exceptions are decided without accessing the KLEE unit, belong to the first group of <<Zkl-ISA-unpriv.adoc#KLEE-illegal-instruction-grounds>>, and are evaluated before every other KLEE condition.
 
@@ -183,16 +169,6 @@ Bit `L` (11) of `misa` indicates that the KLEE extension is present; if KLEE is 
 M-mode firmware that provides an emulated KLEE unit can set this bit to 1.
 It must not clear `misa.L` without first zeroizing all KLEE state, emulated or in hardware (`kl.clearall` and the CSRs of <<Zkl-ISA-unpriv.adoc#KLEE-out-of-reset-unpriv>>); while `misa.L` is clear, the KLEE state is inaccessible, and need not be retained.
 
-// [WARNING]
-// ====
-// This allocation is provisional and has not been agreed with the RISC-V Architecture
-// Review Committee. Presence of KLEE may instead be discovered by other mechanisms, in
-// particular the unified discovery mechanism, which is the direction RISC-V has taken for
-// recent extensions and which does not consume a `misa` bit; bit `L` (11) may also be
-// allocated to another extension. Implementers should expect this subsection to change, and
-// should not treat `misa.L` as a stable interface until the question is settled.
-// ====
-
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-KLS-field-in-mstatus]]
@@ -206,17 +182,6 @@ Defined like the floating-point and vector context status fields `FS` and `VS`,
 it tracks the dirtiness of the lockers, of the KLIOBUF and of every writable KLEE-specific CSR other than the `mklcsk` group.
 `mstatus.KLS` is always in effect; when V=1, the `vsstatus.KLS` field of <<KLEE-KLS-field-VS>> is
 in effect as well.
-
-// [WARNING]
-// ====
-// The choice of `mstatus`[26:25], and of the corresponding bits of `sstatus` and
-// `vsstatus`, is provisional and has not been agreed with the RISC-V Architecture Review
-// Committee. Those bit positions are contested by other extensions, and KLS may end up at a
-// different offset, in a different register, or be carried by a mechanism other than a
-// `*status` context-status field. Nothing in this specification depends on the particular
-// offset: only on there being a two-bit context-status field with the semantics of
-// <<KLEE-aces-encoding>>, defined analogously to `FS` and `VS`.
-// ====
 
 [[KLEE-aces-encoding]]
 .Encoding of the `KLS` field
@@ -366,18 +331,6 @@ This CSR group is accessible in M-mode whenever `KLS` is not Off and `misa.L` is
 Out of reset `KLS` is Off (<<KLEE-out-of-reset-priv>>), so M-mode firmware enables `KLS` before it establishes the CSK, and until then the KLEE unit is not usable.
 
 A new CSK becomes active only once every CSR of the group has been written since the previous activation; from the first such write until then, the CSK is _partially written_, and the KLEE unit is unavailable (KLEE missing-CSK exception, <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>>).
-
-// A trap or return that changes the privilege mode to M-mode discards a partial write, so that a CSK is never assembled from the writes of two sequences; a trap taken from M-mode to M-mode does not.
-// After a discard, the CSK active before the discarded sequence, if any, is active again.
-// One mechanism that ensures this is the following (informative):
-//
-// * The implementation keeps a per-hart flag for each CSR of the group, initially unset.
-// * A write by M-mode firmware to a CSR of the group sets its flag, and the implementation keeps the value written so far.
-// * Once all flags are set, the values written replace the old CSK atomically, and the flags are cleared; the new CSK can then be used for cryptographic operations.
-// * Any mode change to M-mode clears the flags and discards the partially written value, so that M-mode always begins a configuration attempt from a clean state, and a partial key is never activated.
-// * A transition out of M-mode does *not* clear the flags, so an incomplete write sequence is not silently lost: the partially written CSK persists, the KLEE unit stays unavailable, and the next KLEE access from any mode traps with a KLEE missing-CSK exception, notifying M-mode, whose handler can then restart the configuration.
-// * Any KLEE unit reset clears the flags and discards the partially written value.
-// * While any flag is set, that is while a CSK is partially written, the KLEE unit is unavailable: executing a KLEE instruction, or accessing a KLEE CSR other than those named in <<Zkl-ISA-unpriv.adoc#KLEE-CSK-requirements>>, raises a KLEE missing-CSK exception. Since activation clears the flags, the unit becomes available again as soon as the group has been written in full.
 
 Reading a register of the group returns the corresponding part of the active CSK.
 

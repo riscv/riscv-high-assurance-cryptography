@@ -27,6 +27,8 @@ ONES64 = MASK64
 CLEAR_ADS = 64
 CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klmanagedlocker: no locker managed
+KLV_SEWS = (8, 16, 32, 64)                   # <<KLEE-KLV>>: SEW values, ELEN = 64; others set vtype.vill
+MAX_RESTARTS = 2                             # GR59 option 5: this model's documented bound for memory instructions
 VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
 EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
@@ -418,7 +420,7 @@ class Unit:
         self.__dict__.update(attrs)
     def reset(self):                                                # <<KLEE-out-of-reset-unpriv>>
         self.lockers = [Locker() for _ in range(32)]
-        self.kliobuflen = self.kliobuftop = self.klstart = 0
+        self.kliobuflen = self.kliobuftop = self.klstart = self.restarts = 0
         self.kliobuf = bytearray()
         self.klmanagedlocker = NONE
         self.siv = self.impqual = self.siv2 = 0
@@ -828,7 +830,7 @@ class Unit:
 
     # -- kl.exec  <<KLEE-instruction-exec>>
     def exec_(self, k, form='A', vin=None, vout=None, sew=8, halt_after=None):
-        if form != 'D' and not self.zklv: raise Trap('illegal', 1)
+        if form != 'D' and (not self.zklv or sew not in KLV_SEWS): raise Trap('illegal', 1)
         k = self._idx(k)
         self._pre()
         self._off(k)
@@ -1060,12 +1062,14 @@ class Unit:
         while j < end:
             f = fault(j)
             if f or (halt_after is not None and j - self.klstart >= halt_after):
-                self.klstart = 0 if restart and not f else j        # GR59: no restart on a fault
+                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR59: no restart on a fault, and
+                self.restarts += rs                                 # option 3 once the bound is reached
+                self.klstart = 0 if rs else j
                 if f: raise Trap(f[0], tval=f[1])
                 return 'halted'
             act(j)
             j += step
-        self.klstart = 0
+        self.klstart = self.restarts = 0
         return 'done'
     def _mem(self, mem, addr, xl=0, halt_after=None, restart=False, store=False):   # <<KLEE-instruction-load>>, -store
         if self.klmanagedlocker == NONE:                            # GR7: no managed locker: kl.input / kl.output
@@ -1095,7 +1099,8 @@ class Unit:
     input_, output = load, store                                    # kl.input, kl.output: aliases (GR7)
     def _mv_pre(self, writing, vec_len=None, sew=8):
         if not self.zklmv or (vec_len is not None and not self.zklv): raise Trap('illegal', 1)
-        if vec_len is not None and (vec_len % 16 or self.vstart * sew // 8 % 16): raise Trap('illegal', 1)
+        if vec_len is not None and (sew not in KLV_SEWS or vec_len % 16 or self.vstart * sew // 8 % 16):
+            raise Trap('illegal', 1)
         if self.klmanagedlocker == NONE:                            # GR35: no locker under management: a no-op
             self._pre()
             return None, None
@@ -1742,6 +1747,10 @@ def t_restrict():
     u = pv(fresh(clock=5000), 0, cipher(ExpirationDate=10))
     eq('kl.restrict* is not an ExpirationDate evaluation point', (u.restrict(0, md(ExpirationDate=9)), u.getst(0)),
        ('ok', READY))
+    u = pv(fresh(), 0, cipher(UsagePolicy=0b10000))
+    eq('kl.restricth UsagePolicy is a request, not a narrowing: 0b00001 denies U, keeps the Debug grant; 0b10000 drops it',
+       [u.restrict(0, md(UsagePolicy=1), 'h'), u.getmd(0)['UsagePolicy'], u.restrict(0, md(UsagePolicy=0b10000), 'h'),
+        u.getmd(0)['UsagePolicy']], ['ok', 0b10001, 'ok', 0b00001])
 
 def t_localities():
     section('Localities  <<KLEE-Localities>>, <<KLEE-system-keys>>')
@@ -2218,6 +2227,10 @@ def t_transfers():
     eq('GR52: access fault at the byte, prefix committed; restart option for interrupts only (GR59)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
+    w = opened()
+    eq(f'GR59 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
+       [(w.load(mem, BASE, halt_after=16, restart=True), w.klstart) for _ in range(MAX_RESTARTS + 1)]
+       + [w.load(mem, BASE), img(w) == pc], [('halted', 0)] * MAX_RESTARTS + [('halted', 16), 'done', True])
     u, out, ref = rc(), Memory(), Memory()
     u.mgmt(0, EXP)
     out.unmapped.append((BASE + 32, BASE + 48))
@@ -2347,11 +2360,13 @@ def t_sgr():
     u.setst(0, INVALID)
     u.csrs(kliobuflen=64).kliobuf[:] = b'\xAA' * 64
     w.setst(0, EXPIRED)
-    w.vstart = 1
-    eq('GR32: Error-State kl.exec zeroes [klstart, kliobuftop) of Form D, elements vstart..vl-1 of Vd',
+    w.vstart = 2
+    eq('GR32: Error-State kl.exec zeroes [klstart, kliobuftop) of Form D, elements vstart..vl-1 of Vd; '
+       'SEW = 128 sets vtype.vill (KLV)',
        (u.csrs(klstart=16).exec_(0, 'D'), bytes(u.kliobuf),
-        w.csrs(klstart=16).exec_(0, 'A', vin=buf, vout=buf, sew=128),
-        bytes(buf)), ('noop', b'\xAA' * 16 + bytes(48), 'noop', b'\xBB' * 16 + bytes(16)))
+        trap_of(w.csrs(klstart=16).exec_, 0, 'A', vin=buf, vout=buf, sew=128),
+        w.exec_(0, 'A', vin=buf, vout=buf, sew=64), bytes(buf)),
+       ('noop', b'\xAA' * 16 + bytes(48), 'illegal/1', 'noop', b'\xBB' * 16 + bytes(16)))
     info('A Form D kl.exec on an Error-State locker zeroes [klstart, kliobuftop), although whether it is a '
          'substitution depends on an operation the Error State does not define (per the purpose of GR32).')
     u, w = opened(), opened(k=3)

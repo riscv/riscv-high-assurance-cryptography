@@ -110,7 +110,7 @@ class Locker:
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
-    def drop_ads(self):                 # kl.clearads (GR23), or an import that completes without Content2 (GR61)
+    def drop_ads(self):                 # kl.clearads (GR23), an import without Content2, or a kl.clone copy (GR61)
         self.discard()
 
     def halt(self, progress=1, k=None):
@@ -777,6 +777,12 @@ for how in ('kl.clearads', 'an import without Content2'):
     cr.drop_ads()
     check(f'{how} on a halted Sign_Generate discards Progress, RndNum, HasRndNum; State kept',
           cleared(cr) and cr.state == SIGN_GEN)
+cr = armed()
+cr.halt(7, K0)
+cp = copy.deepcopy(cr)
+cp.drop_ads()
+check('kl.clone of a halted Sign_Generate: the copy restarts, the source keeps Progress and RndNum',
+      cleared(cp) and cp.state == SIGN_GEN and (cr.progress, b2v(cr.rnd)) == (7, K0))
 cr = armed()
 cr.halt(9, 0xDEAD)
 cr.setst(READY)
