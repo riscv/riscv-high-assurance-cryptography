@@ -498,7 +498,7 @@ class Unit:
 
     # -- gates
     def _exc(self, cause):
-        """kl_exc_no_csk / kl_exc_unconfigured_buffer: KLEE exceptions exist with or without the Privileged Arch."""
+        """kl_exc_no_csk: KLEE exceptions exist with or without the Privileged Arch. An unconfigured KLIOBUF is illegal/2 (GR14)."""
         return Trap(cause)
     def _exc_locker(self, k, cause):
         raise Trap(cause)
@@ -648,7 +648,7 @@ class Unit:
             raise Trap('illegal', 2)
         if form != 'A': return as_md(ml)
         if not self.zklio: raise Trap('illegal', 2)
-        if not self.kliobuflen: raise self._exc('unconfigured_buffer')
+        if not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
         if self.kliobuftop < 16:                                    # GR4
             raise Trap('illegal', 2)
         return unpack(b2v(bytes(self.kliobuf[:16])))
@@ -826,7 +826,7 @@ class Unit:
         if self.expired(m):
             self._enter_error(k, EXPIRED)
             return 'expired'
-        if needs_buf and not self.kliobuflen: raise self._exc('unconfigured_buffer')
+        if needs_buf and not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
 
     # -- kl.exec  <<KLEE-instruction-exec>>
     def exec_(self, k, form='A', vin=None, vout=None, sew=8, halt_after=None):
@@ -1157,7 +1157,7 @@ class Unit:
             if out:
                 self.kliobuf[:self.kliobuftop] = bytes(self.kliobuftop)
             return 'noop'
-        if not self.kliobuflen: raise self._exc('unconfigured_buffer')
+        if not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
         if self.kliobuftop % 16: raise Trap('illegal', 2)
         k, n = self._xfer_pre(not out), self.kliobuftop
         if k is None:
@@ -1184,7 +1184,7 @@ class Unit:
     def _io(self, mem, addr, xl, halt_after=None, restart=False, out=False):
         self._pre()
         if not self.zklio: raise Trap('illegal', 2)                 # second group: depends on klmanagedlocker = 32
-        if not self.kliobuflen: raise self._exc('unconfigured_buffer')
+        if not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
         end = min(xl, self.kliobuftop)
         if xl == 0 or self.klstart >= end:
             self.klstart = 0                                        # transfers nothing, retires
@@ -1923,7 +1923,7 @@ def t_mgmt():
     b0 = snapshot(u.csrs(kliobuflen=64, kliobuftop=15))
     eq('Form A opening: unconfigured KLIOBUF, kliobuftop < 16 raise before any change',
        (r1, (trap_of(u.mgmt, 0, IMP, form='A'), snapshot(u) == b0)),
-       (('unconfigured_buffer', True), ('illegal/2', True)))
+       (('illegal/2', True), ('illegal/2', True)))
     w, w2 = opened(IMP, cipher(State=1), zklio=False), opened()
     eq('Form A completion needing ml without Zklio illegal/2; export opening, PI completion need no KLIOBUF',
        (trap_of(w.mgmt, 0, END, form='A'), w2.mgmt(0, END, form='A'), w2.mgmt(0, EXP, form='A')),
@@ -1942,7 +1942,7 @@ def t_mgmt():
        ['illegal/1', 16, 'illegal/2', 16, 'no_csk', 16, 'illegal/2', 0])
     eq('an exception inside a management operation keeps State and klmanagedlocker, clears klstart',
        (trap_of(w.mgmt, 0, END, form='A'), w.getst(0), w.klmanagedlocker, w.klstart),
-       ('unconfigured_buffer', IMP, 0, 0))
+       ('illegal/2', IMP, 0, 0))
     eq('Form B reserved (first group); Form C VL*SEW < 128 (GR4, second group for kl.mgmt); end on a Complete '
        'State illegal/2', [trap_of(w.mgmt, 0, PROV, cipher(), form='B'),
                            trap_of(w.mgmt, 0, PROV, cipher(), form='C', vec_bits=64),
@@ -2201,7 +2201,7 @@ def t_transfers():
         trap_of(fresh().store, Memory(), BASE, 16), fresh(zklio=False).store(Memory(), BASE),
         trap_of(fresh(zklio=False).load, Memory(), BASE, 16), fresh().mv_vec(vo, out=True), bytes(vo),
         fresh().mv_iobuf(out=True)],
-       ['empty', 'empty', 0, 'unconfigured_buffer', 'empty', 'illegal/2', 'noop', bytes(16), 'noop'])
+       ['empty', 'empty', 0, 'illegal/2', 'empty', 'illegal/2', 'noop', bytes(16), 'noop'])
     pc = pi_content(cipher())
     u, mem = opened(), Memory(pc)
     img = lambda w: bytes(w.lockers[0].img)
@@ -2273,8 +2273,8 @@ def t_transfers():
          trap_of(opened().mv_iobuf), u.csrs(kliobuftop=32).mgmt(0, END), u.mgmt(0, EXP), u.mv_iobuf(out=True),
          bytes(u.kliobuf[:16]) == v2b(u.siv, 16), u.klstart]
     eq('KLIOBUF variants: kliobuftop bytes (a multiple of 16) between KLIOBUF[0, top) and S from klstart, both ways; '
-       'kliobuftop % 16 illegal/2; klmanagedlocker 32 a no-op; no Zklio illegal/1; unconfigured KLIOBUF', r,
-       ['moved', 32, True, 'illegal/2', 'noop', 'illegal/1', 'unconfigured_buffer', 'completed', 'opened', 'moved',
+       'kliobuftop % 16 illegal/2; klmanagedlocker 32 a no-op; no Zklio illegal/1; unconfigured KLIOBUF illegal/2', r,
+       ['moved', 32, True, 'illegal/2', 'noop', 'illegal/1', 'illegal/2', 'completed', 'opened', 'moved',
         True, 32])
     w, mem = opened(m=xof()), Memory(v2b(0xEF, 16) + v2b(0xCD, 16))
     w.mv_in(0xAB)
@@ -2295,7 +2295,7 @@ def t_kliobuf():
        r + [bytes(u.csrs(kliobuftop=40).kliobuf[:4]), n.csr_read('klmaxiobuflen'), trap_of(n.csr_read, 'kliobuflen'),
             trap_of(n.csr_write, 'kliobuftop', 1), trap_of(n.input_, Memory(), BASE, 16),
             trap_of(u.csr_write, 'klmaxiobuflen', 5)],
-       [[0, 0, 0, 32], 'unconfigured_buffer', 64, bytes(64), 64, 128, 128, b'\1\2\3\4', 0, 'illegal/1', 'illegal/1',
+       [[0, 0, 0, 32], 'illegal/2', 64, bytes(64), 64, 128, 128, b'\1\2\3\4', 0, 'illegal/1', 'illegal/1',
         'illegal/2', 'illegal/1'])
     src = bytes(0x10 + 3 * i & 0xFF for i in range(64))
     u, mem = fresh().csrs(kliobuflen=64, kliobuftop=48), Memory(src)
@@ -2392,7 +2392,7 @@ def t_sgr():
         trap_of(w4.exec_, 0, 'D'), (trap_of(ex, w5, 0), w5.getst(0)), (w6.exec_(0, 'D'), w6.getst(0)),
         (trap_of(w7.exec_, 0, 'D'), w7.getst(0)), (w8.exec_(0, 'D'), w8.getst(0))],
        [('noop', INVALID), 'privilege_violation', 'illegal/2', 'illegal/2', ('privilege_violation', ToyCipher.ENCRYPT),
-        ('expired', EXPIRED), ('unconfigured_buffer', ToyCipher.ENCRYPT), ('invalid', INVALID)])
+        ('expired', EXPIRED), ('illegal/2', ToyCipher.ENCRYPT), ('invalid', INVALID)])
     rows = []
     for st in CONFIG:
         w, p = white_box(st, bytes(64)), opened()
@@ -2670,7 +2670,7 @@ def t_errors():
     eq('no Privileged Architecture: every KLEE exception is still raised, exactly as with it; a locker in a '
        'Configuration State keeps its State (GR40)', (r, [r[i] for i in (0, 3, 5, 7, 8, 10, 12, 13)]),
        (excs(True), ['unsupported', 'out_of_memory', 'privilege_violation', 'privilege_violation',
-                     'privilege_violation', 'out_of_memory', 'no_csk', 'unconfigured_buffer']))
+                     'privilege_violation', 'out_of_memory', 'no_csk', 'illegal/2']))
     u, mem, out = pv(fresh(), 0, cipher()), Memory(), bytearray(b'\x11' * 16)
     m, n = u.getmd(0), u.size(k=0)
     u.mgmt(0, EXP)

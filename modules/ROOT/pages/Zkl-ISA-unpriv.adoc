@@ -761,7 +761,7 @@ Without `Zklio`, the KLIOBUF does not exist, `klmaxiobuflen` reads as zero, and 
 (((CSR, `kliobuflen`)))`kliobuflen` is an XLEN-bit URW CSR that programs the length of the KLIOBUF, in bytes, for `kl.input` and `kl.output`; its maximum is `klmaxiobuflen`.
 Every write, even of the current value, zeroes the buffer up to the new value of `kliobuflen`, and sets `kliobuftop` to the same length.
 
-A zero `kliobuflen` leaves the KLIOBUF _unconfigured_: an operation that expects an input or an output in it raises an unconfigured-KLIOBUF exception.
+A zero `kliobuflen` leaves the KLIOBUF _unconfigured_: an operation that expects an input or an output in it raises an illegal-instruction exception (Rule <<KLEE-GR-iobuf-configured>>).
 
 Rule <<KLEE-SR-kliobuflen-zero>> recommends writing 0 once the contents are no longer needed.
 
@@ -1176,7 +1176,7 @@ Besides the <<KLEE-mv-locker-checks>>, an illegal-instruction exception is raise
 +
 For a vector variant, the check that the vector extension is enabled precedes all of these and the locker checks.
 +
-A KLIOBUF variant raises an unconfigured-KLIOBUF exception if the KLIOBUF is unconfigured (Rule <<KLEE-GR-iobuf-configured>>).
+A KLIOBUF variant raises an illegal-instruction exception if the KLIOBUF is unconfigured (Rule <<KLEE-GR-iobuf-configured>>).
 +
 When `klmanagedlocker` = 32, every variant performs no operation, whatever `klstart` is, as on an _Unconfigured_ or Error-State locker; in both cases `kl.mvout` writes zeros to its destination (Rule <<KLEE-GR-cleared-under-management>>).
 With `klmanagedlocker` = 32, a KLIOBUF variant performs no operation before checking the KLIOBUF and `kliobuftop`, but after checking for `Zklio`.
@@ -1921,7 +1921,7 @@ A _usage_ instruction that would violate the Usage Control policies does not per
 |===
 
 [horizontal]
-[[KLEE-GR-iobuf-configured,GR14]]GR14:: KLIOBUF instructions such as `kl.input` and `kl.output` require `Zklio` and a non-zero `kliobuflen`; with `Zklio` and `kliobuflen` = 0 they raise an unconfigured-KLIOBUF exception.
+[[KLEE-GR-iobuf-configured,GR14]]GR14:: KLIOBUF instructions such as `kl.input` and `kl.output` require `Zklio` and a non-zero `kliobuflen`; otherwise they raise an illegal-instruction exception. The use of an unconfigured KLIOBUF is a ground of the second group of <<KLEE-illegal-instruction-grounds>>, since the issuing mode configures the KLIOBUF itself; no handler can resolve it.
 
 === Custom Metadata
 
@@ -2306,7 +2306,6 @@ The following table gives the Error State that the handler of a KLEE exception s
 | Privilege-violation               | _Privilege Violation_; none for a locker in a Configuration State, which keeps its _State_ (Rule <<KLEE-GR-usage-locker-config-state>>).
 | Clock-unavailable (<<KLEE-Metadata-expiration-date>>) | _Expired_.
 | RBG-unavailable (Rule <<KLEE-GR-rbg-failure>>) | _Invalid_.
-| Unconfigured-KLIOBUF              | None: Rule <<KLEE-SR-handler-duty>> does not apply.
 |===
 
 For `kl.clone` and `kl.derive`, which name two lockers, the table and Rule <<KLEE-SR-handler-duty>> concern the locker on which the exception is raised: for `kl.clone`, the source for a KLEE privilege-violation exception and the destination for a KLEE out-of-memory exception; for `kl.derive`, the endpoint where the failing check is detected, the source being checked first (<<KLEE-GR-gate-order>>).
@@ -2359,11 +2358,12 @@ The grounds for an illegal-instruction exception form two groups:
 . A KLIOBUF substitution that <<KLEE-usage-input-output>> forbids, such as a Form B or C `kl.exec` where Form A is expected, or any substitution without `Zklio`. This ground depends on the _State_, which defines the operation and thus whether a Form is a substitution.
 . A `kl.mgmt` that must read its MDH from a vector operand with `VL` {times} `SEW` < 128, or, in Form A, from a configured KLIOBUF with `kliobuftop` < 16 (Rule <<KLEE-GR-vector-MDH-operand>>).
 . A Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW` / 8 (<<KLEE-CSR-klstart>>).
-. `kl.load` or `kl.store` with `Xl` {ne} 0: with `klmanagedlocker` < 32, always (<<KLEE-instruction-load>>, <<KLEE-instruction-store>>); with `klmanagedlocker` = 32, that is, as `kl.input` or `kl.output`, on an implementation without `Zklio`. A missing CSK and an unconfigured KLIOBUF raise the KLEE missing-CSK and unconfigured-KLIOBUF exceptions instead (<<KLEE-CSK-requirements>>, Rule <<KLEE-GR-iobuf-configured>>).
+. `kl.load` or `kl.store` with `Xl` {ne} 0: with `klmanagedlocker` < 32, always (<<KLEE-instruction-load>>, <<KLEE-instruction-store>>); with `klmanagedlocker` = 32, that is, as `kl.input` or `kl.output`, on an implementation without `Zklio`. A missing CSK raises the KLEE missing-CSK exception instead (<<KLEE-CSK-requirements>>).
+. A KLIOBUF instruction, or a substitution that reads or writes the KLIOBUF, while `kliobuflen` = 0 (Rule <<KLEE-GR-iobuf-configured>>); where the MDH is taken from the KLIOBUF, evaluated before every condition that depends on that MDH.
 --
 
 // Exceptions and State Changes::: [[KLEE-exceptions-and-state-changes,Exceptions and State Changes]]
-// When a KLEE instruction raises a KLEE missing-CSK exception, KLEE locker-Off exception, KLEE unsupported-Metadata exception, KLEE out-of-memory exception, KLEE privilege-violation exception or unconfigured-KLIOBUF exception, it has changed no KLEE state, unless its description states a change that precedes the exception. `kl.mgmt` is the one instruction that does: it zeroizes the target locker before its checks.
+// When a KLEE instruction raises a KLEE missing-CSK exception, KLEE locker-Off exception, KLEE unsupported-Metadata exception, KLEE out-of-memory exception, KLEE privilege-violation exception, it has changed no KLEE state, unless its description states a change that precedes the exception. `kl.mgmt` is the one instruction that does: it zeroizes the target locker before its checks.
 
 [[KLEE-unsupported-handling,Unsupported Metadata]]
 Unsupported Metadata:::
@@ -2399,7 +2399,6 @@ The remaining exceptions, in the order of <<Zkl-ISA-priv.adoc#KLEE-exception-cod
 . *Usage Control.* A KLEE privilege-violation exception for a usage instruction (<<KLEE-instruction-properties>> in Rule <<KLEE-GR-usage-policy>>) in a mode that the _UsagePolicy_ excludes, and for any use, cloning or restriction of a locker in a Configuration State (Rule <<KLEE-GR-usage-locker-config-state>>).
 . *Unreadable secure clock.* A KLEE clock-unavailable exception for a usage instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read, raised while leaving the _State_ unchanged (<<KLEE-Metadata-expiration-date>>).
 . *Insufficient KLF capacity.* A KLEE out-of-memory exception for a `kl.mgmt` opening a provisioning or an import (<<KLEE-locker-management>>) or for `kl.clone` (<<KLEE-instruction-clone>>).
-. *Unconfigured KLIOBUF.* An unconfigured-KLIOBUF exception (Rule <<KLEE-GR-iobuf-configured>>).
 . *Random bits unavailable.* A KLEE RBG-unavailable exception for an operation whose random bits remain unavailable past the implementation-defined bound of Rule <<KLEE-GR-rbg-failure>>, raised while leaving the _State_ unchanged.
 . *Memory exceptions.* The load/store address-breakpoint, address-misaligned, page-fault, guest-page-fault and access-fault exceptions of the component accesses of `kl.load`, `kl.store`, `kl.input` and `kl.output`, ordered as in <<KLEE-instructions-memory>>, with a precise halt (<<KLEE-resumability>>); an access to a non-idempotent region is an access fault (<<KLEE-Memory-Model>>).
 --
@@ -2451,7 +2450,7 @@ The conditions on the locker follow in this order, and the first that applies de
 . a forbidden KLIOBUF substitution: illegal-instruction exception (<<KLEE-illegal-instruction-grounds>>);
 . _UsagePolicy_: KLEE privilege-violation exception (Rule <<KLEE-GR-usage-policy>>);
 . _ExpirationDate_: transition to Error State `kl_state_expired`, then no operation; if the secure clock cannot be read, KLEE clock-unavailable exception, the _State_ unchanged (<<KLEE-Metadata-expiration-date>>);
-. a KLIOBUF required by a substitution but unconfigured: unconfigured-KLIOBUF exception (Rule <<KLEE-GR-iobuf-configured>>);
+. a KLIOBUF required by a substitution but unconfigured: illegal-instruction exception (Rule <<KLEE-GR-iobuf-configured>>);
 . the Machine's own rules.
 
 For `kl.derive`, each condition is evaluated for both endpoints, the source first, before the next condition; an _Unconfigured_ or Error-State endpoint makes the whole instruction a no-op.
@@ -2559,7 +2558,7 @@ A substitution fails as follows:
 * Without `Zklio`, it raises an illegal-instruction exception.
 * Vector and KLIOBUF operands cannot be mixed: a Form B or C `kl.exec` issued where Form A is
   expected raises an illegal-instruction exception.
-* If `kliobuflen` is zero, it raises an unconfigured-KLIOBUF exception.
+* If `kliobuflen` is zero, it raises an illegal-instruction exception (Rule <<KLEE-GR-iobuf-configured>>).
 * If `kliobuflen` is non-zero but `kliobuftop` is an invalid length for the Machine, the locker transitions to Error State _Invalid_, whether the KLIOBUF serves as input or only as output (<<KLEE-CSR-klstart>>); for an MDH operand, however, `kliobuftop` < 16 raises an illegal-instruction exception (Rule <<KLEE-GR-vector-MDH-operand>>).
 
 Where <<Zkl-ISA-machines.adoc#KLEE-Machines>> says that a Form of `kl.exec`, `kl.setst` or `kl.mgmt` is _expected_, rather than _required_ or _the only Form allowed_, the substitutions above apply implicitly.
