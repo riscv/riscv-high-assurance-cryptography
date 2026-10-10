@@ -13,28 +13,29 @@ endif::[]
 == Introduction
 
 KLEE lets software perform high-performance cryptographic operations without direct access to the keys or other critical derived values.
-Its fundamental features are:
-
-* *Atomic operations.* Each cryptographic operation is atomic, so no intermediate value can leak through memory read exploits.
-An instruction that performs several distinct cryptographic operations can be interrupted only between them.
-
-* *Splitting of complex algorithms into smaller atomic operations.* Unlike some CISC architectures, and in line with RISC-V philosophy, KLEE offers no instructions that perform complex modes of operation on inputs of arbitrary length.
-
-* *Hidden cryptographic state.* KLEE operations do not reveal keys and other critical values.
-
-* *A single interface for many primitives*, instead of separate instructions per primitive:
- ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLEE therefore also defines modes of operation, among them CTR, GCM, and CMAC, and secure key derivation.
- ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential.
- The modes work with AES-128, -192, -256, and other block ciphers such as SM4.
- ** The interface also supports hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
- ** Side-channel-protected implementations, when available, are simply variants of the standard algorithms and can replace them without code changes.
- ** Implementations need not support every algorithm and variant: following RISC-V practice, KLEE defines subextensions and leaves requirements to the RISC-V profiles.
-
-* *Support for context switch, persistence, sleep, hibernation, and VM migration.*
-
-* *Scalability.* One ISA and ABI serve embedded to server cores.
-
-KLEE realizes these features through the following concepts.
+//
+// Its fundamental features are:
+//
+// * *Atomic operations.* Each cryptographic operation is atomic, so no intermediate value can leak through memory read exploits.
+// An instruction that performs several distinct cryptographic operations can be interrupted only between them.
+//
+// * *Splitting of complex algorithms into smaller atomic operations.* Unlike some CISC architectures, and in line with RISC-V philosophy, KLEE offers no instructions that perform complex modes of operation on inputs of arbitrary length.
+//
+// * *Hidden cryptographic state.* KLEE operations do not reveal keys and other critical values.
+//
+// * *A single interface for many primitives*, instead of separate instructions per primitive:
+//  ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLEE therefore also defines modes of operation, among them CTR, GCM, and CMAC, and secure key derivation.
+//  ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential.
+//  The modes work with AES-128, -192, -256, and other block ciphers such as SM4.
+//  ** The interface also supports hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
+//  ** Side-channel-protected implementations, when available, are simply variants of the standard algorithms and can replace them without code changes.
+//  ** Implementations need not support every algorithm and variant: following RISC-V practice, KLEE defines subextensions and leaves requirements to the RISC-V profiles.
+//
+// * *Support for context switch, persistence, sleep, hibernation, and VM migration.*
+//
+// * *Scalability.* One ISA and ABI serve embedded to server cores.
+//
+KLEE achieves this feature through the concepts explained next.
 
 [[KLEE-concepts]]
 === Fundamental Concepts and Definitions
@@ -42,12 +43,12 @@ KLEE realizes these features through the following concepts.
 Cryptographic Context:::
 (((Cryptographic Context)))
 Most KLEE instructions run within the constraints set by a *Cryptographic Context* (CC).
-A CC is an indivisible structure consisting of a *Metadata Header* (MDH) and *Content*.
+A CC is an indivisible structure consisting of a *Metadata Header* (MDH), with a fixed format and length, and a *Content*, whose size depends on the MDH.
 (((Cryptographic Context, Content)))
 The Content holds the secrets, usually keys, and other sensitive material.
 (((Cryptographic Context, Metadata Header)))
-The MDH has a fixed format, restricts the use of the secrets to one set of cryptographic algorithms, and can enforce usage constraints by process, VM, security state, boot cycle, expiration date, or other policies.
-The Metadata requires integrity, except for explicitly identified format hints and the layout-preserving fields they make inactive; the Content requires integrity and confidentiality.
+The MDH binds the use of the secrets in the Content to one set of cryptographic algorithms, and, optionally, to a process, VM, security state, boot cycle, expiration date, or other policies.
+The MDH requires integrity (except for hint bits); the Content requires integrity and confidentiality.
 KLEE and the algorithms it implements enforce these requirements architecturally.
 
 Cryptographic Locker:::
@@ -60,9 +61,9 @@ KLEE Machine:::
 (((Machines)))
 (((Cryptographic Context, object-oriented)))
 A *KLEE Machine* (short: _Machine_) is a state machine that implements one or more cryptographic functions (primitives, modes, protocols) through the interface of this specification.
-The metadata of a locker identifies its Machine by the 12-bit _Machine_ field, which _MachinePolicy_ and _MachineExtension_ extend to 16 bits (<<KLEE-metadata-header>>).
-A small set of KLEE instructions operates the Machines: they take this identifier from the metadata and standard RISC-V inputs and outputs, such as GPRs, vector registers and memory, and their semantics depend on the Machine.
-A CC thus encapsulates Machine-specific behavior, so that different primitives (e.g., AES-128, AES-256 and SM4) can be used in the same modes (e.g., ECB, GCM-SIV and XTS) without changing the compiled code. Side-channel-resistant variants are supported transparently.
+The Machine is identified by certain fields in the MDH.
+A small set of KLEE instructions operates all the Machines: they take their inputs and outputs from vector registers, GPRs, and memory, and their semantics depends on the Machine.
+By encapsulating Machine-specific behavior in the MDH and not in the instructions, different primitives (e.g., AES-128, AES-256 and SM4) can be used in the same modes (e.g., ECB, GCM-SIV and XTS) without changing the compiled code. Side-channel-resistant variants are also supported transparently.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -77,11 +78,12 @@ Usage Control Policy:::
 KLEE distinguishes *management* operations from *usage* operations on CCs and lockers.
 (((Cryptographic Context, export)))
 Management operations are classified as
-
-* *configuration* (e.g., *provisioning*, SCC *import*, and *cloning*, *renaming* and *swapping* lockers),
-* *export* of a locker as an SCC, and
-* *clearing* a locker, i.e., freeing it, deleting any secret it contains.
-
+//
+*configuration* (e.g., *provisioning* and SCC *import*),
+*export* of a locker as an SCC, and
+*clearing* a locker, i.e., freeing it, deleting any secret it contains.
+//
+Management operations, while they may be destroying the contents of lockers, do not use their contents, nor they modify any cryptographic information in them, including any that may affect how this information is used.
 Usage operations are cryptographic operations and state changes.
 
 To prevent denial of service, management operations are less restricted than usage operations: _Usage Control_ policies restrict only usage operations.
