@@ -1,0 +1,285 @@
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-rules-explanation]]
+= Principles behind the General Rules
+ifdef::env-site[]
+// On the site each page stands alone; the PDF gets these from src/Zkl.adoc.
+include::partial$Zkl-symbols.adoc[]
+endif::[]
+
+_This chapter is informative and non-normative._
+
+This chapter states eleven principles, and one intermediate consequence of them, from which the General Rules of <<Zkl-ISA-unpriv.adoc#KLEE-unpriv>>, from Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>> onward, follow. The principles mention no individual instruction. Each rule should read as one principle applied to one instruction class and one State group. Rules <<Zkl-ISA-unpriv.adoc#KLEE-GR-multiple-GPRs>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-klstart-vstart>> state operand conventions and are not covered; nor are the SR rules.
+
+== Vocabulary
+
+The principles use only the categories below. The specification defines all of them.
+
+*State groups.*
+
+* _Unconfigured_: the locker holds no CC.
+* _Valid_ States: the locker holds a usable CC. _Ready_, _Success_ and _Failure_ are the architected ones.
+* _Error_ States: the locker holds only an MDH, which records why its CC became unusable.
+* _Configuration_ States: the locker's CC is in transit, that is, being provisioned, imported or exported.
+* _Complete_ = Valid ∪ Error. _Inert_ = Unconfigured ∪ Error, plus the case where there is no locker at all (`klmanagedlocker` = 32).
+
+*Instruction classes* (from <<Zkl-ISA-unpriv.adoc#KLEE-instruction-properties>> in Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>>).
+
+* _Usage_ instructions operate on the CC through the Machine. _UsagePolicy_ gates them.
+** _Derivations_ are usage instructions with two lockers, gated on each, and with a policy consequence (<<KLEE-principle-2>>).
+* _Configuration_ instructions operate on the locker as a container. _UsagePolicy_ does not gate them. There are three kinds:
+** _inspection_: read the MDH or a size, and change nothing;
+** _destructive_: zeroize or overwrite the locker without reading it (the destructive configuration instructions);
+** _transfer_: move a CC, or part of it, unchanged, between lockers or between a locker and memory or registers. This covers the management transfers (`kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`), `kl.rename` and `kl.swap`, and the closing of a management operation.
+* _Memory_ instructions are those with a memory operand. This class cuts across the others: `kl.load` and `kl.store` are both transfer and memory instructions.
+
+*The managed locker* is the one locker whose CC is in transit. A pointer names it, not a locker number.
+
+== The principles
+
+The eleven principles fall into five groups.
+
+* _Transparency_: the architecture describes all the state there is (<<KLEE-principle-1>>). It precedes the definition of a locker.
+* _Security_: what software may never gain, and what it may always do (<<KLEE-principle-2>>, <<KLEE-principle-3>>): confidentiality of the keys, and availability of the lockers that hold them. <<KLEE-principle-2>> is the principle from which the others take their purpose.
+* _Structure_: how a Machine is driven (<<KLEE-principle-4>>), and how an operation executes (<<KLEE-principle-5>>).
+* _Economy_: the least lookahead to identify a locker, as little architectural state as possible, and as little code as possible (<<KLEE-principle-7>>, <<KLEE-principle-8>>, <<KLEE-principle-9>>). The one mechanism that both lead to, the managed locker, is stated separately as the intermediate consequence <<KLEE-consequence-1>>.
+* _Outcomes_: what happens when an instruction cannot do what it is asked, one principle per State group (<<KLEE-principle-6>>, <<KLEE-principle-10>>, <<KLEE-principle-11>>); the second of them is also one way <<KLEE-principle-9>> is implemented.
+
+[[KLEE-principle-1,P1]]
+=== P1 — Resource management is architectural
+
+The architecture, not the implementation, manages every resource that software relies on: a resource exists in an architected number, with an architected state that software can read, and the architecture alone decides when it is available.
+
+It follows that there is no hidden state: an implementation may neither make a resource appear available by keeping state that the architecture does not describe, such as a cache or a hidden copy of a CC, nor make it unavailable by evicting such state.
+
+*Rationale.* A key-protection design that caches its key containers can offer more of them than it holds, at the price of an availability that depends on the cache's behavior, which software can neither see nor control. KLEE exposes its state machines and its resources to software instead (<<Zkl-ISA-unpriv.adoc#KLEE-CC-management>>): the hardware is simpler, and what software is promised, it gets.
+A key that cannot be used when its owner needs it is a denial of service; with architected resources, availability is a property that software can reason about and an evaluation can check.
+
+*Consequences.* There are 32 lockers, each with its MDH always present. The KLF capacity for Content is implementation-defined, but its exhaustion is an architected exception at the instruction that needs it, never a silent eviction. Context switching saves and restores architected state only, in an architected order. Whatever an implementation keeps beyond the MDH and the Content, the ADS included, may be discarded at any time without changing an architected outcome (<<KLEE-principle-7>>), and is identified by architected registers so that an import can tell whether it is usable (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-impl-ids>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-KLF>>, the out-of-memory item of <<Zkl-ISA-unpriv.adoc#KLEE-error-architecture>>, <<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>; among the General Rules, <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> (progress outside the Content) and <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>> (implementation-bound Metadata).
+
+[[KLEE-principle-2,P2]]
+=== P2 — Never increase privileges
+
+No instruction yields a key, a locker or an output that carries more rights than its inputs and its issuer already hold. Three consequences cover the rules.
+
+_No extraction._ Once a key is in a CC, it cannot be extracted from it in clear: it can be used only through its Machine, no instruction reads it out, and an exported CC is sealed. Whoever obtains the CC obtains the right to use the key under its policies, never the key itself.
+
+_Usage is gated._ An instruction exercises only the rights that the _UsagePolicy_ of the MDH grants to the issuing mode; an attempt to exercise a right it does not grant is a privilege violation.
+
+_Secrets flow only downhill._ Material derived from a secret inherits every constraint of that secret. It may move only into a locker whose policies, after narrowing, are at least as strict as the source's. Narrowing never widens a policy, never raises a protection level, and never changes a Machine policy. A transfer is exempt from narrowing exactly when the caller could already obtain its result with admitted instructions, so that the exemption adds no attack surface. A secret bound to the system never leaves it, and a bound key field is never replaced from outside.
+
+Secrets do not linger. When a CC is destroyed, invalidated or restarted, the material that depended on it is released or zeroized, and a destructive configuration instruction zeroizes before any check that could trap, so that no stale copy survives in the KLF.
+
+*Rationale.* The invariant is what makes the principle of least privilege enforceable: policies granted at provisioning, and narrowed later, can be relied upon only if no operation can widen them or bypass them. For derived material, NIST SP 800-57 Part 1 §6.2.1 and SP 800-108r1 §8 require exactly this inheritance. The exemption from narrowing is a shortcut, not a privilege.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-concepts>> (no extraction), <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> (gating), <<Zkl-ISA-unpriv.adoc#KLEE-GR-narrowing>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, the paragraphs after <<Zkl-ISA-unpriv.adoc#KLEE-GR-unrestricted>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>; <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> (zeroizing step) and <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> (restart) for the last paragraph.
+
+[[KLEE-principle-3,P3]]
+=== P3 — Lockers can always be reconfigured
+
+Configuration instructions are admitted in every State group. Neither a Machine nor a _UsagePolicy_ may restrict them. In particular, the return to _Ready_ and the ways out of an Error State are always open, and a locker in a Configuration State can be cleared, re-provisioned or re-imported like any other.
+
+*Rationale.* A saved SCC can always be reloaded, so refusing a configuration transition protects nothing; it only denies a resource.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-opening-locker-when>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-can-be-reconfigured>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-config-instructions-config-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-triggers>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-to-ready>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure>> (first paragraph), <<Zkl-ISA-unpriv.adoc#KLEE-GR-clearads>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-to-from-unconfigured>> (last sentence), `kl.mgmt` exception of <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>>.
+
+[[KLEE-principle-4,P4]]
+=== P4 — All Machines follow one state-machine protocol
+
+Software drives every Machine in the same way. A state-setting usage instruction names the next State, or an operation on the current one. An execute usage instruction performs the operation of the current State. The Machine specifies which transitions exist and which usage instructions each Valid State admits. The architecture supplies the transitions and admissions that are common to all Machines (<<KLEE-principle-6>>, <<KLEE-principle-3>>).
+
+Two conventions complete the protocol. Re-entering the current State is admitted unless the implemented standard gives it no meaning. The completion of a management operation leaves the locker in the State its MDH names; a fresh provisioning leaves it in _Ready_.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-triggers>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-clearads>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>.
+
+[[KLEE-principle-5,P5]]
+=== P5 — Every operation is atomic or prefix-complete with atomic component operations and bounded progress, and asynchrony is invisible
+
+An instruction belongs to one of two kinds. An _uninterruptible_ instruction completes, has no effect at all, or traps with only the effects that <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> lists. A _resumable_ instruction processes its input serially and halts only at a prefix-complete point, recorded in `klstart`; the state it commits at that point is exactly what a shorter instruction, performing only the completed prefix, would commit. The units it processes, a block or a granule, are atomic: a unit is either fully performed or not at all, although the memory accesses that implement it need not be (<<Zkl-ISA-unpriv.adoc#KLEE-rule-memory-instruction-decomposed>>). A precise halt does not retire the instruction. A transition to an Error State after partial progress does.
+
+The KLEE unit may execute asynchronously, but the issuing hart never observes it: a conflicting access waits for the instruction to complete or to halt precisely. Memory instructions are RISC-V memory instructions in every respect. They touch only idempotent memory, so that a prefix can be replayed.
+
+A management operation is an operation that spans several instructions, and the same holds for it. Between its instructions, the locker is in a Configuration State, which is the prefix-complete state of the operation: it can only be completed by the remaining instructions, or discarded and restarted from the beginning. Nothing consumes it partially: a locker in a Configuration State admits only configuration instructions, and a usage instruction on it is a sequencing error that traps (<<KLEE-principle-11>>) and leaves the locker unchanged. Invalidating it instead would discard the in-flight state and, for an export, the only copy of the CC.
+
+Progress is bounded. There is no instruction that processes a potentially unbounded input, as some software libraries and some CISC architectures offer. Every wait, retry and restart has a documented bound; past the bound, the implementation either makes progress or reports the condition, leaving the _State_ unchanged. Key material is all-or-nothing: it enters a field in one uninterruptible step of exactly the field's length, or not at all, so that no locker is ever usable with a partly written key.
+
+*Rationale.* Context save and restore need a state that the locker, `klstart`, `vstart` and the ADS describe completely; for a management operation, the locker in its Configuration State is that state. The memory model must not acquire a new kind of access. Halting and resuming is only meaningful if resumption eventually completes.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-program-order>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-instructions>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-derive-rule-both-fixed-size>> (interruption points, transfer size), <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> (halt points), <<Zkl-ISA-unpriv.adoc#KLEE-GR-checks>> (key item), <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> (temporary failure); for management operations, <<Zkl-ISA-unpriv.adoc#KLEE-GR-config-instructions-config-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-config-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-store-mv-allowed>>.
+
+[[KLEE-principle-6,P6]]
+=== P6 — Misuse of a Valid locker invalidates it
+
+A usage instruction that the Machine, the current State or the current policies do not admit on a Valid locker performs no operation and moves the locker to _Invalid_. An unrecoverable failure of a resource the operation needs does the same. The architecture keeps no history: once in an Error State, the locker is inert (<<KLEE-principle-10>>) and stays so until it is reconfigured (<<KLEE-principle-3>>).
+
+*Rationale.* Fail closed. A sequencing error on a live key may be an attack. The only safe outcome is to make the key unusable until software decides, and software can always reconfigure (<<KLEE-principle-3>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure>> (second paragraph), <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>> (last sentence), <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-checks>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> (permanent failure), <<Zkl-ISA-unpriv.adoc#KLEE-GR-state-after-setst>>.
+
+[[KLEE-principle-7,P7]]
+=== P7 — The MDH is the locker's complete description
+
+The MDH alone determines what a locker is, what it admits and how large it is. The architected behavior of a locker never depends on state outside the MDH and the Content. Whatever an implementation keeps beyond them can be discarded at any time without changing an architected outcome.
+
+*Consequences.* The _State_ field alone identifies the points that software must recognize. An Error-State locker _is_ its MDH, and is exported and imported as such. An _Unconfigured_ locker reads as the one MDH value that is not an MDH. A management operation restores exactly the MDH it was given. Implementation-defined progress lives outside the Content, so every operation can restart from the Content. Metadata that only one implementation can interpret is bound to that implementation.
+
+*Rationale.* Identifying a locker takes the least lookahead possible. The fields that say what the locker is, _Machine_, its policies, _State_ and _StateExtension_, lie in the first 32 bits of the MDH, and those that fix every length lie in the first 64, so that one GPR on RV32 identifies the locker and two size it (<<Zkl-ISA-unpriv.adoc#KLEE-length-rule>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-state-identifies-cc>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-locker-is-only-MDH>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-exported-as-MDH>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-getmd-to-from-unconfigured>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>>.
+
+[[KLEE-principle-8,P8]]
+=== P8 — Additional architectural state beyond the lockers is kept to a minimum
+
+KLEE adds to the hart only the state that its operations cannot do without: the lockers themselves, one progress counter (`klstart`), one pointer to the managed locker (`klmanagedlocker`), one set of authentication and implementation-identification registers (`SIV`, `IMPQUAL`, `SIV2`) and, with `Zklio`, one buffer. Each exists once per hart, not once per locker or once per operation. Any other state an operation needs lives in its locker.
+
+*Rationale.* Every register that KLEE adds is state that a context switch must save and restore, that interposed software must preserve, and that may leak from one context to the next. A single instance of each, shared by all lockers, keeps the save-and-restore sequence short and fixed, and keeps the cost of a hart's KLEE state independent of the number of lockers.
+
+*Consequences.* One set of authentication registers means that at most one management operation per hart is in flight at a time, which is the premise of <<KLEE-consequence-1>>: a single pointer names its locker; a second operation on another locker must first save the first one by a nested export, and management operations are not interleaved with each other or with cryptographic operations. One `klstart` means that every instruction that honors it starts from the value it finds, that an opening `kl.mgmt` clears it, and that interposed software saves and restores it. The authentication registers and the pointer are shared state, so touching them while an operation is in flight is a conflicting access. The progress of a long-running operation is recorded in its locker, in _MachineUse_ and the ADS, not in a register of its own.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>> (through <<KLEE-consequence-1>>), <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> and <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> (`klstart` cleared by `kl.mgmt`), <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLEE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-SR-klstart-save>>–<<Zkl-ISA-unpriv.adoc#KLEE-SR-klstart-restore>> and <<Zkl-ISA-unpriv.adoc#KLEE-SR-klmanagedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLEE-SR-never-clear-exporting>>.
+
+[[KLEE-principle-9,P9]]
+=== P9 — Make instructions as simple as possible, while still requiring short code sequences
+
+Instructions are kept as simple as the RISC-V philosophy asks. The code that uses them is kept small too. Whatever a routine would otherwise repeat in every instruction, or check after every instruction, becomes architectural state or a single check. Two cases matter most. The locker that a management routine works on is held in an architectural register, so the routine carries no locker number and the same code serves every locker. The outcomes of asynchronous events are shaped so that one check at the end of a sequence is enough.
+
+*Rationale.* Management and context-switch code runs in handlers and libraries. It is written once and audited once, and must not grow with the number of lockers or of steps. Moving a repeated operand or check into the architecture costs one CSR and one read-out, and removes a class of software errors.
+
+*Consequences.* <<KLEE-consequence-1>>, with <<KLEE-principle-8>>: the managed-locker pointer, its implicit and `KLML` operands, and the instructions that read and write it. The "check once" property of <<KLEE-principle-10>>: an instruction that falls through never traps and never acts elsewhere, so a routine checks the _State_ only after its last step, through the pointer, without knowing the locker number. One instruction clears every locker and the buffer. The KLIOBUF substitutes for vector operands, so one code path serves harts with and without vectors.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-instructions>>; also the substitution rules of <<Zkl-ISA-unpriv.adoc#KLEE-usage-input-output>>, outside the GR series.
+
+[[KLEE-principle-10,P10]]
+=== P10 — Inert lockers let instructions fall through
+
+On an inert locker, every instruction other than a destructive one performs no operation and raises no exception. The _State_ is unchanged, any output is zero. For each such transfer instructions, `klstart` is left as the same instruction would leave it after a transfer with an empty window. Inspection instructions read what is there: zeros, or the MDH.
+
+*Rationale.* A locker becomes inert asynchronously, when a handler clears or invalidates it. The instructions that follow must neither trap nor act on something else, and the original error must stay readable. One check, at the end of the sequence, must be enough: fall-through is one of the ways <<KLEE-principle-9>> is implemented. Since `klstart` does not advance on an inert locker, the length of a transfer sequence is the caller's own count, taken from the image size before the transfer, never `klstart` (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-no-klstart-loop>>).
+
+*Boundary.* <<KLEE-principle-10>> governs lockers that hold nothing to act on. A Valid locker that is misused falls under <<KLEE-principle-6>>; a locker in a Configuration State falls under <<KLEE-principle-5>>.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-to-from-unconfigured>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-getmd-to-from-unconfigured>>, second half of <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>, bullet 2 of <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>, second half of <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-can-be-reconfigured>>, inspection part of <<Zkl-ISA-unpriv.adoc#KLEE-GR-config-instructions-config-state>>.
+
+[[KLEE-principle-11,P11]]
+=== P11 — Exceptions are raised only for error conditions that fall-through would misreport
+
+An instruction traps only for an error condition that falling through would misreport. There are four such conditions: a malformed or reserved encoding; a sequencing error that would silently lose a CC; a use of unconfigured infrastructure, as opposed to an inert locker; and a policy violation, which the policy owner must see, not the caller. All these checks come before any check that depends on the locker's _State_, so that fall-through (<<KLEE-principle-10>>) is never mistaken for an error.
+
+*Rules.* First half of <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-mgmt-klmanagedlocker-check>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-iobuf-configured>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure-cannot-be-set-directly>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-config-state>>, check order of <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>>.
+
+== Intermediate consequences
+
+An _intermediate consequence_ (the term is provisional) is a statement that follows from two or more principles and from which, in turn, a group of rules follows. It is not a principle: it is a design that the principles select, and it is stated separately only because several rules are easier to derive from it than from the principles directly.
+
+[[KLEE-consequence-1,C1]]
+=== C1 — The managed locker identifies the one CC in transit, together with its authentication and identification information
+
+At most one CC per hart is in transit at a time, together with its authentication and identification information, `SIV`, `IMPQUAL` and `SIV2`: these registers exist once per hart (<<KLEE-principle-8>>), so a second management operation must first save the first one by a nested export. A pointer, `klmanagedlocker`, names the locker of the CC in transit, so that a management routine needs no locker number (<<KLEE-principle-9>>). The pointer follows the CC when the CC moves. It becomes "none" when the CC ceases to exist. It is kept when the operation completes or fails, so that the outcome stays readable. Otherwise only software writes it.
+
+Two consequences follow from <<KLEE-principle-10>> and <<KLEE-principle-11>>. Opening a second operation on another locker while the pointer is in use is a sequencing error, and traps (<<KLEE-principle-11>>). Naming the managed locker when there is none falls through (<<KLEE-principle-10>>) for every instruction except an opening, which has nothing to open and traps (<<KLEE-principle-11>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-store-mv-allowed>>, pointer bullet of <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>>. <<KLEE-consequence-1>> follows from <<KLEE-principle-8>> and <<KLEE-principle-9>>.
+
+[[KLEE-principles-coverage]]
+== Coverage
+
+[cols="<1,<3",options="header"]
+|===
+| Rule | Principle(s) and intermediate consequence
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>  | <<KLEE-consequence-1>>, <<KLEE-principle-9>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>  | <<KLEE-consequence-1>>, <<KLEE-principle-9>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>  | <<KLEE-consequence-1>>, <<KLEE-principle-11>>, <<KLEE-principle-10>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-no-managed-locker>> | <<KLEE-principle-10>>, <<KLEE-consequence-1>>, <<KLEE-principle-9>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-mgmt-klmanagedlocker-check>> | <<KLEE-principle-11>>, <<KLEE-consequence-1>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>> | <<KLEE-consequence-1>>, <<KLEE-principle-10>>, <<KLEE-principle-3>>, <<KLEE-principle-9>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> | <<KLEE-principle-2>>, <<KLEE-principle-11>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-iobuf-configured>> | <<KLEE-principle-11>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>> | <<KLEE-principle-7>>, <<KLEE-principle-2>>, <<KLEE-principle-1>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-state-identifies-cc>> | <<KLEE-principle-7>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-triggers>> | <<KLEE-principle-4>>, <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-state-after-setst>> | <<KLEE-principle-4>>, <<KLEE-principle-6>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-to-ready>> | <<KLEE-principle-4>>, <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>> | <<KLEE-principle-4>>, <<KLEE-principle-6>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-exec-in-ready>> | <<KLEE-principle-6>>, <<KLEE-principle-4>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-clearads>> | <<KLEE-principle-4>>, <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure-cannot-be-set-directly>> | <<KLEE-principle-11>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>> | <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure>> | <<KLEE-principle-3>>, <<KLEE-principle-6>>, <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>> | <<KLEE-principle-6>>, <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>> | <<KLEE-principle-7>>, <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-locker-is-only-MDH>> | <<KLEE-principle-7>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-can-be-reconfigured>> | <<KLEE-principle-3>>, <<KLEE-principle-10>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-error-state-exported-as-MDH>> | <<KLEE-principle-7>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>> | <<KLEE-principle-10>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-transition-to-from-unconfigured>> | <<KLEE-principle-10>>, <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-getmd-to-from-unconfigured>> | <<KLEE-principle-7>>, <<KLEE-principle-10>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> | <<KLEE-principle-10>>, <<KLEE-principle-11>>, <<KLEE-principle-8>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-opening-locker-when>> | <<KLEE-principle-3>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-config-instructions-config-state>> | <<KLEE-principle-3>>, <<KLEE-principle-5>>, <<KLEE-principle-10>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-load-mv-allowed>> | <<KLEE-principle-5>>, <<KLEE-consequence-1>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-store-mv-allowed>> | <<KLEE-principle-5>>, <<KLEE-consequence-1>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-config-state>> | <<KLEE-principle-5>>, <<KLEE-principle-11>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>> | <<KLEE-principle-7>>, <<KLEE-principle-4>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-checks>> | <<KLEE-principle-6>>, <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-narrowing>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-unrestricted>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-SKID-no-export>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-shared-secret>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-exec-implies-unrestricted>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>> | <<KLEE-principle-2>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-derive-rule-both-fixed-size>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-program-order>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-rvwmo>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-idempotent-memory>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-rule-memory-instruction-decomposed>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-observation>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-fences>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> | <<KLEE-principle-5>>, <<KLEE-principle-3>>, <<KLEE-principle-2>>, <<KLEE-principle-8>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-uninterruptible-instructions>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-intra-interruption-points>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-resumability-options>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-no-data>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> | <<KLEE-principle-7>>, <<KLEE-principle-5>>, <<KLEE-principle-2>>, <<KLEE-principle-8>>, <<KLEE-principle-1>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>> | <<KLEE-principle-5>>, <<KLEE-consequence-1>>, <<KLEE-principle-8>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-which-resumable-instructions>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-memory-instructions>> | <<KLEE-principle-5>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> | <<KLEE-principle-6>>, <<KLEE-principle-5>>
+|===
+
+[[KLEE-principles-residue]]
+== What the principles do not determine
+
+The principles constrain the following choices but do not fix them. They stay as rules or encodings in their own right.
+
+* *Which instructions accept the managed-locker pointer, and how it is encoded* (<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>). <<KLEE-consequence-1>> says that management routines need no locker number; the exact set of instructions is a choice.
+* *The pointer is kept on completion* (<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>). <<KLEE-consequence-1>> would also allow resetting it. Keeping it makes the outcome readable and lets the next opening reuse it.
+* *Provisioning ends in _Ready_, with _StateExtension_ and _MachineUse_ zero* (<<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>). A protocol convention.
+* *The size arithmetic of derivations* (<<Zkl-ISA-unpriv.adoc#KLEE-GR-derive-rule-both-fixed-size>>: `min`, zero-fill, divisibility of granularities). <<KLEE-principle-5>> requires only prefix-completeness and all-or-nothing keys.
+* *Freedom within one memory instruction* (<<Zkl-ISA-unpriv.adoc#KLEE-rule-memory-instruction-decomposed>>: any granularity, any order, no atomicity). <<KLEE-principle-5>> requires only prefix-completeness at halts.
+* *Which block transfers are uninterruptible* (<<Zkl-ISA-unpriv.adoc#KLEE-GR-uninterruptible-instructions>>: scalar `kl.mvin` and `kl.mvout` are, vector ones are resumable). Both move 128-bit blocks; the split is a choice.
+
+== Observations for discussion
+
+. *<<KLEE-principle-6>>, <<KLEE-principle-10>> and <<KLEE-principle-11>> form a triad*: invalidate (misused Valid locker), fall through (inert locker), trap (software or policy error). A dozen rules instantiate it. If the triad were stated once, with its boundaries, <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure-cannot-be-set-directly>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-config-state>> could each shrink to one line plus their specifics. <<Zkl-ISA-unpriv.adoc#KLEE-insns-on-unconf-or-error-locker>> currently summarizes the "fall through" leg only.
++
+A merged rule could read as follows; it would precede the rules it replaces, which would keep only their specifics.
++
+--
+*P567: Outcome of an instruction on a locker.*
+After the checks that do not depend on the locker's _State_ (encoding, fatal error, missing CSK, locker _Off_, `klmanagedlocker`), the outcome of a KLEE instruction is determined by the locker's State group and by the class of the instruction:
+
+. _Inert locker_ (_Unconfigured_, Error State, or no managed locker): every instruction except a destructive configuration instruction performs no operation and raises no exception; the _State_ is unchanged, an output operand is zeroed, and an inspection instruction returns zeros or the MDH.
+. _Configuration State_: configuration instructions are admitted; a usage instruction raises a KLEE privilege-violation exception and leaves the locker unchanged.
+. _Valid State_: a configuration instruction is admitted; a usage instruction that _UsagePolicy_ forbids raises a KLEE privilege-violation exception and leaves the locker unchanged; a usage instruction that the Machine, the State or _MachinePolicy_ does not admit performs no operation and transitions the locker to Error State _Invalid_; any other usage instruction performs its operation.
+
+A malformed or reserved encoding, a `kl.mgmt` that would interleave two management operations, and a KLIOBUF instruction without a configured KLIOBUF raise an illegal-instruction exception, resp. an unconfigured-KLIOBUF exception, in every State group.
+--
++
+Leg 1 is <<KLEE-principle-10>>, leg 2 is <<KLEE-principle-11>>, and leg 3 combines <<KLEE-principle-11>> and <<KLEE-principle-6>>; the last paragraph is the part of <<KLEE-principle-11>> that does not depend on the locker. The merged rule does not change any outcome: it is the union of the rules it names, and the exact ordering of the checks within each leg stays in <<Zkl-ISA-unpriv.adoc#KLEE-GR-gate-order>>.
+. *<<KLEE-principle-2>> and <<KLEE-principle-3>> are the two security principles that the specification states nowhere as such.* The rationale of <<KLEE-principle-3>> is a NOTE under <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>>; that of <<KLEE-principle-2>> is the paragraph after <<Zkl-ISA-unpriv.adoc#KLEE-GR-unrestricted>>. Both could become the normative opening of their sections.
+. *The unifying statement of <<KLEE-principle-5>>, "partial execution ≡ shorter instruction", is <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>*, near the end of its section. As the opening sentence of the section, it would make <<Zkl-ISA-unpriv.adoc#KLEE-GR-uninterruptible-instructions>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-which-resumable-instructions>> read as its consequences.
+. *<<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>> is a one-rule section*, because it does not fit the State-based organization. Under <<KLEE-principle-7>> and <<KLEE-principle-2>> it belongs with the derivation rules, next to <<Zkl-ISA-unpriv.adoc#KLEE-GR-SKID-no-export>>. <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>, the RBG rule, was the other such section; it now closes the Rules chapter, after the resumability rules it depends on.
+. *<<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> is a pointer* to the properties table and to the error architecture. Once the triad is written out, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> becomes its "trap" leg for usage instructions.
