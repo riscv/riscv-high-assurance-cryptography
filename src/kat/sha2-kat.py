@@ -188,24 +188,24 @@ class KeyDest:
     def reset(s): s.st, s.key = KL_STATE_INVALID, None
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR46)
-    or a KeyDest (GR46 key derivation, unrestricted)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR47)
+    or a KeyDest (GR47 key derivation, unrestricted)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = isinstance(dst, KeyDest)
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # GR41 items 1-2
+        c.reset()  # GR42 items 1-2
     if not bad and key:
         if min(length, (src.t - src.block_base) // 8) < dst.n:
-            dst.reset()  # GR41 item 5
+            dst.reset()  # GR42 item 5
             return 'refused'
         dst.key = src.exec('C', nbytes=dst.n)[1]
         return 'done'
     if bad or not length:
         return 'refused' if bad else 'noop'
-    dst.exec('B', src.exec('C', nbytes=length)[1])  # GR48: each endpoint advances as kl.exec would
+    dst.exec('B', src.exec('C', nbytes=length)[1])  # GR49: each endpoint advances as kl.exec would
     return 'done'
 
 # ---------------------------------------------------------------- vectors
@@ -383,12 +383,12 @@ check('destination in _Ready_: refused, destination _Invalid_, source untouched'
       kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID
       and (src.st, src.block_base) == (KL_STATE_HASH_OUTPUT, 0))
 dst = absorbing()
-check('length 0: nothing transferred, no State change (GR48)', kl_derive(dst, src, 0) == 'noop'
+check('length 0: nothing transferred, no State change (GR49)', kl_derive(dst, src, 0) == 'noop'
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0) and C(32)(src)[1] == DIG_ABC)
 
 src, dst, s224, d224 = outputting(), KeyDest(32), outputting('SHA-224'), KeyDest(32)
-check('GR46 key derivation: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
-      'a 32-byte key (GR41 item 5): destination _Invalid_, source untouched', None,
+check('GR47 key derivation: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
+      'a 32-byte key (GR42 item 5): destination _Invalid_, source untouched', None,
       (kl_derive(dst, src, 40), dst.key, src.st, kl_derive(d224, s224, 32), d224.st, s224.st),
       ('done', DIG_ABC, KL_STATE_SUCCESS, 'refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
 

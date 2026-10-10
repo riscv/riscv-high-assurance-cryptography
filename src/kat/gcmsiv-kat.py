@@ -220,7 +220,7 @@ class Siv:
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
-                s.klstart, s.halted = 16 * j, True       # GR63
+                s.klstart, s.halted = 16 * j, True       # GR64
                 return out
             blk = sl(INPUT, 128 * j + 127, 128 * j)
             if st == HA:
@@ -228,7 +228,7 @@ class Siv:
                 continue
             if s.ctr == 2**32:
                 s._invalid()
-                return out                               # GR62
+                return out                               # GR63
             o = blk ^ s._ks()
             if st == DEC:
                 s._absorb(o)
@@ -240,10 +240,10 @@ class Siv:
         """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready."""
         if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
             return                                       # Gate Order Rule
-        if isinstance(src, Siv):                         # GR41 item 1: no source endpoint (the tag is none, GR46)
+        if isinstance(src, Siv):                         # GR42 item 1: no source endpoint (the tag is none, GR47)
             return src._invalid()
         if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # GR44 (GR41 item 2); GR41 items 2, 5
+            return s._invalid()                          # GR45 (GR42 item 2); GR42 items 2, 5
         s.key = src[:s.k // 8]
         s._derive()                                      # MR4
 
@@ -559,7 +559,7 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
 m, ref = at('enc'), at('enc')
 m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('GR62/GR31/GR27: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('GR63/GR31/GR27: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
 m = at('dec')
 m.ctr = 2**32
@@ -595,7 +595,7 @@ tag = m.exec('A', len_block(a10, p10), 128)
 o1 = m.exec('A', b2v(p10), 384, None, 1)
 h2 = (m.halted, m.klstart)
 o2 = m.exec('A', b2v(p10), 384, 16)
-check('GR63: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
+check('GR64: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
       (h1, h2) == ((True, 32), (True, 16)) and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) + v2b(tag, 16) == w10)
 
 section('general rules')
@@ -657,7 +657,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR66): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR67): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -695,25 +695,25 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLEE-derive-endpoints>>, GR41, GR44; MR4)')
+section('kl.derive (<<KLEE-derive-endpoints>>, GR42, GR45; MR4)')
 src = bytes.fromhex(VECTORS[11]['key'])
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (GR41 items 1-2)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is no endpoint, GR41 items 1-2)', at('sav'), 12),
-                   ('in Success (GR41 items 1-2)', at('success'), 16),
-                   ('into a key configured by a SKID (GR44, GR41 item 2)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (GR41 item 5)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (GR41 item 5)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (GR41 item 5)', Siv.provisioned(K), 0)):
+for name, m, n in (('in Hash_Absorb (GR42 items 1-2)', at('ha'), 16),
+                   ('in Set_Aux_Value (nonce is no endpoint, GR42 items 1-2)', at('sav'), 12),
+                   ('in Success (GR42 items 1-2)', at('success'), 16),
+                   ('into a key configured by a SKID (GR45, GR42 item 2)', Siv.provisioned(skid=SKID), 16),
+                   ('of 8 bytes into a 128-bit key (GR42 item 5)', Siv.provisioned(K), 8),
+                   ('of 16 bytes into a 256-bit key (GR42 item 5)', Siv.provisioned(K256), 16),
+                   ('of 0 bytes into a key (GR42 item 5)', Siv.provisioned(K), 0)):
     m.derive(src, n)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
 s_, m = at('etf'), Siv.provisioned(K)
 m.derive(s_, 16)
-check('Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, GR46; GR41 item 1) -> only the source '
+check('Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, GR47; GR42 item 1) -> only the source '
       'Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
 section('negative controls, spec notes')

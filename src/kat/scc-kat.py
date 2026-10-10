@@ -162,7 +162,7 @@ class Unit:
     def _set_managed(self, cl):                # common step 2
         self.klmanagedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR37, GR38
+    def _check_transfer(self, cl):             # GR38, GR39
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klmanagedlocker:
             raise IllegalInstruction
 
@@ -250,7 +250,7 @@ class Unit:
         if cl.state == UNCONF or cl.state in ERROR_STATES:
             return                             # GR34: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
-            raise IllegalInstruction           # GR37
+            raise IllegalInstruction           # GR38
         self._check_transfer(cl)
         off, c1 = content_offset(cl.mdh), self.content1_size(cl.mdh)
         end = off + min(c1 + content2_size(cl.mdh), self.max_admissible(cl.mdh))   # image_end
@@ -286,7 +286,7 @@ class Unit:
         if cl.state == UNCONF:
             return b''                         # GR34: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
-            raise IllegalInstruction           # GR38
+            raise IllegalInstruction           # GR39
         self._check_transfer(cl)
         S = v2b(self.reg_SIV, 16) + (v2b(self.reg_IMPQUAL, 16) + v2b(self.reg_SIV2, 16)
                                      if content_offset(cl.mdh) == 48 else b'')
@@ -796,7 +796,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klmanagedlocker follows (2 -> 5)",
    (u.klmanagedlocker, klf[2].snapshot()), (5, snap5))
 u.klmanagedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR38)",
+check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR39)",
       raises(u.store, klf[5]))
 u.klmanagedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])

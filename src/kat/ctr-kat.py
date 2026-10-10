@@ -140,22 +140,22 @@ class KsLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLEE-derive-endpoints>>); src is a KsLocker or DRBG output bytes
-        (GR47, unrestricted: no narrowing)."""
+        (GR48, unrestricted: no narrowing)."""
         n = self.params()[0] // 8
-        if isinstance(src, KsLocker):         # GR41 items 1-2, then item 3: keystream is no hash/MAC/XOF
-            if src.state != OP:               # output, so GR46 key derivation does not admit it into a key
+        if isinstance(src, KsLocker):         # GR42 items 1-2, then item 3: keystream is no hash/MAC/XOF
+            if src.state != OP:               # output, so GR47 key derivation does not admit it into a key
                 return src.invalidate()
             return self.invalidate() if self.state != RDY or self.keytype == 1 else (src.invalidate(), self.invalidate())
         if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
-            return self.invalidate()          # GR41 item 2 (GR44), item 5
+            return self.invalidate()          # GR42 item 2 (GR45), item 5
         self.key = b2v(src[:n])
         return True
 
 
 def derive_to_hash(cl, h, length):
-    """GR46: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (GR48)."""
+    """GR47: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (GR49)."""
     if cl.state != OP:
-        return cl.invalidate()                # GR41 items 1-2
+        return cl.invalidate()                # GR42 items 1-2
     return h.update(keystream(cl, length)) or True
 
 def keystream(cl, nbytes, per_block=False):
@@ -386,22 +386,22 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, C0), 64), PT).hex()
     return cl.state, cl.key
 
-eq("DRBG output (GR47), length 32, into the 16-byte key (GR41 item 5), then F.5.1", derived(32), (RDY, c))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR44, GR41 item 2)", (32, 1)),
-                    ("destination in Operate (GR41 item 2)", (32, 0, True))):
+eq("DRBG output (GR48), length 32, into the 16-byte key (GR42 item 5), then F.5.1", derived(32), (RDY, c))
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR45, GR42 item 2)", (32, 1)),
+                    ("destination in Operate (GR42 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst = ctr_cl(key, T1, C0), ctr_cl(key)
 dst.derive_key(src, 16)
-eq("CTR keystream into a CTR key (GR46 key derivation covers hash/MAC/XOF output only: GR41 item 3) -> both Invalid",
+eq("CTR keystream into a CTR key (GR47 key derivation covers hash/MAC/XOF output only: GR42 item 3) -> both Invalid",
    (src.state, dst.state), (INV, INV))
 cl, h = ctr_cl(key, T1, C0), hashlib.sha256()
 ok = derive_to_hash(cl, h, 40)
-eq("GR46: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
+eq("GR47: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
    (ok, h.hexdigest(), bxor(keystream(cl, 16), PT[48:]).hex()),
    (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
 cl = ctr_cl(key)
 derive_to_hash(cl, hashlib.sha256(), 40)
-eq("GR46 with the source in Ready (no source endpoint, GR41 items 1-2) -> only the source Invalid", cl.state, INV)
+eq("GR47 with the source in Ready (no source endpoint, GR42 items 1-2) -> only the source Invalid", cl.state, INV)
 cl = ctr_cl(key)
 st = cl.state
 check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,

@@ -73,7 +73,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR66)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR67)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -231,7 +231,7 @@ class Gcm:
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
-                s.klstart, s.halted = 16 * i, True       # GR63
+                s.klstart, s.halted = 16 * i, True       # GR64
                 return out
             blk = sl(INPUT, 128 * i + 127, 128 * i)
             if st == HA:
@@ -240,7 +240,7 @@ class Gcm:
             ctr = s._next_ctr()
             if ctr is None:
                 s._invalid()
-                return out                               # GR62
+                return out                               # GR63
             if st == DEC:
                 s._absorb(blk)
             s._set_ctr(ctr)
@@ -294,16 +294,16 @@ class Gcm:
         return 0
 
     def derive(s, src, length):
-        """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready (GR45/GR47 source), the IV
+        """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready (GR46/GR48 source), the IV
         (`kl.exec` input) in Set_Aux_Value."""
         if s.state in ERROR_STATES or isinstance(src, Gcm) and src.state in ERROR_STATES:
             return                                       # Gate Order Rule
-        if isinstance(src, Gcm):                         # GR41 item 1: no source endpoint (the tag is none, GR46)
+        if isinstance(src, Gcm):                         # GR42 item 1: no source endpoint (the tag is none, GR47)
             return src._invalid()
-        if s.state == SAV:                               # GR48: consumed as a Form B kl.exec would be
+        if s.state == SAV:                               # GR49: consumed as a Form B kl.exec would be
             return s._exec_vli(b2v(src[:length]), 8 * length, False, None) if length else None
         if s.key_type == 1 or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # GR44 (GR41 item 2); GR41 items 2, 5
+            return s._invalid()                          # GR45 (GR42 item 2); GR42 items 2, 5
         s.key = src[:s.k // 8]
         if not s.stale:
             s.auth_key = s._enc(0)                       # MR4
@@ -468,7 +468,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR66): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR67): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 check('Form A kl.setst substituting each Form C one (Enc/Dec_Tag_Finalize, Hash_Verify), its input in the KLIOBUF: '
       'tc4 tag and verification; KLIOBUF bytes beyond 16 ignored (MR7); a wrong tag fails', True,
       (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],
@@ -525,14 +525,14 @@ check('GR19: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MR2); '
      'kl.setst out of the state part-way discards the IV (MR9)')
 
-section('multi-block kl.exec, GR62/GR63')
+section('multi-block kl.exec, GR63/GR64')
 for n in (2, 3):
     check(f'{n} blocks per kl.exec', kl_encrypt(K, IV, A, P, nblk=n)[:2] == (RC, RT))
 cl = at('enc')
 o1 = cl.exec('A', b2v(P[:48]), 384, None, 1)
 h = (cl.halted, cl.klstart)
 o2 = cl.exec('A', b2v(P[:48]), 384, 16)
-check('GR63: Encrypt halted after one block (klstart = 16) and resumed',
+check('GR64: Encrypt halted after one block (klstart = 16) and resumed',
       h == (True, 16) and cl.klstart == 0 and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) == RC[:48])
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
@@ -643,7 +643,7 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('GR62/GR31: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('GR63/GR31: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
 check('GR27/GR28: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))
@@ -780,7 +780,7 @@ for ctl in (False, True):
 for mid in (16, 32, 48):
     check(f'export in Set_Aux_Value after {mid} of 60 IV bytes, import, resume: tc6', res[False, mid])
 
-section('kl.derive (<<KLEE-derive-endpoints>>, GR41, GR44, GR48; MR4)')
+section('kl.derive (<<KLEE-derive-endpoints>>, GR42, GR45, GR49; MR4)')
 stale = []
 for k, n in ((16, 16), (16, 32), (32, 32)):
     for ctl in (False, True):
@@ -805,26 +805,26 @@ for iv, n, want in ((IV60B, 60, TC6), (IV60B, 32, TC6), (IV, 12, (RC, RT))):
     check(f'{n} of {len(iv)} IV bytes by kl.derive into Set_Aux_Value, the rest by kl.exec',
           finish(cl, A, P)[:2] == want)
 cl = iv_by_derive(IV60B, 0)
-check('kl.derive of 0 bytes into Set_Aux_Value changes nothing (GR48)', (cl.state, cl.cumul_len) == (SAV, 0))
-check('kl.derive of 20 bytes into a 480-bit IV (granularity b, GR41 item 4) -> Invalid',
+check('kl.derive of 0 bytes into Set_Aux_Value changes nothing (GR49)', (cl.state, cl.cumul_len) == (SAV, 0))
+check('kl.derive of 20 bytes into a 480-bit IV (granularity b, GR42 item 4) -> Invalid',
       iv_by_derive(IV60B, 20).state == INV)
 cl = Gcm.provisioned(bytes(16), J0=b2v(J0B))
 cl.derive(SRC, 16)
 check('GCM with Set IV: kl.derive into `key` in Ready; message matches REF',
       kl_encrypt(None, None, A, P, cl=cl)[:2] == ref_gcm(SRC[:16], IV, A, P))
-for name, cl, n in (('in Hash_Absorb (GR41 items 1-2)', at('ha'), 16),
-                    ('in Success (GR41 items 1-2)', at('success'), 16),
-                    ('into a key configured by a SKID (GR44, GR41 item 2)', Gcm.provisioned(skid=SKID), 16),
-                    ('of 8 bytes into a 128-bit key (GR41 item 5)', at('ready'), 8),
-                    ('of 16 bytes into a 256-bit key (GR41 item 5)', Gcm.provisioned(bytes(32)), 16),
-                    ('of 0 bytes into a key (GR41 item 5)', at('ready'), 0)):
+for name, cl, n in (('in Hash_Absorb (GR42 items 1-2)', at('ha'), 16),
+                    ('in Success (GR42 items 1-2)', at('success'), 16),
+                    ('into a key configured by a SKID (GR45, GR42 item 2)', Gcm.provisioned(skid=SKID), 16),
+                    ('of 8 bytes into a 128-bit key (GR42 item 5)', at('ready'), 8),
+                    ('of 16 bytes into a 256-bit key (GR42 item 5)', Gcm.provisioned(bytes(32)), 16),
+                    ('of 0 bytes into a key (GR42 item 5)', at('ready'), 0)):
     cl.derive(SRC, n)
     check(f'kl.derive {name} -> Invalid, no key written', (cl.state, cl.key) == (INV, b''))
 src, dst = at('enc'), at('ready')
 crypt(src, P, 1)
 src.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))
 dst.derive(src, 16)
-check('the tag in Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, GR46; GR41 item 1) -> only '
+check('the tag in Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, GR47; GR42 item 1) -> only '
       'the source Invalid', True, (src.state, dst.state, dst.key), (INV, READY, K))
 
 section('negative controls')

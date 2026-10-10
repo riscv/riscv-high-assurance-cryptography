@@ -231,18 +231,18 @@ class Ocb:
         return new
 
 def derive(src, dst, length):
-    """kl.derive into `key` (Ready; GR45/GR47 source) or `N` (Set_Aux_Value) from a listed source's bytes."""
+    """kl.derive into `key` (Ready; GR46/GR48 source) or `N` (Set_Aux_Value) from a listed source's bytes."""
     if dst.state in ERROR_STATES:
         return
     if isinstance(src, Ocb):                           # OCB defines no source endpoint
-        src._invalid('GR41 items 1-2')
-    if dst.state == SET_AUX:                           # GR48: min(length, q) bytes, zero-filled
+        src._invalid('GR42 items 1-2')
+    if dst.state == SET_AUX:                           # GR49: min(length, q) bytes, zero-filled
         q = (dst.N_len + 7) // 8
         return dst.exec('B', b2v(src[:min(length, q)]), 8 * q)
     if dst.state != READY:
-        dst._invalid('GR41 items 1-2')                # no endpoint in this State
+        dst._invalid('GR42 items 1-2')                # no endpoint in this State
     if dst.skid is not None or length < len(dst.key) or len(src) < len(dst.key):
-        dst._invalid('GR44 (GR41 item 2), GR41 item 5')
+        dst._invalid('GR45 (GR42 item 2), GR42 item 5')
     dst.key = src[:len(dst.key)]
 
 def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False, lay=None,
@@ -608,19 +608,19 @@ for length in (16, 32):
     check(f"`key` in Ready, length {length}, then vector 0D", True,
           run(None, N13, S40, S40, 128, cl=cl, per_exec=0), CT13)
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (GR41 item 5)", lambda: Ocb(bytes(16)), secret, 8),
-        ("length 0 into the key (GR41 item 5)", lambda: Ocb(bytes(16)), secret, 0),
-        ("12-byte source into the 16-byte key (GR41 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
-        ("into a locker in Hash_Absorb (GR41 items 1-2)", at_absorb, secret, 16),
-        ("into a locker in Success (GR41 items 1-2)", at_end, secret, 16),
-        ("into the key of a KeyType 1 locker (GR44, GR41 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
+        ("length 8 into the 16-byte key, no zero-fill (GR42 item 5)", lambda: Ocb(bytes(16)), secret, 8),
+        ("length 0 into the key (GR42 item 5)", lambda: Ocb(bytes(16)), secret, 0),
+        ("12-byte source into the 16-byte key (GR42 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
+        ("into a locker in Hash_Absorb (GR42 items 1-2)", at_absorb, secret, 16),
+        ("into a locker in Success (GR42 items 1-2)", at_end, secret, 16),
+        ("into the key of a KeyType 1 locker (GR45, GR42 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n) and cl.key is None)
 for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
     cl = Ocb(K128)
     cl.setst(SET_AUX, 'B', 96)
     derive(N13 + bytes(4), cl, n)
-    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (GR48 zero-fill)", True,
+    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (GR49 zero-fill)", True,
           run(None, None, S40, S40, 128, cl=cl), run(K128, nv, S40, S40, 128))
 cl, src = Ocb(K128), bytes(0xA5 ^ i for i in range(16))
 cl.setst(SET_AUX, 'B', 61)
@@ -629,7 +629,7 @@ check("`N` in Set_Aux_Value, N_len = 61, length 16: ceil(61/8) = 8 bytes, pad bi
       run(None, None, S40, S40, 128, cl=cl), run(K128, src[:7] + bytes([src[7] & 0xF8]), S40, S40, 128, n_len=61))
 for where, src in (("Encrypt", at_crypt()), ("Enc_Tag_Finalize", at_last(finish=True)[0])):
     dst = Ocb(bytes(16))
-    check(f"OCB in {where} as a kl.derive source (no source endpoint; an AEAD tag is none, GR46) -> only the "
+    check(f"OCB in {where} as a kl.derive source (no source endpoint; an AEAD tag is none, GR47) -> only the "
           "source Invalid", inval(derive, src, dst, 16) and (src.state, dst.state, dst.key) == (INVALID, READY, bytes(16)))
 
 section("nonces of any bit length 6..120 (REF on bit strings)")

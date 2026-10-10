@@ -322,18 +322,18 @@ class Hmac:
         return v2b(OUT, nbytes)
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR46)
-    or NIK `K0` in _Set_Key_ (GR46 key derivation, unrestricted), loaded through process_VLI as by kl.exec (GR48)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR47)
+    or NIK `K0` in _Set_Key_ (GR47 key derivation, unrestricted), loaded through process_VLI as by kl.exec (GR49)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = dst.st == KL_STATE_SET_KEY
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, key or dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # GR41 items 1-2
+        c.reset()  # GR42 items 1-2
     if bad:
         return 'refused'
     if key and min(length, (src.d - src.h.block_base) // 8) < dst.b // 8:
-        dst.reset()  # GR41 item 5
+        dst.reset()  # GR42 item 5
         return 'refused'
     if not length:
         return 'noop'
@@ -555,7 +555,7 @@ check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb, between "prefix" and "suffix
 for length in (64, 80):
     src, dst = fresh('SHA-512', key=k2, ops=(A, B(m2), O)), fresh(variant='NIK', key=None, ops=(SK,))
     r = kl_derive(dst, src, length)
-    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR46 key derivation): b/8 = 64 B, '
+    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR47 key derivation): b/8 = 64 B, '
           'load complete (cumul_len = b), source _Success_; then tags under K0 = tag',
           (r, dst.h.cumul_len, src.st) == ('done', 512, KL_STATE_SUCCESS)
           and run(dst, A, B(data7), O, C(32))[1] == ref_hmac('SHA-256', TAG2_512, data7))
@@ -564,8 +564,8 @@ for s512, variant, ops, length in [(1, 'NIK', (), 64), (1, 'KIP', (), 64), (1, '
     src = fresh('SHA-512' if s512 else 'SHA-256', key=k2, ops=(A, B(m2), O))
     dst = fresh(variant=variant, key=key7 if variant == 'KIP' else None, ops=(R, *ops))
     res.append((kl_derive(dst, src, length), dst.st, src.st, src.h.block_base))
-check('K0 destination: NIK/KIP in _Ready_ (GR41 item 2), length 32 < b/8, source output 32 < b/8 '
-      '(GR41 item 5): destination _Invalid_, source untouched', None, res,
+check('K0 destination: NIK/KIP in _Ready_ (GR42 item 2), length 32 < b/8, source output 32 < b/8 '
+      '(GR42 item 5): destination _Invalid_, source untouched', None, res,
       [('refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0)] * 4)
 
 section('Negative controls')
