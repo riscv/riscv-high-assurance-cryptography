@@ -52,7 +52,7 @@ P1: _The entire resource management is architectural_::
 +
 --
 The architecture, not the implementation, manages every resource that software relies on: a resource exists in an architected place, with an architected state that software can manage, and the architecture alone decides when it is available.
-Hence no hidden state is needed to make the feature fit a particular use.
+No state that software cannot read determines the behavior it observes, except the secret values on which the outcomes of cryptographic operations depend: keys, sealing secrets and entropy.
 
 *Rationale.* Other architectures may rely on caching to make more than one key available to software. KLEE instead exposes its state machines and resources (<<Zkl-ISA-unpriv.adoc#KLEE-CC-management>>) and lets software manage them; the implementation is simpler as a result.
 
@@ -116,7 +116,7 @@ _Nothing stale is returned._ An output that is not produced reads as zero: an in
 
 *Rationale.* This invariant makes least privilege enforceable: policies granted at provisioning and narrowed later can be relied upon only if no operation can widen or bypass them. For derived material, NIST SP 800-57 Part 1 §6.2.1 and SP 800-108r1 §8 require exactly this inheritance.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-concepts>> (no extraction), <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-outcome-by-state>> (gating), <<Zkl-ISA-unpriv.adoc#KLEE-GR-narrowing>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, the paragraphs after <<Zkl-ISA-unpriv.adoc#KLEE-GR-unrestricted>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>; <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> (zeroizing step) and <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> (restart) for lingering; <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> (zeros) for the last.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-policy>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-outcome-by-state>> (gating), <<Zkl-ISA-unpriv.adoc#KLEE-GR-narrowing>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, the paragraphs after <<Zkl-ISA-unpriv.adoc#KLEE-GR-unrestricted>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-DRBG-implies-unrestricted>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>; <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLEE-exception-state-change>> (zeroizing step) and <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> (restart) for lingering; <<Zkl-ISA-unpriv.adoc#KLEE-GR-usage-locker-error-state>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>> (zeros) for the last.
 --
 
 [[KLEE-Principle-6,P6]]
@@ -131,9 +131,11 @@ Configuration instructions are admitted in every State group, and neither a Mach
 --
 
 [[KLEE-Principle-7,P7]]
-P7: _Cryptographic Contexts persist: they can be stored and reloaded to survive context switches, power cycles, process and VM migrations_::
+P7: _Cryptographic Contexts support persistence_::
 +
 --
+CCs can be stored and reloaded to survive context switches, power cycles, process and VM migrations.
+
 A CC is bound neither to the locker that holds it, nor to the hart, the power state or the machine: it can be saved from a locker and restored into any one. What is saved is the whole CC, its MDH and Content, and restoring it yields a locker that behaves as the saved one did, including an operation interrupted at an architected interruption point; an interruption at an implementation-defined point need not survive, and the operation then restarts (<<KLEE-decision-6>>).
 
 *Rationale.* Persistence is the counterpart of <<KLEE-Principle-6>>: a CC evicted from a locker to make room is not destroyed, only saved. Only the consumer of a CC, or more privileged software, decides when a CC is destroyed.
@@ -144,7 +146,7 @@ A CC is bound neither to the locker that holds it, nor to the hart, the power st
 --
 
 [[KLEE-Principle-8,P8]]
-P8: _Cryptographic Contexts keep their confidentiality and integrity outside a locker_::
+P8: _Cryptographic Contexts keep their confidentiality and integrity also outside a locker_::
 +
 --
 A CC outside a locker reveals nothing of its secret material and cannot be altered undetected: it is encrypted under a key that only the KLEE unit holds, and authenticated together with its MDH. The seal can be bound to a locality, a chip, a chip family or a system, and the CC is then restorable only there.
@@ -154,7 +156,7 @@ A CC outside a locker reveals nothing of its secret material and cannot be alter
 *Consequences.* Export seals the CC with an AEAD under a key derived from a locality secret, with the MDH as associated data; import verifies the seal before anything is restored, and a failed verification leaves an Error State, not a usable locker. Metadata that only the issuing implementation can interpret is bound to that implementation.
 // A locality secret must not be withdrawn while a CC bound to it may still be exported.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLEE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-locality-unconfigure>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLEE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLEE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-locality-unconfigure>>.
 --
 
 [[KLEE-Principle-9,P9]]
@@ -283,7 +285,7 @@ The instructions that take the pointer are the minimum that management routines 
 
 With <<KLEE-Principle-12>> and <<KLEE-Principle-14>>: opening a second operation on another locker while the pointer is in use is a sequencing error and traps; naming the managed locker when there is none falls through for every instruction but an opening, which has nothing to open and traps.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-store-mv-allowed>>, pointer bullet of <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-updates>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-zkl-store-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>> (because `klmanagedlocker` is KLEE state).
 --
 
 [[KLEE-decision-6,D6]]
@@ -342,6 +344,7 @@ Since every operation is atomic or prefix-complete (<<KLEE-Principle-10>>) and t
 | <<Zkl-ISA-unpriv.adoc#KLEE-GR-conflicting-access-rule>> | <<KLEE-Principle-4>>, <<KLEE-Principle-10>>, <<KLEE-decision-5>>, <<KLEE-decision-6>>
 | <<Zkl-ISA-unpriv.adoc#KLEE-GR-skid-field>> | <<KLEE-Principle-5>>, <<KLEE-Principle-8>>
 | <<Zkl-ISA-unpriv.adoc#KLEE-GR-single-skid>> | <<KLEE-Principle-8>>
+| <<Zkl-ISA-unpriv.adoc#KLEE-GR-no-extraction>> | <<KLEE-Principle-5>>, <<KLEE-Principle-8>>
 |===
 
 [[KLEE-Principles-residue]]
