@@ -267,6 +267,7 @@ tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLEE-KLV>>.
 A State _X_ that loads a long field from `INPUT`, or emits one to `OUTPUT`, over several `kl.exec` names a state field _W_, such as _MachineUse_ of the MDH, and its unit, bits or bytes, and records in _W_ the amount transferred so far:
 
 . *Entry.* Entering _X_ zeroes _W_; entering a loading State also zeroes the field, so that reloading replaces it.
+  An emitting State keeps its field: re-entering it by a same-State `kl.setst` (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-same-state>>) only zeroes _W_ and recomputes nothing, so that the field can be emitted again from its beginning.
 . *Progress.* _W_ rises monotonically by the amount of data actually transferred, in its unit: by `KLLEN` or `KLLEN`/8 for a `kl.exec` that completes, and by the committed prefix for one that halts (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-block-iterated-instructions>>), so that its resumption adds only the remainder.
 . *Completion.* The transfer is complete once _W_ reaches the size of the field, and _W_ is not reset then.
   An emitting State then transitions to _Success_, and a loading State admits no further `kl.exec` (Rule <<KLEE-MGR-not-allowed-instructions>>),
@@ -3353,8 +3354,8 @@ The x25519 and x448 Machines (<<KLEE-X25519-X448>>) provide only the former.
 ====
 Due to the wide variety of KDFs, hash functions, and formats, general KEM and PKE support is impractical.
 Among all elliptic curve standards, only the Chinese SM2 standards fully specify an integrated encryption scheme cite:[GMT-0003-4-2012].
-Their implementation is left to user code via scalar multiplication.
-Any resulting key exposed in environment memory should be immediately used to provision a locker and then erased.
+Their implementation is left to user code via scalar multiplication, whose shared secret `kl.derive` can move into the hash function of the KDF without exposing it.
+Any key nevertheless exposed in environment memory should be immediately used to provision a locker and then erased.
 ====
 
 Provisioning an elliptic curve into a locker sets the `Generator` field to the default base point (“generator”) that the standards listed below define for the curve.
@@ -3459,8 +3460,8 @@ The Elliptic Curve Machines use the _MachineUse_ field as follows:
 [cols="^7%,<20%,<73%",width="100%",options="header"]
 |===
 |  Bits   | Name            | Description
-|   0     | `OutputType`    |  Determines whether the output is a point (and thus comes from `SecondPt`) or a signature (and thus comes from `Signature`).
-|  [13:1] | `Progress`      |   Tracks, in an implementation-defined and non-portable unit, the progress of long-running operations such as scalar multiplications. Whenever it is non-zero, the SCC must include an ADS, and an import that completes without `Content2`, for instance on an implementation version mismatch, restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>>).
+|  [1:0]  | `OutputType`    |  Determines what _Output_ emits: 0, a _point_, the result of a multiplication of `Generator`, such as a public key, from `SecondPt`; 1, a _signature_, from `Signature`; 2, a _shared secret_, the result of a multiplication of a loaded `SecondPt`, from `SecondPt`. The value 3 is reserved: a `kl.exec` or `kl.derive` in _Output_ with that value transitions the locker to Error State _Invalid_.
+|  [13:2] | `Progress`      |   Tracks, in an implementation-defined and non-portable unit, the progress of long-running operations such as scalar multiplications. Whenever it is non-zero, the SCC must include an ADS, and an import that completes without `Content2`, for instance on an implementation version mismatch, restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>>).
 |===
 
 For ECC Machines, the flags in _MachinePolicy_ enable signature generation (_MachinePolicy_[0]) and verification (_MachinePolicy_[1]), where all four combinations are admissible, and gate _Sign_Generate_ and _Sign_Verify_, respectively (Rule <<KLEE-MGR-policy-gate>>).
@@ -3471,8 +3472,8 @@ Data Structures:::
 The *Provisioning Input* contains only the MDH.
 
 * *Internal State*:
- ** `OutputType`: Bool.
- ** `Progress`: integer, held in bits [13:1] of the MDH field _MachineUse_. Used only
+ ** `OutputType`: 2 bits, held in bits [1:0] of the MDH field _MachineUse_.
+ ** `Progress`: integer, held in bits [13:2] of the MDH field _MachineUse_. Used only
     for the implementation-defined tracking of long-running operations described above; it is
     the field _P_ of Rule <<KLEE-MGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
  ** `block_base`: integer. The transfer counter of the “set” and “output”
@@ -3659,7 +3660,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     transitions to _Failure_.
   . `SecondPt` {leftarrow} `int(Scalar)` {interpunct} `P`, encoded as in <<KLEE-ECC>>, and
     `HasSecondPt` is set.
-  . `OutputType` {leftarrow} False, and the state transitions to _Output_.
+  . `OutputType` {leftarrow} _shared secret_ if `P` is `SecondPt`, and _point_ otherwise, and the state transitions to _Output_.
 
  ** In State _Sign_Generate_, a single Form D ``kl.exec Kn|K(Xn)`` generates a
     signature over the base point `Generator`, with private key `d` = `int(Scalar)`
@@ -3673,7 +3674,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     operation; otherwise the interrupted operation is resumed with the `RndNum` held, or restarted, as per Rule <<KLEE-MGR-progress-discard>>. The retry rules above apply.
   . On completion, `Signature` {leftarrow} (`r`, `s`) and `HasSignature` is set;
     `RndNum` is destroyed and `HasRndNum` cleared.
-  . `OutputType` {leftarrow} True, and the state transitions to _Output_.
+  . `OutputType` {leftarrow} _signature_, and the state transitions to _Output_.
 
  ** In State _Sign_Verify_, a single Form D ``kl.exec Kn|K(Xn)`` verifies
     `Signature` against the public key held in `SecondPt` and the message value
@@ -3683,13 +3684,20 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     the public key, and of `Generator`, as points — are performed; if any fails, or the signature
     equation does not hold, the state transitions to _Failure_, else to _Success_.
 
- ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed, the state transitions to _Output_ and:
-   . If the output is a point, then `OutputType` <- False, and if the output is a signature, then `OutputType` <- True.
-     This allows the KLEE implementation to determine not only which output must be written out, but also its length.
-     *** If `OutputType` = False, the output is in `SecondPt`.
-     *** If `OutputType` = True, the output is in `Signature`.
-   . In State _Output_, the result is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLEE-MGR-load-long-field>>.
-     . Once the output is complete the state transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>).
+ ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed, the state transitions to _Output_, and `OutputType`
+    determines the output and its length:
+     *** _point_: `SecondPt`, `ub` bits;
+     *** _signature_: `Signature`, `vb` bits;
+     *** _shared secret_: the part of `SecondPt` that the standard of the curve uses as the shared secret: the X coordinate, `b` bits,
+         for the NIST and Brainpool curves (the shared secret `Z` of NIST SP 800-56A {sect}5.7.1.2);
+         X {vvert} Y, `ub` bits, for SM2 (`x~2~ {vvert} y~2~` of cite:[GMT-0003-4-2012]);
+         and the whole `b`-bit string for the Edwards and Montgomery curves (`K` of cite:[RFC7748] {sect}6).
+   . In State _Output_, the output is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLEE-MGR-load-long-field>>.
+     A shared secret is also a `kl.derive` source (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-shared-secret>>), as many times as the caller requires
+     until it leaves _Output_, each transferring the whole field (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-derive-rule-both-fixed-size>>); a point or a signature is a `kl.exec` output source instead (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-exec-implies-unrestricted>>).
+     The protocol that uses a shared secret then applies its own key derivation function, which `kl.derive` can feed inside the KLEE unit.
+     A same-State `kl.setst` in _Output_ zeroes `block_base` and recomputes nothing (Rule <<KLEE-MGR-load-long-field>>), so that the output can be emitted, or moved by `kl.derive`, again.
+     . Once the output is complete the state transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>), in which no `kl.derive` is admitted.
 
  ** Upon returning to State _Ready_:
   *** If a Form B `kl.setst` is used, the parameter `Xs` determines which of the fields
@@ -3712,7 +3720,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 ** {empty}
 +
 --
-`Progress`, bits [13:1] of _MachineUse_, is the field used following Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> for Point Multiplication,
+`Progress`, bits [13:2] of _MachineUse_, is the field used following Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-progress>> for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
 Rule <<KLEE-MGR-progress-discard>> applies: while an operation is interrupted, every transition of the locker's _State_, a same-State `kl.setst` included, `kl.clearads`, and an import that completes without `Content2` zero `Progress`, destroy `RndNum` and clear `HasRndNum`, so that the operation restarts when next issued.
@@ -3767,7 +3775,7 @@ Those of <<KLEE-ECC>>, with the following changes:
     (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>).
  ** Of the _StateExtension_ bits (<<KLEE-ECC-StateExtension>>) only `HasSecondPt` is used: an SCC
     with any of the bits 1 to 3 set is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLEE-Metadata-validity>>).
- ** `OutputType` (<<KLEE-ECC-MachineUse>>) is always False, the only output being a point.
+ ** `OutputType` (<<KLEE-ECC-MachineUse>>) is never _signature_: a multiplication of `Generator` outputs a point, the public key, and one of `SecondPt` a shared secret, `K`; both are a single `b`-bit string.
 
 * *Internal State*: `Generator` and `SecondPt` are each a single `b`-bit string, a _u_-coordinate.
   `SecondPt` holds the peer's public key and, after a scalar multiplication, the public key of the locker
@@ -3823,8 +3831,8 @@ transitions the locker to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-ins
   . If `R` is the all-zero string, as it is for every `P` of small order, the state transitions to _Failure_,
     and `SecondPt` and `HasSecondPt` are left unchanged. This check, optional in cite:[RFC7748] {sect}6, is
     mandatory here, and is made in constant time.
-  . Otherwise `SecondPt` {leftarrow} `R`, `HasSecondPt` is set, `OutputType` {leftarrow} False, and the state
-    transitions to _Output_.
+  . Otherwise `SecondPt` {leftarrow} `R`, `HasSecondPt` is set, `OutputType` {leftarrow} _shared secret_ if `P` is
+    `SecondPt`, and _point_ otherwise, and the state transitions to _Output_.
 
 ** A key exchange consists of two scalar multiplications with the same `Scalar`. The first, with
    `HasSecondPt` clear and the default `Generator`, yields the public key, which is output and sent
@@ -3834,8 +3842,8 @@ transitions the locker to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-ins
 [NOTE]
 ====
 cite:[RFC7748] {sect}6 uses `K` not as a key, but as the input of a key derivation function,
-together with the two public keys. Since `SecondPt` is a source endpoint of `kl.derive` (<<KLEE-derive-endpoints>>,
-Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-shared-secret>>), `K` can reach another locker without being exposed in
+together with the two public keys. Since `K` is a source endpoint of `kl.derive` in _Output_ (<<KLEE-derive-endpoints>>,
+Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-shared-secret>>), it can reach another locker without being exposed in
 environment memory.
 ====
 
@@ -4085,7 +4093,7 @@ never computed.
     computed internally over the fixed-size inputs, with `Hash` (holding `PH(M)`)
     standing in for the message.
   . `Signature` {leftarrow} (`R`, `S`), `HasSignature` is set, `r` and `k'` are destroyed,
-    `msg_pass` {leftarrow} 0, `OutputType` {leftarrow} True, and the state transitions
+    `msg_pass` {leftarrow} 0, `OutputType` {leftarrow} _signature_, and the state transitions
     to _Output_.
 
 ** In State _Sign_Verify_, a single Form D ``kl.exec Kn|K(Xn)`` verifies `Signature`
@@ -4132,7 +4140,7 @@ The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized
 
 The ML-KEM Machines also support the `kl.derive` instruction
 (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>), which takes the `sharedkey` already held in the CC—produced by
-`_Encapsulate_` or by `_Decapsulate_`—and moves it into a key field of a second locker, provisioned beforehand
+`_Encapsulate_` or by `_Decapsulate_`—in State _sharedkey_Output_, and moves it into a key field of a second locker, provisioned beforehand
 in the ordinary way, or into the `kl.exec` input of a hash function, MAC or XOF in a second locker
 (<<KLEE-derive-endpoints>>).
 
@@ -4205,10 +4213,9 @@ State Machine:::
 --
 * *States:*
 Besides
-_Ready_ (1),
-_Success_ (46),
+_Ready_ (1) and
 _Failure_ (47),
-ML-KEM Machines define:
+ML-KEM Machines define the following States; they never enter _Success_:
  ** _GenerateKeyPair_ (2)
  ** _Encapsulate_ (3)
  ** _Decapsulate_ (4)
@@ -4217,18 +4224,25 @@ ML-KEM Machines define:
  ** _encapsk_Output_ (7)
  ** _ciphertext_Input_ (8)
  ** _ciphertext_Output_ (9)
+ ** _sharedkey_Output_ (10)
 --
 
 * *Allowed State Transitions:*
- ** State transitions are allowed between any two valid states, subject to the restrictions in Rules <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-success-failure-cannot-be-set-directly>>.
+ ** By `kl.setst`, from _Ready_ or any State above, to _Ready_ or to _GenerateKeyPair_, _Encapsulate_, _Decapsulate_, _encapsk_Input_, _decapsk_Input_, _ciphertext_Input_, _encapsk_Output_ or _ciphertext_Output_, under the entry conditions given below; from _Failure_ only as Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>> allows.
+ ** On completion of its `kl.exec`: _GenerateKeyPair_ -> _encapsk_Output_; _Encapsulate_ -> _ciphertext_Output_; _Decapsulate_ -> _sharedkey_Output_.
+ ** Once its field has been completely emitted: _encapsk_Output_ -> _Ready_; _ciphertext_Output_ -> _sharedkey_Output_ if `sharedkey` is non-zero, as after _Encapsulate_, and -> _Ready_ otherwise.
+ ** Once its field has been completely loaded: _ciphertext_Input_ -> _Ready_; _encapsk_Input_ -> _Failure_ if the encapsulation key check fails.
+ ** _sharedkey_Output_ is entered only by these transitions: a `kl.setst` naming it in any other State transitions the locker to Error State _Invalid_.
 
 * *Behavior:*
-
++
+--
 ** Upon provisioning, the fields `decapsk` (and with it `encapsk`), `ciphertext` and `sharedkey` are cleared, and so are `HasEncapsk`, `HasDecapsk` and `HasCiphertext`.
 
 ** Upon transitioning to State _Ready_, the field `sharedkey` is cleared, while `decapsk` (and with it `encapsk`), `ciphertext`, `HasEncapsk`, `HasDecapsk` and `HasCiphertext` are kept,
-so that a key pair survives a return to _Ready_, in particular from _Success_ and _Failure_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-setst-in-success-failure>>),
+so that a key pair survives a return to _Ready_, in particular from _sharedkey_Output_ and _Failure_,
 and a completely loaded ciphertext (see below) remains available to _Decapsulate_.
+Upon leaving State _sharedkey_Output_, `sharedkey` is zeroed.
 
 ** _MachineUse_ is set to zero upon provisioning and upon transitioning to State _Ready_.
 
@@ -4245,7 +4259,6 @@ When a load completes and passes its check (see below), `HasEncapsk` is set for 
    performed when a field is written (Rule <<KLEE-MGR-check-on-write>>): when its load finishes, and when an import restores a key
    that `HasEncapsk` or `HasDecapsk` marks as configured. They are split according to what a failure means:
 +
---
  . Upon completion of State _encapsk_Input_, the *encapsulation key check* of
      cite:[nist-fips-203] {sect}7.2 is performed: the type check (`encapsk` has the length required
      by the parameter set) and the modulus check (`encapsk` re-encodes to itself, i.e. every
@@ -4265,12 +4278,12 @@ When a load completes and passes its check (see below), `HasEncapsk` is set for 
  . Upon completion of State _ciphertext_Input_, the *ciphertext type check* of
      cite:[nist-fips-203] {sect}7.3 is performed: a completely loaded `ciphertext` has the length that the parameter
      set requires, so it always passes, and the check is stated for conformance with cite:[nist-fips-203] {sect}7.3.
-     `HasCiphertext` is then set, and the state machine transitions to State _Ready_ (not _Success_).
---
-+
-These checks do not affect the implicit rejection of `ML-KEM.Decaps`: a ciphertext that passes the
+     `HasCiphertext` is then set, and the state machine transitions to State _Ready_.
+
+[none]
+* These checks do not affect the implicit rejection of `ML-KEM.Decaps`: a ciphertext that passes the
 type check but does not decapsulate correctly still yields the `z`-derived shared key, the state
-machine still transitions to _Success_, and the two cases remain indistinguishable to the caller.
+machine still transitions to _sharedkey_Output_, and the two cases remain indistinguishable to the caller.
 
  ** In States _GenerateKeyPair_, _Encapsulate_ and _Decapsulate_ the operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-MGR-progress-discard>>, and, when it is non-zero, the interrupted operation is resumed or restarted as per that Rule.
 
@@ -4279,8 +4292,8 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 `ML-KEM.KeyGen` fails only if the random bit generator fails (cite:[nist-fips-203] Algorithm 19); the locker
 then transitions to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>).
 Otherwise `decapsk` (and with it `encapsk`) receives the new key pair,
-`HasEncapsk` and `HasDecapsk` are set, and the state machine transitions to State _Ready_, which keeps them.
-The caller then transitions to a State that uses the key pair, for instance _encapsk_Output_ or _Decapsulate_.
+`HasEncapsk` and `HasDecapsk` are set, and the state machine transitions to State _encapsk_Output_, to emit the public key.
+The key pair is kept when the caller leaves that State, for _Ready_ or for a State that uses the key pair, such as _Decapsulate_.
 
 ** In State _Encapsulate_, Form D ``kl.exec Kn|K(Xn)`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20), applied to the `encapsk` state field, which must have been set—by `_encapsk_Input_`, `_decapsk_Input_` or `_GenerateKeyPair_`: entering _Encapsulate_ requires `HasEncapsk` (Rule <<KLEE-MGR-policy-gate>>). The procedure draws a random value internally and derives from it *both* the shared key and the ciphertext, which are stored in the `sharedkey` and `ciphertext` state fields, respectively, and `HasCiphertext` is set; the shared key is not drawn independently of the ciphertext.
 
@@ -4291,7 +4304,7 @@ generated by `ML-KEM.KeyGen` or checked when it was loaded; the locker then tran
 ** In State _Decapsulate_, Form D ``kl.exec Kn|K(Xn)`` decapsulates the ciphertext using procedure `ML-KEM.Decaps` of cite:[nist-fips-203] (Algorithm 21).
 Entering _Decapsulate_ requires `HasDecapsk` and `HasCiphertext` (Rule <<KLEE-MGR-policy-gate>>), so that `ML-KEM.Decaps` never runs
 with a partly loaded key or on a partly loaded or unchecked ciphertext.
-`ML-KEM.Decaps` is executed unconditionally. The shared key, either derived from the ciphertext or returned via “implicit rejection” is placed in the `sharedkey` state field, and the state machine transitions to state `_Success_`. The caller cannot distinguish the two cases.
+`ML-KEM.Decaps` is executed unconditionally. The shared key, either derived from the ciphertext or returned via “implicit rejection” is placed in the `sharedkey` state field, and the state machine transitions to State _sharedkey_Output_. The caller cannot distinguish the two cases.
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
 `decapsk` and `ciphertext` are loaded using (multi-block) `kl.exec` instructions of Form B,
@@ -4303,13 +4316,14 @@ the state and no variable is needed to hold it.
 ** In States _encapsk_Output_ and _ciphertext_Output_, the fields `encapsk` and `ciphertext` are
 emitted using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-MGR-load-long-field>>, with the
 progress recorded in _MachineUse_. Both fields are public, so no restriction applies to where they
-are written. Once the field has been completely emitted, the state machine transitions to _Success_ (Rule <<KLEE-MGR-load-long-field>>):
-after _Encapsulate_, the `sharedkey` is then moved by `kl.derive` from _Success_, as after _Decapsulate_.
+are written. Once the field has been completely emitted (Rule <<KLEE-MGR-load-long-field>>), _encapsk_Output_ transitions to _Ready_, and
+_ciphertext_Output_ to _sharedkey_Output_ if `sharedkey` is non-zero, as after _Encapsulate_, and to _Ready_ otherwise.
 Entering _encapsk_Output_ requires `HasEncapsk`, and entering _ciphertext_Output_ requires `HasCiphertext` (Rule <<KLEE-MGR-policy-gate>>).
 
 ** `sharedkey` is emitted by no `kl.exec`. It is the only exportable field of an ML-KEM locker, moved by `kl.derive`
 (<<Zkl-ISA-unpriv.adoc#KLEE-instruction-derive>>) as Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-shared-secret>> specifies,
-in the States given in <<KLEE-derive-endpoints>>. A zero `sharedkey`, as left by _Ready_, is not a source.
+and only in State _sharedkey_Output_ (<<KLEE-derive-endpoints>>), which admits no `kl.exec` and any number of `kl.derive` until the caller leaves it,
+each transferring the whole field (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-derive-rule-both-fixed-size>>).
 
 <<KLEE-ML-KEM-field-lifetime>> summarizes when the fields and flags of an ML-KEM locker are zeroed or kept.
 A key pair or a ciphertext thus survives every return to _Ready_, until the caller provisions the locker again or
@@ -4326,11 +4340,14 @@ starts loading a replacement, or the locker enters an Error State.
 | Entering _decapsk_Input_ | zeroed (Rule <<KLEE-MGR-load-long-field>>) | kept | kept | cleared | kept
 | Entering _ciphertext_Input_ | kept | zeroed (Rule <<KLEE-MGR-load-long-field>>) | zeroed | kept | cleared
 | _Encapsulate_ completes | kept | computed | computed | kept | set
+| _Decapsulate_ completes | kept | kept | computed | kept | kept
+| Leaving _sharedkey_Output_ | kept | kept | zeroed | kept | kept
 | Leaving _encapsk_Input_ or _decapsk_Input_ incomplete | zeroed (Rule <<KLEE-MGR-load-long-field>>) | kept | kept | cleared | kept
 | A failed encapsulation key check (_Failure_) | the whole `decapsk` zeroed | kept | kept | cleared | kept
 | Leaving _ciphertext_Input_ incomplete | kept | zeroed | kept | kept | clear
 | Entering an Error State 3+^| cleared, with the rest of the Content (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-clear-locker-content-error-state>>) 2+^| kept in the MDH
 |===
+--
 
 //
 
@@ -4516,7 +4533,7 @@ ML-DSA Machines define (States 5 and 7 are not used):
    `privkey`, `pubkey`, `HasPrivKey` and `HasPubKey` are not changed.
 
 ** In State _GenerateKeyPair_, Form D ``kl.exec Kn|K(Xn)`` generates a new key pair, replacing `privkey` (which embeds `tr`) and `pubkey`, and setting both `HasPrivKey` and `HasPubKey` using procedure `ML-DSA.KeyGen` of cite:[nist-fips-204] (Algorithm 1), with a seed `xi` drawn from the RBG (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>>).
-On completion the state machine transitions to State _Ready_, which keeps the key pair, as for ML-KEM (<<KLEE-PQC-ML-KEM>>). The caller then transitions to a State that uses it, for instance _pubkey_Output_ or _Sign_Generate_.
+On completion the state machine transitions to State _Ready_, which keeps the key pair. The caller then transitions to a State that uses it, for instance _pubkey_Output_ or _Sign_Generate_.
 
 ** Upon entering State _privkey_Input_, `HasPrivKey` is set to false, and `pubkey` is
 erased and `HasPubKey` set to false, so that
@@ -4601,10 +4618,10 @@ as well as Ascon-Hash256 (<<KLEE-Ascon-Hash256>>), Ascon-XOF128 (<<KLEE-Ascon-XO
 | `kl.exec` input                                             | destination | _Hash_Absorb_
 
 .2+| Elliptic Curve (<<KLEE-ECC>>)
-| `SecondPt` | source      | any State in which `HasSecondPt` is set, except _Output_ with `OutputType` = True
+| the shared secret in `SecondPt` | source      | _Output_ with `OutputType` = _shared secret_
 | `Scalar`   | destination | _Set_Scalar_
 
-| ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | _Success_, if non-zero
+| ML-KEM (<<KLEE-PQC-ML-KEM>>)       | `sharedkey`            | source      | _sharedkey_Output_
 
 | Any Machine | `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-exec-implies-unrestricted>>) | source | any State in which Form C `kl.exec` emits output and no field of the Machine is a source, except the tag of an AEAD Machine, such as _Hash_Output_ of the hash functions, MACs and XOFs, _Hash_Finalize_ of the Ascon hash functions and XOFs, _Operate_ of Keystream generation, _Output_ of ECC, and the Output States of ML-KEM and ML-DSA (<<KLEE-PQC-ML-DSA>>)
 |===

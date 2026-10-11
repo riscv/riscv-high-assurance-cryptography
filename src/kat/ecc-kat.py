@@ -58,6 +58,8 @@ def targets(state, eddsa, sig_exit=True, xdh=False):
 
 def retry_required(mode, r, s, k, n): return r == 0 or s == 0 or (mode == 'sm2' and (r + k) % n == 0)
 
+OUT_POINT, OUT_SIG, OUT_SHARED = 0, 1, 2            # <<KLEE-ECC-MachineUse>> OutputType
+
 class Unsupported(Exception):
     """kl_exc_unsupported at provisioning or import (<<KLEE-Metadata-validity>>)."""
 
@@ -81,7 +83,7 @@ class Locker:
         self.size = dict(gen=u * fw, sec=u * fw, scalar=fw, hash=h // 8, sig=v * fw)
         self.default_gen = self.gen = self.enc(c.G)
         self.scalar, self.sec, self.sig, self.hash, self.rnd = bytes(fw), None, None, None, None
-        self.has, self.out_type, self.progress, self.bb, self.loading = set(), False, 0, 0, None
+        self.has, self.out_type, self.progress, self.bb, self.loading = set(), OUT_POINT, 0, 0, None
         self.msg_pass, self.ctx, self.absorb, self.pass_xs, self.r, self.kp = 0, b'', None, None, None, None
         self.mdh, self.state = dict(MDH0), READY
 
@@ -104,7 +106,7 @@ class Locker:
 
     @property
     def machine_use(self):              # <<KLEE-ECC-MachineUse>>
-        return int(self.out_type) | self.progress << 1
+        return self.out_type | self.progress << 2
 
     def discard(self):                  # MR6
         self.progress, self.rnd = 0, None
@@ -115,7 +117,7 @@ class Locker:
 
     def halt(self, progress=1, k=None):
         """Precise halt of the current long-running kl.exec (GR62)."""
-        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 13:
+        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
             self.rnd = v2b(k, self.j // 8)
@@ -270,8 +272,9 @@ class Locker:
             R = self.c.x(self.scalar, self.sec if 'sec' in self.has else self.gen)
             if not any(R):                          # all-zero result: data error (MR12), SecondPt unchanged
                 return self._fail()
+            out = OUT_SHARED if 'sec' in self.has else OUT_POINT
             self.sec = R
-            self._to_output(False, 'sec')
+            self._to_output(out, 'sec')
             return R
         k = b2v(self.scalar)                        # <<KLEE-EdDSA>>: s from the configured seed
         if not k or self.mode != 'eddsa' and k >= self.c.n:
@@ -281,8 +284,9 @@ class Locker:
             return self._fail()
         P = self.dec(base)
         R = self.c.mul(self.keys()[0] if self.mode == 'eddsa' else k, P)
+        out = OUT_SHARED if 'sec' in self.has else OUT_POINT   # a loaded point: Diffie-Hellman
         self.sec = self.enc(R)
-        self._to_output(False, 'sec')
+        self._to_output(out, 'sec')
         return R
 
     def _sign(self, rbg, bad):
@@ -313,7 +317,7 @@ class Locker:
                 break
             attempt += 1
         self.sig = v2b(r, self.fw) + v2b(s, self.fw)
-        self._to_output(True, 'sig')
+        self._to_output(OUT_SIG, 'sig')
         return r, s, attempt
 
     def _verify(self):
@@ -330,12 +334,20 @@ class Locker:
         X = c.add(c.mul(e * w % n, G), c.mul(r * w % n, Q))
         return X is not None and X[0] % n == r
 
+    def shared(self):
+        """<<KLEE-ECC>> Output: the shared secret is X for the NIST and Brainpool curves (SP 800-56A Z),
+        X || Y for SM2 (GM/T 0003.4), and the whole b-bit string for the Edwards and Montgomery curves (RFC 7748 K)."""
+        return self.sec[:self.fw] if self.mode == 'ecdsa' else self.sec
+
+    def out_buf(self):
+        return self.sig if self.out_type == OUT_SIG else self.shared() if self.out_type == OUT_SHARED else self.sec
+
     def exec_out(self, nbytes, pad=False):
         """Form C kl.exec in _Output_, then _Success_; MR9: carrying W past the field invalidates
         (`pad`: a kl.derive source, zero-padded under GR51)."""
         if self.state != OUTPUT:
             raise Invalid('output transfer outside _Output_')
-        buf = self.sig if self.out_type else self.sec
+        buf = self.out_buf()
         if self.bb + nbytes > len(buf) and not pad:
             raise Invalid('emitting kl.exec past the end of the field (MR9)')
         chunk = buf[self.bb:self.bb + nbytes]
@@ -345,7 +357,7 @@ class Locker:
         return chunk + bytes(nbytes - len(chunk))
 
     def output_all(self, chunk=1 << 10):
-        n, out = len(self.sig if self.out_type else self.sec), b''
+        n, out = len(self.out_buf()), b''
         while self.state == OUTPUT:                  # the final transfer is exactly the remainder
             out += self.exec_out(min(chunk, n - self.bb))
         return out
@@ -429,7 +441,7 @@ class Locker:
         self.sig = R + ((r + kp * s) % L).to_bytes(self.fw, 'big' if be else 'little')
         self.r = self.kp = None
         self.msg_pass = 0
-        self._to_output(True, 'sig')
+        self._to_output(OUT_SIG, 'sig')
         return self.sig
 
     def _eddsa_verify(self):
@@ -761,9 +773,9 @@ def cleared(cr): return (cr.progress, cr.rnd, 'rnd' in cr.has) == (0, None, Fals
 section('Progress and <<KLEE-MGR-progress-discard>>')
 cr = armed()
 check('Progress zero when nothing is interrupted', cr.machine_use == 0)
-cr.halt(0x1234, K0)
-check('halt: Progress non-zero in MachineUse[13:1], RndNum kept, State unchanged',
-      (cr.machine_use, b2v(cr.rnd), 'rnd' in cr.has, cr.state) == (0x1234 << 1, K0, True, SIGN_GEN))
+cr.halt(0x234, K0)
+check('halt: Progress non-zero in MachineUse[13:2], RndNum kept, State unchanged',
+      (cr.machine_use, b2v(cr.rnd), 'rnd' in cr.has, cr.state) == (0x234 << 2, K0, True, SIGN_GEN))
 check('resume uses the held RndNum, draws nothing', None, cr.exec_run([])[:3], (R0, S0, 0))
 check('completion zeroes Progress, destroys RndNum', cleared(cr))
 for t in (READY, OUTPUT, SIGN_GEN):
@@ -789,14 +801,14 @@ cr.setst(READY)
 cr.setst(SIGN_GEN)
 check('after the discard the operation draws afresh', cr.exec_run([K0])[:2] == (R0, S0))
 cr = locker(P256, (SET_SCALAR, D256), to=POINT_MUL)
-cr.halt(0x1FFF)
+cr.halt(0xFFF)
 check('halted Point_Mul resumes to d*G, Progress zero after',
       (cr.exec_run(), cr.progress) == (P256.mul_g(V256['x']), 0))
 cr = locker(P256, (SET_SCALAR, D256), to=POINT_MUL)
-check('Progress at a halt is non-zero and fits [13:1]', invalid(cr.halt, 0) and invalid(cr.halt, 0x2000))
-cr.out_type = True
-cr.halt(0x1FFF)
-check('OutputType | Progress << 1 fits the 14-bit _MachineUse_', cr.machine_use == (1 << 14) - 1)
+check('Progress at a halt is non-zero and fits [13:2]', invalid(cr.halt, 0) and invalid(cr.halt, 0x1000))
+cr.out_type = OUT_SHARED
+cr.halt(0xFFF)
+check('OutputType [1:0] | Progress << 2 fits the 14-bit _MachineUse_', cr.machine_use == (1 << 14) - 2)
 check('only long-running States can halt', invalid(locker(P256, hs(0, 0)).halt))
 info('Progress encoding is implementation-defined: the model only tracks zero / non-zero.')
 
@@ -1138,17 +1150,20 @@ class Dest:
 class HashSrc:
     """A hash in _Hash_Output_: a GR49 source whose kl.exec output is `out` (its MDH: `mdh`)."""
     def __init__(self, out, **mdh):
-        self.sig, self.bb, self.has, self.out_type, self.mdh = out, 0, set(), True, mdh
+        self.sig, self.bb, self.has, self.out_type, self.mdh = out, 0, set(), OUT_SIG, mdh
+
+    def out_buf(self): return self.sig
 
     def exec_out(self, n, pad=False):
         self.bb += n
         return self.sig[self.bb - n:self.bb].ljust(n, b'\0')
 
 def kl_derive(dest, src, length):
-    """ECC source by State (<<KLEE-derive-endpoints>>): `SecondPt` wherever HasSecondPt is set, except _Output_
-    with OutputType = True, whose (signature) kl.exec output is the source (GR49); or a HashSrc."""
+    """ECC source by State (<<KLEE-derive-endpoints>>): the shared secret in _Output_ with OutputType = shared
+    secret (GR48); in _Output_ otherwise the kl.exec output, a public point or a signature (GR49); or a HashSrc."""
     ecc, kdf = isinstance(dest, Locker), isinstance(src, HashSrc)
-    field = 'sec' in src.has and not (src.state == OUTPUT and src.out_type)
+    field = not kdf and src.state == OUTPUT and src.out_type == OUT_SHARED
+    sh = src.shared() if field else None
     kind = 'scalar' if ecc else dest.kind
     if not field and not kdf and src.state != OUTPUT:
         raise Invalid(who='source')                                 # GR44 items 1-2: source first
@@ -1159,7 +1174,7 @@ def kl_derive(dest, src, length):
         raise Invalid(who='both')                                   # GR44 item 3: GR49 is hash/MAC/XOF only
     if kind != 'hash':
         size = dest.fw if ecc else dest.size
-        if length < size or (len(src.sec) if field else len(src.sig) - src.bb) < size:
+        if length < size or (len(sh) if field else len(src.out_buf()) - src.bb) < size:
             raise Invalid(who='destination')                        # GR44 item 5
     if field:                                                       # GR48 restricted, also into a hash: GR45
         s, d = src.mdh, dest.mdh
@@ -1168,9 +1183,9 @@ def kl_derive(dest, src, length):
         d['UsagePolicy'] = (s['UsagePolicy'] | d['UsagePolicy']) & 0xF | s['UsagePolicy'] & d['UsagePolicy'] & 0x10
         d['ExpirationDate'] = min([x for x in (s['ExpirationDate'], d['ExpirationDate']) if x] or [0])
     if kind == 'hash':                                              # GR51
-        dest.data += src.sec[:length].ljust(length, b'\0') if field else src.exec_out(length, pad=True)
+        dest.data += sh[:length].ljust(length, b'\0') if field else src.exec_out(length, pad=True)
         return
-    data = src.sec[:size] if field else src.exec_out(size, pad=True)
+    data = sh[:size] if field else src.exec_out(size, pad=True)
     if ecc:
         if not dest.repr_ok(data):                                  # MR14: checked when written
             raise Invalid('Scalar violates the b-bit representation', who='destination')
@@ -1212,20 +1227,39 @@ cr, Z = ecdh()
 check('ECDH: SecondPt = d_A * Q_B', Z == P256.mul(db, P256.mul_g(V256['x'])))
 h = Dest('hash')
 kl_derive(h, cr, 64)
-check('in _Output_ with OutputType = False: SecondPt (a field) into a hash, source not advanced',
-      (h.data, cr.state, cr.bb) == (cr.sec, OUTPUT, 0))
-cr.output_all()
+check('ECDH _Output_ (OutputType = shared secret): Z = X into a hash, zero-padded to 64 B (GR51), source not '
+      'advanced; a second kl.derive is admitted', None, (h.data, cr.state, cr.bb, cr.out_type, derive_who(Dest('hash'), cr, 32)),
+      (cr.sec[:32] + bytes(32), OUTPUT, 0, OUT_SHARED, None))
 h = Dest('hash', UsagePolicy=5)
 kl_derive(h, cr, 0)
-check('length = 0 transfers nothing (GR51)', h.data == b'' and cr.state == SUCCESS)
-kl_derive(h, cr, 80)
-check('in _Success_ with HasSecondPt: 80 bytes into a hash, zero-padded (GR51)',
-      (h.data, cr.state) == (cr.sec + bytes(16), SUCCESS))
+check('length = 0 transfers nothing (GR51)', h.data == b'' and cr.state == OUTPUT)
+check('kl.exec emits the shared secret Z = X only (32 B), then _Success_', None, (cr.output_all(), cr.state),
+      (cr.sec[:32], SUCCESS))
+check('_Success_ is no kl.derive source (GR27): source _Invalid_', None, derive_who(Dest('hash'), cr, 32), 'source')
+cr = ecdh()[0]
+first = cr.exec_out(16)
+sec, out = cr.sec, cr.out_type
+cr.setst(OUTPUT)
+check('same-State kl.setst in _Output_ (MR9, GR22): block_base zeroed, nothing recomputed, OutputType kept; the '
+      'shared secret is emitted again from its beginning', None,
+      (cr.bb, cr.sec == sec, cr.out_type, cr.exec_out(16), cr.state), (0, True, out, first, OUTPUT))
+pk = locker(P256, sc(2), to=POINT_MUL)
+pk.exec_run()
+h = Dest('hash')
+kl_derive(h, pk, 64)
+check('public-key _Output_ (OutputType = point): X || Y, the kl.exec output (GR49), MachineUse advanced',
+      None, (h.data, pk.out_type, pk.bb), (pk.sec, OUT_POINT, 64))
+for name, cs in (('brainpoolP256r1', EC.WEIERSTRASS_CURVES['brainpoolP256r1']), ('SM2', EC.SM2C)):
+    dhl = locker(cs, (SET_SCALAR, v2b(3, 32)), (SET_SECONDPT, pt(cs, cs.mul(5, cs.G))), to=POINT_MUL)
+    dhl.exec_run()
+    want = dhl.sec[:32] if cs is not EC.SM2C else dhl.sec
+    check(f'{name} ECDH: the shared secret is ' + ('X' if cs is not EC.SM2C else 'X || Y (GM/T 0003.4)'),
+          None, (dhl.out_type, dhl.output_all()), (OUT_SHARED, want))
 cr, _ = ecdh(UsagePolicy=0b00010, ExpirationDate=700)
 h = Dest('hash', UsagePolicy=0b10101, ExpirationDate=900)
 kl_derive(h, cr, 64)
-check('SecondPt into a hash is restricted (GR48): the hash locker is narrowed (GR45)', True,
-      (h.mdh['UsagePolicy'], h.mdh['ExpirationDate'], h.data), (0b0111, 700, cr.sec))
+check('the shared secret into a hash is restricted (GR48): the hash locker is narrowed (GR45)', True,
+      (h.mdh['UsagePolicy'], h.mdh['ExpirationDate'], h.data), (0b0111, 700, cr.sec[:32] + bytes(32)))
 cr, _ = ecdh(UsagePolicy=0b10011, ExpirationDate=900, SCProtection=1)
 k = Dest('key', UsagePolicy=0b10100, ExpirationDate=1200, SCProtection=2)
 kl_derive(k, cr, 64)
@@ -1251,15 +1285,23 @@ cr, d = signing(UsagePolicy=0b00011), scalar_dest()
 kl_derive(d, cr, 64)
 check('signature output into an ECC `Scalar`: r, source advanced as by Form C, not narrowed',
       (d.scalar, cr.bb, cr.state, d.mdh['UsagePolicy']) == (cr.sig[:32], 32, OUTPUT, 0))
-sp, k = with_second(), Dest('key')
-kl_derive(k, sp, 64)
-check('in _Set_SecondPt_ with HasSecondPt: SecondPt into a `key` (GR48)', k.data == sp.sec[:32])
+def kept_after_dh():                    # ECDH, then a Form A return to _Ready_: SecondPt (the result) kept
+    cr = ecdh()[0]
+    cr.setst(READY)
+    return cr
 sp, h = with_second(sign=True), Dest('hash')
 kl_derive(h, sp, 64)
 check('signature _Output_ with HasSecondPt: the source is the kl.exec output (r || s), never SecondPt',
       (h.data, sp.bb) == (sp.sig, 64) and 'sec' in sp.has)
+def failed_mul():                       # off-curve SecondPt: _Point_Mul_ -> _Failure_, HasSecondPt kept
+    cr = locker(P256, sc(2), (SET_SECONDPT, off), to=POINT_MUL)
+    cr.exec_run()
+    return cr
 for label, dest, src, n, who in (
         ('source without HasSecondPt', Dest('hash'), locker(P256, hs(0, 0)), 64, 'source'),
+        ('source in _Failure_ with HasSecondPt (GR27)', Dest('hash'), failed_mul(), 64, 'source'),
+        ('source in _Set_SecondPt_ with HasSecondPt (a loaded peer point)', Dest('key'), with_second(), 64, 'source'),
+        ('source in _Ready_ keeping the ECDH result in SecondPt', Dest('hash'), kept_after_dh(), 64, 'source'),
         ('hash destination in _Ready_', Dest('hash', READY), ecdh()[0], 64, 'destination'),
         ('key destination outside _Ready_', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
         ('key with length < key size (GR44 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
@@ -1369,7 +1411,7 @@ for name, c in EC.MONTGOMERY_CURVES.items():
     ca.exec_run()
     kb = xdh(c, b_, A)[0]
     check(f'{name}: RFC 7748 6 shared secret, both sides; the same Scalar serves both multiplications', True,
-          (ca.sec, kb, ca.out_type, 'sec' in ca.has), (K, K, False, True))
+          (ca.sec, kb, ca.out_type, 'sec' in ca.has), (K, K, OUT_SHARED, True))
     key = Dest('key', size=32)
     kl_derive(key, ca, n)
     check(f'{name}: SecondPt (K) is a kl.derive source in _Output_ (GR48): K never output', True,
@@ -1379,7 +1421,7 @@ for name, c in EC.MONTGOMERY_CURVES.items():
     small = [0, 1, c.p - 1]                                 # order 2; order 4, on the curve or on its twist
     res = [xdh(c, a, v2b(u, n))[1:] for u in small]
     check(f'{name}: small-order u = 0, 1, p - 1: all-zero result -> _Failure_, SecondPt unchanged, no output',
-          all(st == FAILURE and cr.sec == v2b(u, n) and cr.out_type is False for (st, cr), u in zip(res, small)))
+          all(st == FAILURE and cr.sec == v2b(u, n) and cr.out_type == OUT_POINT for (st, cr), u in zip(res, small)))
     big = c.p + c.G                                         # non-canonical u, reduced modulo p
     check(f'{name}: non-canonical u = p + {c.G} accepted and reduced; no check on write or on read', True,
           xdh(c, a, v2b(big, n))[:2], (A, SUCCESS))
