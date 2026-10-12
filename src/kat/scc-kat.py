@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SCC sealing and export/import, MDH, SCC/PCCC layout, kl.size, kl.load/kl.store, klmanagedlocker and
+"""SCC sealing and export/import, MDH, SCC/PCCC layout, kl.size, kl.load/kl.store, klnamedlocker and
 Error-State transfer, on a model unit implementing only AES256_ECB. Primitives are anchored on FIPS 197
 and RFC 8452 (length block restored); the procedures by self-consistency and regression vectors."""
 import os, sys
@@ -153,17 +153,17 @@ class Unit:
         self.CSK, self.LST, self.max_aux, self.zklexpire = CSK, dict(LST), max_aux, zklexpire
         self.ids = (klmvendorid, klmarchid, klmimpid)
         self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0     # <<KLE-KLF>>
-        self.klmanagedlocker, self.decrypts = 32, []            # decrypts: sep of each SCC_Decrypt
+        self.klnamedlocker, self.decrypts = 32, []            # decrypts: sep of each SCC_Decrypt
 
     def _check_managed(self, cl):              # <<KLE-locker-management>>, common step 1
-        if self.klmanagedlocker not in (cl.idx, 32):
+        if self.klnamedlocker not in (cl.idx, 32):
             raise IllegalInstruction
 
     def _set_managed(self, cl):                # common step 2
-        self.klmanagedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
+        self.klnamedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
     def _check_transfer(self, cl):             # GR41, GR42
-        if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klmanagedlocker:
+        if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klnamedlocker:
             raise IllegalInstruction
 
     def impqual(self):                         # zeros(32) @ klmimpid @ klmarchid @ klmvendorid
@@ -266,7 +266,7 @@ class Unit:
         self._check_managed(cl)
         st = cl.state
         if st == UNCONF:                       # GR37: common steps only
-            self.klmanagedlocker = 32
+            self.klnamedlocker = 32
             return
         if is_valid(st):
             AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]      # 1.a-1.c
@@ -299,7 +299,7 @@ class Unit:
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
         if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR37: common steps only
-            self.klmanagedlocker = 32
+            self.klnamedlocker = 32
             return
         st = fld(ml, 'State')
         if cl.state not in (IMPORTING, EXPORTING) or not (is_complete(st) or st in (IMPORTING, EXPORTING)):
@@ -373,13 +373,13 @@ def kl_rename(unit, klf, s, d):                # <<KLE-instruction-clone>>
     if s != d:
         klf[d], klf[s] = klf[s], Locker(idx=s)
         klf[d].idx = d
-        unit.klmanagedlocker = {s: d, d: 32}.get(unit.klmanagedlocker, unit.klmanagedlocker)
+        unit.klnamedlocker = {s: d, d: 32}.get(unit.klnamedlocker, unit.klnamedlocker)
 
 def kl_swap(unit, klf, s, d):
     if s != d:
         klf[s], klf[d] = klf[d], klf[s]
         klf[s].idx, klf[d].idx = s, d
-        unit.klmanagedlocker = {s: d, d: s}.get(unit.klmanagedlocker, unit.klmanagedlocker)
+        unit.klnamedlocker = {s: d, d: s}.get(unit.klnamedlocker, unit.klnamedlocker)
 
 # ---------------------------------------------------------------- vectors
 RFC8452_A = {  # RFC 8452 Appendix A (rfc-editor.org/rfc/rfc8452.txt, April 2019)
@@ -774,46 +774,46 @@ for label, img, want in (("a PCCC of an import that kept its ADS completes with 
     unit.mgmt_complete(cl, mdh_i)
     eq(label, cl.snapshot(), want)
 
-section("klmanagedlocker (<<KLE-CSR-klmanagedlocker>>); kl.rename and kl.swap under management "
+section("klnamedlocker (<<KLE-CSR-klnamedlocker>>); kl.rename and kl.swap under management "
         "(<<KLE-instruction-clone>>)")
 u, klf = new_unit(), {i: Locker(idx=i) for i in range(32)}
 mem = Mem(scc_i)
 u.mgmt_open_import(klf[3], b2v(mem.read(0, 16)))
 u.load(klf[3], mem)
-managed, snap = u.klmanagedlocker, klf[3].snapshot()
+managed, snap = u.klnamedlocker, klf[3].snapshot()
 kl_rename(u, klf, 3, 7)
-eq("the opening kl.mgmt names K3; kl.rename moves it unchanged and klmanagedlocker follows (3 -> 7)",
-   (managed, klf[7].snapshot(), klf[3].state, u.klmanagedlocker), (3, snap, UNCONF, 7))
+eq("the opening kl.mgmt names K3; kl.rename moves it unchanged and klnamedlocker follows (3 -> 7)",
+   (managed, klf[7].snapshot(), klf[3].state, u.klnamedlocker), (3, snap, UNCONF, 7))
 eq("kl.mgmt on another locker meanwhile: illegal instruction, no effect",
    (raises(u.mgmt_open_import, klf[2], mdh_i), klf[2].snapshot()), (True, (0, (), None)))
 u.mgmt_complete(klf[7], mdh_i)
-eq("the import completes on K7 with both segments (per-hart registers); klmanagedlocker -> 32",
-   (klf[7].snapshot(), u.klmanagedlocker), (ref_snap, 32))
+eq("the import completes on K7 with both segments (per-hart registers); klnamedlocker -> 32",
+   (klf[7].snapshot(), u.klnamedlocker), (ref_snap, 32))
 klf[2], klf[5] = Locker(mdh_i, CONTENT1, CONTENT2, idx=2), Locker(make_mdh(), CONTENT1, idx=5)
 snap2, snap5, ml = klf[2].snapshot(), klf[5].snapshot(), klf[2].mdh
 u.mgmt_open_export(klf[2])
 kl_swap(u, klf, 2, 5)
-eq("kl.swap mid-export exchanges the lockers; klmanagedlocker follows (2 -> 5)",
-   (u.klmanagedlocker, klf[2].snapshot()), (5, snap5))
-u.klmanagedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR42)",
+eq("kl.swap mid-export exchanges the lockers; klnamedlocker follows (2 -> 5)",
+   (u.klnamedlocker, klf[2].snapshot()), (5, snap5))
+u.klnamedlocker = 32
+check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR42)",
       raises(u.store, klf[5]))
-u.klmanagedlocker = 5
+u.klnamedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
 u.mgmt_complete(klf[5], ml)
 eq("kl.store from K5 emits the original SCC; the completion on K5 restores it",
-   (img, klf[5].snapshot(), u.klmanagedlocker), (scc_i, snap2, 32))
+   (img, klf[5].snapshot(), u.klnamedlocker), (scc_i, snap2, 32))
 u.mgmt_open_import(klf[7], mdh_i)
 klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
 snap1 = klf[1].snapshot()
 kl_rename(u, klf, 1, 7)
-eq("kl.rename onto the managed locker discards its import (GR18); klmanagedlocker -> 32",
-   (u.klmanagedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
+eq("kl.rename onto the named locker discards its import (GR18); klnamedlocker -> 32",
+   (u.klnamedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
 u.mgmt_open_import(klf[4], mdh_i)
 u.load(klf[4], Mem(tampered(scc_i, 8 * (off1 + 6))))
 u.mgmt_complete(klf[4], mdh_i)
-eq("the managed locker transitions to an Error State (failed authentication): klmanagedlocker -> 32",
-   (klf[4].state, u.klmanagedlocker), (AUTH, 32))
+eq("the named locker transitions to an Error State (failed authentication): klnamedlocker -> 32",
+   (klf[4].state, u.klnamedlocker), (AUTH, 32))
 
 section("Error States (<<KLE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))

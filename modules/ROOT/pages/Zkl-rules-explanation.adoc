@@ -24,7 +24,7 @@ The Principles use only the following categories, all defined in the specificati
 * _Valid_ States: the locker holds a usable CC. _Ready_, _Success_ and _Failure_ are the architected ones.
 * _Error_ States: the locker holds only an MDH, which records why its CC became unusable.
 * _Configuration_ States: the CC is in transit, i.e., being provisioned, imported or exported.
-// * _Complete_ = Valid ∪ Error. _Inert_ = Unconfigured ∪ Error, plus the case of no locker at all (`klmanagedlocker` = 32).
+// * _Complete_ = Valid ∪ Error. _Inert_ = Unconfigured ∪ Error, plus the case of no locker at all (`klnamedlocker` = 32).
 
 *Instruction classes* (from <<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>> in Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-policy>>).
 
@@ -36,7 +36,7 @@ The Principles use only the following categories, all defined in the specificati
 ** _transfer_: move a CC, or part of it, unchanged, between lockers or between a locker and memory or registers: the management transfers (`kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`), `kl.rename` and `kl.swap`, and the closing of a management operation.
 * _Memory_ instructions have a memory operand. The class cuts across the others: `kl.load` and `kl.store` are both transfer and memory instructions.
 
-*The managed locker* is the one whose number `klmanagedlocker` holds, 32 meaning none: the locker of the CC in transit, which stays selected after the operation ends, so that software can read its outcome.
+*The named locker* is the one whose number `klnamedlocker` holds, 32 meaning none: the locker of the CC in transit, which stays selected after the operation ends, so that software can read its outcome.
 
 == Design Principles
 
@@ -46,7 +46,7 @@ The thirteen Principles fall into seven groups.
 * _Transparency_: the architecture describes all the state there is (<<KLE-Principle-management-architectural>>). It precedes the definition of a locker.
 * _Statefulness_: a CC keeps the state of its algorithm, not only its key (<<KLE-Principle-contexts-stateful>>).
 * _Scalability_: KLE works on every class of RISC-V core, from microcontrollers without vectors to vector cores, and on SoCs whose cores share one KLE unit (<<KLE-Principle-scalable>>). The Economy Principles limit the cost of what this requires.
-* _Economy_: simple instructions and short code, the least encoding space, the least architectural state (<<KLE-Principle-small-instructions-code>>–<<KLE-Principle-small-architectural-state>>). The Metadata Header (<<KLE-Decision-metadata>>) follows from <<KLE-Principle-management-architectural>>, <<KLE-Principle-encoding-pressure>> and <<KLE-Principle-small-architectural-state>>; the managed locker (<<KLE-Decision-managed-locker>>) from <<KLE-Principle-small-instructions-code>> and <<KLE-Principle-small-architectural-state>>.
+* _Economy_: simple instructions and short code, the least encoding space, the least architectural state (<<KLE-Principle-small-instructions-code>>–<<KLE-Principle-small-architectural-state>>). The Metadata Header (<<KLE-Decision-metadata>>) follows from <<KLE-Principle-management-architectural>>, <<KLE-Principle-encoding-pressure>> and <<KLE-Principle-small-architectural-state>>; the named locker (<<KLE-Decision-named-locker>>) from <<KLE-Principle-small-instructions-code>> and <<KLE-Principle-small-architectural-state>>.
 * _Security_: what software may always do, what it keeps, what it may never gain, even from a CC outside a locker, and what it cannot make an algorithm do (<<KLE-Principle-availability>>–<<KLE-Principle-no-misuse>>): the availability of the lockers, the persistence of the CCs, the confidentiality of the keys, the confidentiality and integrity of the CCs outside a locker, and the integrity of the algorithms. <<KLE-Principle-no-privilege-elevation>> gives the other Principles their purpose.
 * _Structure_: how an operation executes (<<KLE-Principle-atomicity-asynchrony>>).
 
@@ -98,11 +98,11 @@ P5: _Make instructions as simple as possible, while still requiring short code s
 --
 Various architectural decisions follow from this principle:
 
-. <<KLE-Decision-managed-locker>>, with <<KLE-Principle-small-architectural-state>>: the managed-locker index, its implicit and `KLML` operands, and the instructions that read and write it.
+. <<KLE-Decision-named-locker>>, with <<KLE-Principle-small-architectural-state>>: the named-locker index, its implicit and `KLNL` operands, and the instructions that read and write it.
 . The "check once" property of <<KLE-Decision-fall-through>>: a routine checks the _State_ only after its last step.
 . One instruction clears every locker and the KLIOBUF.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
 --
 
 [[KLE-Principle-encoding-pressure,P6]]
@@ -127,13 +127,13 @@ P7: _Additional architectural state beyond the lockers is kept to a minimum_::
 --
 Every added register must be saved and restored at a context switch and preserved by interposed software, and may leak between contexts.
 State that an operation needs only while under way therefore exists once per hart, not per locker.
-One set of authentication and identification registers, `SIV`, `IMPQUAL` and `SIV2`, 128 or 384 bits depending on the features, serves every locker, so that software keeps at most one management operation in flight per hart, saving it before starting another (<<KLE-Decision-managed-locker>>).
+One set of authentication and identification registers, `SIV`, `IMPQUAL` and `SIV2`, 128 or 384 bits depending on the features, serves every locker, so that software keeps at most one management operation in flight per hart, saving it before starting another (<<KLE-Decision-named-locker>>).
 `klstart` and, with `Zklio`, the KLIOBUF (<<KLE-Principle-scalable>>) follow the same rule.
 
 With one `klstart`, an instruction honoring it starts from the value it finds, so an opening `kl.mgmt` clears it and interposed software saves and restores it.
 Touching the shared registers or the locker index while an operation is in flight is a conflicting access, and a long-running operation keeps its progress in its own locker (<<KLE-Decision-resumption>>).
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> and <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (`klstart` cleared by `kl.mgmt`), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; through <<KLE-Decision-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-save>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-restore>> and <<Zkl-ISA-unpriv.adoc#KLE-SR-klmanagedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> and <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (`klstart` cleared by `kl.mgmt`), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; through <<KLE-Decision-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-save>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-restore>> and <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
 --
 
 [[KLE-Principle-availability,P8]]
@@ -271,7 +271,7 @@ When an instruction cannot do what it is asked, its outcome depends only on the 
 Unless it raises an exception (<<KLE-Decision-exceptions>>), it falls through: it performs no operation (<<Zkl-ISA-unpriv.adoc#KLE-no-operation>>) and zeroes its output, and only the _State_ differs, which moves to _Invalid_ on a misused Valid locker (<<KLE-Decision-misuse>>) and is unchanged on an inert one (<<KLE-Decision-fall-through>>).
 With <<KLE-Decision-exceptions>> for the traps, <<KLE-Principle-atomicity-asynchrony>> for the Configuration States and <<KLE-Principle-availability>> for the configuration instructions, the two parts below select one rule, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-by-state>>: its leg 1 is <<KLE-Decision-fall-through>> and its leg 3 <<KLE-Decision-misuse>>; <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>> orders the checks within each leg.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-by-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-error-state>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, and the summary table <<Zkl-ISA-unpriv.adoc#KLE-insns-on-unconf-or-error-locker>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-by-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-error-state>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, and the summary table <<Zkl-ISA-unpriv.adoc#KLE-insns-on-unconf-or-error-locker>>.
 
 [[KLE-Decision-misuse,D3(a)]]
 D3(a): _Algorithm misuse invalidates a Valid locker_:::
@@ -288,7 +288,7 @@ A destructive instruction is issued to destroy the error, and `kl.swap` keeps it
 As `klstart` does not advance on an inert locker, a transfer sequence is bounded by the caller's own count (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-no-klstart-loop>>).
 A locker in a Configuration State falls under <<KLE-Principle-atomicity-asynchrony>> and <<KLE-Decision-exceptions>> instead.
 +
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-error-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-to-from-unconfigured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-no-managed-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-getmd-to-from-unconfigured>>, second half of <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-openings>>, bullet 2 of <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>>, second half of <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>, inspection part of <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>>, the States paragraph of <<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-error-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-to-from-unconfigured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-getmd-to-from-unconfigured>>, second half of <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>>, bullet 2 of <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, second half of <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>, inspection part of <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>>, the States paragraph of <<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>.
 --
 
 [[KLE-Decision-error-architecture,D4]]
@@ -314,30 +314,30 @@ There are four: a malformed or reserved encoding, a programming error that an il
 Their state-independent checks precede every condition on the locker, and the others, _UsagePolicy_ included, come in the order of Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>: an inert locker falls through unchecked, while a Configuration State traps.
 The other exceptions name a condition that a more privileged handler may resolve, by emulating a Machine, freeing memory, granting a right, or supplying a clock or entropy; Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-handler-duty>> says what a handler must do with one it cannot.
 +
-*Rules.* First half of <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-openings>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klmanagedlocker-check>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-by-state>> (the trap legs), <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> (the address-misaligned exception), <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, <<Zkl-ISA-priv.adoc#KLE-exception-codes>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-handler-duty>>.
+*Rules.* First half of <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klnamedlocker-check>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-by-state>> (the trap legs), <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> (the address-misaligned exception), <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, <<Zkl-ISA-priv.adoc#KLE-exception-codes>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-handler-duty>>.
 --
 
 [[KLE-Decision-management-protocol,D5]]
 D5: _The management operation protocol_::
 +
 --
-A management operation is one operation spanning several instructions (<<KLE-Principle-atomicity-asynchrony>>): a `kl.mgmt` opens it, transfer instructions move the image, a `kl.mgmt` closes it, and between them the locker is in a Configuration State. The opening for provisioning or import is a destructive configuration instruction: it is admitted in every State (<<KLE-Principle-availability>>) and zeroizes the locker and frees its resources right after the state-independent checks (<<KLE-Principle-no-privilege-elevation>>), which also lets the capacity check count the locker's own allocation as free, so that a CC can be reconfigured in place. The managed locker names the operation in flight (<<KLE-Decision-managed-locker>>).
+A management operation is one operation spanning several instructions (<<KLE-Principle-atomicity-asynchrony>>): a `kl.mgmt` opens it, transfer instructions move the image, a `kl.mgmt` closes it, and between them the locker is in a Configuration State. The opening for provisioning or import is a destructive configuration instruction: it is admitted in every State (<<KLE-Principle-availability>>) and zeroizes the locker and frees its resources right after the state-independent checks (<<KLE-Principle-no-privilege-elevation>>), which also lets the capacity check count the locker's own allocation as free, so that a CC can be reconfigured in place. The named locker names the operation in flight (<<KLE-Decision-named-locker>>).
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> (transfers on a cleared locker), <<Zkl-ISA-unpriv.adoc#KLE-GR-opening-locker-when>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-destructive-config>>, the `kl.mgmt` exception of <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>, <<Zkl-ISA-unpriv.adoc#KLE-locker-management>>, <<Zkl-ISA-unpriv.adoc#KLE-nested-mgmt>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-klmanagedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> (transfers on a cleared locker), <<Zkl-ISA-unpriv.adoc#KLE-GR-opening-locker-when>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-destructive-config>>, the `kl.mgmt` exception of <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>, <<Zkl-ISA-unpriv.adoc#KLE-locker-management>>, <<Zkl-ISA-unpriv.adoc#KLE-nested-mgmt>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
 --
 
-[[KLE-Decision-managed-locker,D6]]
-D6: _The managed locker architecture_::
+[[KLE-Decision-named-locker,D6]]
+D6: _The named locker architecture_::
 +
 --
 The authentication and identification registers `SIV`, `IMPQUAL` and `SIV2` exist once per hart (<<KLE-Principle-small-architectural-state>>), so software, not hardware, keeps one management operation in flight at a time: it completes or discards one before managing another locker or performing cryptographic operations, or saves it by a nested export (Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLE-SR-no-interleaving>> and <<Zkl-ISA-unpriv.adoc#KLE-SR-nested-export-first>>).
-`klmanagedlocker` holds the number of the locker of the CC in transit, so that a management routine needs no locker number (<<KLE-Principle-small-instructions-code>>). The number follows the CC when it moves, is kept when the operation completes or fails so that the outcome stays readable, and otherwise changes as Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>> lists, or as software writes it.
+`klnamedlocker` holds the number of the locker of the CC in transit, so that a management routine needs no locker number (<<KLE-Principle-small-instructions-code>>). The number follows the CC when it moves, is kept when the operation completes or fails so that the outcome stays readable, and otherwise changes as Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>> lists, or as software writes it.
 
-The instructions that take the locker index are the minimum that management routines need, since hardware complexity is added only where it saves the most code (<<KLE-Principle-small-instructions-code>>): the management and inspection instructions take it, `kl.clear` and the Error-State immediates of `kl.setst` included, because one routine written for the locker index replaces 32 written for fixed lockers; no usage instruction does, because cryptographic code can address fixed lockers.
+The management and inspection instructions take the locker index, because one routine written for it replaces 32 written for fixed lockers (<<KLE-Principle-small-instructions-code>>); so do `kl.exec` and `kl.setst`, and `kl.clone`, `kl.rename`, `kl.swap` and `kl.derive` for one of their two lockers, so that cryptographic code, too, can work on a locker chosen at run time.
 
-With <<KLE-Decision-fall-through>> and <<KLE-Decision-exceptions>>: a `kl.mgmt` naming a locker other than the managed one traps, even after completion; naming the managed locker when there is none falls through for every instruction but an opening, which has nothing to open and traps.
+With <<KLE-Decision-fall-through>> and <<KLE-Decision-exceptions>>: a `kl.mgmt` naming a locker other than the named one traps, even after completion; naming the named locker when there is none falls through for every instruction but an opening, which has nothing to open and traps.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-store-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> (no usage while in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>> (because `klmanagedlocker` is KLE state).
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-store-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> (no usage while in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>> (because `klnamedlocker` is KLE state).
 --
 
 [[KLE-Decision-resumption,D7]]
@@ -371,11 +371,11 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 [cols="<1,<1",options="header"]
 |===
 | Rules | Principles and Design Decisions
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-override>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-managed-locker>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-openings>> | <<KLE-Decision-fall-through>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-managed-locker>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-no-managed-locker>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-managed-locker>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klmanagedlocker-check>> | <<KLE-Decision-exceptions>>, <<KLE-Decision-managed-locker>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-managed-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-named-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>> | <<KLE-Decision-fall-through>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-named-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-named-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klnamedlocker-check>> | <<KLE-Decision-exceptions>>, <<KLE-Decision-named-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>> | <<KLE-Principle-small-instructions-code>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-named-locker>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-policy>> | <<KLE-Principle-no-privilege-elevation>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>> | <<KLE-Principle-scalable>>, <<KLE-Decision-exceptions>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>> | <<KLE-Principle-management-architectural>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Principle-confidentiality-integrity>>
@@ -403,8 +403,8 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> | <<KLE-Principle-small-architectural-state>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-management-protocol>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-opening-locker-when>> | <<KLE-Principle-availability>>, <<KLE-Decision-management-protocol>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>> | <<KLE-Principle-availability>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-management-protocol>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-store-mv-allowed>> | <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-managed-locker>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> | <<KLE-Principle-confidentiality-integrity>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-managed-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-store-mv-allowed>> | <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-named-locker>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> | <<KLE-Principle-confidentiality-integrity>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-named-locker>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>> | <<KLE-Principle-persistence>>, <<KLE-Principle-confidentiality-integrity>>, <<KLE-Decision-metadata>>, <<KLE-Decision-machine-protocol>>, <<KLE-Decision-management-protocol>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> | <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-misuse>>, <<KLE-Decision-error-states>>, <<KLE-Decision-derivation>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> | <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-misuse>>, <<KLE-Decision-error-states>>
@@ -415,7 +415,7 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-block-iterated-instructions>> | <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-resumption>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-program-order>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-rvwmo>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-idempotent-memory>>, <<Zkl-ISA-unpriv.adoc#KLE-rule-memory-instruction-decomposed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-prefix-complete>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-no-random-no-clock>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-observation>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-fences>> | <<KLE-Principle-atomicity-asynchrony>>
 | <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> | <<KLE-Principle-small-architectural-state>>, <<KLE-Principle-availability>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-resumption>>
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>> | <<KLE-Principle-small-architectural-state>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-managed-locker>>, <<KLE-Decision-resumption>>
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>> | <<KLE-Principle-small-architectural-state>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-named-locker>>, <<KLE-Decision-resumption>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>> | <<KLE-Principle-management-architectural>>, <<KLE-Principle-small-architectural-state>>, <<KLE-Principle-persistence>>, <<KLE-Principle-atomicity-asynchrony>>, <<KLE-Decision-metadata>>, <<KLE-Decision-resumption>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>> | <<KLE-Principle-persistence>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Decision-resumption>>
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-drawn-values>> | <<KLE-Principle-management-architectural>>, <<KLE-Decision-metadata>>, <<KLE-Decision-resumption>>
@@ -434,18 +434,18 @@ The choices below are constrained by the Principles and Design Decisions but not
 [cols="<1,<2,<2",options="header"]
 |===
 | Rule | Choice | Why, and what the Principles leave open
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klmanagedlocker-check>> | A `kl.mgmt` that names a locker explicitly traps whenever `klmanagedlocker` names another locker, even one whose operation has completed. | <<KLE-Decision-managed-locker>> leaves the exact check open. Testing `klmanagedlocker` alone keeps it independent of the _State_ (<<KLE-Decision-exceptions>>), at the cost of Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-klmanagedlocker-finish>>: software writes 32, or a saved value, once it has read the outcome.
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-updates>> | `klmanagedlocker` is kept on completion. | <<KLE-Decision-managed-locker>> would also allow resetting it to 32. Keeping it lets the closing `kl.mgmt` be followed by `kl.getst Xd, KLML`, which a reset would make read 0; software then writes 32, or a saved value.
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-mgmt-klnamedlocker-check>> | A `kl.mgmt` that names a locker explicitly traps whenever `klnamedlocker` names another locker, even one whose operation has completed. | <<KLE-Decision-named-locker>> leaves the exact check open. Testing `klnamedlocker` alone keeps it independent of the _State_ (<<KLE-Decision-exceptions>>), at the cost of Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-finish>>: software writes 32, or a saved value, once it has read the outcome.
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>> | `klnamedlocker` is kept on completion. | <<KLE-Decision-named-locker>> would also allow resetting it to 32. Keeping it lets the closing `kl.mgmt` be followed by `kl.getst Xd, KLNL`, which a reset would make read 0; software then writes 32, or a saved value.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>> | _ChipFamScrt_ is the weakest binding admitted for custom Metadata. | <<KLE-Principle-confidentiality-integrity>> asks only for a binding.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> | A same-State `kl.setst` repeats the entry operations, unless the Machine forbids it. | <<KLE-Principle-no-misuse>> rules out a no-op, which would let later `kl.exec` instructions act on state that the re-entry was expected to reset, but forbidding every re-entry would satisfy it too. In a State that loads a field, repeating restarts the load (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>); a Machine forbids it where its standard does not define the result.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>> | A `kl.restrictl` or `kl.restrictv` that would disable the operation of the current State invalidates the locker at once. | Invalidating it at the first instruction that relies on the operation would also satisfy <<KLE-Principle-no-privilege-elevation>> and <<KLE-Decision-misuse>>. Invalidating at once keeps every Valid State consistent with its policy, so that Machines check the policy only on entering a State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>), and records the error where it was caused (<<KLE-Decision-error-states>>).
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-exported-as-MDH>> | An Error-State image is the MDH alone, neither encrypted nor authenticated, and its import checks only the _State_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>). | <<KLE-Principle-confidentiality-integrity>> protects secret material and the policies bound to it, and an Error-State locker has neither. Anyone can create one with any MDH, by provisioning a locker and setting an Error State, so authentication would prove nothing.
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> | The address-misaligned exception is raised on an empty window, but not when `klmanagedlocker` = 32; the state-independent checks are made in a fixed order. | Memory instructions follow the RISC-V conventions (<<KLE-Principle-atomicity-asynchrony>>), under which alignment depends on the address alone. <<KLE-Decision-exceptions>> requires only that the state-independent checks precede the conditions on the locker, not their order.
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> | The address-misaligned exception is raised on an empty window, but not when `klnamedlocker` = 32; the state-independent checks are made in a fixed order. | Memory instructions follow the RISC-V conventions (<<KLE-Principle-atomicity-asynchrony>>), under which alignment depends on the address alone. <<KLE-Decision-exceptions>> requires only that the state-independent checks precede the conditions on the locker, not their order.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>> | Provisioning ends in _Ready_, with _StateExtension_ and _MachineUse_ zero. | A convention of the protocol (<<KLE-Decision-machine-protocol>>).
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> | A shared secret enters a key field, or, whole and in one uninterruptible step, the message input of a hash function, HMAC, KMAC or XOF; no other message input, CMAC's included. | <<KLE-Principle-no-privilege-elevation>> keeps the secret confidential, and the caller may know the key of the destination and absorb data of its choice before and after the secret. Recovering the secret from the output of a hash function, HMAC, KMAC or XOF then needs a preimage, provided that the whole secret enters at once: a prefix, a suffix or an interrupted transfer would let the caller finalize the hash and search the secret a few bytes at a time. CMAC, which is not one-way under a known key, is excluded (<<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>).
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>> | The size arithmetic of derivations: `min`, zero-fill, divisibility of granularities, no truncated output units. | <<KLE-Principle-atomicity-asynchrony>> requires only prefix-completeness and all-or-nothing keys.
 | <<Zkl-ISA-unpriv.adoc#KLE-rule-memory-instruction-decomposed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-idempotent-memory>> | Any granularity, order and atomicity of component accesses; an access fault with `xtval` at the offending byte, re-execution faulting before any access. | RISC-V conventions for memory instructions; <<KLE-Principle-atomicity-asynchrony>> requires only prefix-completeness at halts.
-| <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> | Every `kl.mgmt`, not only an opening one, clears `klstart` once it passes its `klmanagedlocker` check, even if it then traps. | <<KLE-Principle-small-architectural-state>> requires only that an opening `kl.mgmt` clear `klstart`. Clearing it before the State-dependent checks gives every later outcome the same `klstart`, as zeroizing first does for the locker; keeping it when the `klmanagedlocker` check fails protects the operation in flight from an interleaved `kl.mgmt`.
+| <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> | Every `kl.mgmt`, not only an opening one, clears `klstart` once it passes its `klnamedlocker` check, even if it then traps. | <<KLE-Principle-small-architectural-state>> requires only that an opening `kl.mgmt` clear `klstart`. Clearing it before the State-dependent checks gives every later outcome the same `klstart`, as zeroizing first does for the locker; keeping it when the `klnamedlocker` check fails protects the operation in flight from an interleaved `kl.mgmt`.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-uninterruptible-instructions>> | The KLIOBUF variants of `kl.mvin` and `kl.mvout` are uninterruptible although they transfer several blocks. | <<KLE-Principle-atomicity-asynchrony>> requires halts only at block boundaries, which the GPR variants, transferring one block, and the vector variants, halting between blocks, satisfy. The KLIOBUF variants (<<KLE-Principle-scalable>>) could have been resumable, and are not because `klmaxiobuflen` bounds their length.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-single-skid>> | One SKID per Machine, not one per key. | A choice of granularity for the reference that <<KLE-Principle-confidentiality-integrity>> requires in place of the key.
 |===
