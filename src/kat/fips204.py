@@ -1,5 +1,5 @@
 """FIPS 204 (ML-DSA) reference implementation, stdlib only: Algorithms 6-8 and subroutines, M' of Algorithms
-2 and 4, sign/verify also on an external mu (as <<KLEE-PQC-ML-DSA>>), and a resumable signing loop.  `+` on
+2 and 4, sign/verify also on an external mu (as <<KLE-PQC-ML-DSA>>), and a resumable signing loop.  `+` on
 bytes is FIPS 204's || (first operand first).  Anchored by mldsa-kat.py against NIST ACVP vectors."""
 
 import hashlib

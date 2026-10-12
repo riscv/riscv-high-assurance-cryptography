@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KATs for the KLEE ML-DSA Machines (<<KLEE-PQC-ML-DSA>>): fips204.py against NIST ACVP-Server vectors
+"""KATs for the KLE ML-DSA Machines (<<KLE-PQC-ML-DSA>>): fips204.py against NIST ACVP-Server vectors
 (ML-DSA-keyGen/sigGen/sigVer-FIPS204 internalProjection.json, fetched 2026-08-26, case ids in each
 record), including the external-mu interface the unit exposes, and a model of an ML-DSA locker."""
 import os, sys
@@ -16,7 +16,7 @@ FORM_B = (SIGN_GEN,)                               # every other State is entere
 IN_F = {PK_IN: 'pubkey', MU_IN: 'mu', SIGN_IN: 'signature', SK_IN: 'privkey'}
 OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
 SE = {'HasPrivKey': 1, 'HasPubKey': 2, 'Hedged': 4}   # StateExtension bits 0, 1, 2
-mc = lambda typ, mode: typ << 4 | mode             # <<KLEE-exec-encodings>>
+mc = lambda typ, mode: typ << 4 | mode             # <<KLE-exec-encodings>>
 MLDSA = {44: mc(11, 3), 65: mc(11, 4), 87: mc(11, 5)}
 HASHES = {mc(t, m) for t in (4, 6) for m in range(6)}   # SHA-2 and SHA-3/SHAKE, the PH FIPS 204 admits
 SHAKE256 = mc(6, 5)
@@ -24,7 +24,7 @@ SET_SCALAR = 3                                     # ECC _Set_Scalar_
 h = bytes.fromhex
 
 class RBG:
-    """<<KLEE-Prerequisites>>, scripted: each draw returns the next value."""
+    """<<KLE-Prerequisites>>, scripted: each draw returns the next value."""
     def __init__(self, *values):
         self.values, self.draws = list(values), 0
 
@@ -122,7 +122,7 @@ class MLDSALocker:
         if self.state in ERROR_STATES or name is None or w + n > self.size(name):
             if self.state not in ERROR_STATES:
                 self.invalid()
-            return bytes(n)                        # GR33
+            return bytes(n)                        # GR34
         self.use = w + n
         out = getattr(self, name)[w:w + n]
         if self.use == self.size(name):            # MR9: a completely emitted field -> _Success_
@@ -149,7 +149,7 @@ class MLDSALocker:
                 return self.invalid()
             if self.use == 0:                      # MR6: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR70: RBG failure
+                if self.rnd is None:               # GR73: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after)
@@ -176,7 +176,7 @@ class MLDSALocker:
         else:
             self.put('State', SIGN_OUT)
 
-    def restrictl_policy(self, v):                 # <<KLEE-instruction-restrict>>: a zero field changes nothing
+    def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: a zero field changes nothing
         if v & ~self.get('MachinePolicy'):
             self.invalid()                         # a disabled function cannot be enabled
         elif v:
@@ -197,24 +197,21 @@ class MLDSALocker:
         return new
 
 class KeyDest:
-    """A key destination of <<KLEE-derive-endpoints>>: an ECC `Scalar` in _Set_Scalar_ or a symmetric `key`."""
+    """A key destination of <<KLE-derive-endpoints>>: an ECC `Scalar` in _Set_Scalar_ or a symmetric `key`."""
     def __init__(self, ecc=True, size=32, state=None, keytype=0):
         self.ecc, self.size, self.keytype, self.key = ecc, size, keytype, bytes(size)
         self.state = SET_SCALAR if ecc and state is None else state or READY
 
 def kl_derive_exec(dest, src, length):
-    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, GR49) or a KeyDest."""
+    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, GR50) or a KeyDest."""
     if src.state not in OUT_F:
-        return src.invalid()                       # GR44 items 1-2
+        return src.invalid()                       # GR45 items 1-2
     name, w = OUT_F[src.state], src.use
     if isinstance(dest, KeyDest):
         if dest.state != (SET_SCALAR if dest.ecc else READY) or dest.keytype == 1 \
                 or length < dest.size or w + dest.size > src.size(name):
-            dest.state = INVALID                   # GR44 items 1-2; GR47; GR44 item 5
-        elif not dest.ecc:
-            src.invalid()                          # GR44 item 3: no GR49 key derivation (not hash/MAC/XOF output)
-            dest.state = INVALID
-        else:                                      # unrestricted: no GR45 narrowing
+            dest.state = INVALID                   # GR45 items 1-2; GR48; GR45 item 5
+        else:                                      # GR50, unrestricted: no GR46 narrowing
             dest.key = src.exec_C(dest.size)
         return
     if w + length > src.size(name):
@@ -253,7 +250,7 @@ def tamper_hint_padding(sig, ps):
 # ---------------------------------------------------------------- tests
 
 def t_sizes():
-    section('Sizes <<KLEE-ML-DSA-sizes>> and Serialized Content')
+    section('Sizes <<KLE-ML-DSA-sizes>> and Serialized Content')
     for ps, want, bits, (nbytes, blocks) in (
             (44, (2560, 1312, 2420), (20480, 10496, 19360), (6400, 400)),
             (65, (4032, 1952, 3309), (32256, 15616, 26472), (9392, 587)),
@@ -270,11 +267,11 @@ def t_sizes():
 def t_mdh():
     section('MDH: State numbers, StateExtension, MachinePolicy, AuxInfo, kl.setst Forms')
     glob = {'Ready': READY, 'Success': SUCCESS, 'Failure': FAILURE}
-    check('State list numbers of Ready/Success/Failure = <<KLEE-states-valid>>', None,
+    check('State list numbers of Ready/Success/Failure = <<KLE-states-valid>>', None,
           sorted(n for _, n in LISTED_GLOBAL), sorted(glob.values()))
     for s, n in LISTED_GLOBAL:
         if glob[s] != n:
-            spec_note(f'the ML-DSA State list labels {n} _{s}_; <<KLEE-states-valid>> names it _Failure_')
+            spec_note(f'the ML-DSA State list labels {n} _{s}_; <<KLE-states-valid>> names it _Failure_')
     cc = MLDSALocker(44, aux=SHAKE256, pi_use=0x1234)
     check('provisioning: _Ready_, MachineUse zeroed, AuxInfo kept, flags false', cc.state == READY
           and cc.use == 0 and cc.get('AuxInfo') == SHAKE256 and cc.get('StateExtension') == 0)
@@ -483,7 +480,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR70)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR73)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -496,7 +493,7 @@ def t_sign_verify():
     run(cc, SIGN_VERIFY)
     check('_Sign_Verify_ with HasPubKey false: _Invalid_', cc.state == INVALID)
     cc = generated()
-    mu = D.mu_external(D.H(cc.pubkey, 64), D.format_Mp(b'KLEE', b'round trip'))   # caller: tr, ctx 'KLEE'
+    mu = D.mu_external(D.H(cc.pubkey, 64), D.format_Mp(b'KLE', b'round trip'))   # caller: tr, ctx 'KLE'
     cc.setst(MU_IN)
     cc.exec_B(mu)
     run(cc, SIGN_GEN, 1)
@@ -556,22 +553,22 @@ def t_progress():
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
 
 def t_derive():
-    section('kl.derive: emitted output as a source (GR49, <<KLEE-derive-endpoints>>)')
+    section('kl.derive: emitted output as a source (GR50, <<KLE-derive-endpoints>>)')
     cc, absorbed = generated(), bytearray()
     cc.setst(PK_OUT)
     kl_derive_exec(absorbed, cc, 1000)
     kl_derive_exec(absorbed, cc, 312)
-    check('GR49: _pubkey_Output_ -> SHAKE256 in two transfers, MachineUse as Form C; SHAKE256(pubkey, 64) = tr',
+    check('GR50: _pubkey_Output_ -> SHAKE256 in two transfers, MachineUse as Form C; SHAKE256(pubkey, 64) = tr',
           bytes(absorbed).hex() == VECTORS['keyGen'][0]['pk'] and cc.state == SUCCESS and D.H(bytes(absorbed), 64) == cc.privkey[64:128])
     kl_derive_exec(absorbed, cc, 16)
-    check('transfer after the field is complete (source now in _Success_): source _Invalid_ (GR44)',
+    check('transfer after the field is complete (source now in _Success_): source _Invalid_ (GR45)',
           cc.state == INVALID and len(absorbed) == 1312)
     det = mu_vec(False)
     cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
     cc.setst(SIGN_GEN, 1)
     cc.exec_D()
     kl_derive_exec(absorbed := bytearray(), cc, 2420)
-    check('GR49: _Sign_Output_ -> a hash: the signature, MachineUse as Form C', bytes(absorbed).hex() == det['sig']
+    check('GR50: _Sign_Output_ -> a hash: the signature, MachineUse as Form C', bytes(absorbed).hex() == det['sig']
           and cc.state == SUCCESS)
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
     kd = KeyDest()
@@ -584,15 +581,15 @@ def t_derive():
     check('_pubkey_Output_ -> ECC `Scalar` in _Set_Scalar_: exactly 32 bytes, MachineUse as Form C',
           kd.key.hex() == VECTORS['keyGen'][0]['pk'][:64] and cc.use == 32 and cc.state == PK_OUT)
     for label, kd, n in (('ECC destination in _Ready_', KeyDest(state=READY), 64),
-                         ('ECC `Scalar` of KeyType 1 (GR47)', KeyDest(keytype=1), 64),
-                         ('length < 32 (GR44 item 5)', KeyDest(), 31)):
+                         ('ECC `Scalar` of KeyType 1 (GR48)', KeyDest(keytype=1), 64),
+                         ('length < 32 (GR45 item 5)', KeyDest(), 31)):
         kl_derive_exec(kd, cc, n)
         check(f'{label}: only the destination becomes _Invalid_', kd.state == INVALID and cc.state == PK_OUT
               and cc.use == 32)
     kd = KeyDest(ecc=False)
     kl_derive_exec(kd, cc, 64)
-    check('_pubkey_Output_ -> AES-256 `key` in _Ready_ (not Form B; not hash/MAC/XOF output, so no GR49 key '
-          'derivation): both _Invalid_ (GR44 item 3)', kd.state == INVALID and cc.state == INVALID)
+    check('_pubkey_Output_ -> AES-256 `key` in _Ready_ (GR50, unusual but admitted): the next 32 bytes, MachineUse '
+          'as Form C', kd.state == READY and kd.key.hex() == VECTORS['keyGen'][0]['pk'][64:128] and cc.use == 64)
 
 def t_hints():
     section('FIPS 204 Algorithm 21 hint checks')

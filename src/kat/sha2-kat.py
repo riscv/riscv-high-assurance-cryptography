@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SHA-2 family KAT for KLEE: <<KLEE-SHA-2>> over <<KLEE-hash-functions-MACs-XOFs>>, <<KLEE-process-VLI>>.
+"""SHA-2 family KAT for KLE: <<KLE-SHA-2>> over <<KLE-hash-functions-MACs-XOFs>>, <<KLE-process-VLI>>.
 FIPS 180-4 cores from scratch; hashlib is only a labeled reference oracle."""
 import hashlib, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -57,15 +57,15 @@ assert IV['SHA-256'][7] == 0x5be0cd19 and IV['SHA-224'][0] == 0xc1059ed8
 assert IV['SHA-384'][0] == 0xcbbb9d5dc1059ed8 and IV['SHA-512'][7] == 0x5be0cd19137e2179
 assert IV['SHA-512/224'][0] == 0x8c3d37c819544da2 and IV['SHA-512/256'][7] == 0x0eb72ddc81c52ca2
 
-# <<KLEE-SHA-2-parameters>>: (w, b, n, t)
+# <<KLE-SHA-2-parameters>>: (w, b, n, t)
 PARAMS = {'SHA-224': (32, 512, 256, 224), 'SHA-256': (32, 512, 256, 256),
           'SHA-384': (64, 1024, 512, 384), 'SHA-512': (64, 1024, 512, 512),
           'SHA-512/224': (64, 1024, 512, 224), 'SHA-512/256': (64, 1024, 512, 256)}
 
-# ---------------------------------------------------------------- KLEE model
+# ---------------------------------------------------------------- KLE model
 
 class Hart:
-    klstart = 0  # bytes, <<KLEE-CSR-klstart>>
+    klstart = 0  # bytes, <<KLE-CSR-klstart>>
 
 HART = Hart()
 
@@ -101,7 +101,7 @@ class Sha2:
         W = [bswap(wd(s.block, j), s.w // 8) if s.bswap_words else wd(s.block, j) for j in range(16)]
         s.state = sum(bswap(h, s.w // 8) << (i * s.w) for i, h in enumerate(compress(H, W, s.w)))
 
-    def export(s):  # <<KLEE-hash-functions-MACs-XOFs>> Serialized Content, cumul_len absent
+    def export(s):  # <<KLE-hash-functions-MACs-XOFs>> Serialized Content, cumul_len absent
         return pack((s.state, s.n), (0, 16), (s.block_base, 16), (0, 16), (0, 16), (s.block, s.b))
 
     @classmethod
@@ -110,19 +110,19 @@ class Sha2:
         cl.st, cl.state, cl.block_base, cl.block = st, sl(v, cl.n - 1, 0), sl(v, cl.n + 31, cl.n + 16), v >> (cl.n + 64)
         return cl
 
-    def setst(s, immed, form='A'):  # <<KLEE-instruction-setst>>
+    def setst(s, immed, form='A'):  # <<KLE-instruction-setst>>
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
             raise IllegalInstruction  # GR25
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
         elif s.st == KL_STATE_UNCONFIGURED:
-            raise IllegalInstruction  # GR34
+            raise IllegalInstruction  # GR35
         elif s.st in ERROR_STATES:
             pass
         elif immed == KL_STATE_READY:
             s.reset(KL_STATE_READY)
-        # Form A: max_len = 0 is set by the Machine; no same-State _Hash_Absorb_ (<<KLEE-process-VLI>>)
+        # Form A: max_len = 0 is set by the Machine; no same-State _Hash_Absorb_ (<<KLE-process-VLI>>)
         # or _Hash_Output_ (MR17);
         # stand-alone hashing enters _Hash_Output_ with whole blocks only
         elif form != 'A' or (s.st, immed) not in ((KL_STATE_READY, KL_STATE_HASH_ABSORB),
@@ -137,16 +137,16 @@ class Sha2:
         if s.st == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction
         if s.st in ERROR_STATES:
-            return 'noop', bytes(nbytes)  # GR33
+            return 'noop', bytes(nbytes)  # GR33, GR34
         if s.st == KL_STATE_HASH_OUTPUT and form == 'C':
             p, prior = HART.klstart, prior or bytes(nbytes)
             if p >= nbytes:
                 HART.klstart = 0
-                return 'empty', prior  # empty window: only klstart = 0 (<<KLEE-CSR-klstart>>)
+                return 'empty', prior  # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
             if p:  # not an interruption point: a hash reaches _Success_ before any
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR33
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR34
             return 'retired', s.output(nbytes, prior)
         r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
             s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR23, GR27, MR1
@@ -183,29 +183,29 @@ class Sha2:
         return v2b(OUT, nbytes)
 
 class KeyDest:
-    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLEE-derive-endpoints>>); only the key is modelled."""
+    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLE-derive-endpoints>>); only the key is modelled."""
     def __init__(s, n): s.st, s.n, s.key = KL_STATE_READY, n, None
     def reset(s): s.st, s.key = KL_STATE_INVALID, None
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR49)
-    or a KeyDest (GR49 key derivation, unrestricted)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLE-derive-endpoints>>, GR50)
+    or a KeyDest (GR50, unrestricted)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = isinstance(dst, KeyDest)
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # GR44 items 1-2
+        c.reset()  # GR45 items 1-2
     if not bad and key:
         if min(length, (src.t - src.block_base) // 8) < dst.n:
-            dst.reset()  # GR44 item 5
+            dst.reset()  # GR45 item 5
             return 'refused'
         dst.key = src.exec('C', nbytes=dst.n)[1]
         return 'done'
     if bad or not length:
         return 'refused' if bad else 'noop'
-    dst.exec('B', src.exec('C', nbytes=length)[1])  # GR51: each endpoint advances as kl.exec would
+    dst.exec('B', src.exec('C', nbytes=length)[1])  # GR52: each endpoint advances as kl.exec would
     return 'done'
 
 # ---------------------------------------------------------------- vectors
@@ -303,7 +303,7 @@ def outputting(name='SHA-256', msg=M_ABC):
 
 # ---------------------------------------------------------------- checks
 
-section('FIPS 180-4 vectors through the KLEE model')
+section('FIPS 180-4 vectors through the KLE model')
 for name in PARAMS:
     for msg, h in VEC[name].items():
         want = bytes.fromhex(h)
@@ -334,7 +334,7 @@ for label, ops in [
     cl = Sha2().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (GR33)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR33, GR34)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
 cl, res = outputting(), []
 for ks in (32, 40, 4):
@@ -347,7 +347,7 @@ cl = absorbing()
 check('kl.setst #kl_state_success raises, State kept (GR25)',
       raises(cl.setst, KL_STATE_SUCCESS) and cl.st == KL_STATE_HASH_ABSORB)
 cl.setst(KL_STATE_UNCONFIGURED)
-check('kl.clear; a later kl.exec raises (GR34)',
+check('kl.clear; a later kl.exec raises (GR35)',
       raises(cl.exec, 'B', bytes(4)) and cl.st == KL_STATE_UNCONFIGURED and cl.state == 0)
 cl = outputting('SHA-224')
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(32)(cl)[1], cl.st),
@@ -383,12 +383,12 @@ check('destination in _Ready_: refused, destination _Invalid_, source untouched'
       kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID
       and (src.st, src.block_base) == (KL_STATE_HASH_OUTPUT, 0))
 dst = absorbing()
-check('length 0: nothing transferred, no State change (GR51)', kl_derive(dst, src, 0) == 'noop'
+check('length 0: nothing transferred, no State change (GR45 item 7)', kl_derive(dst, src, 0) == 'noop'
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0) and C(32)(src)[1] == DIG_ABC)
 
 src, dst, s224, d224 = outputting(), KeyDest(32), outputting('SHA-224'), KeyDest(32)
-check('GR49 key derivation: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
-      'a 32-byte key (GR44 item 5): destination _Invalid_, source untouched', None,
+check('GR50: SHA-256("abc") -> a 32-byte `key` in _Ready_ (source _Success_); SHA-224 (28 B) -> '
+      'a 32-byte key (GR45 item 5): destination _Invalid_, source untouched', None,
       (kl_derive(dst, src, 40), dst.key, src.st, kl_derive(d224, s224, 32), d224.st, s224.st),
       ('done', DIG_ABC, KL_STATE_SUCCESS, 'refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
 

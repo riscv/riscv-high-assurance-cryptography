@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""XEX/XTS KAT: the Machine of <<KLEE-XEX-XTS-modes>> and the <<KLEE-XTS-from-XEX>> procedure
+"""XEX/XTS KAT: the Machine of <<KLE-XEX-XTS-modes>> and the <<KLE-XTS-from-XEX>> procedure
 against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,9 +13,9 @@ from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, 
 RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
 
 B, ONES64 = 128, (1 << 64) - 1
-POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLEE-Machine-field>>
+POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
 CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
-XEX_MACHINES = {(t << 4) | 3: c for t, c in enumerate(CIPHERS)}   # <<KLEE-exec-encodings>> Mode 3
+XEX_MACHINES = {(t << 4) | 3: c for t, c in enumerate(CIPHERS)}   # <<KLE-exec-encodings>> Mode 3
 XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
 fget = lambda v, f: sl(v, *MDH_FIELD[f])
 padded = lambda bits: -(-bits // 128) * 16
@@ -25,18 +25,18 @@ def fset(v, f, x):
     return (v & ~(((1 << (hi - lo + 1)) - 1) << lo)) | (x << lo)
 
 def kl_size(mdh, c1_size, pi_size):
-    """<<KLEE-instruction-size>> from an MDH, AuxDataLen = 0."""
+    """<<KLE-instruction-size>> from an MDH, AuxDataLen = 0."""
     st = fget(mdh, 'State')
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR72)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR75)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
 
 def kl_update_mask(V):
-    """<<KLEE-XEX-XTS-modes>> update_mask, b = 128, transcribed."""
+    """<<KLE-XEX-XTS-modes>> update_mask, b = 128, transcribed."""
     if sl(V, 127, 127) == 0:
         return (V << 1) & MASK128
     return ((V << 1) & MASK128) ^ cat((0, 120), (0b10000111, 8))
@@ -65,7 +65,7 @@ def ref_xts(key1, key2, seq, data, encrypt=True):
     cc = tbc(blk(m - 1), tw[a])
     return out + tbc(data[16 * m:] + cc[s:], tw[b]) + cc[:s]
 
-# ---------------------------------------------------------------- KLEE model
+# ---------------------------------------------------------------- KLE model
 class XexLocker:
     def __init__(s, sks=None, doubling=kl_update_mask, rng=None, msb_first=False):
         s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
@@ -80,13 +80,13 @@ class XexLocker:
     def _install(s, field, key2, importing):
         if s.keytype == 0:
             s.key1, s.key2 = field, key2
-        elif field == ONES64 and not importing:   # <<KLEE-KeyType-field>>: random keys, KeyType 0
+        elif field == ONES64 and not importing:   # <<KLE-KeyType-field>>: random keys, KeyType 0
             s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
             s.mdh = fset(s.mdh, 'KeyType', 0)
         elif field != ONES64 and field in s.sks:
-            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR72)
+            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR75)
         else:
-            s.invalidate()                        # <<KLEE-MVR-open>>
+            s.invalidate()                        # <<KLE-MVR-open>>
     def provision(s, pi):
         s.mdh = b2v(pi[:16])
         w1, w2 = s.widths
@@ -130,8 +130,8 @@ class XexLocker:
         lo = 8 * klstart
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
-            return out & ~window, 0               # GR33
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR23, MR1; MR2 (<<KLEE-CSR-klstart>>: length first)
+            return out & ~window, 0               # GR34
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR23, MR1; MR2 (<<KLE-CSR-klstart>>: length first)
             s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -158,18 +158,18 @@ class XexLocker:
         s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
 
     def derive_dest(s, src, length):
-        """kl.derive into `key1 || key2` (<<KLEE-derive-endpoints>>), in Ready."""
+        """kl.derive into `key1 || key2` (<<KLE-derive-endpoints>>), in Ready."""
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # GR44 items 2, 5; GR47
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # GR45 items 2, 5; GR48
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX defines no source endpoint (GR44 items 1-2)."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (GR45 items 1-2)."""
     if isinstance(src, XexLocker):
         return src.invalidate() or False
     return dst.derive_dest(src, length)
@@ -188,7 +188,7 @@ def cl_run(cl, data, per_block=False, klstart=0, halt_after=None):
     return v2b(out, len(data)), ks
 
 def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw):
-    """<<KLEE-XTS-from-XEX>>, step by step; s = 0 is the plain XEX sequence."""
+    """<<KLE-XTS-from-XEX>>, step by step; s = 0 is the plain XEX sequence."""
     m, sb = divmod(len(data), 16)
     s = 8 * sb
     cl = new_xex(key1, key2, **kw)
@@ -350,20 +350,20 @@ section("REF against IEEE 1619-2007 / SP 800-38E")
 for name, k1, k2, i, p, c in VEC:
     check(f"{name} encrypt, decrypt", True, (ref_xts(k1, k2, i, p), ref_xts(k1, k2, i, c, False)), (c, p))
 rnd = random.Random(7)
-check("update_mask transcribed from <<KLEE-XEX-XTS-modes>> == common.update_mask",
+check("update_mask transcribed from <<KLE-XEX-XTS-modes>> == common.update_mask",
       all(kl_update_mask(v) == update_mask(v)
           for v in [0, 1, 1 << 127, MASK128] + [rnd.getrandbits(128) for _ in range(64)]))
 check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
       [v2b(kl_update_mask(b2v(bytes([q]) + bytes(15))), 16) for q in (1, 0x80, 0xff)],
       [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
 
-section("KLEE XEX locker, full blocks (tweak = bin(i, 128))")
+section("KLE XEX locker, full blocks (tweak = bin(i, 128))")
 for name, k1, k2, i, p, c in FULL:
     check(f"{name}: encrypt (one multi-block kl.exec, MR3), decrypt, one kl.exec per block", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
           (c, p, c))
 
-section("<<KLEE-XTS-from-XEX>> ciphertext stealing")
+section("<<KLE-XTS-from-XEX>> ciphertext stealing")
 for name, k1, k2, i, p, c in CTS:
     check(f"{name}: encrypt, decrypt (kl.clone + discarded kl.exec, fed zeros or ones)", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, c, False, discard=MASK128)),
@@ -478,11 +478,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR44 item 5)", None, src, 16),
-                        ("length 0 (GR44 item 5)", None, src, 0),
-                        ("24-byte source (GR44 item 5)", None, src[:24], 32),
-                        ("destination in Encrypt (GR44 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (GR47, GR44 item 2)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR45 item 5)", None, src, 16),
+                        ("length 0 (GR45 item 5)", None, src, 0),
+                        ("24-byte source (GR45 item 5)", None, src[:24], 32),
+                        ("destination in Encrypt (GR45 item 2)", tw, src, 32),
+                        ("KeyType 1 destination (GR48, GR45 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
@@ -502,7 +502,7 @@ for length in list(range(16, 80)) + [128, 129, 255, 256]:
         ref = ref_xts(k41, k42, seq, payload)
         rt &= (kl_xts(k41, k42, seq, payload) == ref == kl_xts(k41, k42, seq, payload, per_block=True)
                and kl_xts(k41, k42, seq, ref, False) == payload == ref_xts(k41, k42, seq, ref, False))
-check("KLEE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
+check("KLE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
 
 cl = new_xex(k1, k2)
 st = cl.state

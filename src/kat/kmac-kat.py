@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KAT for the KLEE KMAC Machines (<<KLEE-KMAC>> on <<KLEE-SHA-3>>) against the NIST SP 800-185 samples.
+"""KAT for the KLE KMAC Machines (<<KLE-KMAC>> on <<KLE-SHA-3>>) against the NIST SP 800-185 samples.
 Keccak-f[1600] is written here and anchored on FIPS 202; hashlib is only a labelled oracle."""
 
 import hashlib
@@ -32,7 +32,7 @@ def rol(v, s):
 
 
 def keccak(st):
-    """KECCAK-p[1600,24] on a KLEE value (lane x + 5y at bits [64(x+5y)+63 : 64(x+5y)])."""
+    """KECCAK-p[1600,24] on a KLE value (lane x + 5y at bits [64(x+5y)+63 : 64(x+5y)])."""
     A = [(st >> 64 * i) & M64 for i in range(25)]
     for rc in RC:
         C = [A[x] ^ A[x + 5] ^ A[x + 10] ^ A[x + 15] ^ A[x + 20] for x in range(5)]
@@ -150,7 +150,7 @@ FIPS202_EMPTY = {
                  '46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f'),
 }
 
-# ------------------------------------------------------------------ KLEE model
+# ------------------------------------------------------------------ KLE model
 MODE = {'KMAC128': 10, 'KMACXOF128': 11, 'KMAC256': 12, 'KMACXOF256': 13}   # Type 6
 NAME = {m: n for n, m in MODE.items()}
 
@@ -170,7 +170,7 @@ def scc_len(b, kt=0):                    # Serialized Content, zero-padded to 12
     return -(-(1696 + b + (64 if kt else b)) // 128) * 16
 
 
-def kl_size(state, b, kt=0):             # <<KLEE-instruction-size>>, AuxDataLen = 0
+def kl_size(state, b, kt=0):             # <<KLE-instruction-size>>, AuxDataLen = 0
     if state in (UNCONF, KL_CFG_PROVISIONING):
         return 16 + -(-(b + (64 if kt else b)) // 128) * 16
     return 16 if state in ERROR_STATES else 32 + scc_len(b, kt)
@@ -185,7 +185,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None):
-    """PI; with a SKID (_KeyType_ = 1, GR71) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
+    """PI; with a SKID (_KeyType_ = 1, GR74) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
     cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
     mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
     return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
@@ -221,14 +221,14 @@ class Kmac:
         self._clear()
 
     def _resolve(self, skid):
-        """<<KLEE-KMAC>>: the SKS returns K and the unit forms key_block; all-ones: random K of c/2 bits."""
+        """<<KLE-KMAC>>: the SKS returns K and the unit forms key_block; all-ones: random K of c/2 bits."""
         K = os.urandom(self.sec // 8) if skid == ALL_ONES else SKS.get(skid)
         try:
             self.kb = b2v(provision_blocks(self.sec, K, b'')[1]) if K is not None else None
         except ValueError:                                               # K longer than the maximum
             self.kb = None
         if self.kb is None:
-            return self.invalidate()                                     # <<KLEE-system-keys>>
+            return self.invalidate()                                     # <<KLE-system-keys>>
         self.keytype, self.skid = (0, 0) if skid == ALL_ONES else (1, skid)
         return True
 
@@ -263,7 +263,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # GR71: SKID resolved after import
+            self._resolve(key)                                           # GR74: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -293,7 +293,7 @@ class Kmac:
     def _to_output(self):
         enc = (left_encode if 'left_encode' in self.bad else right_encode)(self.L)
         self._vli(b2v(enc), 8 * len(enc), 0)
-        room, D = self.b - self.block_base, self.D                       # <<KLEE-SHA-3>> padding
+        room, D = self.b - self.block_base, self.D                       # <<KLE-SHA-3>> padding
         n = room if room >= len(D) + 2 else room + self.b
         S = pack([(bit, 1) for bit in D]) | 1 << len(D) | 1 << (n - 1)
         self.pad_case = 1 if n == room else 2
@@ -305,7 +305,7 @@ class Kmac:
             self.L = 8 * -(-self.L // 8)
 
     def _end(self, status, out=None):
-        if out is not None and status in ('invalid', 'noop'):             # GR33
+        if out is not None and status in ('invalid', 'noop'):             # GR34
             k = min(self.hart.klstart, len(out))
             out[k:] = bytes(len(out) - k)
         self.hart.klstart = 0
@@ -330,7 +330,7 @@ class Kmac:
         self.invalidate()                                                # MR1, GR23, GR27
         return self._end('invalid', out)
 
-    def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLEE-process-VLI>>
+    def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLE-process-VLI>>
         while ib < n:
             amt = min(n - ib, self.b - self.block_base)
             self.state ^= sl(X, ib + amt - 1, ib) << self.block_base
@@ -374,22 +374,22 @@ class Kmac:
 
 
 class KeyDest:
-    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLEE-derive-endpoints>>); only the key is modelled."""
+    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLE-derive-endpoints>>); only the key is modelled."""
     def __init__(self, n): self.st, self.n, self.key = READY, n, None
     def invalidate(self): self.st, self.key = INVALID, None
 
 
 def derive(hart, dst, src, length):
-    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (GR49, GR51), or into a
-    KeyDest (GR49 key derivation, unrestricted)."""
+    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (GR50, GR52), or into a
+    KeyDest (GR50, unrestricted)."""
     if src.st not in ERROR_STATES and dst.st not in ERROR_STATES:
         key = isinstance(dst, KeyDest)
-        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # GR44 items 1-2
+        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # GR45 items 1-2
         for c in bad:
             c.invalidate()
         if not bad and key:
             if length < dst.n or not src.xof and src.L < 8 * dst.n:
-                dst.invalidate()                                         # GR44 item 5
+                dst.invalidate()                                         # GR45 item 5
             else:
                 dst.key = bytearray(dst.n)
                 src.exec(out=dst.key)
@@ -458,14 +458,14 @@ check('left_encode / right_encode / encode_string', True,
       ['0100', '01a8', '020100', '0001', '010002', '020002', '01204b4d4143'])
 check('bytepad(encode_string(K), 168) is one rate block', len(bytepad(encode_string(KEY), 168)) == 168)
 
-section('SP 800-185 reference and KLEE model vs the official samples')
+section('SP 800-185 reference and KLE model vs the official samples')
 for (label, sec, xof, K, X, S, L, _), want in zip(SAMPLES, WANT):
     check(f'reference   {label}', True, ref_kmac(sec, K, X, L, S, xof, len(want)), want)
     got, c = kl_kmac(sec, X, L, S, xof, len(want))
-    check(f'KLEE model  {label}: output, then {"stays in _Hash_Output_" if xof else "_Success_"}',
+    check(f'KLE model  {label}: output, then {"stays in _Hash_Output_" if xof else "_Success_"}',
           True, (got, c.st), (want, OUTPUT if xof else SUCCESS))
 
-section('Parameters and _Machine_ encodings (<<KLEE-exec-encodings>>)')
+section('Parameters and _Machine_ encodings (<<KLE-exec-encodings>>)')
 for nm, sec, c_ in (('KMAC128', 128, 256), ('KMACXOF128', 128, 256), ('KMAC256', 256, 512),
                     ('KMACXOF256', 256, 512)):
     c = locker(sec, 'XOF' in nm, b'')
@@ -515,7 +515,7 @@ h.klstart = 100
 check('input klstart = 100 with block_base = 32 -> _Invalid_, Content cleared, klstart = 0', True,
       (c.exec(inp=DATA200), c.st, c.state, c.kb, h.klstart), ('invalid', INVALID, 0, 0, 0))
 
-section('right_encode(L) and the <<KLEE-SHA-3>> padding on entering _Hash_Output_')
+section('right_encode(L) and the <<KLE-SHA-3>> padding on entering _Hash_Output_')
 c = absorbing(128, DATA200)
 bb = c.block_base
 to_output(c, 256)
@@ -567,7 +567,7 @@ check('two KMAC256 L=4096 exports 1088 bits apart differ only in `state` and `L`
       (ea[200:208 + w2] == eb[200:208 + w2], b2v(ea[208 + w2:212 + w2]), b2v(eb[208 + w2:212 + w2]),
        ea[212 + w2:] == eb[212 + w2:]), (True, 4096 - 1096, 4096 - 2184, True))
 
-section('KMACXOF: unlimited output (<<KLEE-hash-functions-MACs-XOFs>>)')
+section('KMACXOF: unlimited output (<<KLE-hash-functions-MACs-XOFs>>)')
 want = ref_kmac(128, KEY, DATA200, 0, TAG, True, 600)
 c = squeezing(128, DATA200, 0, xof=True)
 outs = squeeze(c, 32, 100, 168, 300)
@@ -593,7 +593,7 @@ check('output only, klstart >= KLLEN/8 (64, 70): empty window, only klstart = 0'
 h.klstart = 5
 check('block_base = 80, output only, klstart = 5 -> _Invalid_, [5, 64) zeroed', True,
       (c.exec(out=o), c.st, h.klstart, bytes(o)), ('invalid', INVALID, 0, b'\xee' * 5 + bytes(59)))
-spec_note('<<KLEE-Ascon-XOF128>>: "producing `XLLEN` for each `ace.exec` call" should read KLLEN and kl.exec')
+spec_note('<<KLE-Ascon-XOF128>>: "producing `XLLEN` for each `ace.exec` call" should read KLLEN and kl.exec')
 
 section('States, transitions and expected Forms')
 for label, c, act in (
@@ -604,7 +604,7 @@ for label, c, act in (
          lambda c: c.setst(OUTPUT, 'B', 512)),
         ('kl.exec in _Ready_ (GR23)', locker(128), lambda c: c.exec(inp=DATA4)),
         ('Form B kl.setst into _Hash_Absorb_', locker(128), lambda c: c.setst(ABSORB, 'B', 32)),
-        ('same-State kl.setst in _Hash_Absorb_ (<<KLEE-process-VLI>>)', absorbing(128, DATA4),
+        ('same-State kl.setst in _Hash_Absorb_ (<<KLE-process-VLI>>)', absorbing(128, DATA4),
          lambda c: c.setst(ABSORB)),
         ('Form B kl.exec in _Hash_Output_ (MR1)', squeezing(128, DATA4, 256),
          lambda c: c.exec(inp=DATA4)),
@@ -617,7 +617,7 @@ for label, c, act in (
 c = squeezing(128, DATA4, 256)
 squeeze(c, 32)
 (st, o), = squeeze(c, 32, fill=0xEE)
-check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR27, GR33)', True,
+check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR27, GR34)', True,
       (st, c.st, bytes(o)), ('invalid', INVALID, bytes(32)))
 c = squeezing(128, DATA200, 256)
 squeeze(c, 32)
@@ -659,7 +659,7 @@ check('all-ones SKID: random K of c/2 = 128 bits forms key_block; _KeyType_ beco
 for label, skid in (('unresolved SKID', 0x42), ('SKS key longer than the 163-byte maximum', 0x1111)):
     c = Kmac(Hart())
     c.provision(make_pi(128, False, None, TAG, skid))
-    check(f'KMAC128 {label}: _Invalid_ (<<KLEE-system-keys>>)', True, c.st, INVALID)
+    check(f'KMAC128 {label}: _Invalid_ (<<KLE-system-keys>>)', True, c.st, INVALID)
 
 section('Provisioning Input and Serialized Content')
 for sec, kmax, smax in ((128, 163, 157), (256, 131, 125)):
@@ -717,7 +717,7 @@ c2 = Kmac(Hart()).import_(*c.export())
 check('round trip, KMAC256 L = 4096 after 2 update()s (L counts down in the Serialized Content), then _Success_', True,
       (bytes(o1 + o2), st, c2.st), (ref_kmac(256, KEY, DATA200, 4096, TAG), 'success', SUCCESS))
 
-section('kl.derive between kl.exec endpoints (<<KLEE-derive-endpoints>>, GR49)')
+section('kl.derive between kl.exec endpoints (<<KLE-derive-endpoints>>, GR50)')
 h = Hart()
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
@@ -734,7 +734,7 @@ check('whole KMAC256 output (L = 512) -> KMACXOF256; source in _Success_', True,
       (src.st, bytes(squeeze(dst, 64)[0][1])),
       (SUCCESS, ref_kmac(256, KEY, WANT[3], 0, b'', True, 64)))
 derive(h, absorbing(128, hart=h), src, 16)
-check('source in _Success_ (no endpoint, GR44 item 1) -> source _Invalid_', True, src.st, INVALID)
+check('source in _Success_ (no endpoint, GR45 item 1) -> source _Invalid_', True, src.st, INVALID)
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), squeezing(128, DATA4, 256, hart=h)
 snap = (src.st, src.state, src.block_base)
 derive(h, dst, src, 16)
@@ -743,7 +743,7 @@ check('destination in _Hash_Output_ -> destination _Invalid_, nothing taken from
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 snap = (src.state, src.block_base, dst.state, dst.block_base)
 derive(h, dst, src, 0)
-check('length = 0 changes no state (GR51)', True,
+check('length = 0 changes no state (GR45 item 7)', True,
       (src.state, src.block_base, dst.state, dst.block_base), snap)
 
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)
@@ -751,8 +751,8 @@ s2, d2 = squeezing(256, DATA4, 512, hart=h), KeyDest(32)
 s3, d3 = squeezing(128, DATA4, 128, hart=h), KeyDest(32)
 for d, s_ in ((dst, src), (d2, s2), (d3, s3)):
     derive(h, d, s_, 32)
-check('GR49 key derivation: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
-      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR44 item 5): destination _Invalid_', True,
+check('GR50: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
+      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR45 item 5): destination _Invalid_', True,
       (bytes(dst.key), bytes(squeeze(src, 16)[0][1]), bytes(d2.key), s2.st, d3.st, s3.st),
       (stream[:16], stream[16:32], WANT[3][:32], OUTPUT, INVALID, OUTPUT))
 

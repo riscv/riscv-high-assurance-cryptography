@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HMAC KAT for KLEE: <<KLEE-HMAC>> (NIK and KIP) over <<KLEE-SHA-2>>, <<KLEE-SM3>> and <<KLEE-SHA-3>>.
+"""HMAC KAT for KLE: <<KLE-HMAC>> (NIK and KIP) over <<KLE-SHA-2>>, <<KLE-SM3>> and <<KLE-SHA-3>>.
 SHA-2, SM3 and Keccak-f from scratch; hashlib SHA-3 is the reference H of the HMAC-SHA-3 tags.
 Python hmac/hashlib are otherwise only labeled reference oracles."""
 import hashlib, hmac, math, os, sys
@@ -69,7 +69,7 @@ def fips_pad(nbits, w):
     return b'\x80' + bytes(-(nbits // 8 + 1 + w // 4) % (2 * w)) + nbits.to_bytes(w // 4, 'big')
 
 def sha2_be(msg, H, w, d, cf=compress):
-    """Byte-level SHA-2 or SM3 (provisioner, reference and IV generation; never the KLEE model)."""
+    """Byte-level SHA-2 or SM3 (provisioner, reference and IV generation; never the KLE model)."""
     m = msg + fips_pad(8 * len(msg), w)
     for i in range(0, len(m), 2 * w):
         H = cf(H, [int.from_bytes(m[j:j + w // 8], 'big') for j in range(i, i + 2 * w, w // 8)], w)
@@ -108,8 +108,8 @@ def keccak(v):
         A[0] ^= rc
     return sum(a << (64 * i) for i, a in enumerate(A))
 
-# name: (NIK Type, NIK Mode, w or None, b, d); <<KLEE-exec-encodings>>, <<KLEE-SHA-2-parameters>>,
-# <<KLEE-SM3>>, <<KLEE-SHA-3-parameters>> (b = the rate)
+# name: (NIK Type, NIK Mode, w or None, b, d); <<KLE-exec-encodings>>, <<KLE-SHA-2-parameters>>,
+# <<KLE-SM3>>, <<KLE-SHA-3-parameters>> (b = the rate)
 HASHES = {'SHA-224': (4, 6, 32, 512, 224), 'SHA-256': (4, 7, 32, 512, 256),
           'SHA-384': (4, 8, 64, 1024, 384), 'SHA-512': (4, 9, 64, 1024, 512),
           'SHA-512/224': (4, 10, 64, 1024, 224), 'SHA-512/256': (4, 11, 64, 1024, 256),
@@ -118,10 +118,10 @@ HASHES = {'SHA-224': (4, 6, 32, 512, 224), 'SHA-256': (4, 7, 32, 512, 256),
           'SHA3-384': (6, 8, None, 832, 384), 'SHA3-512': (6, 9, None, 576, 512)}
 HL = {n: n.lower().replace('-', '_').replace('/', '_').replace('sha_', 'sha') for n in HASHES}
 
-# ---------------------------------------------------------------- KLEE model
+# ---------------------------------------------------------------- KLE model
 
 class HART:
-    klstart = 0  # bytes, <<KLEE-CSR-klstart>>
+    klstart = 0  # bytes, <<KLE-CSR-klstart>>
 
 def setsl(v, hi, lo, x):
     m = ((1 << (hi - lo + 1)) - 1) << lo
@@ -209,10 +209,10 @@ class Hmac:
 
     def provision(s, variant, K0=None, key_type=0):
         typ, mode = HASHES[s.name][:2]
-        kip = variant == 'KIP'  # KIP: the higher Type, or for SM3_HMAC Mode 2 (<<KLEE-exec-encodings>>)
+        kip = variant == 'KIP'  # KIP: the higher Type, or for SM3_HMAC Mode 2 (<<KLE-exec-encodings>>)
         s.variant, s.machine = variant, (typ << 4 | mode + kip) if typ == 9 else ((typ + kip) << 4 | mode)
         if variant == 'NIK' and key_type:
-            s.reset()  # invalid Metadata, <<KLEE-MVR-open>>
+            s.reset()  # invalid Metadata, <<KLE-MVR-open>>
             return s
         s.h.ready()
         s.st, s.K0, s.has_key = KL_STATE_READY, b2v(K0) if variant == 'KIP' else 0, False
@@ -254,7 +254,7 @@ class Hmac:
             if s.st != KL_STATE_UNCONFIGURED:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
         elif s.st == KL_STATE_UNCONFIGURED:
-            raise IllegalInstruction  # GR34
+            raise IllegalInstruction  # GR35
         elif s.st in ERROR_STATES:
             pass
         elif immed == KL_STATE_READY:  # K0 kept, unless its load was left incomplete (MR9)
@@ -286,7 +286,7 @@ class Hmac:
         if s.st == KL_STATE_UNCONFIGURED:
             raise IllegalInstruction
         if s.st in ERROR_STATES:
-            return 'noop', bytes(nbytes)  # GR33
+            return 'noop', bytes(nbytes)  # GR33, GR34
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
         if form == 'B' and s.st == KL_STATE_SET_KEY:
             r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
@@ -297,11 +297,11 @@ class Hmac:
             p, prior = HART.klstart, prior or bytes(nbytes)
             if p >= nbytes:
                 HART.klstart = 0
-                return 'empty', prior  # empty window: only klstart = 0 (<<KLEE-CSR-klstart>>)
+                return 'empty', prior  # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
             if p:  # not an interruption point: the MAC reaches _Success_ before any
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR33
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR34
             return 'retired', s.output(nbytes, prior)
         else:
             r = 'invalid'  # GR23, GR27, MR1
@@ -322,18 +322,18 @@ class Hmac:
         return v2b(OUT, nbytes)
 
 def kl_derive(dst, src, length):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLEE-derive-endpoints>>, GR49)
-    or NIK `K0` in _Set_Key_ (GR49 key derivation, unrestricted), loaded through process_VLI as by kl.exec (GR51)."""
+    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLE-derive-endpoints>>, GR50)
+    or NIK `K0` in _Set_Key_ (GR50, unrestricted), loaded through process_VLI as by kl.exec (GR52)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # Gate Order Rule
     key = dst.st == KL_STATE_SET_KEY
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT), (dst, key or dst.st == KL_STATE_HASH_ABSORB)) if not ok]
     for c in bad:
-        c.reset()  # GR44 items 1-2
+        c.reset()  # GR45 items 1-2
     if bad:
         return 'refused'
     if key and min(length, (src.d - src.h.block_base) // 8) < dst.b // 8:
-        dst.reset()  # GR44 item 5
+        dst.reset()  # GR45 item 5
         return 'refused'
     if not length:
         return 'noop'
@@ -465,7 +465,7 @@ for i, (key, data, tag) in enumerate(GMT0042, 1):
 section('State machine')
 key7, data7 = RFC4231[7]
 TAG7, K0_7 = TAGS['SHA-256', 7], K0_of('SHA-256', key7)
-check('NIK Mode with _KeyType_ = 1: invalid Metadata, _Invalid_ (<<KLEE-MVR-open>>)',
+check('NIK Mode with _KeyType_ = 1: invalid Metadata, _Invalid_ (<<KLE-MVR-open>>)',
       Hmac('SHA-256').provision('NIK', key_type=1).st == KL_STATE_INVALID)
 check('_Machine_ (KIP, NIK): HMAC-SHA-256 Type 5/4 Mode 7, HMAC-SHA3-512 Type 7/6 Mode 9, '
       'SM3_HMAC Type 9 Mode 2/1', None,
@@ -484,7 +484,7 @@ for label, variant, ops in [
         ('kl.exec in _Success_ (GR27), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (GR33)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR33, GR34)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
 cl, res = fresh(key=key7, ops=(A, B(data7), O)), []
 for ks in (32, 40, 4):
@@ -555,7 +555,7 @@ check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb, between "prefix" and "suffix
 for length in (64, 80):
     src, dst = fresh('SHA-512', key=k2, ops=(A, B(m2), O)), fresh(variant='NIK', key=None, ops=(SK,))
     r = kl_derive(dst, src, length)
-    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR49 key derivation): b/8 = 64 B, '
+    check(f'HMAC-SHA-512 tag, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR50): b/8 = 64 B, '
           'load complete (cumul_len = b), source _Success_; then tags under K0 = tag',
           (r, dst.h.cumul_len, src.st) == ('done', 512, KL_STATE_SUCCESS)
           and run(dst, A, B(data7), O, C(32))[1] == ref_hmac('SHA-256', TAG2_512, data7))
@@ -564,8 +564,8 @@ for s512, variant, ops, length in [(1, 'NIK', (), 64), (1, 'KIP', (), 64), (1, '
     src = fresh('SHA-512' if s512 else 'SHA-256', key=k2, ops=(A, B(m2), O))
     dst = fresh(variant=variant, key=key7 if variant == 'KIP' else None, ops=(R, *ops))
     res.append((kl_derive(dst, src, length), dst.st, src.st, src.h.block_base))
-check('K0 destination: NIK/KIP in _Ready_ (GR44 item 2), length 32 < b/8, source output 32 < b/8 '
-      '(GR44 item 5): destination _Invalid_, source untouched', None, res,
+check('K0 destination: NIK/KIP in _Ready_ (GR45 item 2), length 32 < b/8, source output 32 < b/8 '
+      '(GR45 item 5): destination _Invalid_, source untouched', None, res,
       [('refused', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0)] * 4)
 
 section('Negative controls')
@@ -577,5 +577,5 @@ c1 = (cl := fresh('SHA3-256', 'NIK', None, ops=(SK, B(K0s3[:40])))).export()
 cl = Hmac.load('SHA3-256', 'NIK', cl.st, v2b(b2v(c1) & ~(M64 << 1616), len(c1)), cl.se)
 control('HMAC-SHA3-256 Content1 without cumul_len: a partial K0 load cannot be resumed',
         run(cl, B(K0s3[40:]), A, B(data7), O, C(32))[1] != ref_hmac('SHA3-256', key7, data7))
-info('b of HMAC-SHA-3 read as the rate of <<KLEE-SHA-3-parameters>>; KIP K0 as SKID (_KeyType_ = 1) not exercised')
+info('b of HMAC-SHA-3 read as the rate of <<KLE-SHA-3-parameters>>; KIP K0 as SKID (_KeyType_ = 1) not exercised')
 done()

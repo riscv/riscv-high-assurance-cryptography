@@ -1,4 +1,4 @@
-# Build the KLEE specification in the RISC-V docs container.
+# Build the KLE specification in the RISC-V docs container.
 #
 # SPDX-License-Identifier: CC-BY-SA-4.0
 

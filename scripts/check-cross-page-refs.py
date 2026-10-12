@@ -4,7 +4,7 @@
 Each chapter is a separate page on the website, so a link to an anchor in
 another chapter must name that chapter's file:
 
-    <<Zkl-notation.adoc#KLEE-Notation>>        not   <<KLEE-Notation>>
+    <<Zkl-notation.adoc#KLE-Notation>>        not   <<KLE-Notation>>
 
 The PDF renders both forms the same ("Section 1"), but on the site the short
 form is a broken link. Links within the same page stay <<id>>.

@@ -1,4 +1,4 @@
-[[KLEE-pseudocode-examples]]
+[[KLE-pseudocode-examples]]
 = Pseudocode Examples
 ifdef::env-site[]
 // On the site each page stands alone; the PDF gets these from src/Zkl.adoc.
@@ -6,13 +6,13 @@ include::partial$Zkl-symbols.adoc[]
 endif::[]
 
 _This chapter is informative._ The examples follow the conventions of
-<<Zkl-notation.adoc#KLEE-Notation>>; in particular, a value loaded into a vector register holds the
+<<Zkl-notation.adoc#KLE-Notation>>; in particular, a value loaded into a vector register holds the
 byte at the lowest address in its least significant bits.
-The listings assume RV64, on which a 64-bit operand, such as the destination of `kl.getst` or the auxiliary input of a Form B `kl.setst`, is one GPR; on RV32 it is a GPR pair whose first register number is even (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-multiple-GPRs>>).
+The listings assume RV64, on which a 64-bit operand, such as the destination of `kl.getst` or the auxiliary input of a Form B `kl.setst`, is one GPR; on RV32 it is a GPR pair whose first register number is even (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 // ///////////////////////////////////////////////////////////////////
 
-[[KLEE-management-code-snippets]]
+[[KLE-management-code-snippets]]
 == Code for Locker Configuration and Export Operations
 
 [WARNING]
@@ -24,26 +24,26 @@ This subsection illustrates the intended instruction sequences for locker config
 They show the main operation logic and error detection, but not application-specific error management, and can be packaged into libraries or OS APIs to avoid increasing application code size.
 
 Registers:::
-GPR `t0` holds the number of the locker to be provisioned, imported or exported, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLEE-instructions-memory>>).
-The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-multiple-GPRs>>).
+GPR `t0` holds the number of the locker to be provisioned, imported or exported, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-instructions-memory>>).
+The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 Selecting the locker:::
-The routines never use explicit locker numbers in the instructions: on entry they save `klmanagedlocker` and write the locker number to it, and every KLEE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLEE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLEE-GR-klmanagedlocker-override>>).
+The routines never use explicit locker numbers in the instructions: on entry they save `klmanagedlocker` and write the locker number to it, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klmanagedlocker-override>>).
 `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand, and `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name the managed locker `KLML`, which requires no `Zklind`.
-Since a clear resets `klmanagedlocker` to 32, the routines write it again before every opening, at `restart` for a provisioning or an import: a `KLML` opening raises an illegal-instruction exception when `klmanagedlocker` = 32, and otherwise opens the locker it names, a Valid one included (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-klml-openings>>).
-On exit they restore the saved value, as Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-klmanagedlocker-finish>> requires of software that has finished a management operation; a routine can thus be called from a handler that has saved the interrupted operation (<<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>), including for a nested export or import of the locker that operation manages.
+Since a clear resets `klmanagedlocker` to 32, the routines write it again before every opening, at `restart` for a provisioning or an import: a `KLML` opening raises an illegal-instruction exception when `klmanagedlocker` = 32, and otherwise opens the locker it names, a Valid one included (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klml-openings>>).
+On exit they restore the saved value, as Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-klmanagedlocker-finish>> requires of software that has finished a management operation; a routine can thus be called from a handler that has saved the interrupted operation (<<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>), including for a nested export or import of the locker that operation manages.
 
 Checking the _State_:::
 +
 --
 After each management instruction, the code reads the _State_ of the locker with `kl.getst`.
-If a handler has meanwhile cleared the locker or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, other than an opening, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-cleared-under-management>>), and the check detects the change:
+If a handler has meanwhile cleared the locker or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, other than an opening, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>), and the check detects the change:
 
 * after a clear, `KLML` reads as an _Unconfigured_ locker, so the check finds _State_ 0: a provisioning or an import restarts, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
 * after an Error State, or the completing `kl.mgmt`, `KLML` still names the locker, so the check reads its final _State_, and an Error State abandons the operation.
 
 Only the check after the last instruction is required; the earlier checks only react sooner.
-The code may bound the number of restarts and branch to its error handling once the bound is reached; this is a matter of robustness only, since system software must let the operation complete (Rule <<Zkl-ISA-unpriv.adoc#KLEE-SR-no-unconditional-clear>>).
+The code may bound the number of restarts and branch to its error handling once the bound is reached; this is a matter of robustness only, since system software must let the operation complete (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-no-unconditional-clear>>).
 --
 
 Error handling:::
@@ -70,7 +70,7 @@ The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `kl.mgmt`
                                   # run inside another management operation
 
 restart:
-  kl.setml  t0                    # name the locker: every KLEE instruction
+  kl.setml  t0                    # name the locker: every KLE instruction
                                   # below acts on it; a clear resets it to 32
   kl.mgmt   KLML, #kl_cfg_provisioning, s5:s4 # start provisioning, load MDH
   kl.getst  t2, KLML              # get _State_ field from MDH
@@ -211,7 +211,7 @@ Incomplete procedure, like all the others in management.
 A locker in an Error State is covered: only its MDH is stored.
 A locker under management (partially provisioned, imported or exported) is exported by the same sequence,
 but the caller must also save `klstart` before the opening `kl.mgmt`, which clears it, and restore it after the re-import
-(<<Zkl-ISA-unpriv.adoc#KLEE-state-save-and-restore-order>>); this is not shown.
+(<<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>); this is not shown.
 ====
 
 *Export Code (`Zklmem`)*
@@ -319,20 +319,20 @@ success:
   kl.setml  s8                    # restore the caller's value
 ----
 
-During the provisioning and import procedures, the validity of the whole MDH is checked by the opening `kl.mgmt`, which receives it in Form D (<<Zkl-ISA-unpriv.adoc#KLEE-MVR-open>>), except for the image of a locker in an Error State, of which only the _State_ is checked (<<Zkl-ISA-unpriv.adoc#KLEE-error-state-transfer>>).
+During the provisioning and import procedures, the validity of the whole MDH is checked by the opening `kl.mgmt`, which receives it in Form D (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>), except for the image of a locker in an Error State, of which only the _State_ is checked (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
 The conditions evaluated at completion — SKS resolution at provisioning, authentication at import — can still transition the locker to an Error State upon executing `kl.mgmt KLML, #kl_cfg_management_end`, which the `kl.getst` after that instruction detects, as it detects a clear or an Error State set at any earlier point.
-A data error found by a check that the Machine attaches to a field of the PI or SCC leaves the locker in _Failure_ instead (Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-completion-state>>), which these listings do not test.
+A data error found by a check that the Machine attaches to a field of the PI or SCC leaves the locker in _Failure_ instead (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>), which these listings do not test.
 
 // ////////////////////////////////////////////////////////////////////////////
 
-[[KLEE-ECB-mode-example]]
+[[KLE-ECB-mode-example]]
 == Electronic Codebook Modes (Direct Encryption/Decryption)
 
 The following pseudocode illustrates how to use an ECB CC to encrypt data with a block cipher.
 Here, as in most other examples, we assume the block cipher has a width of 128 bits (`KLLEN` is also 128).
 The uppercase `IMPORT` instruction is a placeholder for an import code snippet, library, or API call.
 
-[[KLEE-pseudocode-ECB-encryption]]
+[[KLE-pseudocode-ECB-encryption]]
 .Simple Example: Encryption with no Authentication
 ----
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
@@ -354,10 +354,10 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
     ciphertext[16*i .. 16*i+15] ← V0
 ----
 
-[[KLEE-keystream-modes-example]]
+[[KLE-keystream-modes-example]]
 == CTR/XCTR Keystream Generation
 
-[[KLEE-pseudocode-keystream-modes]]
+[[KLE-pseudocode-keystream-modes]]
 .Encrypt with Keystream Generation
 ----
 // Acquire payload, initialize
@@ -387,7 +387,7 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 Only XEX encryption pseudocode is provided; decryption is similar
 (here it is also assumed `b` = `KLLEN` = 128).
 
-[[KLEE-pseudocode-basic-IV-mode]]
+[[KLE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated mode without associated data
 ----
 // Acquire payload and SCC, initialize
@@ -408,21 +408,21 @@ Only XEX encryption pseudocode is provided; decryption is similar
 ----
 
 The loop covers whole blocks only: XEX has no partial-block state.
-A data unit whose length is not a multiple of `b` is completed by ciphertext stealing, which software performs with further `kl.exec` on the same CC, and a `kl.clone` for decryption, as described in <<Zkl-ISA-machines.adoc#KLEE-XTS-from-XEX>>.
+A data unit whose length is not a multiple of `b` is completed by ciphertext stealing, which software performs with further `kl.exec` on the same CC, and a `kl.clone` for decryption, as described in <<Zkl-ISA-machines.adoc#KLE-XTS-from-XEX>>.
 
 //
 
-[[KLEE-GCM-mode-examples]]
+[[KLE-GCM-mode-examples]]
 == GCM Mode
 
-In <<KLEE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
+In <<KLE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
 `b` = `KLLEN` = 128 and `c` = 32.
 
-Associated data and plaintext/ciphertext are treated differently, as <<Zkl-ISA-machines.adoc#KLEE-GCM-mode>> requires.
+Associated data and plaintext/ciphertext are treated differently, as <<Zkl-ISA-machines.adoc#KLE-GCM-mode>> requires.
 The caller zero-fills the final block of the AD beyond its actual end, and `GHASH` absorbs that block whole.
 For the PT and CT the caller must not rely on zero-padding: a final block shorter than `b` goes through State _Enc_Last_Block_ (or _Dec_Last_Block_ for decryption), so that no keystream bit past the end of the message is absorbed into `GHASH` or written out.
 
-[[KLEE-pseudocode-GCM-encryption]]
+[[KLE-pseudocode-GCM-encryption]]
 .GCM Encryption
 ----
 // Acquire payload, initialize
@@ -478,7 +478,7 @@ For the PT and CT the caller must not rely on zero-padding: a final block shorte
   kl.exec V2, K0                          // V2 contains the tag
 ----
 
-<<KLEE-pseudocode-GCM-decryption>> gives the code for GCM decryption, from the point where the AD has been absorbed; up to there, the code is that of <<KLEE-pseudocode-GCM-encryption>>.
+<<KLE-pseudocode-GCM-decryption>> gives the code for GCM decryption, from the point where the AD has been absorbed; up to there, the code is that of <<KLE-pseudocode-GCM-encryption>>.
 // Decryption differs from encryption in three ways: the roles of `PT` and `CT` are
 // reversed; States _Encrypt_ and _Enc_Last_Block_ are replaced by _Decrypt_ and
 // _Dec_Last_Block_; and the tag is finalized and verified instead of being emitted, as shown
@@ -486,7 +486,7 @@ For the PT and CT the caller must not rely on zero-padding: a final block shorte
 Note that no `kl.exec` is issued in State _Dec_Tag_Finalize_: the recomputed tag
 stays inside the locker and is never made available to software on this path.
 
-[[KLEE-pseudocode-GCM-decryption]]
+[[KLE-pseudocode-GCM-decryption]]
 .GCM Decryption
 ----
   // Decrypt the whole blocks of the ciphertext
@@ -522,7 +522,7 @@ stays inside the locker and is never made available to software on this path.
 We also show how to implement GCM encryption using an ECB CC, provided the vector ISA
 supports carry-less binary multiplication.
 
-[[KLEE-pseudocode-GCM-encryption-alternate]]
+[[KLE-pseudocode-GCM-encryption-alternate]]
 .Implementing GCM encryption using an ECB CC
 ----
 // Acquire payload, initialize
@@ -579,13 +579,13 @@ supports carry-less binary multiplication.
   tag ← V3 xor V2
 ----
 
-[[KLEE-GCM-SIV-mode-examples]]
+[[KLE-GCM-SIV-mode-examples]]
 == GCM-SIV Mode
 
-We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `KLLEN` = 128).
-<<KLEE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
+We show in <<KLE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `KLLEN` = 128).
+<<KLE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
 
-[[KLEE-pseudocode-GCM-SIV-encryption]]
+[[KLE-pseudocode-GCM-SIV-encryption]]
 .GCM-SIV Encryption
 ----
 // Acquire payload, initialize
@@ -646,7 +646,7 @@ We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption
     CT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1] ← V1
 ----
 
-[[KLEE-pseudocode-GCM-SIV-decryption]]
+[[KLE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
 ----
 // Acquire payload, initialize
@@ -701,12 +701,12 @@ We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption
 
 //
 
-[[KLEE-OCB-mode-examples]]
+[[KLE-OCB-mode-examples]]
 == OCB Mode
 
 In this section we show pseudocode for OCB encryption and decryption (`b` = `KLLEN` = 128).
 
-[[KLEE-pseudocode-OCB-encryption]]
+[[KLE-pseudocode-OCB-encryption]]
 .OCB Encryption
 ----
 // Acquire payload, initialize
@@ -769,12 +769,12 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `KLL
   kl.exec V1, K0                         // output tag
 ----
 
-OCB decryption follows <<KLEE-pseudocode-OCB-encryption>> up to the final block, with the roles of `PT` and `CT` exchanged, and States _Decrypt_ and _Dec_Last_Block_ in place of _Encrypt_ and _Enc_Last_Block_;
-<<KLEE-pseudocode-OCB-decryption-difference>> gives only the last step, which differs.
+OCB decryption follows <<KLE-pseudocode-OCB-encryption>> up to the final block, with the roles of `PT` and `CT` exchanged, and States _Decrypt_ and _Dec_Last_Block_ in place of _Encrypt_ and _Enc_Last_Block_;
+<<KLE-pseudocode-OCB-decryption-difference>> gives only the last step, which differs.
 OCB has no _Dec_Tag_Finalize_ state: after the last block, _Dec_Last_Block_ transitions directly to
 _Hash_Verify_, where the received tag is supplied, as shown below.
 
-[[KLEE-pseudocode-OCB-decryption-difference]]
+[[KLE-pseudocode-OCB-decryption-difference]]
 .OCB Decryption
 ----
   V1 ← tag                               // the tag received with the message
@@ -784,10 +784,10 @@ _Hash_Verify_, where the received tag is supplied, as shown below.
      handle error
 ----
 
-[[KLEE-CMAC-mode-example]]
+[[KLE-CMAC-mode-example]]
 == CMAC Functions
 
-[[KLEE-pseudocode-CMAC]]
+[[KLE-pseudocode-CMAC]]
 .CMAC Computation
 ----
 - Info: CMAC input = *M with bit length M_len

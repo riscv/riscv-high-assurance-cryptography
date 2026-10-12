@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GCM-SIV (<<KLEE-GCM-SIV-mode>>) through a model locker, against RFC 8452 Appendix C.1-C.3
+"""GCM-SIV (<<KLE-GCM-SIV-mode>>) through a model locker, against RFC 8452 Appendix C.1-C.3
 (results and per-vector intermediates) and a byte-string RFC 8452 reference."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +51,7 @@ def ref_decrypt(key, nonce, aad, ct):
     pt = ref_ctr(enc, ct[-16:], ct[:-16])
     return pt if ref_tag(auth, enc, nonce, aad, pt) == ct[-16:] else None
 
-# ---------------------------------------------------------------- Montmul from <<KLEE-SCC-AEAD>>
+# ---------------------------------------------------------------- Montmul from <<KLE-SCC-AEAD>>
 G = (1 << 128) | (1 << 127) | (1 << 126) | (1 << 121) | 1
 
 def gf_mul(a, b):
@@ -74,7 +74,7 @@ X_M128 = gf_inv(gf_mul(1 << 127, 2))
 
 def montmul_def(a, b): return gf_mul(gf_mul(a, b), X_M128)
 
-# ---------------------------------------------------------------- KLEE model
+# ---------------------------------------------------------------- KLE model
 SKID = 0x00C0FFEE00C0FFEE
 SKS = {SKID: bytes.fromhex('01000000000000000000000000000000')}
 CALLS = []                                               # enc_blk calls of RFC8452_KeyDeriv
@@ -82,7 +82,7 @@ CALLS = []                                               # enc_blk calls of RFC8
 def enc_blk(key, p): return b2v(aes_encrypt(key, v2b(p, 16)))
 
 def RFC8452_KeyDeriv(k, key, nonce):
-    """<<KLEE-GCM-SIV-KeyDeriv>>; returns (enc_key, auth_key)."""
+    """<<KLE-GCM-SIV-KeyDeriv>>; returns (enc_key, auth_key)."""
     A, E = [0] * 6, 0
     for i in range(k // 64 + 2):
         A[i] = enc_blk(key, cat((nonce, 96), (bin_(i, 32), 32)))
@@ -92,7 +92,7 @@ def RFC8452_KeyDeriv(k, key, nonce):
     return E, cat((sl(A[1], 63, 0), 64), (sl(A[0], 63, 0), 64))
 
 def SCC_KeyDeriv(key, nonce):
-    """<<KLEE-SCC-key-derivation>>."""
+    """<<KLE-SCC-key-derivation>>."""
     A = [sl(enc_blk(key, cat((nonce, 96), (bin_(i, 32), 32))), 63, 0) for i in range(6)]
     return cat(*((A[i], 64) for i in (5, 4, 3, 2))), cat((A[1], 64), (A[0], 64))
 
@@ -154,7 +154,7 @@ class Siv:
 
     def setst(s, immed, form='A', aux=0):
         st = s.state
-        if immed in ERROR_STATES:                        # <<KLEE-instruction-setst>>, GR31
+        if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR31
             return s._error(immed if immed < 54 else INV)
         if st in ERROR_STATES:
             return                                       # GR33
@@ -182,18 +182,18 @@ class Siv:
         """kl.exec; `start` resumes at that klstart, `stop` halts after that many blocks."""
         s.halted, st = False, s.state
         if st in ERROR_STATES:
-            return 0                                     # GR33
+            return 0                                     # GR33, GR34
         want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
         if want == 'A' and form in 'BC':
             raise IllegalInstruction(form)               # vector and KLIOBUF operands mixed: a forbidden substitution
         if want != form:
             return s._invalid()                          # GR23, GR27, MR1
         if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
-            return s._invalid()                          # MR2: length first (<<KLEE-CSR-klstart>>)
+            return s._invalid()                          # MR2: length first (<<KLE-CSR-klstart>>)
         if start is not None:
             s.klstart = start
             if 8 * start >= KLLEN:
-                s.klstart = 0                            # empty window: only klstart = 0 (<<KLEE-CSR-klstart>>)
+                s.klstart = 0                            # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
                 return 0
             if start % 16 or start and s.state in (ELB, DLB, ETF, DTF):
                 return s._invalid()                      # not an interruption point
@@ -220,7 +220,7 @@ class Siv:
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
-                s.klstart, s.halted = 16 * j, True       # GR64
+                s.klstart, s.halted = 16 * j, True       # GR67
                 return out
             blk = sl(INPUT, 128 * j + 127, 128 * j)
             if st == HA:
@@ -228,7 +228,7 @@ class Siv:
                 continue
             if s.ctr == 2**32:
                 s._invalid()
-                return out                               # GR63
+                return out                               # GR66
             o = blk ^ s._ks()
             if st == DEC:
                 s._absorb(o)
@@ -237,17 +237,17 @@ class Siv:
         return out
 
     def derive(s, src, length):
-        """kl.derive destination (<<KLEE-derive-endpoints>>): `key` in Ready."""
+        """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready."""
         if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
             return                                       # Gate Order Rule
-        if isinstance(src, Siv):                         # GR44 item 1: no source endpoint (the tag is none, GR49)
-            return src._invalid()
+        if isinstance(src, Siv):                         # GR45 item 1: no State emits Form C output (the tag
+            return src._invalid()                        # comes from a Form A kl.exec)
         if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # GR47 (GR44 item 2); GR44 items 2, 5
+            return s._invalid()                          # GR48 (GR45 item 2); GR45 items 2, 5
         s.key = src[:s.k // 8]
         s._derive()                                      # MR4
 
-# ---------------------------------------------------------------- drivers (<<KLEE-GCM-SIV-mode-examples>>)
+# ---------------------------------------------------------------- drivers (<<KLE-GCM-SIV-mode-examples>>)
 def len_block(aad, pt, be=False):
     if be:                                               # GCM-style control
         return b2v((8 * len(aad)).to_bytes(8, 'big') + (8 * len(pt)).to_bytes(8, 'big'))
@@ -495,7 +495,7 @@ for i, v in enumerate(VECTORS):
         ek, ak = RFC8452_KeyDeriv(8 * len(key), key, b2v(nonce))
         auth, enc = ref_keys(key, nonce)
         lb = le64(8 * len(aad)) + le64(8 * len(pt))
-        check(f'{name}: auth_key, enc_key ({len(CALLS)} enc_blk calls), POLYVAL, REF and KLEE',
+        check(f'{name}: auth_key, enc_key ({len(CALLS)} enc_blk calls), POLYVAL, REF and KLE',
               (auth.hex(), enc.hex(), ref_polyval(auth, pad16(aad) + pad16(pt) + lb).hex())
               == (v2b(ak, 16).hex(), v2b(ek, len(key)).hex(), v2b(m.probe, 16).hex())
               == (v['auth_key'], v['enc_key'], v['polyval']) and CALLS == list(range(len(key) // 8 + 2)))
@@ -559,7 +559,7 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
 m, ref = at('enc'), at('enc')
 m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('GR63/GR33/GR29: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('GR66/GR34/GR29: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
 m = at('dec')
 m.ctr = 2**32
@@ -595,7 +595,7 @@ tag = m.exec('A', len_block(a10, p10), 128)
 o1 = m.exec('A', b2v(p10), 384, None, 1)
 h2 = (m.halted, m.klstart)
 o2 = m.exec('A', b2v(p10), 384, 16)
-check('GR64: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
+check('GR67: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
       (h1, h2) == ((True, 32), (True, 16)) and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) + v2b(tag, 16) == w10)
 
 section('general rules')
@@ -657,7 +657,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR71): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR74): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -695,26 +695,26 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLEE-derive-endpoints>>, GR44, GR47; MR4)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR45, GR48; MR4)')
 src = bytes.fromhex(VECTORS[11]['key'])
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (GR44 items 1-2)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is no endpoint, GR44 items 1-2)', at('sav'), 12),
-                   ('in Success (GR44 items 1-2)', at('success'), 16),
-                   ('into a key configured by a SKID (GR47, GR44 item 2)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (GR44 item 5)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (GR44 item 5)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (GR44 item 5)', Siv.provisioned(K), 0)):
+for name, m, n in (('in Hash_Absorb (GR45 items 1-2)', at('ha'), 16),
+                   ('in Set_Aux_Value (nonce is no endpoint, GR45 items 1-2)', at('sav'), 12),
+                   ('in Success (GR45 items 1-2)', at('success'), 16),
+                   ('into a key configured by a SKID (GR48, GR45 item 2)', Siv.provisioned(skid=SKID), 16),
+                   ('of 8 bytes into a 128-bit key (GR45 item 5)', Siv.provisioned(K), 8),
+                   ('of 16 bytes into a 256-bit key (GR45 item 5)', Siv.provisioned(K256), 16),
+                   ('of 0 bytes into a key (GR45 item 5)', Siv.provisioned(K), 0)):
     m.derive(src, n)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
 s_, m = at('etf'), Siv.provisioned(K)
 m.derive(s_, 16)
-check('Enc_Tag_Finalize as a kl.derive source (an AEAD tag is no source, GR49; GR44 item 1) -> only the source '
-      'Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
+check('Enc_Tag_Finalize as a kl.derive source (no Form C output: the tag comes from a Form A kl.exec; GR45 item 1) '
+      '-> only the source Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
 section('negative controls, spec notes')
 k2, n2, a2, p2, w2 = vec(1)

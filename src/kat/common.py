@@ -1,4 +1,4 @@
-"""Shared utilities for the KLEE KAT suite.
+"""Shared utilities for the KLE KAT suite.
 
 Values are little-endian bit strings in Python ints (Zkl-notation.adoc): byte i of a
 string is bits [8i+7:8i]; `cat` is `@` (left operand most significant).  Also: AES,
@@ -13,11 +13,11 @@ MASK128 = (1 << 128) - 1
 # ---------------------------------------------------------------- notation
 
 def b2v(b: bytes) -> int:
-    """Byte string -> KLEE value (byte i at bits [8i+7:8i])."""
+    """Byte string -> KLE value (byte i at bits [8i+7:8i])."""
     return int.from_bytes(b, 'little')
 
 def v2b(v: int, n: int) -> bytes:
-    """KLEE value -> byte string of n bytes."""
+    """KLE value -> byte string of n bytes."""
     return v.to_bytes(n, 'little')
 
 def sl(v: int, hi: int, lo: int) -> int:
@@ -158,7 +158,7 @@ def gmul_ghash(X: bytes, Y: bytes) -> bytes:
     return z.to_bytes(16, 'big')
 
 def kl_galoismul(a: int, b: int) -> int:
-    """The spec's Galoismul on KLEE values (byte order forward, bits reflected per byte)."""
+    """The spec's Galoismul on KLE values (byte order forward, bits reflected per byte)."""
     return b2v(gmul_ghash(v2b(a, 16), v2b(b, 16)))
 
 # ---------------------------------------------------------------- POLYVAL (RFC 8452)
@@ -176,7 +176,7 @@ def _clmul(a: int, b: int) -> int:
 
 def montmul(a: int, b: int) -> int:
     """The spec's Montmul: a * b * x^-128 in GF(2^128) mod x^128+x^127+x^126+x^121+1,
-    on KLEE values under the fully little-endian POLYVAL representation (V[k] = coeff of x^k)."""
+    on KLE values under the fully little-endian POLYVAL representation (V[k] = coeff of x^k)."""
     p = _clmul(a, b)
     for _ in range(128):
         if p & 1:
@@ -187,7 +187,7 @@ def montmul(a: int, b: int) -> int:
     return p & MASK128
 
 def mulx_polyval(v: int) -> int:
-    """RFC 8452's mulX_POLYVAL on a KLEE value."""
+    """RFC 8452's mulX_POLYVAL on a KLE value."""
     c = v >> 127
     v = (v << 1) & MASK128
     if c:
@@ -197,7 +197,7 @@ def mulx_polyval(v: int) -> int:
 # ---------------------------------------------------------------- XTS / OCB doublings
 
 def update_mask(v: int) -> int:
-    """XEX/XTS mask update (little-endian doubling), per KLEE-XEX-XTS-modes."""
+    """XEX/XTS mask update (little-endian doubling), per KLE-XEX-XTS-modes."""
     c = v >> 127
     v = (v << 1) & MASK128
     if c:
@@ -210,7 +210,7 @@ def double_ocb(v: int) -> int:
 
 # ---------------------------------------------------------------- MDH and States
 
-# <<KLEE-metadata-header>>: (name, hi, lo); None marks a Reserved field.
+# <<KLE-metadata-header>>: (name, hi, lo); None marks a Reserved field.
 MDH_FIELDS = [
     ('Machine', 11, 0), ('MachinePolicy', 13, 12), ('MachineExtension', 15, 14),
     ('SCProtection', 17, 16), ('State', 23, 18), ('StateExtension', 27, 24),
@@ -236,7 +236,7 @@ def mdh_reserved(v: int) -> int:
     """The Reserved bits of an MDH, OR-ed together (0 if all clear)."""
     return any(sl(v, hi, lo) for n, hi, lo in MDH_FIELDS if n is None)
 
-# <<KLEE-State-field>>, <<KLEE-state-constants-symmetric>>
+# <<KLE-State-field>>, <<KLE-state-constants-symmetric>>
 KL_STATE_UNCONFIGURED, KL_STATE_READY = 0, 1
 KL_STATE_OPERATE = KL_STATE_HASH_ABSORB = 2
 (KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_FINALIZE, KL_STATE_HASH_VERIFY,

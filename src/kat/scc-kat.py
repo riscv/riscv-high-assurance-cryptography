@@ -15,15 +15,15 @@ from common import (b2v, v2b, sl, cat, bin_, montmul, mulx_polyval, aes_encrypt,
 
 M32 = (1 << 32) - 1
 
-# ---------------------------------------------------------------- <<KLEE-SCC-AEAD>>, literally
+# ---------------------------------------------------------------- <<KLE-SCC-AEAD>>, literally
 def AESE256(K, B):
     return b2v(aes_encrypt(v2b(K, 32), v2b(B, 16)))
 
-def SCC_KeyDeriv(key, nonce):                 # <<KLEE-SCC-key-derivation>>
+def SCC_KeyDeriv(key, nonce):                 # <<KLE-SCC-key-derivation>>
     A = [sl(AESE256(key, cat((nonce, 96), (bin_(i, 32), 32))), 63, 0) for i in range(6)]
     return cat(*[(a, 64) for a in A[5:1:-1]]), cat((A[1], 64), (A[0], 64))
 
-def POLYVAL(auth_key, blocks):                # <<KLEE-SCC-POLYVAL>>
+def POLYVAL(auth_key, blocks):                # <<KLE-SCC-POLYVAL>>
     tmp = 0
     for blk in blocks:
         tmp = montmul(tmp ^ blk, auth_key)
@@ -36,7 +36,7 @@ def ctr_block(SIV, sep, i):                   # 1 @ sep @ SIV[125:32] @ bin((int
     return cat((1, 1), (sep & 1, 1), (sl(SIV, 125, 32), 94), ((sl(SIV, 31, 0) + i) & M32, 32))
 
 def _tag(AD, N, sep, P, K, length_block, clear_ads):
-    """The common part of <<KLEE-SCC-GCM-SIV-enc>>/<<KLEE-SCC-GCM-SIV-dec>>. length_block (RFC 8452's)
+    """The common part of <<KLE-SCC-GCM-SIV-enc>>/<<KLE-SCC-GCM-SIV-dec>>. length_block (RFC 8452's)
     and clear_ads=False are harness-only, for the RFC cross-checks and the negative controls."""
     enc_key, auth_key = SCC_KeyDeriv(K, N)
     AD_auth = list(AD)
@@ -67,8 +67,8 @@ def put(m, name, x):
 def field_at(bit):
     return next((n or 'Reserved', hi, lo) for n, hi, lo in MDH_FIELDS if lo <= bit <= hi)
 
-AES256_ECB = cat((2, 8), (0, 4))              # <<KLEE-exec-encodings>>: Type 2, Mode 0
-ECB_STATES = (READY, ENCRYPT, DECRYPT)        # <<KLEE-ECB-mode>>
+AES256_ECB = cat((2, 8), (0, 4))              # <<KLE-exec-encodings>>: Type 2, Mode 0
+ECB_STATES = (READY, ENCRYPT, DECRYPT)        # <<KLE-ECB-mode>>
 ERR_NAME = {48: 'kl_state_unsupported', 49: 'kl_state_invalid', 50: 'kl_state_out_of_memory',
             51: 'kl_state_mgmt_auth', 52: 'kl_state_priv_violation', 53: 'kl_state_expired'}
 is_valid = lambda st: 1 <= st <= 47
@@ -76,10 +76,10 @@ is_complete = lambda st: 1 <= st <= 55
 base_type = lambda st: ('pi' if st in (KL_CFG_PROVISIONING, KL_CFG_PPI_EXPORTING, KL_CFG_PPI_IMPORTING)
                         else 'scc' if st in (EXPORTING, IMPORTING) else None)
 
-# <<KLEE-locality-indexes>>: index -> ((hi, lo) within the Locality field, value)
+# <<KLE-locality-indexes>>: index -> ((hi, lo) within the Locality field, value)
 LOCALITY_ENC = {0: ((1, 0), 1), 1: ((1, 0), 2), 2: ((1, 0), 3), 3: ((3, 2), 1), 4: ((3, 2), 2),
                 5: ((3, 2), 3), 6: ((5, 4), 1), 7: ((5, 4), 2), 8: ((6, 6), 1), 9: ((7, 7), 1), 10: ((8, 8), 1)}
-HW_CHAIN_NEXT = {0: 1, 1: 2, 2: None, 3: 4, 4: 5, 5: None}   # <<KLEE-Localities>> substitution chains
+HW_CHAIN_NEXT = {0: 1, 1: 2, 2: None, 3: 4, 4: 5, 5: None}   # <<KLE-Localities>> substitution chains
 
 def locality_field(indices):
     f = 0
@@ -89,14 +89,14 @@ def locality_field(indices):
         f |= val << lo
     return f
 
-def localities_of(mdh):                        # in index order, as <<KLEE-SCC-export>> step 1.c appends them
+def localities_of(mdh):                        # in index order, as <<KLE-SCC-export>> step 1.c appends them
     return [j for j, ((hi, lo), val) in LOCALITY_ENC.items() if sl(fld(mdh, 'Locality'), hi, lo) == val]
 
 def make_mdh(localities=(), **f):
     return sum(v << MDH_FIELD[n][1] for n, v in {'Machine': AES256_ECB, 'MachinePolicy': 1, 'State': READY,
                **f, 'Locality': locality_field(localities)}.items())
 
-# ---------------------------------------------------------------- layout (<<KLEE-instruction-mv>>)
+# ---------------------------------------------------------------- layout (<<KLE-instruction-mv>>)
 def content_offset(mdh):                       # ADSDropped never affects it
     st, aux = fld(mdh, 'State'), fld(mdh, 'AuxDataLen')
     if is_valid(st) or st in (IMPORTING, EXPORTING):
@@ -121,7 +121,7 @@ class Mem:
         self.hi = max(self.hi, off + n)
         return (self.data[off:off + n] + bytes(n))[:n]
 
-class KleeException(Exception):
+class KleException(Exception):
     pass
 
 class Locker:
@@ -135,7 +135,7 @@ class Locker:
     def snapshot(self):
         return self.mdh, tuple(self.content1 or ()), None if self.content2 is None else tuple(self.content2)
 
-def err_mdh(m, st):                            # <<KLEE-GR-clear-locker-content-error-state>>
+def err_mdh(m, st):                            # <<KLE-GR-clear-locker-content-error-state>>
     return put(put(put(m, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
 
 def enter_error_state(cl, st):
@@ -145,24 +145,24 @@ def outcome(cl):
     st = cl.state
     return 'ok' if is_valid(st) else ERR_NAME.get(st, f'State {st}')
 
-# ---------------------------------------------------------------- the KLEE unit of one hart
+# ---------------------------------------------------------------- the KLE unit of one hart
 class Unit:
     SC_LEVELS, VERSIONS = (0, 1, 2), (0,)
 
     def __init__(self, CSK, LST, klmvendorid, klmarchid, klmimpid, max_aux=16, zklexpire=True):
         self.CSK, self.LST, self.max_aux, self.zklexpire = CSK, dict(LST), max_aux, zklexpire
         self.ids = (klmvendorid, klmarchid, klmimpid)
-        self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0     # <<KLEE-KLF>>
+        self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0     # <<KLE-KLF>>
         self.klmanagedlocker, self.decrypts = 32, []            # decrypts: sep of each SCC_Decrypt
 
-    def _check_managed(self, cl):              # <<KLEE-locker-management>>, common step 1
+    def _check_managed(self, cl):              # <<KLE-locker-management>>, common step 1
         if self.klmanagedlocker not in (cl.idx, 32):
             raise IllegalInstruction
 
     def _set_managed(self, cl):                # common step 2
         self.klmanagedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR40, GR41
+    def _check_transfer(self, cl):             # GR41, GR42
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klmanagedlocker:
             raise IllegalInstruction
 
@@ -177,7 +177,7 @@ class Unit:
             return None if j is None else self.LST[j]
         return self.LST.get(j) or None
 
-    def lst_eff(self, j):                      # LST_eff of <<KLEE-SCC-export>>
+    def lst_eff(self, j):                      # LST_eff of <<KLE-SCC-export>>
         return self._substitute(j) or 0
 
     def content1_size(self, mdh):              # AES256_ECB: 256-bit key or 64-bit SKID
@@ -187,7 +187,7 @@ class Unit:
         return self.content1_size(mdh) + 16 * max(0, self.max_aux - 2)
 
     def metadata_check(self, M, base, at_import=False, low_only=False):
-        """<<KLEE-Metadata-validity>>: None, 'unsupported' or 'invalid'; low_only: MDH[63:0] only."""
+        """<<KLE-Metadata-validity>>: None, 'unsupported' or 'invalid'; low_only: MDH[63:0] only."""
         if (fld(M, 'MachineExtension') or fld(M, 'Machine') != AES256_ECB
                 or fld(M, 'SCProtection') not in self.SC_LEVELS + (3,)):        # 3 is reserved: invalid
             return 'unsupported'
@@ -203,10 +203,10 @@ class Unit:
             invalid = invalid or (any(sl(M, hi, lo) for hi, lo in RESERVED if hi >= 64) or sl(loc, 5, 4) == 3
                                   or any(self._substitute(j) is None for j in localities_of(M))
                                   or fld(M, 'ExpirationDate') and not self.zklexpire
-                                  or custom and sl(loc, 1, 0) < 2)          # <<KLEE-GR-custom-locality>>
+                                  or custom and sl(loc, 1, 0) < 2)          # <<KLE-GR-custom-locality>>
         return 'invalid' if invalid else None
 
-    def kl_size(self, mdh, form='C'):          # <<KLEE-instruction-size>>
+    def kl_size(self, mdh, form='C'):          # <<KLE-instruction-size>>
         mdh &= (1 << 64) - 1 if form == 'B' else (1 << 128) - 1
         st = fld(mdh, 'State')
         if form == 'A' and st == UNCONF:
@@ -220,7 +220,7 @@ class Unit:
             return (64 + content2_size(mdh) if fld(mdh, 'AuxDataLen') else 32) + self.content1_size(mdh)
         return 16 + self.content1_size(mdh)    # PI: same key field
 
-    # kl.mgmt #kl_cfg_importing: <<KLEE-SCC-import>> steps 1-5, or the short import
+    # kl.mgmt #kl_cfg_importing: <<KLE-SCC-import>> steps 1-5, or the short import
     def mgmt_open_import(self, cl, ml):
         self._check_managed(cl)
         try:
@@ -231,13 +231,13 @@ class Unit:
     def _open_import(self, cl, ml):
         cl.__init__(idx=cl.idx)                # step 1: clear
         st = fld(ml, 'State')
-        if st in ERROR_STATES:                 # <<KLEE-error-state-transfer>>; Expired without Zklexpire: read
+        if st in ERROR_STATES:                 # <<KLE-error-state-transfer>>; Expired without Zklexpire: read
             st = INVALID if st in (54, 55) or st == EXPIRED and not self.zklexpire else st
             cl.mdh = err_mdh(ml, st)
             return
         chk = self.metadata_check(ml, base_type(st) or 'scc', at_import=True)
         if chk == 'unsupported':
-            raise KleeException('kl_exc_unsupported')
+            raise KleException('kl_exc_unsupported')
         if chk:
             cl.mdh = put(0, 'State', INVALID)  # every other MDH field stays zero
             return
@@ -248,9 +248,9 @@ class Unit:
 
     def load(self, cl, mem, at=16):            # kl.load: step 6
         if cl.state == UNCONF or cl.state in ERROR_STATES:
-            return                             # GR36: no operation
+            return                             # GR37: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
-            raise IllegalInstruction           # GR40
+            raise IllegalInstruction           # GR41
         self._check_transfer(cl)
         off, c1 = content_offset(cl.mdh), self.content1_size(cl.mdh)
         end = off + min(c1 + content2_size(cl.mdh), self.max_admissible(cl.mdh))   # image_end
@@ -262,10 +262,10 @@ class Unit:
         has_c2 = fld(cl.mdh, 'AuxDataLen') >= 2 and not fld(cl.mdh, 'ADSDropped')
         cl.content2 = deser(S[off + c1:end]) if has_c2 else None
 
-    def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLEE-SCC-export>>
+    def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLE-SCC-export>>
         self._check_managed(cl)
         st = cl.state
-        if st == UNCONF:                       # GR36: common steps only
+        if st == UNCONF:                       # GR37: common steps only
             self.klmanagedlocker = 32
             return
         if is_valid(st):
@@ -284,9 +284,9 @@ class Unit:
 
     def store(self, cl):                       # kl.store
         if cl.state == UNCONF:
-            return b''                         # GR36: no operation
+            return b''                         # GR37: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
-            raise IllegalInstruction           # GR41
+            raise IllegalInstruction           # GR42
         self._check_transfer(cl)
         S = v2b(self.reg_SIV, 16) + (v2b(self.reg_IMPQUAL, 16) + v2b(self.reg_SIV2, 16)
                                      if content_offset(cl.mdh) == 48 else b'')
@@ -295,10 +295,10 @@ class Unit:
         return S
 
     def mgmt_complete(self, cl, ml, regen=None, clear_ads=True):
-        """kl_cfg_management_end for base type scc: <<KLEE-SCC-import>> steps 7-15. regen = (AuxDataLen,
+        """kl_cfg_management_end for base type scc: <<KLE-SCC-import>> steps 7-15. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
-        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR36: common steps only
+        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR37: common steps only
             self.klmanagedlocker = 32
             return
         st = fld(ml, 'State')
@@ -344,7 +344,7 @@ def import_image(unit, mem, ml=None, regen=None, clear_ads=True):
     M, cl = b2v(mem.read(0, 16)), Locker()
     try:
         unit.mgmt_open_import(cl, M)
-    except KleeException as e:
+    except KleException as e:
         return cl, e.args[0]
     if cl.state == IMPORTING:
         unit.load(cl, mem)
@@ -369,7 +369,7 @@ def reimport_pccc(unit, image):
     unit.mgmt_complete(cl, b2v(image[:16]))
     return cl
 
-def kl_rename(unit, klf, s, d):                # <<KLEE-instruction-clone>>
+def kl_rename(unit, klf, s, d):                # <<KLE-instruction-clone>>
     if s != d:
         klf[d], klf[s] = klf[s], Locker(idx=s)
         klf[d].idx = d
@@ -519,24 +519,24 @@ for src, k, nce, aad, pt, rec in RFC8452_AEAD:
     else:
         eq(f"{src}: bits differ: no sep verifies the record (the one-bit price of sep)", verifies, [])
 
-section("the MDH (<<KLEE-metadata-header>>)")
+section("the MDH (<<KLE-metadata-header>>)")
 eq("the MDH fields tile bits [127:0]", sorted(b for _, hi, lo in MDH_FIELDS for b in range(lo, hi + 1)),
    list(range(128)))
 probe = make_mdh(State=0x2A, StateExtension=0x9)
 eq("kl.getst / kl.getstx expansions (srli 18, andi 0x3F; srli 24, andi 0x0F)",
    ((probe & M32) >> 18 & 0x3F, (probe & M32) >> 24 & 0x0F), (0x2A, 0x9))
-check("every length/capacity field and Version lies in [63:0] (<<KLEE-length-rule>>, kl.size Form B)",
+check("every length/capacity field and Version lies in [63:0] (<<KLE-length-rule>>, kl.size Form B)",
       all(MDH_FIELD[f][0] < 64 for f in ('Machine', 'MachinePolicy', 'KeyType', 'StateExtension',
                                          'AuxDataLen', 'ADSDropped', 'SCProtection', 'Version')))
 eq("Locality field round-trips for each Locality set",
    [localities_of(make_mdh(s)) for s in LOC_SETS], [list(s) for s in LOC_SETS])
-eq("at most six Localities, so len_AD <= 7 (<<KLEE-SCC-GCM-SIV-enc>>)",
+eq("at most six Localities, so len_AD <= 7 (<<KLE-SCC-GCM-SIV-enc>>)",
    max(len(localities_of(put(0, 'Locality', f))) for f in range(512) if sl(f, 5, 4) != 3), len(LOC_SETS[2]))
 
-section("length rule and layout (<<KLEE-length-rule>>, <<KLEE-SCC>>, <<KLEE-instruction-size>>)")
+section("length rule and layout (<<KLE-length-rule>>, <<KLE-SCC>>, <<KLE-instruction-size>>)")
 base = make_mdh(LOC_SETS[2], AuxDataLen=AUX_LEN)
 image_len = lambda m: 16 + content_offset(m) + unit.content1_size(m) + content2_size(m)
-check("image_size = kl.size - 16 (<<KLEE-instruction-mv>>)", all(image_len(m) == unit.kl_size(m) for m in (
+check("image_size = kl.size - 16 (<<KLE-instruction-mv>>)", all(image_len(m) == unit.kl_size(m) for m in (
       base, make_mdh(), put(base, 'ADSDropped', 1), put(base, 'AuxDataLen', 2), make_mdh(KeyType=1))))
 eq("the SCC length does not depend on State (Valid and scc Configuration States)",
    len({image_len(put(base, 'State', st)) for st in list(range(1, 48)) + [EXPORTING, IMPORTING]}), 1)
@@ -567,12 +567,12 @@ check("kl.size Form B ignores reserved bits, Locality and ExpirationDate in [127
       all(lean.kl_size(m) == 0 and lean.kl_size(m, 'B') == lean.kl_size(m & (1 << 64) - 1) != 0 for m in (
           base | 1 << 116, base | 2 << 78, put(base, 'Locality', 0b110000), make_mdh((10,)),
           make_mdh(ExpirationDate=5))))
-eq("kl.size: MachineUse and AuxInfo are not checked (<<KLEE-MachineUse>>)",
+eq("kl.size: MachineUse and AuxInfo are not checked (<<KLE-MachineUse>>)",
    {unit.kl_size(put(put(base, 'MachineUse', 0x2EEF), 'AuxInfo', 7), f) for f in 'BC'}, {unit.kl_size(base)})
 eq("kl.size Form B reports 0 for an unsupported Version",
    unit.kl_size(put(base, 'Version', 1), 'B'), 0)
 
-section("export -> import round trip (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>)")
+section("export -> import round trip (<<KLE-SCC-export>>, <<KLE-SCC-import>>)")
 sccs, plain = {}, lambda m: (m, tuple(CONTENT1), None)
 for locs in LOC_SETS:
     mdh = make_mdh(locs)
@@ -642,7 +642,7 @@ eq("changed selected Locality Secret / unselected one / other CSK / substituted 
    (imp(new_unit(LST_ALT), scc), imp(new_unit(LST_ALT_UNSEL), scc), imp(new_unit(csk=CSK ^ 1), scc),
     imp(unit, v2b(make_mdh((2,)), 16) + scc[16:])), (AUTH_F, 'ok', AUTH_F, AUTH_F))
 cl, res = import_image(unit, Mem(scc), ml=put(put(mdh, 'Locality', 0), 'UsagePolicy', 0b11111))
-eq("ml is consumed only for State (<<KLEE-locker-management>>): another State fails, other fields ignored",
+eq("ml is consumed only for State (<<KLE-locker-management>>): another State fails, other fields ignored",
    (imp(unit, scc, ml=put(mdh, 'State', ENCRYPT)), res, cl.mdh), (AUTH_F, 'ok', mdh))
 no_sip, m0 = new_unit(LST_NO_SIP), make_mdh((0,))
 scc0 = sealed(no_sip, m0)
@@ -659,13 +659,13 @@ cl, res = import_image(no_sloc, Mem(scc10))
 eq("... its import there is invalid Metadata (MDH zeroed); where configured, Authentication Failed",
    (res, cl.mdh, imp(unit, scc10)), (INV_MD, put(0, 'State', INVALID), AUTH_F))
 
-section("the Auxiliary Data Section (<<KLEE-Auxiliary-Data-Section>>)")
+section("the Auxiliary Data Section (<<KLE-Auxiliary-Data-Section>>)")
 mdh_i = make_mdh(LOC_SETS[2], AuxDataLen=AUX_LEN)
 scc_i = sealed(unit, mdh_i, CONTENT1, CONTENT2)
 off1, off2 = 64, 64 + 16 * n1
 s1, c1 = SCC_Encrypt([mdh_i] + [LST[j] for j in LOC_SETS[2]], 0, 0, CONTENT1, CSK)
 s2, c2 = SCC_Encrypt([unit.impqual(), s1], 0, 1, CONTENT2, CSK)
-eq("SCC = MDH | SIV | IMPQUAL | SIV2 | Content1 | Content2, length kl.size (<<KLEE-SCC>>)",
+eq("SCC = MDH | SIV | IMPQUAL | SIV2 | Content1 | Content2, length kl.size (<<KLE-SCC>>)",
    (scc_i, len(scc_i)),
    (b''.join(v2b(x, 16) for x in (mdh_i, s1, unit.impqual(), s2, *c1, *c2)), unit.kl_size(mdh_i)))
 eq("IMPQUAL = zeros(32) @ klmimpid @ klmarchid @ klmvendorid", scc_i[32:48],
@@ -715,7 +715,7 @@ eq("every sampled change in IMPQUAL, SIV2 or Content2 drops the ADS and keeps Co
 eq("a change in Content1 rejects the whole SCC",
    {imp(unit, tampered(scc_i, b)) for b in range(8 * off1, 8 * off2, 13)}, {AUTH_F})
 
-section("the segment separator sep (<<KLEE-SCC-AEAD>>)")
+section("the segment separator sep (<<KLE-SCC-AEAD>>)")
 enc0 = SCC_KeyDeriv(CSK, 0)[0]
 eq("counter block: 128 bits, bit 127 = 1, bit 126 = sep overriding SIV[126]",
    (max(ctr_block(x, sp, i).bit_length() for x in (0, MASK128, 0x5A5A << 32) for sp in (0, 1)
@@ -733,7 +733,7 @@ eq("sep enters tag and keystream; a segment-1 payload does not authenticate with
    (t1 != t2, e1 != e2, SCC_Decrypt(AD1, 0, 0, t1, e1, CSK)[0], SCC_Decrypt(AD1, 0, 1, t1, e1, CSK)[0]),
    (True, True, True, False))
 
-section("ADSDropped, an unauthenticated format hint (<<KLEE-data-formats>>)")
+section("ADSDropped, an unauthenticated format hint (<<KLE-data-formats>>)")
 ref_snap = import_image(unit, Mem(scc_i))[0].snapshot()
 set47, mem = tampered(scc_i, 47), Mem(tampered(scc_i, 47))
 cl, res = import_image(unit, mem)
@@ -774,8 +774,8 @@ for label, img, want in (("a PCCC of an import that kept its ADS completes with 
     unit.mgmt_complete(cl, mdh_i)
     eq(label, cl.snapshot(), want)
 
-section("klmanagedlocker (<<KLEE-CSR-klmanagedlocker>>); kl.rename and kl.swap under management "
-        "(<<KLEE-instruction-clone>>)")
+section("klmanagedlocker (<<KLE-CSR-klmanagedlocker>>); kl.rename and kl.swap under management "
+        "(<<KLE-instruction-clone>>)")
 u, klf = new_unit(), {i: Locker(idx=i) for i in range(32)}
 mem = Mem(scc_i)
 u.mgmt_open_import(klf[3], b2v(mem.read(0, 16)))
@@ -796,7 +796,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klmanagedlocker follows (2 -> 5)",
    (u.klmanagedlocker, klf[2].snapshot()), (5, snap5))
 u.klmanagedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR41)",
+check("kl.store from a kl_cfg_exporting locker not named by klmanagedlocker: illegal (GR42)",
       raises(u.store, klf[5]))
 u.klmanagedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
@@ -815,7 +815,7 @@ u.mgmt_complete(klf[4], mdh_i)
 eq("the managed locker transitions to an Error State (failed authentication): klmanagedlocker -> 32",
    (klf[4].state, u.klmanagedlocker), (AUTH, 32))
 
-section("Error States (<<KLEE-error-state-transfer>>)")
+section("Error States (<<KLE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))
 cl_fail, res = import_image(unit, Mem(bad_c1))
 failed = err_mdh(mdh_i, AUTH)
@@ -835,7 +835,7 @@ far = new_unit(LST_NO_SLOC, ids=IDS_NEXT_REV, csk=CSK ^ 7, max_aux=0)
 cl_e, res = import_image(far, Mem(img_e))
 far.mgmt_complete(cl_e, cl_e.mdh)
 far.load(cl_e, Mem(img_e))
-eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR36)",
+eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR37)",
    (res, cl_e.snapshot()), (AUTH_F, snap))
 dirty = make_mdh(Machine=0xFFF, MachinePolicy=0, KeyType=3, AuxDataLen=5, ADSDropped=1, UsagePolicy=0b10101,
                  MachineExtension=2, SCProtection=3, StateExtension=0xF, AuxInfo=0x155, MachineUse=0x2EEF,
@@ -860,7 +860,7 @@ eq("without Zklexpire the short import of Expired installs the MDH in Invalid",
    cl_x.mdh, err_mdh(dirty, INVALID))
 eq("the same MDH in a Valid State is checked (unsupported)", imp(unit, v2b(put(dirty, 'State', 1), 16)),
    'kl_exc_unsupported')
-info("the short import neither opens a management operation nor zeroizes SIV/IMPQUAL/SIV2 (<<KLEE-KLF>> "
+info("the short import neither opens a management operation nor zeroizes SIV/IMPQUAL/SIV2 (<<KLE-KLF>> "
      "zeroizes them for a kl.mgmt that opens an import).")
 
 section("negative controls")

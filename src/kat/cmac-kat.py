@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CMAC KAT: the Machine of <<KLEE-CMAC-mode>> against SP 800-38B / RFC 4493, with its
+"""CMAC KAT: the Machine of <<KLE-CMAC-mode>> against SP 800-38B / RFC 4493, with its
 state machine, Serialized Content and kl.derive endpoints."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +31,7 @@ def ref_cmac(K, M):
         X = E(bxor(X, M[16 * i:16 * i + 16]))
     return E(bxor(X, last)), [x.to_bytes(16, 'big').hex().upper() for x in (L, K1, K2)]
 
-# ---------------------------------------------------------------- KLEE model
+# ---------------------------------------------------------------- KLE model
 class Invalid(Exception): pass
 class Unsupported(Exception): pass
 SKS = {}
@@ -56,7 +56,7 @@ def unpack(data, lay):
 
 class Cmac:
     def __init__(s, key, skid=None, policy=0, **nc):
-        """policy: _MachinePolicy_, unused by CMAC: a non-zero value is unsupported Metadata (<<KLEE-CMAC-mode>>)."""
+        """policy: _MachinePolicy_, unused by CMAC: a non-zero value is unsupported Metadata (<<KLE-CMAC-mode>>)."""
         if policy:
             raise Unsupported('MachinePolicy')
         s.key, s.skid, s.state, s.policy = key, skid, READY, policy
@@ -96,7 +96,7 @@ class Cmac:
         s.state = immed if immed != VERIFY else SUCCESS if sl(aux, B - 1, 0) == s.hash else FAILURE
     def exec(s, form, INPUT=0, klen=B):
         st = s.state
-        if st in ERROR_STATES:                    # GR33
+        if st in ERROR_STATES:                    # GR33, GR34
             return 0
         if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD'}.get(st) or ''):
             s._invalid('Form')                    # MR1, GR23, GR27
@@ -134,28 +134,33 @@ class Cmac:
         new.last_blk_len = f['last_blk_len']
         return new
 
+class ExecOut(bytes):
+    """The kl.exec output of another Machine, such as a hash (GR50)."""
+
 def derive(src, dst, length):
-    """kl.derive; src is a Cmac locker or the bytes of a GR48/GR50 source.
-    Endpoints: output in Hash_Output (GR49 source); `key` in Ready, input in Hash_Absorb (destination)."""
+    """kl.derive; src is a Cmac locker, an ExecOut, or the bytes of a GR49/GR51 source.
+    Endpoints: output in Hash_Output (GR50 source); `key` in Ready, input in Hash_Absorb (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(c.state in ERROR_STATES for c in lockers):
         return                                    # Gate Order Rule
     bad = [c for c, ok in ((src, src.state == OUTPUT) if isinstance(src, Cmac) else (src, True),
                            (dst, dst.state == ABSORB or (dst.state == READY and dst.skid is None))) if not ok]
-    for c in bad:                                 # GR44 items 1-2 (GR47): only the offending lockers
-        c._invalid('GR44 items 1-2' if c is bad[-1] else None)
-    # GR44 item 3 holds: GR48/GR50 sources, and GR49 (a MAC tag into a key is key derivation, unrestricted)
+    for c in bad:                                 # GR45 items 1-2 (GR48): only the offending lockers
+        c._invalid('GR45 items 1-2' if c is bad[-1] else None)
+    if dst.state == ABSORB and not isinstance(src, (Cmac, ExecOut)):
+        dst._invalid('GR45 item 3')               # GR49 excepts CMAC, GR51 feeds keys only
+    # GR45 item 3 holds otherwise: GR49/GR51 sources into the key, and GR50 (any kl.exec output, into a key too)
     avail = B // 8 if isinstance(src, Cmac) else len(src)
     if dst.state == READY and (length < len(dst.key) or avail < len(dst.key)):
-        dst._invalid('GR44 item 5')
+        dst._invalid('GR45 item 5')
     data = v2b(src.exec('C', klen=8 * length), length) if isinstance(src, Cmac) else src
-    if dst.state == ABSORB:                       # consumed as kl.exec would be (GR51)
+    if dst.state == ABSORB:                       # consumed as kl.exec would be (GR52)
         return dst.exec('B', b2v(data[:length]), 8 * length)
     dst.key = data[:len(dst.key)]
 
 def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
         skid=None, **nc):
-    """<<KLEE-pseudocode-CMAC>> up to _Hash_Output_; hop exports/imports after every instruction."""
+    """<<KLE-pseudocode-CMAC>> up to _Hash_Output_; hop exports/imports after every instruction."""
     fB = 'D' if subst else 'B'
     cl = cl or Cmac(K, skid, **nc)
     nxt = (lambda c: c.imported(c.export(lay), lay)) if hop else (lambda c: c)
@@ -214,7 +219,7 @@ W4 = VEC[3][3]                                    # AES-128, Mlen = 40
 section("gen_subkeys vs published L, K1, K2")
 for lab, K, *pub in SUBKEYS:
     got = [v2b(x, 16).hex().upper() for x in Cmac(K).gen_subkeys()]
-    check(f"{lab} L, K1, K2 (KLEE, REF)", True, (got, ref_cmac(K, b'')[1]), (pub, pub))
+    check(f"{lab} L, K1, K2 (KLE, REF)", True, (got, ref_cmac(K, b'')[1]), (pub, pub))
 
 section("vectors")
 def verified(K, M, t):
@@ -250,7 +255,7 @@ for Xs, bad in [(x, True) for x in (136, 129, 4, 12, 127)] + [(x, False) for x i
           (bad, INVALID if bad else OUTPUT if Xs == 0 else LAST))
 
 section("Serialized Content")
-info("<<KLEE-CMAC-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
+info("<<KLE-CMAC-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
 fits = True
 for vals in ((MASK128, B), (0, 0), (1, B - 8)):
     cl = Cmac(K128)
@@ -291,7 +296,7 @@ for name, mk, act in INVALID_CASES:
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
 cl = Cmac(K128)
 raises(cl.exec, 'B', exc=Invalid)
-check("Error State: Content cleared (GR29); kl.exec no operation, OUTPUT 0 (GR33)", True,
+check("Error State: Content cleared (GR29); kl.exec no operation, OUTPUT 0 (GR33, GR34)", True,
       (cl.key, cl.hash, cl.exec('C'), cl.state), (None, 0, 0, INVALID))
 subst = all(tag(K, M, subst=True) == W for _, K, M, W in VEC)
 cl = run(K128, MSG[:40], subst=True)
@@ -317,23 +322,24 @@ secret = K128 + bytes(range(0xF0, 0x100))
 for length in (16, 32):
     cl = Cmac(bytes(16))
     derive(secret, cl, length)
-    check(f"shared secret (GR48) into `key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
+    check(f"shared secret (GR49) into `key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
 new16 = lambda: Cmac(bytes(16))
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (GR44 item 5)", new16, secret, 8),
-        ("length 0 into the key (GR44 item 5)", new16, secret, 0),
-        ("12-byte source into the 16-byte key (GR44 item 5)", new16, K128[:12], 16),
-        ("into a locker in Hash_Absorb_Last_Block (GR44 items 1-2)", last_set, secret, 16),
-        ("into a locker in Success (GR44 items 1-2)", done_ok, secret, 16),
-        ("into the key of a KeyType 1 locker (GR47, GR44 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
-        ("24 bytes into Hash_Absorb: short block (GR51, MR2)", at_absorb, MSG[:24], 24)]:
+        ("length 8 into the 16-byte key, no zero-fill (GR45 item 5)", new16, secret, 8),
+        ("length 0 into the key (GR45 item 5)", new16, secret, 0),
+        ("12-byte source into the 16-byte key (GR45 item 5)", new16, K128[:12], 16),
+        ("into a locker in Hash_Absorb_Last_Block (GR45 items 1-2)", last_set, secret, 16),
+        ("into a locker in Success (GR45 items 1-2)", done_ok, secret, 16),
+        ("into the key of a KeyType 1 locker (GR48, GR45 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
+        ("24 bytes of hash output into Hash_Absorb: short block (GR52, MR2)", at_absorb, ExecOut(MSG[:24]), 24),
+        ("a shared secret into Hash_Absorb (GR49 excepts CMAC; GR45 item 3)", at_absorb, secret, 32)]:
     cl = mk()
     check(f"{name} -> Invalid", raises(derive, src, cl, n, exc=Invalid) and cl.key is None)
 cl = at_absorb()
-derive(MSG[:32], cl, 32)
+derive(ExecOut(MSG[:32]), cl, 32)
 cl.setst(LAST, 'B', 64)
 cl.exec('B', b2v(MSG[32:40]), 64)
-check("32 bytes into Hash_Absorb, then the last block: ex4", True, v2b(cl.exec('C'), 16), W4)
+check("32 bytes of hash output into Hash_Absorb (GR50), then the last block: ex4", True, v2b(cl.exec('C'), 16), W4)
 src, dst = run(K128, MSG[:16]), at_absorb(K256)
 derive(src, dst, 16)
 dst.setst(LAST, 'B', 64)
@@ -342,11 +348,11 @@ check("CMAC tag (Hash_Output) into another CMAC's Hash_Absorb: REF; source in Su
       (v2b(dst.exec('C'), 16), src.state), (ref_cmac(K256, VEC[1][3] + MSG[:8])[0], SUCCESS))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
 derive(src, dst, 16)
-check("CMAC tag into another CMAC's `key` in Ready (GR49 key derivation, unrestricted), then MSG[:40]: REF",
+check("CMAC tag into another CMAC's `key` in Ready (GR50, unrestricted), then MSG[:40]: REF",
       True, (src.state, dst.state, dst.key, tag(None, MSG[:40], cl=dst)),
       (SUCCESS, READY, VEC[1][3], ref_cmac(VEC[1][3], MSG[:40])[0]))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(32))
-check("16-byte CMAC tag into a 32-byte `key` (GR44 item 5) -> only the destination Invalid",
+check("16-byte CMAC tag into a 32-byte `key` (GR45 item 5) -> only the destination Invalid",
       raises(derive, src, dst, 32, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = at_absorb(), Cmac(bytes(16))
 check("CMAC in Hash_Absorb as a source (no source endpoint) -> only the source Invalid",
