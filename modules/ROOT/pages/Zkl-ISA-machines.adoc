@@ -225,6 +225,7 @@ In a State that processes whole blocks of `b` bits, one `kl.exec` applies the pe
 takes an input and producing `OUTPUT[i+b-1:i]` if it produces an output. Blocks are thus taken and produced from the least
 significant position upwards, here and throughout this specification.
 A resumed `kl.exec` performs only the iterations from `i` = 8 {interpunct} `klstart` onwards (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>).
+The clock check of <<Zkl-ISA-unpriv.adoc#KLEE-Metadata-expiration-date>> occurs only when the instruction starts or resumes after a halt, not between these iterations. The randomness separation of Rule <<KLEE-MGR-atomic-randomness>> applies to the whole instruction, not separately to each block.
 +
 A State that the Machine describes as processing a single block, such as a last-block, tag-finalize or verify State, processes
 exactly one block whatever `KLLEN` is, unless its transfer window is invalid (Rule <<KLEE-MGR-granularity>>) or empty (<<Zkl-ISA-unpriv.adoc#KLEE-CSR-klstart>>); a further `kl.exec` in a last-block State is governed by Rule <<KLEE-MGR-single-last-block>>.
@@ -235,8 +236,17 @@ completes, that is by the `kl.mgmt` with `#kl_cfg_management_end`, and whenever 
 is modified, for instance when `kl.derive` overwrites a key field or an explicit operation of the Machine regenerates it. A Machine states only the derivation itself, and marks such a field “(derived)” in
 its *Internal State*.
 
-[[KLEE-MGR-atomic-randomness,MR5]]MR5:: Whenever a Machine requires a random value, if the RBG cannot supply it, Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> applies.
-Such an internal random value, such as a signing nonce or an ephemeral scalar, is generated and consumed only for the purpose of the scheme which requires it, and for no other instance of the original use or any other purpose.
+[[KLEE-MGR-atomic-randomness,MR5]]MR5:: _Randomness generation and transfer separation._
+A Machine operation whose architected computation requires input from an RBG or DRBG must be a separate instruction that operates on state already in the locker, with only scalar GPR inputs captured at issue. It must not access memory, vector registers or the KLIOBUF, transfer data between lockers, or be embedded as a component of an instruction that performs such transfers. Its results remain in the locker; input loading and result output occur in separate instructions.
+This separation applies to every Machine and may not be relaxed by a Machine-specific rule.
++
+Whenever such an operation requires a random value, if the RBG or DRBG cannot supply it, Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-rbg-failure>> applies.
+The operation may be long-running under Rule <<Zkl-ISA-unpriv.adoc#KLEE-GR-long-running-no-data>>; generating an internal nonce, an ephemeral scalar, or a signature and retaining it in the locker are examples.
+A later instruction using a completed result must not acquire additional algorithmic randomness as part of a data transfer. Neither that instruction nor any of its resumptions may wait or raise an RBG-unavailable exception because of RBG or DRBG starvation. Any further randomness-dependent computation must again occur in a separate instruction before the transfer that uses its result.
++
+Implementation-only randomness, such as masking bits, must likewise be supplied so that data-transfer instructions and their resumptions cannot encounter RBG or DRBG starvation. An implementation must not weaken the Machine's required protection to meet this condition. Saving and restoring an interrupted transfer, or discarding its ADS, must not introduce a starvation dependency into the remaining transfer.
++
+An internal algorithmic random value, such as a signing nonce or an ephemeral scalar, is generated and consumed only for the purpose of the scheme which requires it, and for no other instance of the original use or any other purpose.
 This Rule excludes the reuse of an internal random value which may be used by some algorithms to enforce nonce reuse.
 Rule <<KLEE-MGR-progress-discard>> ensures this.
 
