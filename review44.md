@@ -6,7 +6,7 @@
 
 ## 2. Findings
 
-### C1 - Shared-secret transfers are both uninterruptible and resumable
+### C1 **fixed** - Shared-secret transfers are both uninterruptible and resumable
 
 **Severity rationale:** Atomic insertion of a secret is a confidentiality boundary. A conflicting permission to expose intermediate destination states can undermine that boundary.
 
@@ -16,9 +16,9 @@
 
 **Evidence:** GR63 explicitly explains that no locker may hold part of a shared secret; GR66 grants the opposite execution model for its message destination. There is no normative precedence between these rules. Exploitability depends on the receiving Machine's permitted operations, which were not inspected; the contradictory architectural guarantee is itself established in scope.
 
-**Resolution:** Add to GR65–GR67: “A derivation covered by GR63 commits no partial transfer at either endpoint. The resumable derivation rules apply only to other derivations.” Change GR66 to exclude both key-field destinations and shared-secret insertion into message inputs. Internal preemption may use GR69–GR72 only without exposing a partially transferred secret or weakening GR63's architectural outcome.
+**Resolution:** In GR66, replace “`kl.derive` other than into a key field (Rule GR63)” with “`kl.derive`, except where Rule GR63 makes it uninterruptible”.
 
-### C2 - Retargeting the named locker hides the authentication-register owner
+### C2 **fixed** - Retargeting the named locker hides the authentication-register owner
 
 **Severity rationale:** Following the documented save procedure can overwrite the only authentication state of an interrupted export. The resulting loss of the only restorable CC prevents safe context switching.
 
@@ -28,9 +28,9 @@
 
 **Evidence:** Authentication registers exist once per hart; changing the selector does not save them. GR68 serializes in-flight instructions, not the interval between instructions of a management operation. SR9 explicitly permits temporary retargeting, and the save/restore sequences require it. SR12's general coordination advice supplies no reentrant ownership protocol.
 
-**Resolution:** Define a software authentication-owner record independent of `klnamedlocker`, accessible to all interposed handlers through a specified platform convention. It must identify the owner, or none, across every trap boundary, including temporary selection of 32, and track opening, completion, clear, rename/swap, and suspended management levels. Specify how record publication and those operations remain consistent if interrupted. Before another operation overwrites authentication registers, save the actual owner by a completed nested export; preserve that image and its resumption state, then clear the saved locker under SR14 before reusing the registers. Restore its image before resuming it. Clarify that SR13 prohibits unconditional discard-and-restart, not this completed save/clear/restore sequence. Rewrite SR11 and the save/restore algorithms to consult the record. The default save path should save and clear the owner first using Form D `kl.mgmt` and locker memory transfers, then save the KLIOBUF and other lockers; restoration should restore the KLIOBUF before restoring the owner last, using the same buffer-independent forms. Apply SR7/SR9/SR15 to the final selector and progress values. Temporary KLIOBUF transfers during ordinary management still require the ownership record. Describe `klnamedlocker` consistently as a selector.
+**Resolution:** Recommended: (1) Append to SR11: “While that locker is in such a State, software must not write another value to `klnamedlocker` before saving it this way, so that `klnamedlocker` names the owner of the authentication registers at every trap.” (2) In the Context Save Order, save the named locker before the KLIOBUF, with Form C or D `kl.mgmt` and no KLIOBUF transfer. (3) In the Context Restore Order, restore the KLIOBUF before the named locker, which is restored last, also without the KLIOBUF. Alternative: a hardware-maintained, read-only owner field for the authentication registers.
 
-### M1 - End-of-field validation conflicts with committed derivation prefixes
+### M1 **fixed** - End-of-field validation conflicts with committed derivation prefixes
 
 **Severity rationale:** The rules do not determine the two endpoints' architectural state after a rejected field transfer. Independent implementations can consume different source data or retain different destination contents.
 
@@ -40,9 +40,9 @@
 
 **Evidence:** GR45 separates initial checks from transferred-value checks, so initial validation alone does not resolve this case. An Error State may destroy the destination, whereas a Machine-defined failure outcome need not describe the other endpoint. The commented-out alternative GR52 is not operative.
 
-**Resolution:** Define final validation against the committed field prefix plus the staged final unit and zero-filled tail, before committing that unit. On failure, do not consume or commit the current source unit; preserve earlier source effects, and apply the destination's specified failure outcome, with the candidate field unusable. Explicitly permit required destination zeroization to supersede preservation of its prefix. On success, commit the final unit, tail, and completion state together. For GR63 transfers, stage the entire transfer and commit neither endpoint before successful validation. Specify the absolute field offset on resumption as `klstart + unit_offset`; empty transfers perform no zero-filling or validation side effect.
+**Resolution:** In GR52, replace “is not written: its locker takes the outcome its Machine specifies, or _Invalid_, and the instruction retires;” with “leaves its locker in the outcome its Machine specifies, or _Invalid_, and the instruction retires, the source keeping the effects of the units already transferred;”, and replace “the `i`-th byte transferred” with “byte `i` of the transfer, counted across resumptions,”.
 
-### M2 - Random-key provisioning lacks a capacity transition
+### M2 **not a defect** - Random-key provisioning lacks a capacity transition
 
 **Severity rationale:** An otherwise valid provisioning may require more storage at completion than was allocated at opening, without a specified allocation failure or recovery outcome.
 
@@ -52,9 +52,9 @@
 
 **Evidence:** The text explicitly permits different capacities for the two key types. “Room for every field” does not specify whether the opening's type-1 allocation includes the subsequent type-0 representation. This also affects emulated implementations and simultaneous occupation of other lockers.
 
-**Resolution:** Before random generation at completion, reserve the full final type-0 capacity, allowing an implementation to have reserved it earlier. If reservation fails, raise KLE out-of-memory and leave the type-1 provisioning image, MDH, and allocation unchanged, apart from already specified `kl.mgmt` effects; provisioning remains open for retry or abandonment. Commit the new allocation and `_KeyType_=0` only with successful completion; release provisional reservations on failure. State that the capacity becomes fixed after this commit.
+**Resolution:** None. The KLF capacity of a locker with a resolved SKID is implementation-defined: it may hold the 64-bit SKID or the entire key, and the architecture need not know. A random key, from the all-ones SKID, uses the capacity of a provisioned key.
 
-### M3 - A faulting attempt cannot always advance one granule
+### M3 **fixed** - A faulting attempt cannot always advance one granule
 
 **Severity rationale:** The progress guarantee conflicts with required precise fault handling on ordinary invalid memory accesses.
 
@@ -64,9 +64,9 @@
 
 **Evidence:** RVV 1.0, §17.1, requires eventual forward progress, not positive progress on every faulting attempt. The draft itself requires that the failing unit have no effect. No hardware policy can resolve a permanently invalid software address by advancing the instruction.
 
-**Resolution:** Qualify the progress guarantee: “A synchronous fault may halt with no additional progress. Eventual completion assumes that software resolves the fault and grants execution time. Once the instruction is otherwise executable and its required resources are available, the implementation must document and enforce a bound on consecutive zero-progress preemptions, after which at least one permitted unit completes before an asynchronous interruption.” Keep all committed prefixes and retain the exception-specific handling and bounded resource-wait rules. Apply the same qualification to P13.
+**Resolution:** In GR65 option 3, replace “advancing by at least one granule per attempt” with “as for `vstart` in RVV 1.0, the implementation must ensure that forward progress can eventually be guaranteed for the granule that `klstart` reports”, after RVV 1.0, “Precise vector traps”.
 
-### M4 - The self-derivation check has two incompatible scopes
+### M4 **fixed** - The self-derivation check has two incompatible scopes
 
 **Severity rationale:** Operand legality and exception priority can differ between implementations for the same instruction and hart state.
 
@@ -76,9 +76,9 @@
 
 **Evidence:** GR3 distinguishes the encoded zero placeholder from the selected locker. The two exception groups straddle fatal, missing-CSK, and locker-Off handling. This concerns operand interpretation and priority, not the cause-code allocation excluded by A4.
 
-**Resolution:** Specify that the first-group equality test applies only when `R=00`, comparing the two direct locker indices. When `R=01` or `R=10`, resolve `KLNL` as GR8 prescribes and test equality after fatal, missing-CSK, and locker-Off checks, but before the conditions on either locker's State; add that position explicitly to the evaluation-order rule. Never compare a `KLNL` placeholder as a direct K0 operand. With no named locker, this test does not fire and the existing no-op rule remains applicable.
+**Resolution:** In the first group of illegal-instruction grounds, replace “or equal locker indices in `kl.derive`” with “or, in a `kl.derive` with `R` = `00`, equal locker indices”. The second group already covers `KLNL`. Add a KAT check that `kl.derive KLNL, K0, Xs2` is legal.
 
-### m1 - Handler summaries undo the prescribed retirement outcome
+### m1 **fixed** - Handler summaries undo the prescribed retirement outcome
 
 **Severity rationale:** The normative rules take precedence, but contradictory implementation guidance can cause incorrect handler code.
 
@@ -88,9 +88,9 @@
 
 **Evidence:** L3444 explicitly gives the SR rules precedence; this limits the defect to guidance, without making the contradictory summaries safe to follow.
 
-**Resolution:** Split handler exit into resume and skip cases. Resume restores the saved progress; skip applies SR15's retirement effects and zeroes only the unwritten output window. Replace “zeroes the output” with an explicit reference to that suffix.
+**Resolution:** In “Handling a KLE Exception”, replace item 2 with “advances `xepc` past the instruction, retiring a usage instruction as Rule SR15 states.” After the handler's exit duties, add “A handler that skips the trapping instruction applies its retirement effects to `klstart` and `vstart` instead of restoring them (Rule SR15).”
 
-### m2 - Management claims confidentiality for plaintext metadata
+### m2 **fixed** - Management claims confidentiality for plaintext metadata
 
 **Severity rationale:** This overstates the security contract, although the actual wire format is clear.
 
@@ -100,9 +100,9 @@
 
 **Evidence:** The SCC table makes the MDH a separate plaintext section; `kl.getmd*` also exposes it by design.
 
-**Resolution:** Replace the claim with: “Management preserves the integrity of authenticated MDH fields and the confidentiality and integrity of secret Content, subject to the explicitly defined PI, PCCC, Error-State, and ADS behaviors.” Do not encrypt the MDH to satisfy the mistaken sentence.
+**Resolution:** Replace “the confidentiality and integrity of the MDH and Content of a CC are preserved” with “the integrity of the MDH, and the confidentiality and integrity of the Content, of a CC are preserved”.
 
-### m3 - SP 800-140F is cited as supplying test metrics it does not specify
+### m3 **fixed** - SP 800-140F is cited as supplying test metrics it does not specify
 
 **Severity rationale:** The reference can mislead readers assessing the advertised side-channel levels; no numerical testing threshold is currently imposed by this draft.
 
@@ -112,9 +112,9 @@
 
 **Evidence:** [NIST SP 800-140F, March 2020](https://doi.org/10.6028/NIST.SP.800-140F), §§5 and 6.2, replaces the relevant ISO provisions but states “No additional requirements at this time.” The NIST publication page identifies that final edition. FIPS 140-3's adoption of the older ISO editions is correctly stated.
 
-**Resolution:** Identify the edition and its actual role: “FIPS 140-3 uses CMVP modifications, including SP 800-140F (March 2020), whose §6.2 specifies no additional test-metric requirements.” Attribute any numerical metrics to a separately verified edition, clause, and assessment profile; retain the distinction between test effort and attack resistance.
+**Resolution:** Replace “with CMVP modifications, such as the test metrics of NIST SP 800-140F” with “with CMVP modifications; NIST SP 800-140F (March 2020), where the CMVP lists approved non-invasive test metrics, currently specifies none”.
 
-### m4 - The strict memory-prefix rule is incorrectly attributed to RVV
+### m4 **fixed** - The strict memory-prefix rule is incorrectly attributed to RVV
 
 **Severity rationale:** The stronger KLE rule is implementable, but its standards rationale invites an incompatible implementation shortcut.
 
@@ -124,9 +124,9 @@
 
 **Evidence:** RVV 1.0, §§3.7 and 17.1, distinguishes the restart index from the stronger no-effects-beyond-prefix property. Section 17.1 explicitly permits later idempotent stores if re-execution produces the correct result. KLE's decomposition permission remains constrained by its own stricter semantics.
 
-**Resolution:** Say that KLE uses a restart cursor analogous to `vstart`, but imposes the stronger GR57 guarantee. Explain that sub-16-byte or out-of-order component accesses must still support a legal 16-byte locker-transfer halt: permission prevalidation and commitment scheduling must prevent a reported precise fault from leaving a visible partial granule or visible accesses beyond the recorded prefix. The entire 16-byte transfer need not become globally visible atomically.
+**Resolution:** Align GR57 with RVV 1.0: on a precise halt, an access of a KLE memory instruction at or beyond `klstart` may already be visible, since re-execution from `klstart` produces the correct final state; the source and destination of a memory instruction never overlap. GR66 and P13 refer to this exception. `kl.exec` stays strict: extending the exception to it needs a Machine-by-Machine analysis and must exclude in-place operation, a KLIOBUF substitution or `Vd` = `Vs2`. Option 5 still restarts at 0 only before any visible effect.
 
-### m5 - The clone description retains removed GPR-indirect operands
+### m5 **fixed** - The clone description retains removed GPR-indirect operands
 
 **Severity rationale:** A stale operand description contradicts the current encoding and can mislead assembly or emulator authors.
 
@@ -136,9 +136,9 @@
 
 **Evidence:** GR3 reserves other nonzero `R` values and defines `KLNL` selection through `klnamedlocker`; this is unrelated to A1's provisional opcode allocation.
 
-**Resolution:** Replace both parentheticals with “or the locker selected by `KLNL`, where that operand uses the GR3 encoding.” Use resolved source/destination indices throughout the three instruction descriptions.
+**Resolution:** Replace “Clones the source locker `Ks` (or the locker indexed by `Xs`) into the destination locker `Kd` (or the locker indexed by `Xd`):” with “Clones the source locker `Ks` into the destination locker `Kd`, either of which, not both, may be `KLNL` (Rule GR3):”.
 
-### m6 - Authentication does not prove that every transfer instruction ran
+### m6 **fixed** - Authentication does not prove that every transfer instruction ran
 
 **Severity rationale:** The note gives software an incorrect diagnostic guarantee about incomplete transfers.
 
@@ -148,9 +148,9 @@
 
 **Evidence:** No transfer-coverage bitmap is specified, and opening initializes unwritten imported bytes to zero. Authentication validates the resulting bytes, not their transfer history.
 
-**Resolution:** State that incomplete transfers can yield invalid images and authentication failure, but completion is established by the software transfer count and outcome checks, not by authentication alone. Preserve acceptance of any correctly authenticated image; do not add a coverage bitmap solely to enforce the note.
+**Resolution:** Replace “causes an authentication error at import (next section), and completing an import prematurely causes one at once” with “causes, with overwhelming likelihood, an authentication error at import (next section), and completing an import prematurely, one at once”.
 
-### m7 - Truncating conversion is called an unrestricted inverse
+### m7 **fixed** - Truncating conversion is called an unrestricted inverse
 
 **Severity rationale:** This is a mathematical precision defect in normative notation, with a straightforward correction.
 
@@ -160,9 +160,9 @@
 
 **Evidence:** For example, `int(bin(256,8))=0`, not 256. Only the width-constrained mapping is bijective.
 
-**Resolution:** Replace the inverse claim with: “For an `m`-bit value `V`, `bin(int(V),m)=V`; for an unsigned integer `n`, `int(bin(n,m))=n mod 2**m`.” Keep the specified truncation semantics.
+**Resolution:** Replace “so `bin` is the inverse of `int`” with “so `bin(int(V), m)` = `V` for an `m`-bit `V`, and `int(bin(n, m))` = `n` mod 2^m^”.
 
-### m8 - Acronyms source has grammar errors
+### m8 **fixed** - Acronyms source has grammar errors
 
 **Severity rationale:** These errors occur in a source comment and do not affect architectural semantics.
 
@@ -172,9 +172,9 @@
 
 **Evidence:** The idiom is “stand for,” and “all other” requires the plural count noun here. The comment's reviewer directions were not treated as review instructions.
 
-**Resolution:** Apply the two replacements.
+**Resolution:** Replace “can stay for” with “can stand for”, and “cryptography extension” with “cryptography extensions”.
 
-### m9 - Notation has spelling and grammatical labeling errors
+### m9 **fixed** - Notation has spelling and grammatical labeling errors
 
 **Severity rationale:** These are editorial defects with no change to byte representation.
 
@@ -184,9 +184,9 @@
 
 **Evidence:** The first is a misspelling; the second avoids the missing possessive and unnecessary capitalization.
 
-**Resolution:** Apply the two replacements.
+**Resolution:** Replace “endianess” with “endianness”, and “Software Developers note:” with “Note to software developers:”.
 
-### m10 - Symbols comment miscapitalizes Unicode
+### m10 **fixed** - Symbols comment miscapitalizes Unicode
 
 **Severity rationale:** This is a minor source-comment error.
 
@@ -196,7 +196,7 @@
 
 **Evidence:** Unicode is the proper name.
 
-**Resolution:** Capitalize “Unicode.”
+**Resolution:** Replace “unicode” with “Unicode”.
 
 ## 3. Cross-document inconsistencies and missing requirements
 

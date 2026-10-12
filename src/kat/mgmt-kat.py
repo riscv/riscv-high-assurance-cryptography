@@ -2735,15 +2735,16 @@ def build_context(u):
     return src, ml, mem
 
 def save_context(u):
-    """<<KLE-state-save-and-restore-order>>, with 32 written before the KLIOBUF save and before each export (GR11)."""
+    """<<KLE-save-order>>: the named locker first, without the KLIOBUF (Rule SR11), then the KLIOBUF and the other
+    lockers, with 32 written before the KLIOBUF save and before each export (GR11)."""
     ctx = {c: u.csr_read(c) for c in ('klstart', 'klnamedlocker', 'kliobuflen', 'kliobuftop')}
+    mc, ctx['images'] = ctx['klnamedlocker'], {}
+    if mc < 32 and u.getmd(mc)['State'] != UNCONF:
+        ctx['images'][mc] = export(u, mc)
     if ctx['kliobuflen']:
         mem = Memory()
         u.csrs(klnamedlocker=32, klstart=0, kliobuftop=ctx['kliobuflen']).output(mem, BASE, ctx['kliobuflen'])
         ctx['kliobuf'] = mem.read(BASE, ctx['kliobuflen'])
-    mc, ctx['images'] = ctx['klnamedlocker'], {}
-    if mc < 32 and u.getmd(mc)['State'] != UNCONF:
-        ctx['images'][mc] = export(u, mc)
     for k in range(32):
         if k != mc and u.getst(k) != UNCONF:
             ctx['images'][k] = export(u.csrs(klnamedlocker=32), k)
@@ -2751,18 +2752,21 @@ def save_context(u):
     return ctx
 
 def restore_context(u, ctx, managed_first=False):
+    """<<KLE-restore-order>>: the other lockers, the KLIOBUF, then the named locker, without the KLIOBUF (Rule SR11);
+    managed_first restores the named locker before the other lockers, a negative control."""
     mc = ctx['klnamedlocker']
-    order = [k for k in ctx['images'] if k != mc]
-    if mc in ctx['images']:
-        order = [mc] + order if managed_first else order + [mc]
-    for k in order:
+    named = [mc] if mc in ctx['images'] else []
+    first, last = (named + [k for k in ctx['images'] if k != mc], []) if managed_first else \
+                  ([k for k in ctx['images'] if k != mc], named)
+    for k in first:
         import_(u.csrs(klnamedlocker=32), k, ctx['images'][k])
-        if k != mc:
-            u.csrs(klnamedlocker=32)
-    u.csrs(kliobuflen=ctx['kliobuflen'])
+    u.csrs(klnamedlocker=32, kliobuflen=ctx['kliobuflen'])
     if ctx['kliobuflen']:
-        u.csrs(klnamedlocker=32, klstart=0).input_(Memory(ctx['kliobuf']), BASE, ctx['kliobuflen'])
-    u.csrs(kliobuftop=ctx['kliobuftop'], klnamedlocker=mc, klstart=ctx['klstart'])
+        u.csrs(klstart=0).input_(Memory(ctx['kliobuf']), BASE, ctx['kliobuflen'])
+    u.csrs(kliobuftop=ctx['kliobuftop'])
+    for k in last:
+        import_(u.csrs(klnamedlocker=32), k, ctx['images'][k])
+    u.csrs(klnamedlocker=mc, klstart=ctx['klstart'])
 
 def t_save_restore():
     section('Reset, context save and restore  <<KLE-out-of-reset-unpriv>>, <<KLE-state-save-and-restore-order>>')
@@ -2816,10 +2820,11 @@ def t_encodings():
        ([d(T << 2, rs1=3, rd=4)[0] for T in range(4)], [d(T << 2 | 1, rs1=6) for T in range(4)],
         [d(T << 2 | 2, rd=7) for T in range(4)], [d(T << 2 | 3) for T in range(4)],
         [d(T << 2 | R, rs1=6, rd=7) for T in range(4) for R in (1, 2)],
-        d(12, rs2=9, rs1=6, rd=7), d(0, rs2=1, rs1=6, rd=7), d(16, rs1=6, rd=7)),
+        d(12, rs2=9, rs1=6, rd=7), d(0, rs2=1, rs1=6, rd=7), d(16, rs1=6, rd=7), d(13), d(14)),
        (list(names), [(n, 'KLNL', 'K6') + (('X0',) if n == 'kl.derive' else ()) for n in names],
         [(n, 'K7', 'KLNL') + (('X0',) if n == 'kl.derive' else ()) for n in names], ['illegal/1'] * 4,
-        ['illegal/1'] * 8, ('kl.derive', 'K7', 'K6', 'X9'), 'illegal/1', 'illegal/1'))
+        ['illegal/1'] * 8, ('kl.derive', 'K7', 'K6', 'X9'), 'illegal/1', 'illegal/1',
+        ('kl.derive', 'KLNL', 'K0', 'X0'), ('kl.derive', 'K0', 'KLNL', 'X0')))
     words = {'kl.exec': enc_r(0, 2, rs2=2, rs1=6, rd=3),
              'kl.size': enc_r(0, 6, rs1=6, rd=3), 'kl.restrictl': enc_r(1, 2, rs1=4, rd=6),
              'kl.getmdl': enc_r(3, 2, rs1=6, rd=3), 'kl.setst': enc_setst(2, F=1, r=1, rs1=4, rd=6),
@@ -2938,10 +2943,12 @@ def t_klnl_pairs():
     w = rc(5, rc(3))
     r = [w.clone(3, 'KLNL'), w.rename('KLNL', 3), w.swap(3, 'KLNL'), w.derive('KLNL', 3, 16), w.getst(3)]
     w.csrs(klnamedlocker=3)
-    r += [w.clone(3, 'KLNL'), w.swap('KLNL', 3), trap_of(w.derive, 3, 'KLNL', 16), trap_of(w.clone, 'KLNL', 'KLNL')]
+    r += [w.clone(3, 'KLNL'), w.swap('KLNL', 3), trap_of(w.derive, 3, 'KLNL', 16), trap_of(w.clone, 'KLNL', 'KLNL'),
+          trap_of(w.derive, 'KLNL', 0, 16) is None]
     eq('KLNL at 32: clone, rename, swap and derive perform no operation, the other locker untouched; KLNL naming '
-       'the other locker: clone and swap no-ops, derive illegal/2; KLNL for both (R = 11) illegal/1', r,
-       ['noop', 'noop', 'noop', 'noop', ToyCipher.ENCRYPT, 'noop', 'noop', 'illegal/2', 'illegal/1'])
+       'the other locker: clone and swap no-ops, derive illegal/2; KLNL for both (R = 11) illegal/1; KLNL and K0, '
+       'whose encoded fields are both 0, are no self-derivation (M4)', r,
+       ['noop', 'noop', 'noop', 'noop', ToyCipher.ENCRYPT, 'noop', 'noop', 'illegal/2', 'illegal/1', True])
 
 def t_rename_swap():
     section('kl.rename and kl.swap  <<KLE-instruction-clone>>')
