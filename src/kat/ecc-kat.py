@@ -11,7 +11,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw that the bound of GR68 cut short
+TIMEOUT = object()                                  # an RBG draw that the bound of GR70 cut short
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLEE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -29,7 +29,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLEE RBG-unavailable exception (GR68): random bits unavailable past the bound; State unchanged."""
+    """KLEE RBG-unavailable exception (GR70): random bits unavailable past the bound; State unchanged."""
 
 class PrivViolation(Invalid):
     """Transition to Error State _Privilege Violation_ (GR45: a destination at a weaker level)."""
@@ -112,11 +112,11 @@ class Locker:
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
-    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR63)
+    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR67)
         self.discard()
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR62)."""
+        """Precise halt of the current long-running kl.exec (GR65)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
@@ -290,19 +290,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR68)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR70)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`, not the curve's default
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR68: bits unavailable past the bound: KLEE
+            if k is TIMEOUT:                        # GR70: bits unavailable past the bound: KLEE
                 self.rnd = entry[0]                 # RBG-unavailable exception, State unchanged, retryable
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR68: RBG failure
+            if k is None:                           # GR70: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -742,13 +742,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR68)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR70)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLEE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR68)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR70)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))
@@ -1235,7 +1235,7 @@ kl_derive(h, cr, 0)
 check('length = 0 transfers nothing (GR51)', h.data == b'' and cr.state == OUTPUT)
 check('kl.exec emits the shared secret Z = X only (32 B), then _Success_', None, (cr.output_all(), cr.state),
       (cr.sec[:32], SUCCESS))
-check('_Success_ is no kl.derive source (GR27): source _Invalid_', None, derive_who(Dest('hash'), cr, 32), 'source')
+check('_Success_ is no kl.derive source (GR44 item 1): source _Invalid_', None, derive_who(Dest('hash'), cr, 32), 'source')
 cr = ecdh()[0]
 first = cr.exec_out(16)
 sec, out = cr.sec, cr.out_type
@@ -1299,7 +1299,7 @@ def failed_mul():                       # off-curve SecondPt: _Point_Mul_ -> _Fa
     return cr
 for label, dest, src, n, who in (
         ('source without HasSecondPt', Dest('hash'), locker(P256, hs(0, 0)), 64, 'source'),
-        ('source in _Failure_ with HasSecondPt (GR27)', Dest('hash'), failed_mul(), 64, 'source'),
+        ('source in _Failure_ with HasSecondPt (GR44 item 1)', Dest('hash'), failed_mul(), 64, 'source'),
         ('source in _Set_SecondPt_ with HasSecondPt (a loaded peer point)', Dest('key'), with_second(), 64, 'source'),
         ('source in _Ready_ keeping the ECDH result in SecondPt', Dest('hash'), kept_after_dh(), 64, 'source'),
         ('hash destination in _Ready_', Dest('hash', READY), ecdh()[0], 64, 'destination'),

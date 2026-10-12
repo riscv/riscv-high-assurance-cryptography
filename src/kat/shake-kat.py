@@ -289,7 +289,7 @@ def kl_derive(dst, src, length, interrupt_at=None):
     bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # GR44 items 1-2 (GR27: a SHA3-n in _Success_ admits no kl.exec)
+        c.reset()  # GR44 items 1-2 (no endpoint in _Success_)
     pos, HART.klstart = HART.klstart, 0
     if not bad and key:
         if length < dst.n or not src.xof and (src.t - src.block_base) // 8 < dst.n:
@@ -470,7 +470,7 @@ check('[oracle] SHAKE128 512 B over kl.exec of 100+68+200+144 B; stays in _Hash_
 cl = squeezing('SHAKE128', MSG_ABC)
 out = bytearray(b'\xee' * 400)
 r = cl.exec('C', out=out, interrupt_at=1)
-check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR65)',
+check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR63)',
       (r, HART.klstart, bytes(out[168:])) == ('interrupted', 168, b'\xee' * 232))
 check('resumed squeeze retires with klstart = 0', (cl.exec('C', out=out), HART.klstart) == ('done', 0))
 check('[oracle] SHAKE128 400 B with interrupt/resume', None, bytes(out), oracle('SHAKE128', MSG_ABC, 400))
@@ -619,7 +619,7 @@ dst = squeezing('SHA3-224', MSG_ABC)
 squeeze(dst, 28)
 snap = (src.st, src.state, src.block_base)
 r = kl_derive(dst, src, 16)
-check('destination in _Success_ (GR27): _Invalid_, nothing taken from the source',
+check('destination in _Success_ (GR44 item 2): _Invalid_, nothing taken from the source',
       (r, dst.st) == ('invalid', KL_STATE_INVALID) and snap == (src.st, src.state, src.block_base))
 
 src, dst, s224, d224 = squeezing('SHAKE128', MSG_ABC), KeyDest(16), squeezing('SHA3-224', MSG_ABC), KeyDest(32)

@@ -28,7 +28,7 @@ CLEAR_ADS = 64
 CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klmanagedlocker: no locker managed
 KLV_SEWS = (8, 16, 32, 64)                   # <<KLEE-KLV>>: SEW values, ELEN = 64; others set vtype.vill
-MAX_RESTARTS = 2                             # GR61 option 5: this model's documented bound for memory instructions
+MAX_RESTARTS = 2                             # GR62 option 5: this model's documented bound for memory instructions
 VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
 EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
@@ -1061,7 +1061,7 @@ class Unit:
         while j < end:
             f = fault(j)
             if f or (halt_after is not None and j - self.klstart >= halt_after):
-                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR61: no restart on a fault, and
+                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR62: no restart on a fault, and
                 self.restarts += rs                                 # option 3 once the bound is reached
                 self.klstart = 0 if rs else j
                 if f: raise Trap(f[0], tval=f[1])
@@ -2222,11 +2222,11 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR54: access fault at the byte, prefix committed; restart option for interrupts only (GR61)',
+    eq('GR54: access fault at the byte, prefix committed; restart option for interrupts only (GR62)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()
-    eq(f'GR61 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
+    eq(f'GR62 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
        [(w.load(mem, BASE, halt_after=16, restart=True), w.klstart) for _ in range(MAX_RESTARTS + 1)]
        + [w.load(mem, BASE), img(w) == pc], [('halted', 0)] * MAX_RESTARTS + [('halted', 16), 'done', True])
     u, out, ref = rc(), Memory(), Memory()
@@ -2972,7 +2972,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR59); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR60); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 

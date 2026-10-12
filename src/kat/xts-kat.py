@@ -30,7 +30,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR70)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR72)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -84,7 +84,7 @@ class XexLocker:
             s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
             s.mdh = fset(s.mdh, 'KeyType', 0)
         elif field != ONES64 and field in s.sks:
-            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR70)
+            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR72)
         else:
             s.invalidate()                        # <<KLEE-MVR-open>>
     def provision(s, pi):
