@@ -313,10 +313,8 @@ An instruction executed in the State checks a condition only if the condition ca
 [[KLE-MGR-config-data-error,MR12]]MR12:: _Configuration errors and data errors._
 Each Machine states which of its checks detect which of these two kinds of error:
 
-* A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard rejects, such as a malformed private key, or a value, in any field, a peer point or a signature included, whose encoding violates a constraint of its representation, such as the zero most significant bits of secp521r1 (<<KLE-ECC>>).
-  It transitions the locker to Error State _Invalid_, so the CC cannot be used until it is reconfigured.
-* A _data error_ is a ciphertext, tag, signature, message representative or public key that is otherwise malformed or does not verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses (a peer's point, a public key or a generator) that is not a valid point of the curve.
-  It transitions the state machine to _Failure_, which is a Valid State.
+* A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard rejects, such as a malformed private key, or a value, in any field, a peer point or a signature included, whose encoding violates a constraint of its representation, such as the zero most significant bits of secp521r1 (<<KLE-ECC>>). It transitions the locker to Error State _Invalid_, so the CC cannot be used until it is reconfigured.
+* A _data error_ is a ciphertext, tag, signature, message representative or public key that is otherwise malformed or does not verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses (a peer's point, a public key or a generator) that is not a valid point of the curve. It transitions the state machine to _Failure_, which is a Valid State.
 
 [[KLE-MGR-check-on-read,MR13]]MR13:: _Checks when a field is read._
 An operation that reads a field performs, before it changes any state, the checks that depend on the operation or on more than one field, such as the validity of a point in the role the operation gives it, the range of `Scalar` against the group order, or the consistency of a public key with a private key; Rule <<KLE-MGR-config-data-error>> classifies a failure.
@@ -888,9 +886,9 @@ A Machine invokes it as:
 
 ```
 process_VLI(max_len,
-            block, b,        state, n,
-            input_base,      block_base,      state_offset,      cumul_len,
-            process_block(), finalize(),      mode,              granularity).
+            block,           b,               state,           n,
+            input_base,      block_base,      state_offset,    cumul_len,
+            process_block(), finalize(),      mode,            granularity).
 ```
 where the parameters are all _references_ to certain variables of the caller Machine:
 
@@ -2524,37 +2522,33 @@ State Machine:::
  ** _Ready_ -> _Hash_Output_, for the empty message.
  ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
-* *Behavior:*
- ** _Ready_:
-  . `nn` {leftarrow} `nn~max~`; `kk` {leftarrow} the length of the system key, else 0;
-  . `last_blk_len`, `block_base` and `cumul_len` {leftarrow} 0;
-  . `state` {leftarrow} the IV of cite:[RFC7693] {sect}2.6, with `h~0~` XORed with `0x01010000` {oplus} `(kk << 8)` {oplus} `nn`
-    ({sect}2.5, {sect}3.3);
-  . `block` {leftarrow} the system key, zero-padded to `b` bits, else zero.
- ** In _Ready_, the operation (Rule <<KLE-operation-immediates>>) `kl.setst Kn, \#kl_state_set_aux_value, Xs` sets
-    `nn` {leftarrow} `Xs[7:0]` and, without a system key, `kk` {leftarrow} `Xs[15:8]`, then recomputes `h~0~`.
-    The locker transitions to Error State _Invalid_ unless 1 {le} `nn` {le} `nn~max~`, `kk` {le} `kk~max~`, `Xs[15:8]` = 0
-    with a system key, and the other bits of `Xs` are 0.
- ** Keyed hashing:
-  . A system key: its block is compressed by `F(false)`, with `cumul_len` {leftarrow} `b`, on leaving _Ready_ for
+* *Behavior*, where it differs from <<KLE-hash-functions-MACs-XOFs>>:
+ ** Upon entering State _Ready_ (hence, also after provisioning): `nn` {leftarrow} `nn~max~`;
+   `kk` {leftarrow} 0 or the length of the system key, and `block` {leftarrow} the system key, zero-padded;
+   `state` is the IV of cite:[RFC7693] {sect}2.6, with `h~0~` XORed with
+    `0x01010000` {oplus} `(kk << 8)` {oplus} `nn` ({sect}2.5, {sect}3.3).
+ ** In State _Ready_, a `kl.setst Kn, #kl_state_set_aux_value, Xs` sets
+    `nn` {leftarrow} `Xs[7:0]` and, without a system key, `kk` {leftarrow} `Xs[15:8]`, and recomputes `h~0~`.
+    It must be 1 {le} `nn` {le} `nn~max~`, `kk` {le} `kk~max~`, and `Xs[15:8]` = 0 with a
+    system key, with the other bits of `Xs` 0, else
+    the locker transitions to Error State _Invalid_.
+ ** Keys:
+  . The block of a system key is compressed by `F(false)`, with `cumul_len` {leftarrow} `b`, on leaving _Ready_ for
     _Hash_Absorb_ or for a non-empty final block.
-  . A caller's key: the caller sets `kk` and absorbs the key, zero-padded to `b` bits, as the first block, which is the
-    final block for an empty message.
- ** _Hash_Absorb_: `process_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, cumul_len, process_block(), None, mode=assign)`.
+  . A caller sets `kk` for its own key and absorbs the key, zero-padded to `b` bits, as the first block.
+ ** _Hash_Absorb_ invokes `process_VLI` with `max_len` = 0, `state_offset` = 0 and `mode` = `assign`.
     The caller keeps the final block, 1 to `b`/8 bytes, for _Hash_Absorb_Last_Block_, also when the message is a whole
     number of blocks.
- ** _Hash_Absorb_Last_Block_: as in <<KLE-hash-functions-MACs-XOFs>>, with `process_last_block()`. From _Ready_, `Xs` = 0
-    denotes the empty message: the `kl.setst` applies `F(true)` to the system-key block, with `cumul_len` {leftarrow} `b`,
-    or else to a zero block, and transitions to _Hash_Output_; after the caller has set `kk` > 0, it transitions the
-    locker to Error State _Invalid_ instead.
- ** _Hash_Output_: the first `nn` bytes of `state` are the digest; once emitted, the state transitions to _Success_.
+ ** From _Ready_, a final-block length `Xs` = 0 denotes the empty message: the `kl.setst` applies `F(true)` to the
+    system-key block, with `cumul_len` {leftarrow} `b`, or else to a zero block, and transitions to _Hash_Output_.
+    If the caller set `kk` > 0, it transitions the locker to Error State _Invalid_ instead.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-HMAC]]
 === HMAC
 
-Hash function acceleration suffices to compute HMACs, but an environment may want to keep the HMAC key secret or hidden.
+Hash function Machines suffice to compute HMACs, but an environment may want to hide the HMAC key.
 This section extends <<KLE-hash-functions-MACs-XOFs>> accordingly.
 
 Under HMAC, the Machine, not the caller, performs the padding and length encoding of the hash function, at finalization.  For SHA-2 (<<KLE-SHA-2>>) and SM3 (<<KLE-SM3>>), standard padding is applied over the total absorbed length (`b` + `cumul_len` bits for the inner hash, `b` + `d` bits for the outer) using `cumul_len`, which is maintained under HMAC.  For SHA-3, the suffix-and-padding of <<KLE-SHA-3>> applies.
