@@ -57,10 +57,12 @@ SKS = {SKID: bytes.fromhex('feffe9928665731c6d6a8f9467308308')}
 
 class Gcm:
     """A GCM (set_iv False) or GCM with Set IV locker; MDH reduced to State, MachinePolicy
-    (bit 0 encrypt, bit 1 decrypt), KeyType.  le_counter, iv_into_J0, stale_auth_key: controls."""
+    (bit 0 encrypt, bit 1 decrypt), KeyType.  le_counter, iv_into_J0, stale_auth_key, ready_keeps_ctr:
+    controls."""
 
-    def __init__(s, set_iv=False, policy=3, le_counter=False, iv_into_J0=False, stale_auth_key=False):
-        s.set_iv, s.policy, s.le, s.stale = set_iv, policy, le_counter, stale_auth_key
+    def __init__(s, set_iv=False, policy=3, le_counter=False, iv_into_J0=False, stale_auth_key=False,
+                 ready_keeps_ctr=False):
+        s.set_iv, s.policy, s.le, s.stale, s.keep_ctr = set_iv, policy, le_counter, stale_auth_key, ready_keeps_ctr
         s.acc = 'J0' if iv_into_J0 else 'tag'
         s.klstart, s.halted = 0, False
         s._error(UNCONF)
@@ -73,7 +75,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR75)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR77)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -126,6 +128,8 @@ class Gcm:
 
     def _ready(s):
         s.auth_key, s.tag = s._enc(0), 0
+        if s.set_iv and not s.keep_ctr:
+            s._set_ctr(s.start_ctr)                      # Set IV: the provisioned J0 restored
 
     def _enc(s, p): return b2v(aes_encrypt(s.key, v2b(p, 16)))
     def _absorb(s, d): s.tag = kl_galoismul(s.tag ^ d, s.auth_key)
@@ -231,7 +235,7 @@ class Gcm:
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
-                s.klstart, s.halted = 16 * i, True       # GR68
+                s.klstart, s.halted = 16 * i, True       # GR70
                 return out
             blk = sl(INPUT, 128 * i + 127, 128 * i)
             if st == HA:
@@ -240,7 +244,7 @@ class Gcm:
             ctr = s._next_ctr()
             if ctr is None:
                 s._invalid()
-                return out                               # GR67
+                return out                               # GR69
             if st == DEC:
                 s._absorb(blk)
             s._set_ctr(ctr)
@@ -359,8 +363,11 @@ def kl_encrypt(key, iv, ad, pt, cl=None, iv_chunk=16, iv_stop=None, nblk=1, swap
 
 def kl_decrypt(key, iv, ad, ct, tag, cl=None, subst=False, extra=b'', **kw):
     cl = cl or Gcm.provisioned(key, **kw)
-    cl.setst(SAV, 'B', 8 * len(iv))
-    feed(cl, iv)
+    if cl.set_iv:
+        cl.setst(HA)
+    else:
+        cl.setst(SAV, 'B', 8 * len(iv))
+        feed(cl, iv)
     feed(cl, pad16(ad), 4096)
     cl.setst(DEC)
     pt = crypt(cl, ct, max(1, len(ct) // 16), DLB)
@@ -473,7 +480,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR75): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR77): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 check('Form A kl.setst substituting each Form C one (Enc/Dec_Tag_Finalize, Hash_Verify), its input in the KLIOBUF: '
       'tc4 tag and verification; KLIOBUF bytes beyond 16 ignored (MR7); a wrong tag fails', True,
       (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],
@@ -530,14 +537,14 @@ check('GR21: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MR2); '
      'kl.setst out of the state part-way discards the IV (MR9)')
 
-section('multi-block kl.exec, GR67/GR68')
+section('multi-block kl.exec, GR69/GR70')
 for n in (2, 3):
     check(f'{n} blocks per kl.exec', kl_encrypt(K, IV, A, P, nblk=n)[:2] == (RC, RT))
 cl = at('enc')
 o1 = cl.exec('A', b2v(P[:48]), 384, None, 1)
 h = (cl.halted, cl.klstart)
 o2 = cl.exec('A', b2v(P[:48]), 384, 16)
-check('GR68: Encrypt halted after one block (klstart = 16) and resumed',
+check('GR70: Encrypt halted after one block (klstart = 16) and resumed',
       h == (True, 16) and cl.klstart == 0 and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) == RC[:48])
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
@@ -648,7 +655,7 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('GR67/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('GR69/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
 check('GR29/GR30: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))
@@ -670,11 +677,29 @@ check('no block budget: 320 blocks in 40 kl.exec', cl.state == ENC and cl._bs(sl
 cl = at('setiv')
 c1 = kl_encrypt(None, None, A, P, cl=cl)[:2]
 cl.setst(READY)
-back = (cl.state, cl.tag) == (READY, 0)
+back = (cl.state, cl.export()) == (READY, at('setiv').export())
 c2 = kl_encrypt(None, None, A, P, cl=cl)[:2]
-check('GR26/GR21: Success -> Ready allowed, tag cleared', back and c1 == (RC, RT))
-check('the next message continues the counter under the same tag mask',
-      c2 == ref_gcm(K, IV, A, P, J0B, inc32(J0B, -(-len(P) // 16) + 1)))
+check('GR26/GR21: Success -> Ready restores the provisioned J0: the Content of a fresh provisioning',
+      back and c1 == (RC, RT))
+check('after Ready the next message repeats the provisioned GCM invocation: tc4', c2 == (RC, RT))
+cl = at('setiv')
+cl.setst(HA)
+cl.setst(ENC)
+cl.exec('A', b2v(P[:32]), 256)
+cl.setst(READY)
+check('GR21: Encrypt -> Ready mid-message; the next message is tc4',
+      kl_encrypt(None, None, A, P, cl=cl)[:2] == (RC, RT))
+_, st1, cl = kl_decrypt(None, None, A, RC, bytes(16), cl=at('setiv'))
+cl.setst(READY)
+p2, st2, _ = kl_decrypt(None, None, A, RC, RT, cl=cl)
+check('Failure -> Ready; the same Set IV locker decrypts and verifies tc4', (st1, st2, p2) == (FAIL, SUCC, P))
+P2 = bytes(range(len(P)))
+cl = at('setiv')
+c1 = kl_encrypt(None, None, A, P, cl=cl)[0]
+cl.setst(READY)
+c2 = kl_encrypt(None, None, A, P2, cl=cl)[0]
+check('NOTE: another message after Ready reuses the keystream, C1 xor C2 = P1 xor P2; '
+      'a new IV needs a new PI (<<KLE-nonce-reuse>>)', bxor(c1, c2) == bxor(P, P2))
 states = []
 for c0 in (2**32 - 2, 2**32 - 1):
     cl = at('setiv')
@@ -854,5 +879,9 @@ control(f'length block halves swapped ({len(sw)} vectors)', len(sw) >= 4 and all
 control(f'little-endian counter ({len(le)} vectors)', len(le) >= 4 and all(le))
 control('IV accumulated in J0, export/import in Set_Aux_Value', not any(res[True, m] for m in (16, 32, 48)))
 control('auth_key not re-derived after kl.derive into `key`', not any(stale))
+cl = at('setiv', ready_keeps_ctr=True)
+kl_encrypt(None, None, A, P, cl=cl)
+cl.setst(READY)
+control('Set IV: Ready keeps the running counter', kl_encrypt(None, None, A, P, cl=cl)[:2] != (RC, RT))
 
 done()

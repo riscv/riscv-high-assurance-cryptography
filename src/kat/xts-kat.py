@@ -3,7 +3,7 @@
 against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
+from common import (install_key, aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
                     MASK128, MDH_FIELD, mdh_pack,
                     KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
@@ -12,7 +12,7 @@ from common import (aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, 
 
 RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
 
-B, ONES64 = 128, (1 << 64) - 1
+B = 128
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
 CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
 XEX_MACHINES = {(t << 4) | 3: c for t, c in enumerate(CIPHERS)}   # <<KLE-exec-encodings>> Mode 3
@@ -30,9 +30,9 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR76)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR78)."""
     k = CIPHERS[XEX_MACHINES[mach]]
-    content, w = (key1, 64) if keytype else (cat((key2, k), (key1, k)), 2 * k)
+    content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
 
 def kl_update_mask(V):
@@ -77,16 +77,13 @@ class XexLocker:
     def invalidate(s):                            # GR29
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
-    def _install(s, field, key2, importing):
-        if s.keytype == 0:
-            s.key1, s.key2 = field, key2
-        elif field == ONES64 and not importing:   # <<KLE-KeyType-field>>: random keys, KeyType 0
-            s.key1, s.key2 = s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)
-            s.mdh = fset(s.mdh, 'KeyType', 0)
-        elif field != ONES64 and field in s.sks:
-            s.skid, (s.key1, s.key2) = field, s.sks[field]   # one SKID, two keys (GR76)
-        else:
-            s.invalidate()                        # <<KLE-MVR-open>>
+    def _install(s, field, key2, importing):     # one SKID, two keys (GR78); KeyType 2: both random
+        r = install_key(s.keytype, field, importing, s.sks, lambda: (s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)),
+                        (field, key2))
+        if r is None:
+            return s.invalidate()                 # <<KLE-MVR-open>>
+        (s.key1, s.key2), s.skid, kt = r
+        s.mdh = fset(s.mdh, 'KeyType', kt)
     def provision(s, pi):
         s.mdh = b2v(pi[:16])
         w1, w2 = s.widths
@@ -465,9 +462,9 @@ cl = XexLocker(sks=SKS)
 cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID + 1))
 check("unresolved SKID at provisioning -> Invalid", True, cl.state, INVALID)
 cl = XexLocker(sks=SKS)
-cl.provision(build_pi(XEX_OF['AES-128'], 1, ONES64))
+cl.provision(build_pi(XEX_OF['AES-128'], 2, 0))
 rand_ct = cl_run(tw(cl), data)[0]
-check("all-ones SKID: two independent random keys, KeyType 0, Content1 48 B", True,
+check("KeyType 2: two independent random keys, KeyType 0, Content1 48 B", True,
       (cl.keytype, cl.key1 != cl.key2, len(cl.content1()),
        rand_ct == ref_xts(v2b(cl.key1, 16), v2b(cl.key2, 16), i, data)), (0, True, 48, True))
 

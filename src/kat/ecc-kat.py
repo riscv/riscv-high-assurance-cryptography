@@ -11,7 +11,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw that the bound of GR74 cut short
+TIMEOUT = object()                                  # an RBG draw that the bound of GR76 cut short
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -29,7 +29,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLE RBG-unavailable exception (GR74): random bits unavailable past the bound; State unchanged."""
+    """KLE RBG-unavailable exception (GR76): random bits unavailable past the bound; State unchanged."""
 
 class PrivViolation(Invalid):
     """Transition to Error State _Privilege Violation_ (GR47: a destination at a weaker level)."""
@@ -114,11 +114,11 @@ class Locker:
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
-    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR72)
+    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR74)
         self.discard()
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR70)."""
+        """Precise halt of the current long-running kl.exec (GR72)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
@@ -134,8 +134,8 @@ class Locker:
             raise Invalid('transition not allowed')                   # MR1
         if t in (SET_HASH, SET_SIG) and not any(self.policy):
             raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MR11
-        if self.state == MSG_ABSORB:
-            self._finalize_pass()
+        if self.state == MSG_ABSORB:                # MR11: leave first, then check the destination's entry conditions
+            self._abandon_pass() if t == READY else self._finalize_pass()
         f = self.loading
         if f and self.bb < self.size[f]:            # MR9: a load left incomplete leaves the field unconfigured
             if f == 'ctx':
@@ -294,19 +294,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR74)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR76)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`, not the curve's default
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR74: bits unavailable past the bound: KLE
+            if k is TIMEOUT:                        # GR76: bits unavailable past the bound: KLE
                 self.rnd = entry[0]                 # RBG-unavailable exception, State unchanged, retryable
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR74: RBG failure
+            if k is None:                           # GR76: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -416,8 +416,24 @@ class Locker:
     HS_BITS = {'ed25519': 1664, 'ed448': 1792}                    # SHA-512 / SHAKE256 Serialized Content under HMAC
 
     def eddsa_content1_extra_bits(self):
-        """Positions viii-xiii of <<KLE-EdDSA>>: ctxlen, ctx, r, k', and H, H' iff HasHashState (bit 3)."""
-        return 8 + 2040 + 2 * self.b + ('hstate' in self.has) * 2 * self.HS_BITS[self.c.name]
+        """Positions viii-xiii of <<KLE-EdDSA>>: ctxlen, ctx, r, k', the state of H always (MachinePolicy != 0), and
+        that of H' if MachinePolicy[0]; never dependent on HasHashState."""
+        return 8 + 2040 + 2 * self.b + (any(self.policy) + bool(self.policy[0])) * self.HS_BITS[self.c.name]
+
+    def serialized(self):
+        """Fields iv-vii of <<KLE-ECC>> that Content1 carries, with whatever they hold: SecondPt always, Signature and
+        Hash if MachinePolicy != 0, RndNum (if j > 0) if MachinePolicy[0]; never dependent on State or StateExtension."""
+        return ['sec'] + (['sig', 'hash'] if any(self.policy) else []) + (['rnd'] if self.policy[0] and self.j else [])
+
+    def varlen(self):
+        """Size in bytes of Fields iv-vii: ub/8 + (MachinePolicy != 0) (vb + h)/8 + MachinePolicy[0] j/8."""
+        b, h, j, u, v = PARAMS[self.c.name]
+        return (u * b + any(self.policy) * (v * b + h) + bool(self.policy[0]) * j) // 8
+
+    def _abandon_pass(self):
+        """Leaving _Msg_Absorb_ for _Ready_ (<<KLE-EdDSA>>): no hash completed, no binding check."""
+        self.absorb, self.pass_xs = None, None
+        self.has.discard('hstate')
 
     def _finalize_pass(self):
         xs, data, self.absorb, self.pass_xs = self.pass_xs, self.absorb, None, None
@@ -746,13 +762,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR74)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR76)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR74)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR76)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))
@@ -959,6 +975,14 @@ check('Xs bit 6 drops the signature: Sign_Verify -> Invalid', invalid(cr.setst, 
 
 section('Ed25519 / Ed25519ctx / Ed25519ph: RFC 8032 7.1, 7.2, 7.3')
 c = EC.ED25519
+p = locker(P256)
+v0 = p.varlen()
+p.setst(SET_HASH); p.exec_in(bytes(16))                 # half of the 32-byte Hash: HasHash clear, block_base 16
+check('C2: Fields iv-vii depend only on MachinePolicy: a half-loaded Hash, HasHash clear, is serialized with its '
+      'prefix and block_base; P-256 varlen = ub/8 + (vb + h)/8 + j/8 = 192 bytes', None,
+      (v0, p.varlen(), 'hash' in p.serialized(), 'hash' in p.has, p.bb), (192, 192, True, False, 16))
+check('C2: varlen for MachinePolicy 0 (DH only), sign only, verify only: 64, 192, 160 bytes', None,
+      [Locker(P256, sign=s, verify=v).varlen() for s, v in ((False, False), (True, False), (False, True))], [64, 192, 160])
 check('b = 256: the seed is b bits', all(len(bytes.fromhex(v[1])) * 8 == PARAMS['ed25519'][0] for v in RFC8032_ED25519))
 for name, seed, pk, msg, sig in RFC8032_ED25519:
     seed, pk, msg, sig = map(bytes.fromhex, (seed, pk, msg, sig))
@@ -1046,13 +1070,30 @@ for name, seed, pk, msg, ctx, sig in RFC8032_ED448PH:
 
 c = EC.ED25519
 seed = bytes.fromhex(RFC8032_ED25519[0][1])
+res = []
+for t, xs in ((MSG_ABSORB, 1), (READY, 0)):
+    cr = locker(c, (SET_SCALAR, seed), (SET_SIG, bytes(range(64))))
+    res.append('sig' in cr.has)
+    cr.setst(MSG_ABSORB, 0)
+    cr.exec_in(b'msg')
+    cr.setst(t, xs)
+    res.append('sig' in cr.has)
+check('finalizing signing pass 1 clears a HasSignature set by an earlier load (Signature.R is an intermediate value); '
+      'abandoning it for _Ready_ keeps it', None, res, [True, False, True, True])
 cr = locker(c, (SET_SCALAR, seed), (SET_SIG, bytes(range(64))))
-had = 'sig' in cr.has
 cr.setst(MSG_ABSORB, 0)
 cr.exec_in(b'msg')
+check('MR11: signing pass 1 -> _Msg_Absorb_ Xs = 2 with a loaded Signature -> Invalid '
+      '(finalization clears HasSignature before the entry check)', invalid(cr.setst, MSG_ABSORB, 2))
+cr = locker(c, (SET_SCALAR, seed))
+cr.setst(MSG_ABSORB, 0)
+cr.exec_in(b'msg')
+cr.setst(MSG_ABSORB, 1)
+cr.exec_in(b'ms')                                          # a partial, hence different, pass-2 message
 cr.setst(READY)
-check('signing pass 1 clears a HasSignature set by an earlier load (Signature.R is an intermediate value)', None,
-      (had, 'sig' in cr.has), (True, False))
+check('signing pass 2 abandoned for _Ready_ with a different message: no binding check, Ready; msg_pass = 0, '
+      'r and k\' cleared, HasHashState clear', None,
+      (cr.state, cr.msg_pass, cr.r, cr.kp, 'hstate' in cr.has), (READY, 0, None, None, False))
 
 c = EC.ED25519
 _, seed, pk, msg, sig = (x if i == 0 else bytes.fromhex(x) for i, x in enumerate(RFC8032_ED25519[2]))
@@ -1070,8 +1111,13 @@ cr.exec_run(); trace.append(cr.aux() >> 1)
 check('AuxInfo[2:1] = msg_pass: 0 (pass 1 open), 1 (pass 2 open), 2 (pass 2 done), 0 after Sign_Generate; '
       'an export/import mid-pass 2 resumes the pass and yields the RFC 8032 7.1 signature', None,
       (trace, cr.output_all(c.nbytes).hex()), ([0, 0, 1, 2, 0], sig.hex()))
-check("HasHashState (bit 3) set while a pass is open: Content1 carries H and H' (2 x 1664 bits for ed25519), "
-      'and only then', None, hst, [True, 8 + 2040 + 512 + 2 * 1664, False, 8 + 2040 + 512])
+check("HasHashState (bit 3) set while a pass is open; Content1 carries H and H' (2 x 1664 bits for ed25519) whatever "
+      'the flag, its length fixed by MachinePolicy', None, hst,
+      [True, 8 + 2040 + 512 + 2 * 1664, False, 8 + 2040 + 512 + 2 * 1664])
+e = locker(c, (SET_SCALAR, seed))
+e.setst(MSG_ABSORB, 0); e.exec_in(msg); e.setst(MSG_ABSORB, 1)
+check('C2: between the signing passes Signature.R is an intermediate value, HasSignature clear, and is serialized',
+      None, ('sig' in e.has, 'sig' in e.serialized(), e.sig is not None), (False, True, True))
 cv = locker(c, (SET_SECONDPT, pk), (SET_SIG, sig))
 cv.setst(MSG_ABSORB, 2); v_open = cv.aux() >> 1
 cv.exec_in(msg); cv.setst(SIGN_VER); cv.exec_run()
@@ -1456,8 +1502,9 @@ for name, c in EC.MONTGOMERY_CURVES.items():
           ((A, a, True), A, None, False, False, True))
     cr, bad_se = xdh(c, a)[2], Locker(c)
     bad_se.has.add('hash')
-    check(f'{name}: _StateExtension_: only HasSecondPt; varlen = HasSecondPt * b/8; bits 1 to 3 unsupported', True,
-          (cr.has, len(cr.sec), cr.state_se_supported(), bad_se.state_se_supported()), ({'sec'}, n, True, False))
+    check(f'{name}: _StateExtension_: only HasSecondPt; varlen = b/8, HasSecondPt set or not; bits 1 to 3 '
+          'unsupported', True, (cr.has, len(cr.sec), cr.varlen(), Locker(c).varlen(), cr.state_se_supported(),
+                                bad_se.state_se_supported()), ({'sec'}, n, n, n, True, False))
 check('x25519: bit 255 of the u-coordinate is ignored', True,
       xdh(X25, bytes.fromhex(RFC7748['x25519']['dh'][0]), v2b(9 | 1 << 255, 32))[0].hex(), RFC7748['x25519']['dh'][1])
 XST = {READY, SET_GEN, SET_SCALAR, SET_SECONDPT, POINT_MUL, OUTPUT}

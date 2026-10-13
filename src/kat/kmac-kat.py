@@ -167,12 +167,12 @@ def pack(fields):
 
 
 def scc_len(b, kt=0):                    # Serialized Content, zero-padded to 128 bits
-    return -(-(1696 + b + (64 if kt else b)) // 128) * 16
+    return -(-(1696 + b + (64 if kt == 1 else b)) // 128) * 16
 
 
 def kl_size(state, b, kt=0):             # <<KLE-instruction-size>>, AuxDataLen = 0
     if state in (UNCONF, KL_CFG_PROVISIONING):
-        return 16 + -(-(b + (64 if kt else b)) // 128) * 16
+        return 16 + -(-(b + (64 if kt == 1 else b)) // 128) * 16
     return 16 if state in ERROR_STATES else 32 + scc_len(b, kt)
 
 
@@ -184,14 +184,15 @@ def provision_blocks(sec, K, S):
     return cb, kb
 
 
-def make_pi(sec, xof, K, S, skid=None):
-    """PI; with a SKID (_KeyType_ = 1, GR75) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
-    cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
-    mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
-    return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
+def make_pi(sec, xof, K, S, skid=None, keytype=None):
+    """PI; with a SKID (_KeyType_ = 1, GR77) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
+    _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
+    kt = int(skid is not None) if keytype is None else keytype
+    cb, kb = provision_blocks(sec, b'' if kt == 1 else K, S)
+    mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=kt)
+    return v2b(mdh, 16) + cb + (v2b(skid, 8) if kt == 1 else kb)
 
 
-ALL_ONES = (1 << 64) - 1
 SKS = {0x0123456789ABCDEF: bytes(range(32)), 0x1111: bytes(164)}   # the second exceeds the KMAC128 maximum
 
 
@@ -221,15 +222,16 @@ class Kmac:
         self._clear()
 
     def _resolve(self, skid):
-        """<<KLE-KMAC>>: the SKS returns K and the unit forms key_block; all-ones: random K of c/2 bits."""
-        K = os.urandom(self.sec // 8) if skid == ALL_ONES else SKS.get(skid)
+        """<<KLE-KMAC>>: the SKS returns K, or for _KeyType_ = 2 (skid None) K is random of c/2 bits; the unit
+        forms key_block."""
+        K = os.urandom(self.sec // 8) if skid is None else SKS.get(skid)
         try:
             self.kb = b2v(provision_blocks(self.sec, K, b'')[1]) if K is not None else None
         except ValueError:                                               # K longer than the maximum
             self.kb = None
         if self.kb is None:
             return self.invalidate()                                     # <<KLE-system-keys>>
-        self.keytype, self.skid = (0, 0) if skid == ALL_ONES else (1, skid)
+        self.keytype, self.skid = (0, 0) if skid is None else (1, skid)
         return True
 
     def provision(self, pi):
@@ -240,7 +242,7 @@ class Kmac:
         self.cb = b2v(pi[16:16 + w])
         if kt == 0:
             self.kb = b2v(pi[16 + w:])
-        elif not self._resolve(b2v(pi[16 + w:16 + w + 8])):
+        elif not self._resolve(None if kt == 2 else b2v(pi[16 + w:16 + w + 8])):
             return
         self.ready()
 
@@ -263,7 +265,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # GR75: SKID resolved after import
+            self._resolve(key)                                           # GR77: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -653,9 +655,11 @@ for sec in (128, 256):
     c2 = Kmac(Hart()).import_(mdh, img)
     check(f'KMAC{sec}: import resolves the SKID again, same key_block', True, (c2.kb, c2.st), (c.kb, c.st))
 c = Kmac(Hart())
-c.provision(make_pi(128, False, None, TAG, ALL_ONES))
-check('all-ones SKID: random K of c/2 = 128 bits forms key_block; _KeyType_ becomes 0, exported by value', True,
-      (c.st, c.keytype, len(c.export()[1]) == scc_len(1344)), (READY, 0, True))
+c.provision(pi := make_pi(128, False, bytes(16), TAG, keytype=2))
+check('_KeyType_ = 2: the PI of _KeyType_ = 0; a random K of c/2 = 128 bits forms key_block; _KeyType_ becomes 0, '
+      'exported by value', True, (len(pi) == kl_size(UNCONF, 1344), c.st, c.keytype,
+      c.kb != b2v(provision_blocks(128, bytes(16), b'')[1]), len(c.export()[1]) == scc_len(1344)),
+      (True, READY, 0, True, True))
 for label, skid in (('unresolved SKID', 0x42), ('SKS key longer than the 163-byte maximum', 0x1111)):
     c = Kmac(Hart())
     c.provision(make_pi(128, False, None, TAG, skid))

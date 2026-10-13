@@ -5,7 +5,7 @@ vectors (ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 internalProjection.
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips203 as K  # noqa: E402
-from common import (ERROR_STATES, MDH_FIELD, MDH_FIELDS, IllegalInstruction, check, control,  # noqa: E402
+from common import (ERROR_STATES, MDH_FIELD, MDH_FIELDS, IllegalInstruction, LoopBound, check, control,  # noqa: E402
                     done, info, mdh_pack, raises, section, sl, spec_note,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
                     KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID,
@@ -26,7 +26,8 @@ OUT_F = {EK_OUT: 'encapsk', CT_OUT: 'ciphertext'}
 SK_SRC = (SK_OUT,)                                 # <<KLE-derive-endpoints>>: sharedkey only in _sharedkey_Output_
 FIELDS = ('decapsk', 'ciphertext', 'sharedkey')    # encapsk is the ek sub-field of decapsk
 # <<KLE-ML-KEM-field-lifetime>>: fields zeroed on entering a State (MR9 zeroes a loaded field)
-ZEROED = {READY: ('sharedkey',), EK_IN: ('decapsk',), DK_IN: ('decapsk',), CT_IN: ('ciphertext', 'sharedkey')}
+ZEROED = {READY: ('sharedkey',), EK_IN: ('decapsk',), DK_IN: ('decapsk',), CT_IN: ('ciphertext', 'sharedkey'),
+          ENC: ('sharedkey',), DEC: ('sharedkey',)}
 # <<KLE-ML-KEM-sizes>> (bytes); Internal State (bits: decapsk, its encapsk, ciphertext, sharedkey), the
 # encapsk byte offset and the byte total; Serialized Content (bits) and its "MDH included" bytes and 128-bit blocks.
 SIZES = {512: (800, 1632, 768, 32), 768: (1184, 2400, 1088, 32), 1024: (1568, 3168, 1568, 32)}
@@ -50,7 +51,6 @@ DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', {**key(192)
         mc(10, 0): ('secp256r1', {SET_SCALAR: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {SET_SCALAR: ('Scalar', 384)}),
         mc(10, 3): ('ed25519', {SET_SCALAR: ('Scalar', 256)})}
 AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
-ALL_ONES_SKID = (1 << 64) - 1
 FILL = b'\x5a'                                     # placeholder key of a provisioned destination
 USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}     # <<KLE-UsagePolicy>>
 HART = {'mode': 'M', 'now': 0}                     # privilege mode; secure clock (Zklexpire)
@@ -103,7 +103,7 @@ class Dest(Locker):
     """A kl.derive destination; only its field (`key`) or absorbed input is modelled."""
     def __init__(self, machine, state=READY, keytype=0, skid=0, **mdh):
         self.name, self.eps = DEST[machine]
-        if keytype == 1 and skid == ALL_ONES_SKID:
+        if keytype == 2:
             keytype = 0                            # <<KLE-KeyType-field>>: random key, KeyType 0
         self.mdh = mdh_pack(Machine=machine, State=state, KeyType=keytype, **mdh)
         self.key, self.absorbed = FILL * next((b // 8 for f, b in self.eps.values() if f != 'input'), 0), b''
@@ -130,11 +130,15 @@ class MLKEMLocker(Locker):
             self.zero(n)
         self.ads = None
 
-    def zero(self, n): setattr(self, n, bytes(self.size[n]))
+    def zero(self, n):
+        setattr(self, n, bytes(self.size[n]))
+        if n == 'sharedkey' and self.mdh:
+            self.set_sk(0)                         # HasSharedKey is cleared whenever sharedkey is zeroed
     def fields(self): return [getattr(self, n) for n in FIELDS]
     se = property(lambda self: self.get('StateExtension'))     # bit 0 HasEncapsk, bit 1 HasDecapsk
     def set_flags(self, ek, dk): self.put('StateExtension', self.se & ~3 | ek | dk << 1)
     def set_ct(self, v): self.put('StateExtension', self.se & ~4 | v << 2)     # HasCiphertext, bit 2
+    def set_sk(self, v): self.put('StateExtension', self.se & ~8 | v << 3)     # HasSharedKey, bit 3
     use = property(lambda self: self.get('MachineUse'),         # W of MR9 (bytes), P of MR6
                    lambda self, v: self.put('MachineUse', v))
 
@@ -224,13 +228,13 @@ class MLKEMLocker(Locker):
                 self.use = w + n
                 out = getattr(self, name)[w:w + n]
                 if self.use == self.size[name]:    # MR9, with the Machine's transitions at completion
-                    self.transition(SK_OUT if self.state == CT_OUT and any(self.sharedkey) else READY)
+                    self.transition(SK_OUT if self.state == CT_OUT and self.se & 8 else READY)
                 return out
             self.enter_error(INVALID)
         return bytes(n)                            # GR34
 
     def exec_D(self, halt_after=None):
-        """Form D; halt_after=n halts precisely after n steps (GR70).  Returns 'retired', 'halted' or 'noop'."""
+        """Form D; halt_after=n halts precisely after n steps (GR72).  Returns 'retired', 'halted' or 'noop'."""
         if not self.gate():
             return 'noop'
         st = self.state
@@ -240,7 +244,7 @@ class MLKEMLocker(Locker):
         if self.use == 0 or self.resume_redraws:   # MR6: start anew, drawing fresh values
             w = ({'d': self.rbg(), 'z': self.rbg()} if st == GEN else {'ek': self.encapsk, 'm': self.rbg()}
                  if st == ENC else {'dk': self.decapsk, 'c': self.ciphertext})
-            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR74
+            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR76
                 self.enter_error(INVALID)
                 return 'retired'
             self.ads = {'w': w, 'next': 0}
@@ -250,7 +254,11 @@ class MLKEMLocker(Locker):
                 self.use = self.ads['next'] + 1    # P != 0 at a halt, the data in a 6-block ADS
                 self.put('AuxDataLen', 6)
                 return 'halted'
-            steps[self.ads['next']](self.ads['w'])
+            try:
+                steps[self.ads['next']](self.ads['w'])
+            except LoopBound:                      # a SampleNTT limit: no output, _Failure_ (<<KLE-PQC-ML-KEM>>)
+                self.transition(FAILURE)           # discards the ADS and zeroes P (MR6)
+                return 'retired'
             self.ads['next'] += 1
         w = self.ads['w']
         if st == GEN:
@@ -258,6 +266,7 @@ class MLKEMLocker(Locker):
             self.set_flags(1, 1)
         else:
             self.sharedkey = w['K']
+            self.set_sk(1)                         # whatever its value, zero included
             if st == ENC:
                 self.ciphertext = w['c']
                 self.set_ct(1)
@@ -269,6 +278,9 @@ class MLKEMLocker(Locker):
         new, c1, a = copy.copy(self), b''.join(self.fields()), self.size['decapsk']
         b = a + self.size['ciphertext']
         new.decapsk, new.ciphertext, new.sharedkey = c1[:a], c1[a:b], c1[b:]
+        if new.state == SK_OUT and not new.se & 8:  # an unsupported State | StateExtension: invalid Metadata
+            new.enter_error(INVALID)
+            return new
         if new.check_keys and new.se & 2 and not K.check_decaps_key(new.decapsk, new.ps):    # MR14 on import:
             new.enter_error(INVALID)               # a configuration error
             return new
@@ -320,7 +332,7 @@ def kl_derive(dest, src, length):
     out = src.state in OUT_F                       # the State selects the source: the GR51 output, else sharedkey
     field, bits = dest.eps.get(dest.state, (None, 0))
     n, is_key = bits // 8, field not in (None, 'input', 'J0')
-    bad = [lk for lk, ok in ((src, out or src.state in SK_SRC and any(src.sharedkey)),
+    bad = [lk for lk, ok in ((src, out or src.state in SK_SRC and src.se & 8),
                              (dest, field and not (is_key and dest.get('KeyType') == 1))) if not ok]
     cmac_in = field == 'input' and dest.name.endswith('CMAC')
     if not bad and not out and (field == 'J0' or cmac_in):
@@ -591,8 +603,25 @@ def t_state_machine():
     check('kl.exec after completion (now in _sharedkey_Output_, which admits none): _Invalid_, OUTPUT zeroed',
           cc.state == INVALID and got == bytes(16))
     cc = to(encapsulated(), READY, CT_OUT)
-    check('_ciphertext_Output_ entered from _Ready_ (sharedkey zero): completion -> _Ready_',
+    check('_ciphertext_Output_ entered from _Ready_ (HasSharedKey clear): completion -> _Ready_',
           emit(cc, (1088,)).hex() == v['c'] and cc.state == READY)
+    cc = encapsulated()
+    set_after_enc = cc.se & 8
+    cc.sharedkey = bytes(32)                       # a zero shared key, which FIPS 203 does not exclude
+    check('_Encapsulate_ sets HasSharedKey; a zero shared key still leads from _ciphertext_Output_ to _sharedkey_Output_, '
+          'and kl.derive delivers it', set_after_enc and emit(cc, (1088,)).hex() == v['c'] and cc.state == SK_OUT
+          and cc.se & 8 and derived(Dest(AES256_CTR), cc, 32).key == bytes(32))
+    out = encapsulated()
+    emit(out, (1088,))
+    check('HasSharedKey cleared with sharedkey: entering _Ready_, _ciphertext_Input_ or _Encapsulate_, leaving '
+          '_sharedkey_Output_', None,
+          [(m.se & 8, zero(m.sharedkey)) for m in (moved(encapsulated(), READY), moved(encapsulated(), CT_IN),
+                                                   moved(encapsulated(), ENC), moved(out, READY))], [(0, True)] * 4)
+    bad = copy.copy(out)
+    bad.put('StateExtension', bad.se & ~8)
+    check('import: _sharedkey_Output_ with HasSharedKey clear is invalid Metadata; with it set, flag and key survive',
+          bad.export_import().state == INVALID and (lambda n: (n.state, n.se & 8, n.sharedkey))(out.export_import())
+          == (SK_OUT, 8, out.sharedkey))
     cc = encapsulated()
     part, over = emit(cc, (512, 512)), cc.exec_C(128)
     check('emitting past the field size: _Invalid_, OUTPUT zeroed (MR9)',
@@ -635,7 +664,7 @@ def t_state_machine():
         run(cc, ENC)                               # key pair, ciphertext and sharedkey all set
         before = cc.fields() + [cc.se]
         run(cc, st)
-        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR74, GR29)',
+        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR76, GR29)',
               voided(cc) and not zero(*before[:3]))
 
     states = set()
@@ -643,7 +672,8 @@ def t_state_machine():
         cc = decaps_ready(x)
         cc.exec_D()
         states.add(cc.state)
-        check(f"_Decapsulate_ {x['src']} ({x['reason']})", cc.sharedkey.hex() == x['k'] and cc.state == SK_OUT)
+        check(f"_Decapsulate_ {x['src']} ({x['reason']}), HasSharedKey set",
+              cc.sharedkey.hex() == x['k'] and cc.state == SK_OUT and cc.se & 8)
     check('valid and implicitly rejected ciphertexts both reach _sharedkey_Output_', None, states, {SK_OUT})
     x = vec('decaps', ps, 'valid')
     cc = decaps_ready(x)
@@ -778,7 +808,7 @@ def t_long_running():
     check('export/import keeping the ADS: P kept, resumes to the ACVP key pair',
           same and kept.rbg.draws == 2 and kept.state == EK_OUT and kept.encapsk.hex() == kv['ek'])
     dropped = halted_gen()[0].export_import(keep_ads=False)
-    check('import completing without Content2 (GR72, MR6) zeroes P: restart with fresh values',
+    check('import completing without Content2 (GR74, MR6) zeroes P: restart with fresh values',
           dropped.use == 0 and dropped.state == GEN and restarted(dropped))
     x = vec('decaps', ps)
     cc = decaps_ready(x)
@@ -789,6 +819,37 @@ def t_long_running():
     cc = to(halted_gen()[0], CLEAR_ADS)
     check('kl.clearads keeps the State, removes the ADS, zeroes P (MR6); the operation restarts',
           cc.state == GEN and cc.get('AuxDataLen') == 0 and cc.use == 0 and restarted(cc))
+
+def t_loop_bound():
+    section('SampleNTT limit (FIPS 203 Appendix B): the operation ends without output in _Failure_ (<<KLE-PQC-ML-KEM>>)')
+    ps = 768
+    kv, ev = vec('keyGen', ps), vec('encaps', ps)
+    d, z, m = h(kv['d']), h(kv['z']), h(ev['m'])
+    ek, dk = K.keygen_internal(d, z, ps)
+    c = K.encaps_internal(ek, m, ps)[1]
+    try:
+        K.SAMPLE_NTT_BOUND = 280
+        cc = MLKEMLocker(ps, rbg=RBG(d, z))
+        run(cc, GEN)
+        check('the Table 4 minimum limit of 280 iterations: the ACVP key pair', cc.state == EK_OUT
+              and cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
+        K.SAMPLE_NTT_BOUND = 100                   # a polynomial needs at least 128 iterations
+        cc = MLKEMLocker(ps, rbg=RBG(d, z))
+        check('_GenerateKeyPair_ reaching the limit: _Failure_, no key pair, P = 0, no ADS', run(cc, GEN) == 'retired'
+              and cc.state == FAILURE and zero(*cc.fields()) and cc.se == 0 and cc.use == 0 and cc.ads is None)
+        cc = MLKEMLocker(ps, rbg=RBG(m))
+        load(cc, EK_IN, ek)
+        run(cc, ENC)
+        check('_Encapsulate_ reaching the limit: _Failure_, no ciphertext, no shared key, P = 0', cc.state == FAILURE
+              and zero(cc.ciphertext, cc.sharedkey) and cc.use == 0 and cc.ads is None)
+        cc = MLKEMLocker(ps)
+        load(cc, DK_IN, dk)
+        load(cc, CT_IN, c)
+        run(cc, DEC)
+        check('_Decapsulate_ reaching the limit: _Failure_, no shared key, P = 0', cc.state == FAILURE
+              and zero(cc.sharedkey) and cc.use == 0 and cc.ads is None)
+    finally:
+        K.SAMPLE_NTT_BOUND = None
 
 def t_derive():
     section('kl.derive: <<KLE-derive-endpoints>> and the derivation rules')
@@ -849,8 +910,8 @@ def t_derive():
           derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == CT_OUT)
     check('KeyType 1 key never importable (GR49): destination _Invalid_',
           derived(Dest(AES128_ECB, keytype=1, skid=0x1234), src).state == INVALID and src.state == SK_OUT)
-    dest = derived(Dest(AES128_ECB, keytype=1, skid=ALL_ONES_SKID), src)
-    check('all-ones SKID placeholder (KeyType 0) receives the key',
+    dest = derived(Dest(AES128_ECB, keytype=2), src)
+    check('a locker provisioned with KeyType 2 (now KeyType 0) receives the key',
           dest.get('KeyType') == 0 and dest.key == ss[:16] and dest.state == READY)
     check('source in _sharedkey_Output_ after _Decapsulate_: key delivered',
           derived(Dest(AES256_CTR), cd, 32).key.hex() == dv['k'] and cd.state == SK_OUT)
@@ -1013,6 +1074,6 @@ VECTORS = {
 }
 
 if __name__ == '__main__':
-    for t in (t_sizes, t_mdh, t_fips203, t_input_checks, t_state_machine, t_key_flags, t_long_running, t_derive, t_controls):
+    for t in (t_sizes, t_mdh, t_fips203, t_input_checks, t_state_machine, t_key_flags, t_long_running, t_loop_bound, t_derive, t_controls):
         t()
     done()

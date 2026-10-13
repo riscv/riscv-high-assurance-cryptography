@@ -4,6 +4,8 @@ bytes is FIPS 204's || (first operand first).  Anchored by mldsa-kat.py against 
 
 import hashlib
 
+from common import LoopBound  # noqa: E402
+
 Q = 8380417
 N = 256
 D = 13
@@ -261,6 +263,14 @@ def w1_encode(w1, ps):
 
 # ---------------------------------------------------------------- sampling (Alg. 29-34)
 
+# FIPS 204 Appendix C: these loops should not be bounded; a bound is at least the Table 3 limit (iterations;
+# XOF bytes for SampleInBall).  None: unbounded.  A test sets a smaller one to reach the exhaustion path.
+BOUNDS = {'RejNTTPoly': None, 'RejBoundedPoly': None, 'SampleInBall': None}
+
+def _bound(name, n):
+    if BOUNDS[name] is not None and n > BOUNDS[name]:
+        raise LoopBound(name)
+
 def sample_in_ball(c_tilde, ps):
     tau = PARAMS[ps]['tau']
     c = [0] * 256
@@ -273,6 +283,7 @@ def sample_in_ball(c_tilde, ps):
             if pos >= len(stream):
                 stream = xof.digest(len(stream) + 1024)
             j = stream[pos]; pos += 1
+            _bound('SampleInBall', pos)
             if j <= i:
                 break
         c[i] = c[j]
@@ -293,6 +304,7 @@ def rej_ntt_poly(seed):
             buf = xof.digest(len(buf) + 168)
         z = _coeff_from_three_bytes(buf[pos], buf[pos + 1], buf[pos + 2])
         pos += 3
+        _bound('RejNTTPoly', pos // 3)
         if z is not None:
             a.append(z)
     return a
@@ -315,6 +327,7 @@ def rej_bounded_poly(seed, eta):
         z0 = _coeff_from_half_byte(buf[pos] & 0x0F, eta)
         z1 = _coeff_from_half_byte(buf[pos] >> 4, eta)
         pos += 1
+        _bound('RejBoundedPoly', pos)
         if z0 is not None:
             a.append(z0 % Q)
         if z1 is not None and len(a) < 256:

@@ -4,6 +4,8 @@ Anchored by mlkem-kat.py against NIST ACVP vectors."""
 
 import hashlib
 
+from common import LoopBound  # noqa: E402
+
 Q = 3329
 N = 256
 
@@ -84,6 +86,10 @@ def poly_sub(f, g):
 
 # ---------------------------------------------------------------- sampling (Algorithms 7-8)
 
+# FIPS 203 Appendix B: the loop should not be bounded; a bound is at least 280 iterations.  None: unbounded.
+# A test sets a smaller one to reach the exhaustion path.
+SAMPLE_NTT_BOUND = None
+
 def sample_ntt(seed34):
     """SampleNTT: rejection-sample a polynomial in NTT domain from SHAKE128."""
     out = []
@@ -95,6 +101,8 @@ def sample_ntt(seed34):
             buf = xof.digest(len(buf) + 512)   # same stream, longer
         c0, c1, c2 = buf[pos], buf[pos + 1], buf[pos + 2]
         pos += 3
+        if SAMPLE_NTT_BOUND is not None and pos // 3 > SAMPLE_NTT_BOUND:
+            raise LoopBound('SampleNTT')
         d1 = c0 + 256 * (c1 % 16)
         d2 = c1 // 16 + 16 * c2
         if d1 < Q:

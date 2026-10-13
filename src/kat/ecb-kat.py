@@ -3,7 +3,7 @@
 and GB/T 32907-2016 (SM4); also the general rules, the PI/SCC layout and kl.derive into `key`."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
+from common import (install_key, aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT,
                     KL_STATE_DECRYPT, KL_STATE_INVALID, KL_STATE_PRIV_VIOLATION, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, info, done)
@@ -68,7 +68,7 @@ def kl_size(mdh, c1_size, pi_size):          # <<KLE-instruction-size>>, AuxData
     return 16 if st in ERROR_STATES else 16 + pi_size if st == 0 else 32 + c1_size
 
 def build_pi(cipher, key_field, policy=POL_BOTH, keytype=0, **mdh):
-    k = 64 if keytype else CIPHERS[cipher][2]
+    k = 64 if keytype == 1 else CIPHERS[cipher][2]
     return v2b(mdh_pack(Machine=MACHINE[cipher], MachinePolicy=policy, KeyType=keytype, **mdh), 16) \
         + v2b(key_field, pad16(k))
 
@@ -98,14 +98,11 @@ class EcbLocker:
         self.mdh, self.key, self.skid = put(self.mdh, 'State', st), None, None
 
     def _install(self, field, importing):     # <<KLE-KeyType-field>>, <<KLE-MVR-open>>
-        if self.keytype == 0:
-            self.key = field
-        elif field == ONES64 and not importing:
-            self.key, self.mdh = random.Random(1).getrandbits(self.cipher[2]), put(self.mdh, 'KeyType', 0)
-        elif field != ONES64 and field in self.sks:
-            self.skid, self.key = field, self.sks[field]
-        else:
-            self.invalidate()
+        r = install_key(self.keytype, field, importing, self.sks, lambda: random.Random(1).getrandbits(self.cipher[2]))
+        if r is None:
+            return self.invalidate()
+        self.key, self.skid, kt = r
+        self.mdh = put(self.mdh, 'KeyType', kt)
 
     def provision(self, pi):
         self.mdh, self.key, self.skid = b2v(pi[:16]), None, None
@@ -349,11 +346,13 @@ m192 = mdh_pack(Machine=MACHINE['AES-192'], MachinePolicy=POL_BOTH, KeyType=1, S
 cl = EcbLocker(SKS)
 cl.provision(build_pi('AES-192', SKID + 1, keytype=1))
 eq("unresolved SKID at provisioning -> Invalid (<<KLE-MVR-open>>)", cl.state, INV)
-cl.provision(build_pi('AES-192', ONES64, keytype=1))
-eq("all-ones SKID: random key, KeyType 0, Content1 32 B, kl.size 64",
+cl.provision(build_pi('AES-192', 0, keytype=2))
+eq("KeyType 2: random key, KeyType 0, Content1 32 B, kl.size 64",
    (cl.state, cl.keytype, kl_size(cl.mdh, len(cl.content1()), 0)), (RDY, 0, 64))
-cl.import_scc(m192, v2b(ONES64, 16))
-eq("SCC carrying the all-ones SKID in a Complete State -> Invalid", cl.state, INV)
+cl.import_scc(mdh_pack(Machine=MACHINE['AES-192'], MachinePolicy=POL_BOTH, KeyType=2, State=RDY), bytes(32))
+eq("SCC with KeyType 2 -> Invalid (<<KLE-KeyType-field>>)", cl.state, INV)
+cl.provision(build_pi('AES-192', ONES64, keytype=1))
+eq("the all-ones SKID is an ordinary SKID: unresolved -> Invalid", cl.state, INV)
 cl.provision(build_pi('AES-128', b2v(H(SP38A_F1[0][2])), policy=0))
 eq("PI with MachinePolicy = 0 -> Invalid", cl.state, INV)
 cl.import_scc(put(put(m192, 'KeyType', 0), 'State', KL_STATE_OPERATE), H(SP38A_F1[1][2]))

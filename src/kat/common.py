@@ -254,6 +254,21 @@ KL_CFG_MANAGEMENT_END = 63
 class IllegalInstruction(Exception):
     pass
 
+def install_key(keytype, field, importing, sks, generate, value=None):
+    """<<KLE-KeyType-field>>, <<KLE-system-keys>>: what a key field installs, as (key, skid, KeyType), or None for
+    _Invalid_.  KeyType 0: `value`, else the field; 1: the key(s) that the SKS resolves for the SKID in the field;
+    2, in a PI only: generate(), after which KeyType is 0."""
+    if keytype == 0:
+        return (field if value is None else value), None, 0
+    if keytype == 1 and field in sks:
+        return sks[field], field, 1
+    if keytype == 2 and not importing:
+        return generate(), None, 0
+    return None
+
+class LoopBound(Exception):
+    """A sampler reached the limit an implementation set on its loop (FIPS 203 Appendix B, FIPS 204 Appendix C)."""
+
 # ---------------------------------------------------------------- reporting
 
 _counts = {'pass': 0, 'fail': 0}

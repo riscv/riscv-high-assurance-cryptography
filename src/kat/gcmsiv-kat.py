@@ -135,15 +135,16 @@ class Siv:
         if s.state in ERROR_STATES:
             return 0, 0                                  # GR30
         kb = 64 if s.key_type else s.k
-        return (cat((s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr % 2**32, 32), (s.nonce, 96),
+        return (cat((s.ctr >> 32 << 15 | s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr & M32, 32), (s.nonce, 96),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 400))
 
     @classmethod
     def imported(cls, state, v, k, **kw):
         s = cls(**kw)
         s.k, s.key, s.state = k, v2b(sl(v, k - 1, 0), k // 8), state
-        s.nonce, s.ctr, s.SIV, s.tmp, s.last_blk_len = (sl(v, k + hi, k + lo) for hi, lo in
-                                                         ((95, 0), (127, 96), (255, 128), (383, 256), (399, 384)))
+        s.nonce, lo, s.SIV, s.tmp, vi = (sl(v, k + hi, k + lo) for hi, lo in
+                                         ((95, 0), (127, 96), (255, 128), (383, 256), (399, 384)))
+        s.ctr, s.last_blk_len = (vi >> 15 & 1) << 32 | lo, vi & 0x7F     # ctr[32] in bit 15 of field vi
         if not s.stale:
             s._derive()                                  # MR4
         return s
@@ -220,7 +221,7 @@ class Siv:
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
-                s.klstart, s.halted = 16 * j, True       # GR68
+                s.klstart, s.halted = 16 * j, True       # GR70
                 return out
             blk = sl(INPUT, 128 * j + 127, 128 * j)
             if st == HA:
@@ -228,7 +229,7 @@ class Siv:
                 continue
             if s.ctr == 2**32:
                 s._invalid()
-                return out                               # GR67
+                return out                               # GR69
             o = blk ^ s._ks()
             if st == DEC:
                 s._absorb(o)
@@ -559,13 +560,15 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
 m, ref = at('enc'), at('enc')
 m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('GR67/GR34/GR29: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('GR69/GR34/GR29: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
 m = at('dec')
 m.ctr = 2**32
 v, _ = m.export()
-check('ctr = 2^32 is serialized as bin(ctr mod 2^32, 32): imported with ctr = 0',
-      Siv.imported(DEC, v, m.k).ctr == 0)
+i = Siv.imported(DEC, v, m.k)
+i.exec('A', 0, 128)
+check('ctr = 2^32 survives export/import (bit 32 in field vi): the next block -> Invalid',
+      (sl(v, m.k + 399, m.k + 399), i.state) == (1, INV))
 bad = (0, 4, 12, 121, 128)
 for where, last in (('enc', ELB), ('dec', DLB)):
     nm = 'Enc' if last == ELB else 'Dec'
@@ -595,7 +598,7 @@ tag = m.exec('A', len_block(a10, p10), 128)
 o1 = m.exec('A', b2v(p10), 384, None, 1)
 h2 = (m.halted, m.klstart)
 o2 = m.exec('A', b2v(p10), 384, 16)
-check('GR68: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
+check('GR70: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
       (h1, h2) == ((True, 32), (True, 16)) and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) + v2b(tag, 16) == w10)
 
 section('general rules')
@@ -657,13 +660,13 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR75): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR77): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
 m.exec('A', b2v(p5[:16]), 128)
 v = m.export()[0]
-check('layout: key, nonce, bin(ctr,32), SIV, tmp, last_blk_len',
+check('layout: key, nonce, ctr[31:0], SIV, tmp, ctr[32] @ last_blk_len',
       (sl(v, 127, 0), sl(v, 223, 128), sl(v, 255, 224), sl(v, 383, 256), sl(v, 511, 384), v >> 512)
       == (b2v(k5), b2v(n5), 1, siv, m.tmp, 0))
 

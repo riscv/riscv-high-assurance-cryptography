@@ -28,7 +28,7 @@ CLEAR_ADS = 64
 CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klnamedlocker: no locker managed
 KLV_SEWS = (8, 16, 32, 64)                   # <<KLE-KLV>>: SEW values, ELEN = 64; others set vtype.vill
-MAX_RESTARTS = 2                             # GR66 option 5: this model's documented bound for memory instructions
+MAX_RESTARTS = 2                             # GR68 option 5: this model's documented bound for memory instructions
 VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
 EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
@@ -408,6 +408,7 @@ class Unit:
         self.clf_total, self.clock, self.csk = clf_total, clock, csk     # clock None: unreadable
         self.hw = {j: _secret(b'hw', j) for j in range(6) if j not in hw_missing}
         self.sks = dict(DEFAULT_SKS)
+        self.random_keys = True                                     # _KeyType_ 2 supported
         self.physbootscrt, self.virtbootscrt = _secret(b'phys'), _secret(b'virt')
         self.mlocality, self.hlocality, self.slocality = _secret(b'mloc'), _secret(b'hloc'), _secret(b'sloc')
         self.mode, self.kls_off, self.llstatus, self.vstart, self._rbg = 'M', False, {}, 0, 0
@@ -459,6 +460,7 @@ class Unit:
         if mach is None or m['MachineExtension']: return True
         if m['SCProtection'] in SC_ORDER and m['SCProtection'] not in mach.sc_levels: return True   # 3: invalid
         if m['KeyType'] == 1 and not self.sks: return True              # no SKID support (R7)
+        if m['KeyType'] == 2 and not self.random_keys: return True      # no random key generation
         return m['MachinePolicy'] not in mach.policies and not (mach.kind == 'ops' and m['MachinePolicy'] == 0)
     def invalid(self, m, ctx, low=False):
         """ctx: 'provision', 'import' or 'size'; low: only bits [63:0] are examined."""
@@ -467,7 +469,8 @@ class Unit:
         bad = [m['res'] & (MASK64 if low else MASK128), m['AuxDataLen'] == 1,
                pi and (m['AuxDataLen'] or m['ADSDropped']),
                mach and mach.kind == 'ops' and m['MachinePolicy'] == 0,
-               m['KeyType'] > 1, mach and not mach.key_len and m['KeyType'] == 1,   # R7: no key field
+               m['KeyType'] == 3 or m['KeyType'] == 2 and not pi,              # <<KLE-KeyType-field>>
+               mach and not mach.key_len and m['KeyType'] in (1, 2),            # R7: no key field
                ctx == 'provision' and st != UNCONF, ctx == 'import' and (st == UNCONF or st > 60),
                st in (54, 55) or (mach and 2 <= st <= 45 and st not in mach.states),
                mach and st in VALID and not mach.stx_ok(st, m['StateExtension']),
@@ -479,7 +482,8 @@ class Unit:
     def available(self, m):
         mach = MACHINES.get(m['Machine'])
         return int(bool(mach) and not m['MachineExtension'] and m['MachinePolicy'] in mach.policies
-                   and m['SCProtection'] in mach.sc_levels and m['KeyType'] in ((0, 1) if self.sks else (0,)))
+                   and m['SCProtection'] in mach.sc_levels
+                   and m['KeyType'] in {0, 1 if self.sks else 0, 2 if self.random_keys else 0})
     def usage_allowed(self, m):                                     # <<KLE-UsagePolicy>>
         up = m['UsagePolicy']
         if self.mode == 'D': return bool(up & 0b10000)
@@ -725,7 +729,7 @@ class Unit:
             m['AuxDataLen'], c2 = (ADS_BLOCKS, self.gen_ads(cl)) if self.wants_ads(m) else (0, b'')
         cl.c2, cl.img = c2, None
         if m['KeyType'] == 1:                                       # <<KLE-MVR-open>>, <<KLE-system-keys>>
-            err = INVALID if b2v(cl.c1[:8]) == ONES64 else self.sks_resolve(cl)
+            err = self.sks_resolve(cl)
             if err:
                 self._enter_error(k, err)
     def _complete_provisioning(self, k):
@@ -733,7 +737,7 @@ class Unit:
         m = cl.mdh
         if m['AuxDataLen'] or m['ADSDropped']: return self._enter_error(k, INVALID)
         pi, cl.img = bytes(cl.img), None
-        if m['KeyType'] == 1 and b2v(pi[:8]) == ONES64:
+        if m['KeyType'] == 2:                                       # <<KLE-KeyType-field>>: random key, KeyType 0
             cl.c1, m['KeyType'] = self.rbg(MACHINES[m['Machine']].key_len), 0
         else:
             cl.c1 = pi[:16] if m['KeyType'] == 1 else pi
@@ -1057,7 +1061,7 @@ class Unit:
         while j < end:
             f = fault(j)
             if f or (halt_after is not None and j - self.klstart >= halt_after):
-                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR66: no restart on a fault, and
+                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR68: no restart on a fault, and
                 self.restarts += rs                                 # option 3 once the bound is reached
                 self.klstart = 0 if rs else j
                 if f: raise Trap(f[0], tval=f[1])
@@ -1501,16 +1505,24 @@ def t_validity():
     section('Metadata validity  <<KLE-Metadata-validity>>, <<KLE-MVR-open>>')
     rows = []
     for kw in (dict(res=1 << 46), dict(res=1 << 116), dict(AuxDataLen=1), dict(ADSDropped=1), dict(AuxDataLen=2),
-               dict(MachinePolicy=0), dict(KeyType=2), dict(KeyType=3), dict(Locality=loc(boot=3)),
+               dict(MachinePolicy=0), dict(KeyType=3), dict(Locality=loc(boot=3)),
                dict(Version=1), dict(Version=2), dict(Version=3, Locality=loc(hw1=3)), dict(SCProtection=3),
                dict(State=READY)):
         u = rc(3).csrs(klstart=16)
         rows.append((u.mgmt(3, PROV, cipher(**kw)), pack(u.getmd(3)), u.lockers[3].alloc, u.klnamedlocker, u.klstart))
-    eq('14 invalid PIs -> Invalid, other fields zero, no capacity, klnamedlocker keeps naming it, klstart 0', rows,
-       [('invalid', pack(md(State=INVALID)), 0, 3, 0)] * 14)
-    eq('R7: KeyType 1 for a Machine without a key field is invalid; KeyType 0 provisions it',
-       [rc(3).mgmt(3, PROV, md(Machine=M_HASH, KeyType=1)), rc(3).mgmt(3, PROV, md(Machine=M_HASH))],
-       ['invalid', 'opened'])
+    eq('13 invalid PIs -> Invalid, other fields zero, no capacity, klnamedlocker keeps naming it, klstart 0', rows,
+       [('invalid', pack(md(State=INVALID)), 0, 3, 0)] * 13)
+    eq('R7: KeyType 1 or 2 for a Machine without a key field is invalid; KeyType 0 provisions it',
+       [rc(3).mgmt(3, PROV, md(Machine=M_HASH, KeyType=1)), rc(3).mgmt(3, PROV, md(Machine=M_HASH, KeyType=2)),
+        rc(3).mgmt(3, PROV, md(Machine=M_HASH))], ['invalid', 'invalid', 'opened'])
+    eq('KeyType 2 opens a provisioning; outside a PI, at import, it is invalid (<<KLE-KeyType-field>>)',
+       [rc(3).mgmt(3, PROV, cipher(KeyType=2)), rc(3).mgmt(3, IMP, cipher(State=READY, KeyType=2))],
+       ['opened', 'invalid'])
+    norand = rc(3)
+    norand.random_keys = False
+    eq('KeyType 2 without random key generation -> kl_exc_unsupported, kl.avail 0',
+       [trap_of(norand.mgmt, 3, PROV, cipher(KeyType=2)), norand.avail('C', m=cipher(KeyType=2))],
+       ['unsupported', 0])
     nosks = rc(3)
     nosks.sks = {}
     eq('R7: KeyType 1 without SKID support -> kl_exc_unsupported, kl.avail 0',
@@ -1578,9 +1590,9 @@ def t_lengths():
     check('PI length independent of SCProtection, StateExtension, MachineUse, policies, AuxInfo, State, Version',
           same(lambda **kw: cm.pi_content_size(cipher(**kw)), SCProtection=1, StateExtension=1, MachineUse=9,
                UsagePolicy=7, Locality=2, ExpirationDate=5, AuxInfo=3, State=5, Version=1))
-    eq('PI length depends on KeyType; Content1 on StateExtension',
-       (cm.pi_content_size(base), cm.pi_content_size(cipher(KeyType=1)),
-        cm.content1_size(cipher(StateExtension=1)) - cm.content1_size(base)), (32, 16, 16))
+    eq('PI length depends on KeyType, 2 as 0; Content1 on StateExtension',
+       (cm.pi_content_size(base), cm.pi_content_size(cipher(KeyType=1)), cm.pi_content_size(cipher(KeyType=2)),
+        cm.content1_size(cipher(StateExtension=1)) - cm.content1_size(base)), (32, 16, 32, 16))
     check('SCC length independent of SCProtection, MachineUse, AuxInfo, UsagePolicy, Locality, ExpirationDate, State',
           same(lambda **kw: u.size_of(cipher(**{'State': 2, 'AuxDataLen': 4, **kw}), True), SCProtection=1,
                MachineUse=9, AuxInfo=5, UsagePolicy=7, Locality=2, ExpirationDate=5, State=3))
@@ -1597,7 +1609,7 @@ def t_lengths():
     pi_ok, scc_ok = u.size('C', m=cipher()), u.size('C', m=cipher(State=2, AuxDataLen=4))
     eq('Forms B and C: State 0 is validated as at provisioning (a PI: no ADS fields), any other State as at import',
        [pi_ok > 0, S(AuxDataLen=4), scc_ok > 0, u.size('B', lo=pack(cipher()) & MASK64) == pi_ok,
-        u.size('B', lo=pack(cipher(AuxDataLen=4)) & MASK64)], [True, 0, True, True, 0])
+        u.size('B', lo=pack(cipher(AuxDataLen=4)) & MASK64), S(KeyType=2) == pi_ok], [True, 0, True, True, 0, True])
     em = [md(Machine=M_ABSENT, State=s, res=1 << 46, AuxDataLen=1 + 8 * (s & 1), ADSDropped=s & 1)
           for s in ERROR_STATES]
     eq('kl.size 16 for any Error-State MDH, even invalid or unsupported; AuxDataLen, ADSDropped ignored (B, C)',
@@ -1634,18 +1646,18 @@ def t_lengths():
     check('ContentOffset 0/16/48; image_size = kl.size - 16 = image_end within the maximum', all(ok))
     a = fresh()
     eq('kl.avail 1 for implemented combinations, else 0; 0 for an Unconfigured locker',
-       ([a.avail('C', m=m) for m in (base, cipher(KeyType=1), xof(MachinePolicy=1), sig(MachinePolicy=0),
-                                     cipher(SCProtection=2))],
-        [a.avail('C', m=m) for m in (cipher(MachineExtension=2), cipher(KeyType=2), cipher(SCProtection=3),
+       ([a.avail('C', m=m) for m in (base, cipher(KeyType=1), cipher(KeyType=2), xof(MachinePolicy=1),
+                                     sig(MachinePolicy=0), cipher(SCProtection=2))],
+        [a.avail('C', m=m) for m in (cipher(MachineExtension=2), cipher(KeyType=3), cipher(SCProtection=3),
                                      cipher(MachinePolicy=0), xof(MachinePolicy=3),
                                      md(Machine=M_ABSENT, MachinePolicy=1))],
-        a.avail(k=0)), ([1] * 5, [0] * 6, 0))
+        a.avail(k=0)), ([1] * 6, [0] * 6, 0))
     eq('kl.avail examines no other field; Form B uses [63:0]',
        (a.avail('C', m=cipher(State=63, res=3 << 116, Locality=loc(boot=3), Version=2)), a.avail('B', lo=pack(base))),
        (1, 1))
     provision(a, 0, base)
     a.setst(0, EXPIRED)
-    a.mgmt(1, PROV, cipher(KeyType=2))
+    a.mgmt(1, PROV, cipher(KeyType=3))
     eq('Error-State locker: kl.avail Form A uses its fields; kl.size 16 (GR30)',
        (a.avail(k=0), a.avail(k=1), a.size(k=0), a.size(k=1)), (1, 0, 16, 16))
 
@@ -1817,15 +1829,12 @@ def t_localities():
     eq('a subset of an allowed MachinePolicy resolves; the privilege mode is irrelevant',
        (provision(fresh(), 0, cipher(KeyType=1, MachinePolicy=1), v2b(SKID_B, 16)),
         provision(fresh(mode='U'), 0, cipher(KeyType=1), v2b(SKID_A, 16))), (READY, READY))
-    w = pv(pv(fresh(), 0, cipher(KeyType=1), v2b(ONES64, 16)), 1, cipher(KeyType=1), v2b(ONES64, 16))
-    eq('all-ones SKID: a key is generated at completion, KeyType becomes 0',
-       (w.getmd(0)['KeyType'], len(w.lockers[0].c1), w.lockers[0].c1 != w.lockers[1].c1, w.size(k=0)),
-       (0, 32, True, 64))
-    src = pv(fresh(), 0, cipher(KeyType=1), v2b(SKID_A, 16))
-    src.lockers[0].c1 = v2b(ONES64, 16)
-    eq('an SCC whose Content1 carries the all-ones SKID -> Invalid (<<KLE-locker-management>>)',
-       import_(fresh(), 0, export(src, 0)),
-       INVALID)
+    w = pv(pv(fresh(), 0, cipher(KeyType=2), bytes(32)), 1, cipher(KeyType=2), bytes(32))
+    eq('KeyType 2: the PI has the KeyType 0 layout; keys generated at completion replace its key; KeyType becomes 0',
+       (w.getmd(0)['KeyType'], len(w.lockers[0].c1), w.lockers[0].c1 != w.lockers[1].c1,
+        bytes(32) not in (w.lockers[0].c1, w.lockers[1].c1), w.size(k=0)), (0, 32, True, True, 64))
+    eq('the all-ones SKID is an ordinary SKID: unresolved -> Invalid (<<KLE-system-keys>>)',
+       provision(fresh(), 0, cipher(KeyType=1), v2b(ONES64, 16)), INVALID)
 
 def t_mgmt():
     section('kl.mgmt: provisioning, import, export  <<KLE-locker-management>>')
@@ -2022,15 +2031,17 @@ def t_nested():
     eq('double nesting stays 59; Complete ml illegal on pi; PCCC re-import 60 -> 56; resumption completes', r,
        ['opened', PPI_EXP, 'completed', PPI_EXP, 'completed', PROV, 'opened', 'illegal/2', 'completed', 'cleared',
         NONE, 'opened', PPI_IMP, 4, 'done', 'completed', PROV, 'done', 'completed', content])
-    u = opened(m=cipher(KeyType=1))
-    u.mv_in(ONES64)
+    u = opened(m=cipher(KeyType=2))
+    u.mv_in(0)
+    u.mv_in(0)
     s0 = u.getmd(0)
     u.mgmt(0, EXP)
     pv_ = [u.mv_out() for _ in range(u.size(k=0) // 16 - 1)]
     u.mgmt(0, END, s0)
     u.mgmt(0, END)
-    eq('all-ones SKID: the PCCC carries only the SKID; the key comes from the completing kl.mgmt',
-       (pv_, u.getmd(0)['KeyType'], len(u.lockers[0].c1)), ([ONES64], 0, 32))
+    eq('KeyType 2: the PCCC keeps KeyType 2 and the loaded PI content; the key comes from the completing kl.mgmt',
+       (s0['KeyType'], pv_, u.getmd(0)['KeyType'], len(u.lockers[0].c1), u.lockers[0].c1 != bytes(32)),
+       (2, [0, 0], 0, 32, True))
     u = fresh()
     src, ml, mem, scc = interrupted_import(u, 2, 64)
     regs, s1, ks = (u.siv, u.impqual, u.siv2), u.getmd(2), u.klstart
@@ -2228,11 +2239,11 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR56: access fault at the byte, prefix committed; restart option for interrupts only (GR66)',
+    eq('GR56: access fault at the byte, prefix committed; restart option for interrupts only (GR68)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()
-    eq(f'GR66 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
+    eq(f'GR68 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
        [(w.load(mem, BASE, halt_after=16, restart=True), w.klstart) for _ in range(MAX_RESTARTS + 1)]
        + [w.load(mem, BASE), img(w) == pc], [('halted', 0)] * MAX_RESTARTS + [('halted', 16), 'done', True])
     u, out, ref = rc(), Memory(), Memory()
@@ -3020,7 +3031,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR64); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR65); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 

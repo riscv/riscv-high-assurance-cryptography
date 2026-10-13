@@ -5,7 +5,7 @@ record), including the external-mu interface the unit exposes, and a model of an
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips204 as D  # noqa: E402
-from common import (ERROR_STATES, MDH_FIELD, IllegalInstruction, check, control, done, info,  # noqa: E402
+from common import (ERROR_STATES, MDH_FIELD, IllegalInstruction, LoopBound, check, control, done, info,  # noqa: E402
                     mdh_pack, raises, section, sl, spec_note, KL_STATE_READY as READY,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID)
 
@@ -18,7 +18,6 @@ OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
 SE = {'HasPrivKey': 1, 'HasPubKey': 2, 'Hedged': 4}   # StateExtension bits 0, 1, 2
 mc = lambda typ, mode: typ << 4 | mode             # <<KLE-exec-encodings>>
 MLDSA = {44: mc(11, 3), 65: mc(11, 4), 87: mc(11, 5)}
-HASHES = {mc(t, m) for t in (4, 6) for m in range(6)}   # SHA-2 and SHA-3/SHAKE, the PH FIPS 204 admits
 SHAKE256 = mc(6, 5)
 SET_SCALAR = 3                                     # ECC _Set_Scalar_
 h = bytes.fromhex
@@ -34,19 +33,17 @@ class RBG:
 
 class MLDSALocker:
     """An ML-DSA CC; _Sign_Generate_ halts at rejection-loop boundaries (P = MachineUse, ADS = kappa)."""
-    def __init__(self, ps, policy=0b11, aux=0, rbg=None, pi_use=0, hashes=HASHES):
+    def __init__(self, ps, policy=0b11, aux=0, rbg=None, pi_use=0):
         self.ps, self.rbg, self.n = ps, rbg, dict(zip(('privkey', 'pubkey', 'signature'), D.sizes(ps)))
         self.privkey = self.pubkey = b''
         self.clear()
-        self.mdh, self.exc = 0, None
-        if aux and aux not in hashes:              # 0: pure ML-DSA; else PH, unsupported: stays _Unconfigured_
-            self.exc = 'kl_exc_unsupported'
-            return
+        self.mdh = 0
         self.mdh = mdh_pack(Machine=MLDSA[ps], MachinePolicy=policy, AuxInfo=aux, MachineUse=pi_use, State=READY)
         self.use = 0                               # provisioning zeroes MachineUse, keeps AuxInfo
 
     def clear(self):                               # the fields cleared on entering _Ready_
         self.signature, self.mu, self.rnd, self.kappa = b'', b'', bytes(32), 0
+        self.sign_bound = D.SIGN_LOOP_BOUND        # the implementation's limit on the signing loop
 
     def get(self, f): return sl(self.mdh, *MDH_FIELD[f])
 
@@ -131,7 +128,15 @@ class MLDSALocker:
         return out
 
     def exec_D(self, xi=None, halt_after=None):
-        """Form D; halt_after=n halts _Sign_Generate_ after n loop iterations.  Returns 'halted' or None."""
+        """Form D; halt_after=n halts _Sign_Generate_ after n loop iterations.  Returns 'halted' or None.
+        A loop limit reached ends the operation without output in _Failure_ (<<KLE-PQC-ML-DSA>>)."""
+        try:
+            return self._exec_D(xi, halt_after)
+        except LoopBound:
+            self.rnd, self.use, self.kappa = bytes(32), 0, 0
+            return self.put('State', FAILURE)
+
+    def _exec_D(self, xi, halt_after):
         st = self.state
         if st in ERROR_STATES:
             return
@@ -149,10 +154,10 @@ class MLDSALocker:
                 return self.invalid()
             if self.use == 0:                      # MR6: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR74: RBG failure
+                if self.rnd is None:               # GR76: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
-                                                                      self.kappa, halt_after)
+                                                                      self.kappa, halt_after, self.sign_bound)
             if status == 'halted':
                 self.use = self.kappa // D.PARAMS[self.ps]['l'] + 1        # P != 0 at a halt
                 return 'halted'
@@ -180,13 +185,10 @@ class MLDSALocker:
         if v:                                      # a zero field changes nothing
             self.put('MachinePolicy', self.get('MachinePolicy') & ~v)
 
-    def export_import(self, hashes=HASHES):
-        """SCC round trip: the Serialized Content carries no tr, ctx or ctxlen (external mu).
-        An AuxInfo the importing implementation does not support raises kl_exc_unsupported."""
+    def export_import(self):
+        """SCC round trip: the Serialized Content carries no tr, ctx or ctxlen (external mu); AuxInfo is carried
+        unchecked."""
         new = MLDSALocker(self.ps)
-        if self.get('AuxInfo') and self.get('AuxInfo') not in hashes:
-            new.mdh, new.exc = 0, 'kl_exc_unsupported'
-            return new
         new.mdh = self.mdh
         for f in ('privkey', 'pubkey', 'signature', 'mu', 'rnd'):
             setattr(new, f, getattr(self, f))
@@ -278,18 +280,11 @@ def t_mdh():
           and loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk']))).get('StateExtension') == 0b010)
     cc.setst(SIGN_GEN, 0)
     check('Hedged in StateExtension bit 2', cc.get('StateExtension') == 0b111)
-    for aux, name, ok in ((0x00, 'pure ML-DSA', True), (0x43, 'PH = SHA2-512', True), (0x65, 'PH = SHAKE256', True),
-                          (0x61, 'PH = SHA3-256', True), (0x01, 'AES128_CBC', False), (0x46, 'SHA2-224_HMAC', False),
-                          (0x6A, 'KMAC128', False), (0x83, 'Ascon-Hash256', False)):
-        cc = MLDSALocker(44, aux=aux)
-        check(f'AuxInfo {aux:#04x} ({name}): ' + ('_Ready_' if ok else 'kl_exc_unsupported, _Unconfigured_'),
-              (cc.exc, cc.mdh and cc.state) == ((None, READY) if ok else ('kl_exc_unsupported', 0)))
-    cc = MLDSALocker(44, aux=mc(6, 0), hashes=HASHES - {mc(6, 0)})
-    check('AuxInfo SHA3-224, admitted but not implemented: kl_exc_unsupported, locker _Unconfigured_',
-          (cc.exc, cc.mdh) == ('kl_exc_unsupported', 0))
-    cc = MLDSALocker(44, aux=mc(6, 0)).export_import(hashes=HASHES - {mc(6, 0)})
-    check('import of an SCC whose AuxInfo the implementation lacks: kl_exc_unsupported, locker _Unconfigured_',
-          (cc.exc, cc.mdh) == ('kl_exc_unsupported', 0))
+    vals = (0x00, 0x43, 0x65, 0x61, 0x01, 0x46, 0x6A, 0x83, 0xFFFF)
+    check('AuxInfo is never checked: pure, SHA2-512, SHAKE256, SHA3-256, AES128_CBC, SHA2-224_HMAC, KMAC128, '
+          'Ascon-Hash256 and 0xFFFF all provision to _Ready_ and survive export/import unchanged (<<KLE-PQC-ML-DSA>>)',
+          all(MLDSALocker(44, aux=a).state == READY and MLDSALocker(44, aux=a).export_import().get('AuxInfo') == a
+              for a in vals))
     cc = generated(policy=0)
     sg, sv = generated(policy=0), generated(policy=0)
     sg.setst(SIGN_GEN, 1)
@@ -479,7 +474,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR74)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR76)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -550,6 +545,45 @@ def t_progress():
     cc.exec_D()
     check('it resumes to the deterministic signature', cc.state == SIGN_OUT and cc.signature
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
+
+def t_loop_bounds():
+    section('Loop limits (FIPS 204 Appendix C): the operation ends without output in _Failure_ (<<KLE-PQC-ML-DSA>>)')
+    hed, kv, vv = mu_vec(True), VECTORS['keyGen'][0], next(v for v in VECTORS['sigVerMu'] if v['pass'])
+    sk, mu, rnd = h(hed['sk']), h(hed['mu']), h(hed['rnd'])
+    n = D.sign_internal_mu_resumable(sk, mu, rnd, 44)[3]
+    cc = loaded(44, (SK_IN, sk), (MU_IN, mu), rbg=RBG(rnd))
+    cc.sign_bound = n - 1
+    run(cc, SIGN_GEN, 0)
+    check(f'signing loop limited to {n - 1} of the {n} iterations it needs: _Failure_, no signature, rnd destroyed, '
+          'P = 0', cc.state == FAILURE and cc.signature == b'' and cc.rnd == bytes(32) and cc.use == 0)
+    try:
+        D.BOUNDS.update(RejBoundedPoly=481, RejNTTPoly=298, SampleInBall=221)
+        cc = loaded(44, (SK_IN, sk), (MU_IN, mu), rbg=RBG(rnd))
+        run(cc, SIGN_GEN, 0)
+        check('the Table 3 minimum limits: the ACVP signature', cc.state == SIGN_OUT and cc.signature.hex() == hed['sig'])
+        D.BOUNDS.update(RejBoundedPoly=1)
+        cc = MLDSALocker(44)
+        run(cc, GEN, xi=h(kv['seed']))
+        check('_GenerateKeyPair_, RejBoundedPoly limited: _Failure_, no key pair', cc.state == FAILURE
+              and cc.privkey == cc.pubkey == b'' and not cc.flag('HasPrivKey') and not cc.flag('HasPubKey'))
+        D.BOUNDS.update(RejBoundedPoly=481, RejNTTPoly=1)
+        cc = loaded(44, (SK_IN, h(kv['sk'])))
+        run(cc, COMPUTE_PK)
+        check('_compute_pubKey_, RejNTTPoly limited: _Failure_, no public key', cc.state == FAILURE
+              and cc.pubkey == b'' and not cc.flag('HasPubKey'))
+        cc = loaded(44, (PK_IN, h(vv['pk'])), (MU_IN, h(vv['mu'])), (SIGN_IN, h(vv['sig'])))
+        run(cc, SIGN_VERIFY)
+        check('_Sign_Verify_ of a valid signature, RejNTTPoly limited: _Failure_', cc.state == FAILURE)
+        D.BOUNDS.update(RejNTTPoly=298, SampleInBall=8)
+        cc = loaded(44, (SK_IN, sk), (MU_IN, mu), rbg=RBG(rnd))
+        cc.setst(SIGN_GEN, 0)
+        cc.exec_D(halt_after=0)
+        p = cc.use
+        cc.exec_D()
+        check('a halted _Sign_Generate_, SampleInBall limited on resumption: _Failure_, no signature, rnd destroyed, '
+              'P = 0', p != 0 and cc.state == FAILURE and cc.signature == b'' and cc.rnd == bytes(32) and cc.use == 0)
+    finally:
+        D.BOUNDS.update(RejBoundedPoly=None, RejNTTPoly=None, SampleInBall=None)
 
 def t_derive():
     section('kl.derive: emitted output as a source (GR51, <<KLE-derive-endpoints>>)')
@@ -2303,6 +2337,6 @@ VECTORS = {
 
 if __name__ == '__main__':
     for t in (t_sizes, t_mdh, t_fips204, t_state_machine, t_compute_pubkey_and_import, t_sign_verify, t_progress,
-              t_derive, t_hints):
+              t_loop_bounds, t_derive, t_hints):
         t()
     done()

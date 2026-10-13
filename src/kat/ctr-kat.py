@@ -4,7 +4,7 @@ SP 800-38A F.5 and the google/hctr2 XCTR reference vectors; also the general rul
 PI/SCC layout and kl.derive.  (n, j) = (96, 32) in CTR, (b, b) in XCTR."""
 import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
+from common import (install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
                     KL_STATE_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, info,
                     done)
@@ -33,7 +33,7 @@ def kl_size(mdh, c1_size, pi_size):          # <<KLE-instruction-size>>, AuxData
 
 def build_pi(cipher, key_field, mode='CTR', keytype=0):
     return v2b(mdh_pack(Machine=MACHINE[cipher, mode], MachinePolicy=3, KeyType=keytype), 16) \
-        + v2b(key_field, pad16(64 if keytype else CIPHERS[cipher]))
+        + v2b(key_field, pad16(64 if keytype == 1 else CIPHERS[cipher]))
 
 def ref(key, block, msg):                     # byte-string keystream reference
     return bxor(b''.join(aes_encrypt(key, block(i)) for i in range(-(-len(msg) // 16))), msg)
@@ -67,14 +67,12 @@ class KsLocker:
         self.ctr = 1 if self.mdh and KIND.get(fld(self.mdh, 'Machine'), (None, None))[1] == 'XCTR' else 0
 
     def _install(self, field, importing):
-        if self.keytype == 0:
-            self.key = field
-        elif field == ONES64 and not importing:
-            self.key, self.mdh = random.Random(1).getrandbits(self.params()[0]), put(self.mdh, 'KeyType', 0)
-        elif field != ONES64 and field in self.sks:
-            self.skid, self.key = field, self.sks[field]
-        else:
-            self.invalidate()
+        r = install_key(self.keytype, field, importing, self.sks,
+                        lambda: random.Random(1).getrandbits(self.params()[0]))
+        if r is None:
+            return self.invalidate()
+        self.key, self.skid, kt = r
+        self.mdh = put(self.mdh, 'KeyType', kt)
 
     def provision(self, pi):
         self.mdh = b2v(pi[:16])
@@ -374,9 +372,11 @@ for label, kt, field, want_c1 in (("by value", 0, b2v(key), SP38A_F5[0][1] + TAI
     eq(f"{label}: Content1 after 2 blocks = key|IV|ctr; imported, it finishes F.5.1",
        (cl.content1().hex(), cl2.state, bxor(head + keystream(cl2, 32), PT).hex()), (want_c1, OP, c))
 cl = KsLocker(SKS)
+cl.provision(pi := build_pi('AES-128', 0, keytype=2))
+eq("KeyType 2: PI of 32 B as with KeyType 0; random key, KeyType 0, Content1 32 B",
+   (len(pi), cl.state, cl.keytype, cl.key != 0, len(cl.content1())), (32, RDY, 0, True, 32))
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
-eq("all-ones SKID: random key, KeyType 0, Content1 32 B",
-   (cl.state, cl.keytype, len(cl.content1())), (RDY, 0, 32))
+eq("the all-ones SKID is an ordinary SKID: unresolved -> Invalid", cl.state, INV)
 info("_Operate_ is enabled by either MachinePolicy bit (MR11), and one must be set: the gate always passes.")
 
 section("kl.derive (<<KLE-derive-endpoints>>, <<KLE-instruction-derive>>)")
