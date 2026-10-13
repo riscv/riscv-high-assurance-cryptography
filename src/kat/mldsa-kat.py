@@ -176,11 +176,9 @@ class MLDSALocker:
         else:
             self.put('State', SIGN_OUT)
 
-    def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: a zero field changes nothing
-        if v & ~self.get('MachinePolicy'):
-            self.invalid()                         # a disabled function cannot be enabled
-        elif v:
-            self.put('MachinePolicy', v)
+    def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: a set bit removes a function,
+        if v:                                      # a zero field changes nothing
+            self.put('MachinePolicy', self.get('MachinePolicy') & ~v)
 
     def export_import(self, hashes=HASHES):
         """SCC round trip: the Serialized Content carries no tr, ctx or ctxlen (external mu).
@@ -300,13 +298,14 @@ def t_mdh():
           '_Sign_Verify_ -> _Invalid_', (cc.state, cc.flag('HasPrivKey'), sg.state, sv.state)
           == (READY, 1, INVALID, INVALID))
     cc = MLDSALocker(44)
-    cc.restrictl_policy(0b10)
+    cc.restrictl_policy(0b01)
     check('kl.restrictl narrows MachinePolicy to verify-only', cc.get('MachinePolicy') == 0b10)
     cc.restrictl_policy(0b00)
     check('kl.restrictl with a zero MachinePolicy field leaves it unchanged', (cc.get('MachinePolicy'), cc.state)
           == (0b10, READY))
     cc.restrictl_policy(0b01)
-    check('kl.restrictl enabling a disabled function: _Invalid_', cc.state == INVALID)
+    check('kl.restrictl: a set bit of a disabled function changes nothing', (cc.get('MachinePolicy'), cc.state)
+          == (0b10, READY))
     for pol, st, name in ((0b10, SIGN_GEN, '_Sign_Generate_ with MachinePolicy[0]'),
                           (0b01, SIGN_VERIFY, '_Sign_Verify_ with MachinePolicy[1]')):
         cc = generated(policy=pol)

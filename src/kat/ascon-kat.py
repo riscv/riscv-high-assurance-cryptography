@@ -396,12 +396,13 @@ def kl_derive(dst, src, length):
 def kl_restrictl(cc, machine_policy, machine_use=0):               # _MachineUse_: not changeable
     if machine_use: return cc.invalidate()
     if not machine_policy: return
-    dropped = cc.policy & ~machine_policy
-    if (not cc.USES_POLICY or machine_policy & ~cc.policy
+    new = cc.policy & ~machine_policy                                # a set bit removes a function
+    dropped = cc.policy & ~new
+    if (not cc.USES_POLICY
             or (dropped & 0b01 and cc.st in (ENCRYPT, ENC_LAST, OUTPUT))
             or (dropped & 0b10 and cc.st in (DECRYPT, DEC_LAST, VERIFY))):
         return cc.invalidate()
-    cc.policy = machine_policy
+    cc.policy = new
 
 def kl_restricth(cc, aux_info):                                   # not a field kl.restricth may change
     if aux_info: cc.invalidate()
@@ -755,14 +756,14 @@ section('_MachinePolicy_, kl.restrictl and kl.restricth')
 _, rec, ok = aead_run(AEAD(K, policy=0b10), True, KAT_NONCE, ad579, ct579, tag=b2v(tag579))
 res = [(rec, ok)] + [(c.st, c.policy) for c in (after(aead_to(start, policy=pol), act) for pol, start, act in (
     (0b10, ABSORB, lambda c: c.setst(ENCRYPT, 'A')), (0b01, ABSORB, lambda c: c.setst(DECRYPT, 'A')),
-    (0b11, READY, lambda c: (kl_restrictl(c, 0b10), c.setst(ABSORB, 'C', INPUT=NN, KLLEN=128), c.setst(ENCRYPT, 'A'))),
-    (0b11, ENCRYPT, lambda c: kl_restrictl(c, 0b10)), (0b11, OUTPUT, lambda c: kl_restrictl(c, 0b10)),
-    (0b01, READY, lambda c: kl_restrictl(c, 0b11)), (0b11, ABSORB, lambda c: kl_restrictl(c, 0b01)),
+    (0b11, READY, lambda c: (kl_restrictl(c, 0b01), c.setst(ABSORB, 'C', INPUT=NN, KLLEN=128), c.setst(ENCRYPT, 'A'))),
+    (0b11, ENCRYPT, lambda c: kl_restrictl(c, 0b01)), (0b11, OUTPUT, lambda c: kl_restrictl(c, 0b01)),
+    (0b01, READY, lambda c: kl_restrictl(c, 0b10)), (0b11, ABSORB, lambda c: kl_restrictl(c, 0b10)),
     (0b11, READY, lambda c: kl_restricth(c, 0x0001))))]
-check('decryption-only locker decrypts but cannot _Encrypt_ (and vice versa); kl.restrictl narrows, never '
-      'enables, and not during the operation it disables; kl.restricth on _AuxInfo_ -> _Invalid_', True, res,
+check('decryption-only locker decrypts but cannot _Encrypt_ (and vice versa); kl.restrictl removes '
+      'functions, a set bit of a disabled one changing nothing, and not during the operation it disables; kl.restricth on _AuxInfo_ -> _Invalid_', True, res,
       [(pt579, True), (INVALID, 0b10), (INVALID, 0b01), (INVALID, 0b10), (INVALID, 0b11), (INVALID, 0b11),
-       (INVALID, 0b01), (ABSORB, 0b01), (INVALID, 0b11)])
+       (READY, 0b01), (ABSORB, 0b01), (INVALID, 0b11)])
 
 section('Resumption (<<KLE-GR-block-iterated-instructions>>, <<KLE-CSR-klstart>>)')
 pt3 = b2v(bytes(range(48)))

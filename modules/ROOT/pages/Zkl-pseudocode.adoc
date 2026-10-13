@@ -24,22 +24,35 @@ This subsection illustrates the intended instruction sequences for locker config
 They show the main operation logic and error detection, but not application-specific error management, and can be packaged into libraries or OS APIs to avoid increasing application code size.
 
 Registers:::
-GPR `t0` holds the number of the locker to be provisioned, imported or exported, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-instructions-memory>>).
+GPR `t0` holds the number of the locker to be provisioned, imported or exported, or 32 for the locker that `klnamedlocker` names, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-instructions-memory>>).
 The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 Selecting the locker:::
-The routines never use explicit locker numbers in the instructions: on entry they save `klnamedlocker` and write the locker number to it, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>).
+The routines never use explicit locker numbers in the instructions: they save `klnamedlocker` on entry and select the locker with the preamble `select_locker` below, on entry and at every `restart`, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>).
 `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand, and `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name the named locker `KLNL`.
-Since a clear resets `klnamedlocker` to 32, the routines write it again before every opening, at `restart` for a provisioning or an import: a `KLNL` opening raises an illegal-instruction exception when `klnamedlocker` = 32, and otherwise opens the locker it names, a Valid one included (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>>).
+A clear resets `klnamedlocker` to 32, after which a `KLNL` opening performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>>): the next _State_ check reads 0, and the preamble at `restart` names locker `t0` again or, when `t0` = 32, whose locker the clear has destroyed, branches to `no_locker`. An opening on a named locker opens it, a Valid one included.
 On exit they restore the saved value, as Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-finish>> requires of software that has finished a management operation; a routine can thus be called from a handler that has saved the interrupted operation (<<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>), including for a nested export or import of the locker that operation manages.
++
+----
+.macro select_locker              # t0 = p: 0-31, or 32 for the named locker
+  li        t1, 32
+  bgeu      t0, t1, 1f            # p = 32: keep the named locker
+  kl.setnl  t0                    # p in 0-31: name locker p
+  j         2f
+1:
+  kl.getnl  t2
+  bgeu      t2, t1, no_locker     # none named, or cleared: error to caller
+2:
+.endm
+----
 
 Checking the _State_:::
 +
 --
 After each management instruction, the code reads the _State_ of the locker with `kl.getst`.
-If a handler has meanwhile cleared the locker or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, other than an opening, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>>), and the check detects the change:
+If a handler has meanwhile cleared the locker or set it to an Error State, a following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, a `KLNL` opening after a clear included, performs no operation (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-cleared-under-management>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-openings>>), and the check detects the change:
 
-* after a clear, `KLNL` reads as an _Unconfigured_ locker, so the check finds _State_ 0: a provisioning or an import restarts, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
+* after a clear, `KLNL` reads as an _Unconfigured_ locker, so the check finds _State_ 0: a provisioning or an import restarts, its preamble naming locker `t0` again or branching to `no_locker` when `t0` = 32, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
 * after an Error State, or the completing `kl.mgmt`, `KLNL` still names the locker, so the check reads its final _State_, and an Error State abandons the operation.
 
 Only the check after the last instruction is required; the earlier checks only react sooner.
@@ -47,7 +60,7 @@ The code may bound the number of restarts and branch to its error handling once 
 --
 
 Error handling:::
-The code at `handle_errors` is not shown.
+The code at `handle_errors` and `no_locker` is not shown; `no_locker` restores `klnamedlocker` and returns an error to the caller, since with `t0` = 32 no locker is named, or a clear has destroyed the named one.
 It writes 0 to `klstart`, which a `kl.mvin` or `kl.mvout` loop leaves at its last transfer point, and restores `klnamedlocker` as the routines do on exit.
 If the locker is still in a Configuration State, it clears a locker being provisioned or imported, and completes the export of a locker being exported with the saved MDH, which restores the locker.
 
@@ -70,7 +83,7 @@ The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `kl.mgmt`
                                   # run inside another management operation
 
 restart:
-  kl.setnl  t0                    # name the locker: every KLE instruction
+  select_locker                   # name the locker: every KLE instruction
                                   # below acts on it; a clear resets it to 32
   kl.mgmt   KLNL, #kl_cfg_provisioning, s5:s4 # start provisioning, load MDH
   kl.getst  t2, KLNL              # get _State_ field from MDH
@@ -121,7 +134,7 @@ finished:
   kl.getnl  s8                    # save the caller's value
 
 restart:
-  kl.setnl  t0                    # name the locker (a clear resets it to 32)
+  select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_provisioning, s5:s4 # start prov. and load MDH
   kl.getst  t2, KLNL
   beqz      t2, restart           # locker cleared: must restart
@@ -150,7 +163,7 @@ finished:
 ----
   li         t3, 0x30             # to determine Error States
   kl.getnl   s8                   # save the caller's value
-  kl.setnl   t0                   # name the locker for all that follows
+  select_locker                   # name the locker for all that follows
   kl.size    s1, KLNL             # TOTAL size to export
   beqz       s1, handle_errors    # 0 means the locker is unconfigured
 
@@ -238,7 +251,7 @@ but the caller must also save `klstart` before the opening `kl.mgmt`, which clea
   kl.getnl   s8                   # save the caller's value
 
 restart:
-  kl.setnl  t0                    # name the locker (a clear resets it to 32)
+  select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_importing, s5:s4    # open locker for import, load MDH
   kl.getst  t2, KLNL
   beqz      t2, restart           # locker cleared means force restart
@@ -292,7 +305,7 @@ success:
   kl.getnl  s8                    # save the caller's value
 
 restart:
-  kl.setnl  t0                    # name the locker (a clear resets it to 32)
+  select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_importing, s5:s4    # open locker for import, load MDH
   kl.getst  t2, KLNL
   beqz      t2, restart           # locker cleared means force restart

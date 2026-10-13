@@ -214,6 +214,7 @@ Besides the General Rules (GR) of <<Zkl-ISA-unpriv.adoc#KLE-unpriv>>, in particu
 the current State of the Machine in that locker does not explicitly allow,
 transitions the locker to Error State _Invalid_.
 `kl.clearads` is allowed in every Valid State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>>).
+A `kl.setst` with _Unconfigured_ (`kl.clear`) counts as a configuration instruction, not a usage instruction (<<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>>), so no State restricts it.
 +
 An illegal-instruction exception is raised instead only on a ground of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>, not for an instruction merely wrong for the State: for instance, a reserved encoding, including a `kl.setst` with `#immed7` 46, 47, 54 or 55, or 53 without `Zklexpire`, a Form unavailable to the implementation at all, or a KLIOBUF substitution that <<Zkl-ISA-unpriv.adoc#KLE-usage-input-output>> forbids.
 
@@ -254,7 +255,7 @@ A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-
 . Any material *must* be regenerated if the operation is restarted instead of resumed.
 It is up to the algorithm implemented in the Machine to establish whether these values are kept upon completion of the operations.
 . If _P_ is non-zero, _P_ is zeroed, and the material destroyed, on every transition of the locker's _State_, including a same-State `kl.setst`, a transition to _Ready_ or to an Error State, by `kl.clearads`, and by an import that completes without `Content2`, whatever the reason (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>).
-. A `kl.clone` copies _P_ and the material to its destination verbatim, as an export followed by an import does (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>); each copy is thereafter subject to these sub-rules independently.
+. A `kl.clone` restarts the operation in its destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>): the copy's _P_ is zeroed and its material destroyed, while the source keeps both.
 . _P_ is not cleared, and the material is not destroyed, by an interrupt, by an export, or by an import that completes with `Content2`.
 . When the operation completes, _P_ is set to zero, but it is up to the algorithm encoded in the Machine to establish whether the material is kept or destroyed.
 
@@ -309,9 +310,9 @@ An instruction executed in the State checks a condition only if the condition ca
 [[KLE-MGR-config-data-error,MR12]]MR12:: _Configuration errors and data errors._
 Each Machine states which of its checks detect which of these two kinds of error:
 
-* A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard rejects, such as a malformed private key, or a value whose encoding violates a constraint of its representation, such as the zero most significant bits of secp521r1 (<<KLE-ECC>>).
+* A _configuration error_ is a private key, or another field loaded to configure the CC, that the referenced standard rejects, such as a malformed private key, or a value, in any field, a peer point or a signature included, whose encoding violates a constraint of its representation, such as the zero most significant bits of secp521r1 (<<KLE-ECC>>).
   It transitions the locker to Error State _Invalid_, so the CC cannot be used until it is reconfigured.
-* A _data error_ is a ciphertext, tag, signature, message representative or public key that is malformed or does not verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses (a peer's point, a public key or a generator) that is not a valid point of the curve.
+* A _data error_ is a ciphertext, tag, signature, message representative or public key that is otherwise malformed or does not verify, such as an ML-KEM encapsulation key that fails its check, or a point that an operation uses (a peer's point, a public key or a generator) that is not a valid point of the curve.
   It transitions the state machine to _Failure_, which is a Valid State.
 
 [[KLE-MGR-check-on-read,MR13]]MR13:: _Checks when a field is read._
@@ -345,7 +346,8 @@ Where a standard's formula requires a bit count, it is obtained by multiplying t
 [horizontal]
 [[KLE-MGR-last-blk-len,MR16]]MR16:: A `last_blk_len`, or any other parameter giving the bit length of a final input piece, is a multiple of 8,
 unless the Machine states that its referenced standard orders the bits within a byte as <<Zkl-notation.adoc#KLE-Notation>> does,
-so that a truncation of the last byte to its least significant bits is the bit string that the standard defines (as for <<KLE-Ascon-AEAD128>>).
+so that a truncation of the last byte to its least significant bits is the bit string that the standard defines (as for <<KLE-Ascon-AEAD128>>),
+or the Machine defines which bits of the partial final byte carry the piece (as for the nonce of <<KLE-OCB-mode>>).
 A value that the Machine does not admit transitions the locker to Error State _Invalid_.
 Whether zero is admissible depends on the Machine.
 
@@ -593,11 +595,11 @@ State Machine:::
 +
 --
   . If in CTR mode, then:
-  .. `tmp ← keystream_block(bswap(ctr) @ IV)`,
+  .. `tmp <- keystream_block(bswap(ctr) @ IV)`,
   . else: (i.e., if in a XCTR mode)
-  .. `tmp ← keystream_block(IV xor ctr)`,
+  .. `tmp <- keystream_block(IV xor ctr)`,
   . `tick_ctr()`, and
-  . `OUTPUT ← tmp`.
+  . `OUTPUT <- tmp`.
 
 
 --
@@ -890,7 +892,7 @@ where the parameters are all _references_ to certain variables of the caller Mac
  * `state_offset` is the offset within `state` for XORing with the input data, for instance, for sponge constructions.
  * `cumul_len` is the cumulative length of the data absorbed so far by the procedure, or `None` if not tracked.
  * `mode` is either `assign` or `xor_accumulate`, and selects how incoming data is combined with
-   the destination, as specified in Step 4.b below. It is *not* inferred from whether `block` and
+   the destination, as specified in steps 3.b and 3.c below. It is *not* inferred from whether `block` and
    `state` denote the same variable.
 
 [IMPORTANT]
@@ -924,7 +926,7 @@ all counted in bits, to support values of `max_len` that are not multiples of 8 
 However, the routine only supports values of `b` and `n` that are multiples of 8 bits,
 and all `kl.exec` instructions transfer whole bytes and never a fraction of a byte.
 As a consequence, `input_base` is always a multiple of 8, and so is `block_base`, except after the final transfer of a
-`max_len` that is not a multiple of 8, which ends the instruction (step 4.g).
+`max_len` that is not a multiple of 8, which ends the instruction (step 3.h).
 
 Finally, two parameters are functions of the called Machine:
 
@@ -2315,7 +2317,7 @@ The state then transitions to _Hash_Absorb_Last_Block_.
 ** State _Hash_Absorb_Last_Block_ is very similar to _Hash_Absorb_; the differences
    are:
  *** `last_blk_len` is used in place of `b` for the amount of data to be absorbed.
- *** `process_last_block()` is called instead of `process_block()` in Step 4.g.
+ *** `process_last_block()` is called instead of `process_block()` in step 3.g.
  *** The instruction is terminated after `process_last_block()`—only one block
      is absorbed—and the state transitions to _Hash_Output_.
 
@@ -3384,6 +3386,8 @@ The parameters used in this section are:
  . The number `v` of elements used to represent a signature (`v` can be 0, 1 or 2, where `v` = 0
    denotes a curve for which no signature scheme is provided).
 
+The granularity of every Elliptic Curve Machine, X25519, X448 and EdDSA included, is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
+
 The parameters for the defined curves are:
 
 * NIST curves cite:[NIST-SP-800-186,nist-fips-186-5]:
@@ -3443,6 +3447,8 @@ The Elliptic Curve Machines use the _MachineUse_ field as follows:
 |  [1:0]  | `OutputType`    |  Determines what _Output_ emits: 0, a _point_, the result of a multiplication of `Generator`, such as a public key, from `SecondPt`; 1, a _signature_, from `Signature`; 2, a _shared secret_, the result of a multiplication of a loaded `SecondPt`, from `SecondPt`. The value 3 is reserved: a `kl.exec` or `kl.derive` in _Output_ with that value transitions the locker to Error State _Invalid_.
 |  [13:2] | `Progress`      |   Tracks, in an implementation-defined and non-portable unit, the progress of long-running operations such as scalar multiplications. Whenever it is non-zero, the SCC must include an ADS, and an import that completes without `Content2`, for instance on an implementation version mismatch, restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>).
 |===
+
+NOTE: _Output_ emits a shared secret through `kl.exec` like any other output, so the caller can read it: the protocols that process the ECDH shared secret themselves are too many to list as `kl.derive` destinations. Its `kl.derive` transfers remain restricted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), so that a derived key inherits the policies of the ECC locker, but they do not hide the secret from a caller that may issue `kl.exec` on that locker. The exclusion of CMAC as a destination (<<KLE-derive-endpoints>>) therefore matters only for a secret that `kl.exec` cannot read, such as the ML-KEM `sharedkey`.
 
 For ECC Machines, the flags in _MachinePolicy_ enable signature generation (_MachinePolicy_[0]) and verification (_MachinePolicy_[1]), where all four combinations are admissible, and gate _Sign_Generate_ and _Sign_Verify_, respectively (Rule <<KLE-MGR-policy-gate>>).
 --
@@ -3613,7 +3619,7 @@ configured private key.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `kl.setst` with a non-zero value in the GPR.
     In this case, a random value is set (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> applies if the RBG fails), no further
-    `kl.exec` is issued, and the generated value is never disclosed: it leaves
+    `kl.exec` is issued, the State loads nothing (Rule <<KLE-MGR-load-long-field>> does not apply), and the generated value is never disclosed: it leaves
     the locker only as part of an SCC.
 
  ** *Random numbers and retry rules.*
@@ -3978,6 +3984,7 @@ State Machine:::
     performing signature generation during signing passes 1 and 2, and only while performing signature verification during
     the verification pass: clearing _MachinePolicy_[0], resp. _MachinePolicy_[1], in it transitions the locker to Error
     State _Invalid_.
+ ** _MachinePolicy_ = 0 is invalid for EdDSA (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>), at provisioning and as the result of a `kl.restrict*`.
  ** The entry conditions (Rule <<KLE-MGR-policy-gate>>) for _Sign_Generate_ and _Sign_Verify_ of <<KLE-ECC>> are
     replaced by the following, in addition to the gating by _MachinePolicy_:
   *** _Sign_Generate_: `Scalar` holds a configured seed, and either `msg_pass` = 2 (pure mode) or `msg_pass` = 0
@@ -4117,6 +4124,8 @@ The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized
 | ML-KEM-768  |      1184 |      2400 |         1088 |        32
 | ML-KEM-1024 |      1568 |      3168 |         1568 |        32
 |===
+
+The granularity of the ML-KEM Machines is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
 
 The ML-KEM Machines also support the `kl.derive` instruction
 (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>), which takes the `sharedkey` already held in the CC—produced by
@@ -4348,6 +4357,8 @@ The _Module-Lattice-Based Digital Signature Standard_ was announced by NIST in A
 | ML-DSA-87 |     4896    |    2592    |     4627
 |===
 
+The granularity of the ML-DSA Machines is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
+
 The principal functions offered by ML-DSA are:
 
 * `ML-DSA.KeyGen`: Generates a public-private key pair.
@@ -4501,7 +4512,7 @@ ML-DSA Machines define (States 5 and 7 are not used):
 
 * *Allowed State Transitions:*
 
-** State transitions are allowed between any two valid states, subject to the restrictions in Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>>.
+** State transitions are allowed between any two valid states, subject to the restrictions in Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>>, and to the entry conditions below.
 
 * *Behavior:*
 

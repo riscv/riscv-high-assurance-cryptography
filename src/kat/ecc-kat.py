@@ -72,6 +72,8 @@ class Locker:
         sign, verify = (not xdh if x is None else x for x in (sign, verify))
         if xdh and (sign or verify):
             raise Unsupported('<<KLE-X25519-X448>>: _MachinePolicy_ is not used and must be zero')
+        if c.edwards and not (sign or verify):
+            raise Invalid('<<KLE-EdDSA>>: _MachinePolicy_ = 0 is invalid')
         self.c, self.policy, self.sig_exit = c, (sign, verify), sig_exit
         self.aux_info = (1 if c.edwards else 0) if aux_info is None else aux_info
         if c.edwards and (self.aux_info >> 3 or self.aux_info & 1 and not pure_impl):
@@ -177,15 +179,17 @@ class Locker:
             self._ready(xs)
         self.state = t
 
-    def restrictl_policy(self, sign, verify):
-        """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLE-instruction-restrict>>): narrowing only; clearing
-        both bits erases Hash and Signature and their flags (<<KLE-ECC>>)."""
-        if sign > self.policy[0] or verify > self.policy[1]:
-            raise Invalid('widening _MachinePolicy_')
+    def restrictl_policy(self, clear_sign, clear_verify):
+        """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLE-instruction-restrict>>): a set bit removes its
+        function, a clear one changes nothing; clearing both bits erases Hash and Signature and their flags
+        (<<KLE-ECC>>), and is invalid for EdDSA (<<KLE-EdDSA>>)."""
+        sign, verify = self.policy[0] and not clear_sign, self.policy[1] and not clear_verify
         signing = self.state == SIGN_GEN or self.state == MSG_ABSORB and self.pass_xs in (0, 1)
         verifying = self.state == SIGN_VER or self.state == MSG_ABSORB and self.pass_xs == 2
         if signing and self.policy[0] and not sign or verifying and self.policy[1] and not verify:
             raise Invalid('disabling the operation of the current State')
+        if self.mode == 'eddsa' and not (sign or verify):
+            raise Invalid('<<KLE-EdDSA>>: _MachinePolicy_ = 0 is invalid')
         self.policy = (sign, verify)
         if not sign and not verify:
             self.hash = self.sig = None
@@ -909,14 +913,15 @@ res += [Locker(P256, sign=sg, verify=vf).setst(t) is None for sg, vf in ((True, 
 check('_MachinePolicy_ = 0: entering _Set_Hash_ or _Set_Signature_ -> Invalid; admitted with either bit set', None,
       res, [True] * 6)
 
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, False)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, True)
 check('kl.restrictl clearing both _MachinePolicy_ bits erases Hash and Signature and clears their flags', None,
       (cr.hash, cr.sig, {'hash', 'sig'} & cr.has, cr.policy), (None, None, set(), (False, False)))
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, True)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, False)
 check('... clearing only _MachinePolicy_[0] keeps them', None, ({'hash', 'sig'} <= cr.has), True)
-check('... a widening request, or clearing _MachinePolicy_[0] in _Sign_Generate_: _Invalid_', None,
-      [invalid(Locker(P256, sign=False).restrictl_policy, True, True),
-       invalid(locker(P256, sc(7), hs(E0), to=SIGN_GEN).restrictl_policy, False, True)], [True, True])
+check('... a set bit of a disabled function changes nothing; clearing _MachinePolicy_[0] in _Sign_Generate_: '
+      '_Invalid_', None,
+      [Locker(P256, sign=False).restrictl_policy(True, False).policy,
+       invalid(locker(P256, sc(7), hs(E0), to=SIGN_GEN).restrictl_policy, True, False)], [(False, True), True])
 
 section('Signing and verification over a custom `Generator`')
 G2 = pt(P256, P256.mul_g(2))
@@ -1076,7 +1081,10 @@ check('verification pass: msg_pass 3 while open and once completed; Sign_Verify 
 r1 = locker(EC.ED25519, (SET_SCALAR, seed)); r1.setst(MSG_ABSORB, 0)
 r2 = locker(EC.ED25519, (SET_SCALAR, seed)); r2.setst(MSG_ABSORB, 0)
 check('EdDSA _Msg_Absorb_ in a signing pass: kl.restrictl clearing _MachinePolicy_[0] -> Invalid; clearing [1] admitted',
-      None, [invalid(r1.restrictl_policy, False, True), r2.restrictl_policy(True, False).policy], [True, (True, False)])
+      None, [invalid(r1.restrictl_policy, True, False), r2.restrictl_policy(False, True).policy], [True, (True, False)])
+check('EdDSA: _MachinePolicy_ = 0 is invalid, at provisioning and as the result of kl.restrictl', None,
+      [invalid(Locker, EC.ED25519, sign=False, verify=False),
+       invalid(locker(EC.ED25519, (SET_SCALAR, seed)).restrictl_policy, True, True)], [True, True])
 ok_ed = locker(EC.ED25519, (SET_SCALAR, seed))
 ok_ed.setst(MSG_ABSORB, 0)
 bad_ed = copy.deepcopy(ok_ed, {id(ok_ed.c): ok_ed.c}); bad_ed.has.discard('hstate')

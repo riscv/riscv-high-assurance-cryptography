@@ -95,7 +95,7 @@ The KLE fatal-error exception precedes every exception that depends on the state
 |Exception Code(s) | Mnemonic/RISC-V type           | Examples in KLE (((KLE, error codes)))
 |  3   | Instruction address breakpoint | As per the Privileged Specification.
 | 12, 20, 1 | Instruction page fault, instruction guest-page fault, instruction access fault | As per the Privileged Specification.
-|  2   | Illegal-instruction            | The KLE grounds decided without accessing the state of the KLE unit, such as a reserved encoding or a `KLS` field in effect that is Off, listed first in <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>.
+|  2   | Illegal-instruction            | The KLE grounds decided without accessing the state of the KLE unit, such as a reserved encoding or a `KLS` field in effect that is Off, listed first in <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>; at the same point, an `hstateen0` denial while V=1 raises a virtual-instruction exception (code 22) instead (<<KLE-privileged-CSRs>>).
 | TBD  | *KLE fatal-error*             | Fatal system failure in the KLE unit.
 | TBD  | *KLE missing-CSK*             | Use of the KLE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>, <<KLE-CSR-mklcsk>>). Only M-mode can establish a CSK.
 | TBD  | *KLE locker-Off*              | Any access, as defined in <<KLE-CSR-llockerstatus>>, to a locker whose `*llockerstatus` field is _Off_; M-mode forwards it to the mode that owns the _Off_ field.  This exception enables on-demand (lazy) locker loading and trap-and-emulate.
@@ -103,7 +103,7 @@ The KLE fatal-error exception precedes every exception that depends on the state
 For a usage instruction, a forbidden KLIOBUF substitution is evaluated in the order of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>, after the KLE privilege-violation exception for a locker in a Configuration State.
 // For a usage instruction, the _Unconfigured_, Error-State and Configuration-State conditions of <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>> precede the grounds that depend on the operation of the State, namely a forbidden KLIOBUF substitution: on an _Unconfigured_ or Error-State locker the instruction performs no operation, and in a Configuration State it raises a KLE privilege-violation exception.
 | TBD  | *KLE unsupported-Metadata*    | Unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>) when opening a provisioning or import.
-| TBD  | *KLE privilege-violation*     | A _usage_ instruction that would violate the Usage Control policies (<<Zkl-ISA-unpriv.adoc#KLE-Metadata>>), including any attempt to use, clone or restrict a locker in a Configuration State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>), which is forbidden at all privilege levels.
+| TBD  | *KLE privilege-violation*     | A usage instruction that the _UsagePolicy_ denies (<<Zkl-ISA-unpriv.adoc#KLE-Metadata>>), or any use, clone or restriction of a locker in a Configuration State, which is forbidden at all privilege levels (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>).
 | TBD  | *KLE clock-unavailable*         | With `Zklexpire`, a _usage_ instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-expiration-date>>).
 | TBD  | *KLE out-of-memory*           | Insufficient KLF capacity when opening a provisioning or import, or cloning.
 | TBD  | *KLE RBG-unavailable*         | Random bits that an operation needs remain unavailable past the implementation-defined bound of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>.
@@ -153,8 +153,8 @@ None of these CSRs, the `mklcsk` group included, is available without the KLE ex
 (<<KLE-KL-field-in-misa>>, <<KLE-KLS-field-in-mstatus>>, <<KLE-KLS-field-VS>>):
 an access then raises an illegal-instruction exception, a condition evaluated after the `Smstateen` check below, where implemented, and before the privilege check.
 An access from a mode below the privilege of the CSR also raises an illegal-instruction exception.
-Where `Smstateen` is implemented, the KLE bit (to be allocated) of `mstateen0`, `hstateen0` and `sstateen0` gates every KLE instruction and every KLE CSR, including the identification CSRs, in the modes below the register's own: a clear bit makes the instruction or access raise an illegal-instruction exception, as that extension prescribes.
-These exceptions are decided without accessing the KLE unit, belong to the first group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>, and are evaluated before every other KLE condition.
+Where `Smstateen` is implemented, the KLE bit (to be allocated) of `mstateen0`, `hstateen0` and `sstateen0` gates every KLE instruction and every KLE CSR, including the identification CSRs, in the modes below the register's own: a clear bit makes the instruction or access raise the exception that extension prescribes: an illegal-instruction exception, or a virtual-instruction exception for an `hstateen0` denial while V=1.
+These exceptions are decided without accessing the KLE unit, are evaluated with the first group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>, and precede every other KLE condition.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -256,7 +256,7 @@ For each of these three CSRs:::
 +
 `*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the first group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>), and the KLE fatal-error and missing-CSK exceptions, but before all other conditions, including the second group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>> and the conditions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>. The hardware state of a locker with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
-A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`. An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>>, one that zeroizes or overwrites the locker without reading what it held before: a `kl.mgmt` opening a provisioning or an import, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` into it, but not `kl.swap`. Such an instruction sets every field in effect for the locker to _Dirty_, even if the locker was already _Unconfigured_. However, a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination performs no operation, raises no KLE locker-Off exception, and sets no field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
+A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`. An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>> other than `kl.swap`, which reads the locker it overwrites: a `kl.mgmt` opening a provisioning or an import, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` into it. Such an instruction, on a locker with an _Off_ field in effect, sets every field in effect for the locker to _Dirty_, even if the locker was already _Unconfigured_. However, a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination performs no operation, raises no KLE locker-Off exception, and sets no field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
 +
 A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware locker as authoritative: a mode that held the authoritative image of the locker for lazy loading discards it, and M-mode, which alone emulates a locker, never again uses the emulated copy it held for it (<<KLE-unsupported-handling>>).
 +
@@ -324,11 +324,12 @@ For these, it needs either (a) the CSK and the Locality Secrets of the HW Bindin
 
 An emulator keeps one copy per locker slot and replaces it:
 
-. at the next KLE unsupported-Metadata exception on that slot; or
-. at an emulated `kl.clone` naming the slot as destination, which also clears the slot's hardware locker and marks it _Off_, since the clone of an emulated locker is emulated too.
+. at the next KLE unsupported-Metadata exception on that slot;
+. at an emulated `kl.clone` naming the slot as destination, which also clears the slot's hardware locker and marks it _Off_, since the clone of an emulated locker is emulated too; or
+. at an emulated `kl.rename` naming the slot as destination, or an emulated `kl.swap` naming it, either of which moves a copy into the slot.
 
 A copy orphaned by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,destructive configuration instruction>> is never used again but lingers until replaced.
-As a robustness recommendation, as for a cleared locker (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clear>>), an emulator should zeroize a copy whose _Off_ mark is gone before M-mode next returns control to a less privileged mode; checking `mllockerstatus` whenever it runs finds such copies.
+As a robustness recommendation, as for a cleared locker (<<Zkl-ISA-unpriv.adoc#KLE-destructive-config>>), an emulator should zeroize a copy whose _Off_ mark is gone before M-mode next returns control to a less privileged mode; checking `mllockerstatus` whenever it runs finds such copies.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -405,7 +406,7 @@ reset:
 . bit `L` of `misa` is 1 if the KLE unit and the KLE ISA are at least partially implemented in hardware, and 0 for a purely emulated KLE unit;
  if this bit is writable, M-mode firmware can set it to 1;
 . the `KLS` field of `mstatus` (visible in `sstatus`) and, where implemented, of `vsstatus` is Off;
-. the CSK is unconfigured, unless it is hardwired, or shared under the fourth model of <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>, which the reset of one hart neither clears nor regenerates;
+. the CSK is unconfigured under the first and second ways of <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>; a hardwired CSK is kept, and so is a boot-generated one, which the reset of one hart neither clears nor regenerates;
 . the entire KLF memory is zeroed;
 . `mklphysbootscrt` and `hklvirtbootscrt` are zero;
 . `mkllocality`, `hkllocality` and `skllocality` are zero; and

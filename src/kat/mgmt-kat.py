@@ -614,8 +614,7 @@ class Unit:
     def _mgmt(self, k, imm, ml, form, vec_bits=128, via_km=False):
         self._pre()
         opening = imm in (PROV, IMP)
-        if k == NONE:                                               # GR9, GR10: KLNL at 32
-            if imm != END: raise Trap('illegal', 2)                 # no locker to open
+        if k == NONE:                                               # GR9, GR10: KLNL at 32, an opening included
             self.klstart = 0                                        # GR37: common steps only
             return 'noop'
         self._off(k, exempt=opening)
@@ -812,12 +811,12 @@ class Unit:
         if m['State'] == UNCONF or m['State'] in ERROR_STATES: return 'noop'          # GR35, GR33
         if m['State'] in PARTIAL: return self._exc_config(k)
         if forbidden_sub: raise Trap('illegal', 2)
+        if needs_buf and not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
         if not self.usage_allowed(m): return self._exc_locker(k, 'privilege_violation')
         if self.clock_unreadable(m): raise self._exc('clock_unavailable')
         if self.expired(m):
             self._enter_error(k, EXPIRED)
             return 'expired'
-        if needs_buf and not self.kliobuflen: raise Trap('illegal/2')                       # GR14: unconfigured KLIOBUF
 
     # -- kl.exec  <<KLE-instruction-exec>>
     def exec_(self, k, form='A', vin=None, vout=None, sew=8, halt_after=None):
@@ -891,10 +890,11 @@ class Unit:
         mach, new = MACHINES.get(m['Machine']), dict(m)
         bad = [n for n in MDH_FIELD if n not in named and xs[n]] + [xs['res']]
         req = xs['MachinePolicy']
-        if req:
-            bad.append(mach is None or mach.kind == 'ext' or req & ~m['MachinePolicy'] or req not in mach.policies
-                       or (st in mach.op_states and not req & mach.op_states[st]))     # GR28
-            new['MachinePolicy'] = req
+        if req:                                                     # a set bit removes a function
+            mp = m['MachinePolicy'] & ~req
+            bad.append(mach is None or mach.kind == 'ext' or mp not in mach.policies
+                       or (st in mach.op_states and not mp & mach.op_states[st]))      # GR28
+            new['MachinePolicy'] = mp
         req, pv = xs['Locality'], []                                # pv: Usage Control failures (Privilege Violation)
         if req:
             for name, hi, lo in LOC_SUB:
@@ -1228,19 +1228,28 @@ def provision(u, k, m, content=None, via='load', form='D', done_form='A'):
     finished(u, saved)
     return u.lockers[k].mdh['State']
 
-def listing_provision(clear_at=lambda s: False, m=None, on_trap=None, limit=8, error_at=None, start=None):
+def listing_provision(clear_at=lambda s: False, m=None, on_trap=None, limit=8, error_at=None, start=None, p=0,
+                      race=False):
     """Zklmem provisioning of <<KLE-management-code-snippets>>; clear_at(boundary) is a handler's kl.clear,
-    on_trap(u, tag) a handler that returns past a trapping opening kl.mgmt; start: a CC already in the locker."""
-    u, m, step = fresh(), m or cipher(), 0
+    on_trap(u, tag) a handler that returns past a trapping opening kl.mgmt; start: a CC already in the locker;
+    p: the locker number, 32 for the named locker (locker 0); race: a kl.clear between the preamble and the opening."""
+    u, m, step, raced = fresh(), m or cipher(), 0, []
     if start is not None:
         provision(u, 0, start)
+    if p == 32:
+        u.csrs(klnamedlocker=0)                                   # the caller has named locker 0
     def opening():
-        u.csrs(klnamedlocker=0)                                   # kl.setnl t0 at restart
+        if p < 32:
+            u.csrs(klnamedlocker=p)                               # select_locker at restart: name locker p
+        if race and not raced:
+            raced.append(u.clear(0))                              # a handler clears it before the opening
         tag = trap_of(u.mgmt, 'KLNL', PROV, m)
         if tag:
             on_trap(u, tag)
     ops = (opening, lambda: u.load(Memory(pi_content(m)), BASE), lambda: u.mgmt('KLNL', END))
     for restarts in range(limit):
+        if p == 32 and u.klnamedlocker == NONE:
+            return 'no_locker', restarts                            # select_locker: error to the caller
         for op in ops:
             for act in (op, None):                                  # the instruction, then its kl.getst
                 if clear_at(step):
@@ -1686,12 +1695,13 @@ def t_restrict():
         (cipher(SCProtection=1), md(SCProtection=1), 'v', 0, {}, 'invalid', 'State', INVALID),
         (cipher(), md(SCProtection=3), 'v', 0, {}, 'invalid', 'State', INVALID),
         (cipher(SCProtection=1), md(SCProtection=2), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(MachinePolicy=1), 'v', 0, {}, 'ok', 'MachinePolicy', 1),
-        (cipher(MachinePolicy=1), md(MachinePolicy=3), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(), md(MachinePolicy=2), 'v', 0, {}, 'ok', 'MachinePolicy', 1),     # a set bit removes a function
+        (cipher(MachinePolicy=1), md(MachinePolicy=2), 'v', 0, {}, 'ok', 'MachinePolicy', 1),  # already removed
+        (cipher(MachinePolicy=1), md(MachinePolicy=3), 'v', 0, {}, 'invalid', 'State', INVALID),  # 0: invalid here
         (xof(MachinePolicy=1), md(MachinePolicy=1), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(MachinePolicy=2), 'v', 1, {}, 'invalid', 'State', INVALID),     # GR28: disables Encrypt
-        (cipher(), md(MachinePolicy=1), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),
-        (sig(MachinePolicy=0), md(MachinePolicy=1), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(), md(MachinePolicy=1), 'v', 1, {}, 'invalid', 'State', INVALID),     # GR28: disables Encrypt
+        (cipher(), md(MachinePolicy=2), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),
+        (sig(MachinePolicy=0), md(MachinePolicy=1), 'v', 0, {}, 'ok', 'MachinePolicy', 0),  # nothing to remove
         (sig(), md(AuxInfo=1), 'h', 0, {}, 'invalid', 'State', INVALID),
         (sig(), md(MachineUse=1), 'l', 0, {}, 'invalid', 'State', INVALID),
         (sig(), md(Machine=1), 'l', 0, {}, 'invalid', 'State', INVALID),
@@ -1723,7 +1733,7 @@ def t_restrict():
        [(lambda r, m, _: m['Locality'] if r == 'ok' else m['State'])(*run(cipher(Locality=c), md(Locality=q), 'h'))
         for c, q, _ in cases] + [u.restrict(0, md(Locality=loc(sloc=1)), 'h')],
        [w if w is not None else PRIV for _, _, w in cases] + ['privilege_violation'])
-    r, m, _ = run(cipher(), md(UsagePolicy=1, Locality=loc(hw1=1), ExpirationDate=9, MachinePolicy=1))
+    r, m, _ = run(cipher(), md(UsagePolicy=1, Locality=loc(hw1=1), ExpirationDate=9, MachinePolicy=2))
     eq('kl.restrictv applies both halves; needs VL*SEW >= 128 (GR4)',
        (r, [m[f] for f in ('UsagePolicy', 'Locality', 'ExpirationDate', 'MachinePolicy', 'State')],
         trap_of(fresh().restrict, 0, 0, 'v', vec_bits=96)), ('ok', [1, loc(hw1=1), 9, 1, READY], 'illegal/1'))
@@ -2375,18 +2385,21 @@ def t_sgr():
         w = rc(unit=fresh(**kw), ExpirationDate=5, UsagePolicy=8)
         w.clock = 10
         return w
-    w1, w2, w3, w4, w5, w6, w7, w8 = gated(), opened(), gated(), gated(zklio=False), gated(), gated(mode='S'), rc(), \
-        pv(fresh(), 0, cipher())
-    w6.mode = 'S'
+    w1, w2, w3, w4, w5, w6, w7, w8 = gated(), opened(), gated(), gated(zklio=False), gated(), \
+        gated(mode='S').csrs(kliobuflen=16), rc(), pv(fresh(), 0, cipher())
+    w9, w10 = gated(), gated(mode='S')                    # KLIOBUF unconfigured: checked before UsagePolicy and expiry
+    w6.mode = w10.mode = 'S'
     w1.setst(0, INVALID)
-    eq('Gate Order Rule: Error State > Configuration > forbidden substitution > UsagePolicy > expiry > KLIOBUF > '
+    eq('Gate Order Rule: Error State > Configuration > forbidden substitution > KLIOBUF > UsagePolicy > expiry > '
        'Machine',
        [(ex(w1, 0), w1.getst(0)), trap_of(w2.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w3.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w4.exec_, 0, 'D'), (trap_of(ex, w5, 0), w5.getst(0)), (w6.exec_(0, 'D'), w6.getst(0)),
-        (trap_of(w7.exec_, 0, 'D'), w7.getst(0)), (w8.exec_(0, 'D'), w8.getst(0))],
+        (trap_of(w7.exec_, 0, 'D'), w7.getst(0)), (w8.exec_(0, 'D'), w8.getst(0)),
+        trap_of(w9.exec_, 0, 'D'), (trap_of(w10.exec_, 0, 'D'), w10.getst(0))],
        [('noop', INVALID), 'privilege_violation', 'illegal/2', 'illegal/2', ('privilege_violation', ToyCipher.ENCRYPT),
-        ('expired', EXPIRED), ('illegal/2', ToyCipher.ENCRYPT), ('invalid', INVALID)])
+        ('expired', EXPIRED), ('illegal/2', ToyCipher.ENCRYPT), ('invalid', INVALID),
+        'illegal/2', ('illegal/2', ToyCipher.ENCRYPT)])
     rows = []
     for st in CONFIG:
         w, p = white_box(st, bytes(64)), opened()
@@ -2418,7 +2431,7 @@ def t_sgr():
           cl(2)[:2] == cl(1)[:2]]
     t = rc(0, rc(1, fresh(clf_total=2 * MACHINES[M_CIPHER].clf_capacity(cipher(SCProtection=1))), SCProtection=1),
            SCProtection=1)
-    r += [t.clone(1, 0), t.clf_free(), trap_of(t.clone, 2, 0), t.getst(2), t.restrict(1, md(MachinePolicy=1)),
+    r += [t.clone(1, 0), t.clf_free(), trap_of(t.clone, 2, 0), t.getst(2), t.restrict(1, md(MachinePolicy=2)),
           t.getmd(1)['MachinePolicy'], t.getmd(0)['MachinePolicy']]
     eq('kl.clone: Unconfigured source clears Kd; perfect copy = export+import; capacity; clone then restrict', r,
        ['cleared', 'cloned', True, (1, 2, 3), ToyCipher.ENCRYPT, True, 'cloned', 0, 'out_of_memory', 0, 'ok', 1, 3])
@@ -2868,9 +2881,9 @@ def t_encodings():
     w = fresh()
     r += [w.getmd('KLNL') == md(), w.size(k='KLNL'), w.avail(k='KLNL'), w.setst('KLNL', 0),
           w.setst('KLNL', ToyCipher.ENCRYPT, 1), w.exec_('KLNL', 'D'), w.mgmt('KLNL', END),
-          trap_of(w.mgmt, 'KLNL', EXP), trap_of(w.mgmt, 'KLNL', PROV, cipher()), w.klnamedlocker]
+          w.mgmt('KLNL', EXP), w.mgmt('KLNL', PROV, cipher()), w.klnamedlocker]
     u = fresh().csrs(klstart=16)
-    r2 = [trap_of(u.mgmt, 'KLNL', op, cipher()) for op in (PROV, IMP, EXP)] + [u.klstart]
+    r2 = [u.mgmt('KLNL', op, cipher()) for op in (PROV, IMP, EXP)] + [u.klstart, u.klnamedlocker]
     for op, m in ((PROV, cipher()), (IMP, cipher(State=2)), (EXP, None)):
         u = rc(5).csrs(klnamedlocker=5)
         r2 += [u.mgmt('KLNL', op, m), u.getst(5), u.klnamedlocker]
@@ -2878,18 +2891,19 @@ def t_encodings():
     x.setst(4, INVALID)
     r2 += [v.mgmt(6, PROV, cipher()), x.csrs(klnamedlocker=4).mgmt('KLNL', PROV, cipher()),
            y.mgmt('KLNL', EXP), y.klnamedlocker, listing_provision(start=cipher(SCProtection=1))]
-    eq('GR9: a KLNL opening (provisioning, import, export) with klnamedlocker = 32 is illegal/2, klstart kept; '
+    eq('GR9: a KLNL opening (provisioning, import, export) with klnamedlocker = 32 is a no-op: common steps only '
+       '(klstart 0), klnamedlocker stays 32; '
        'otherwise it opens the locker, a Valid one included, and klnamedlocker is not changed; an explicit '
        'opening, or a KLNL opening of an Error-State locker, is not affected; a KLNL export opening on an '
        'Unconfigured locker is a no-op that sets 32; the provisioning listing reprovisions a Valid locker', r2,
-       ['illegal/2'] * 3 + [16, 'opened', PROV, 5, 'opened', IMP, 5, 'opened', EXP, 5, 'opened', 'opened', 'noop',
+       ['noop'] * 3 + [0, NONE, 'opened', PROV, 5, 'opened', IMP, 5, 'opened', EXP, 5, 'opened', 'opened', 'noop',
                             NONE, (READY, 0)])
     eq('GR8-GR10: KLNL is the named locker (State, size, completion); after completion KLNL still names it; '
        'an explicit '
        'locker is never redirected; KLNL at 32 reads as Unconfigured: kl.setst, kl.exec and end are no-ops, an '
-       'export or a provisioning opening is illegal/2', r,
+       'export or a provisioning opening too', r,
        [PROV, True, 'completed', READY, 5, READY, False, 'cleared', 0, ToyCipher.ENCRYPT,
-        True, 0, 0, 'noop', 'noop', 'noop', 'noop', 'illegal/2', 'illegal/2', NONE])
+        True, 0, 0, 'noop', 'noop', 'noop', 'noop', 'noop', 'noop', NONE])
     src = pv(fresh(), 0, cipher(SCProtection=1))
     img = bytearray(export(src, 0))
     img[70] ^= 1                                                    # a tampered Content1 byte (offset 48 + 22)
@@ -3067,6 +3081,9 @@ def t_controls():
             '(GR7, GR37)', runs[False] == 'noop')
     eq('a handler clear at any one boundary of the provisioning listing: Ready after at most one restart (GR37)',
        [listing_provision(lambda s, at=at: s == at) for at in range(6)], [(READY, 0)] + [(READY, 1)] * 5)
+    eq('GR9: a clear between select_locker and the KLNL opening: the opening is a no-op and the check reads 0; the '
+       'listing restarts and provisions locker p, or returns an error when p = 32',
+       [listing_provision(race=True), listing_provision(race=True, p=32)], [(READY, 1), ('no_locker', 1)])
     eq('a handler Error State at any boundary after the opening: the next instruction is a no-op, the listing '
        'reaches handle_errors with it (GR37)', ([listing_provision(error_at=at) for at in range(1, 6)],
                                                   [listing_export(error_at=at)[0] for at in range(3, 8)]),
