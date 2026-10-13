@@ -32,7 +32,7 @@ def POLYVAL(auth_key, blocks):                # <<KLE-SCC-POLYVAL>>
 def tag_block(S, sep):                        # 0 @ sep @ S[125:0]
     return cat((0, 1), (sep & 1, 1), (sl(S, 125, 0), 126))
 
-def ctr_block(SIV, sep, i):                   # 1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2^32, 32)
+def ctr_block(SIV, sep, i):                   # 1 @ sep @ SIV[125:32] @ bin\((int(SIV[31:0]) + i) mod 2^32, 32)
     return cat((1, 1), (sep & 1, 1), (sl(SIV, 125, 32), 94), ((sl(SIV, 31, 0) + i) & M32, 32))
 
 def _tag(AD, N, sep, P, K, length_block, clear_ads):
