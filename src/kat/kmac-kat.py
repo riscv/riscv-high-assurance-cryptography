@@ -185,7 +185,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None):
-    """PI; with a SKID (_KeyType_ = 1, GR74) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
+    """PI; with a SKID (_KeyType_ = 1, GR75) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16)."""
     cb, kb = provision_blocks(sec, b'' if skid is not None else K, S)
     mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=int(skid is not None))
     return v2b(mdh, 16) + cb + (kb if skid is None else v2b(skid, 8))
@@ -263,7 +263,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # GR74: SKID resolved after import
+            self._resolve(key)                                           # GR75: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -380,16 +380,16 @@ class KeyDest:
 
 
 def derive(hart, dst, src, length):
-    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (GR50, GR52), or into a
-    KeyDest (GR50, unrestricted)."""
+    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (GR51, GR53), or into a
+    KeyDest (GR51, unrestricted)."""
     if src.st not in ERROR_STATES and dst.st not in ERROR_STATES:
         key = isinstance(dst, KeyDest)
-        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # GR45 items 1-2
+        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # GR46 items 1-2
         for c in bad:
             c.invalidate()
         if not bad and key:
             if length < dst.n or not src.xof and src.L < 8 * dst.n:
-                dst.invalidate()                                         # GR45 item 5
+                dst.invalidate()                                         # GR46 item 5
             else:
                 dst.key = bytearray(dst.n)
                 src.exec(out=dst.key)
@@ -717,7 +717,7 @@ c2 = Kmac(Hart()).import_(*c.export())
 check('round trip, KMAC256 L = 4096 after 2 update()s (L counts down in the Serialized Content), then _Success_', True,
       (bytes(o1 + o2), st, c2.st), (ref_kmac(256, KEY, DATA200, 4096, TAG), 'success', SUCCESS))
 
-section('kl.derive between kl.exec endpoints (<<KLE-derive-endpoints>>, GR50)')
+section('kl.derive between kl.exec endpoints (<<KLE-derive-endpoints>>, GR51)')
 h = Hart()
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
@@ -734,7 +734,7 @@ check('whole KMAC256 output (L = 512) -> KMACXOF256; source in _Success_', True,
       (src.st, bytes(squeeze(dst, 64)[0][1])),
       (SUCCESS, ref_kmac(256, KEY, WANT[3], 0, b'', True, 64)))
 derive(h, absorbing(128, hart=h), src, 16)
-check('source in _Success_ (no endpoint, GR45 item 1) -> source _Invalid_', True, src.st, INVALID)
+check('source in _Success_ (no endpoint, GR46 item 1) -> source _Invalid_', True, src.st, INVALID)
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), squeezing(128, DATA4, 256, hart=h)
 snap = (src.st, src.state, src.block_base)
 derive(h, dst, src, 16)
@@ -743,7 +743,7 @@ check('destination in _Hash_Output_ -> destination _Invalid_, nothing taken from
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 snap = (src.state, src.block_base, dst.state, dst.block_base)
 derive(h, dst, src, 0)
-check('length = 0 changes no state (GR45 item 7)', True,
+check('length = 0 changes no state (GR46 item 7)', True,
       (src.state, src.block_base, dst.state, dst.block_base), snap)
 
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)
@@ -751,8 +751,8 @@ s2, d2 = squeezing(256, DATA4, 512, hart=h), KeyDest(32)
 s3, d3 = squeezing(128, DATA4, 128, hart=h), KeyDest(32)
 for d, s_ in ((dst, src), (d2, s2), (d3, s3)):
     derive(h, d, s_, 32)
-check('GR50: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
-      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR45 item 5): destination _Invalid_', True,
+check('GR51: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
+      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR46 item 5): destination _Invalid_', True,
       (bytes(dst.key), bytes(squeeze(src, 16)[0][1]), bytes(d2.key), s2.st, d3.st, s3.st),
       (stream[:16], stream[16:32], WANT[3][:32], OUTPUT, INVALID, OUTPUT))
 

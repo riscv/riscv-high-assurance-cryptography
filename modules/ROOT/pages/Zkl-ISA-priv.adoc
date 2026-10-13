@@ -100,7 +100,7 @@ The KLE fatal-error exception precedes every exception that depends on the state
 | TBD  | *KLE missing-CSK*             | Use of the KLE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>, <<KLE-CSR-mklcsk>>). Only M-mode can establish a CSK.
 | TBD  | *KLE locker-Off*              | Any access, as defined in <<KLE-CSR-llockerstatus>>, to a locker whose `*llockerstatus` field is _Off_; M-mode forwards it to the mode that owns the _Off_ field.  This exception enables on-demand (lazy) locker loading and trap-and-emulate.
 |  2   | Illegal-instruction            | Raised if the KLE grounds for an illegal-instruction exception that require the state of the KLE unit are fulfilled, listed second in <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>.
-For a usage instruction, a forbidden KLIOBUF substitution is evaluated in the order of <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>, after the KLE privilege-violation exception for a locker in a Configuration State.
+For a usage instruction, a forbidden KLIOBUF substitution is evaluated in the order of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>, after the KLE privilege-violation exception for a locker in a Configuration State.
 // For a usage instruction, the _Unconfigured_, Error-State and Configuration-State conditions of <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>> precede the grounds that depend on the operation of the State, namely a forbidden KLIOBUF substitution: on an _Unconfigured_ or Error-State locker the instruction performs no operation, and in a Configuration State it raises a KLE privilege-violation exception.
 | TBD  | *KLE unsupported-Metadata*    | Unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>) when opening a provisioning or import.
 | TBD  | *KLE privilege-violation*     | A _usage_ instruction that would violate the Usage Control policies (<<Zkl-ISA-unpriv.adoc#KLE-Metadata>>), including any attempt to use, clone or restrict a locker in a Configuration State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>), which is forbidden at all privilege levels.
@@ -254,11 +254,11 @@ For each of these three CSRs:::
 |===
 --
 +
-`*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the first group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>), and the KLE fatal-error and missing-CSK exceptions, but before all other conditions, including the second group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>. The hardware state of a locker with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
+`*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the first group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>), and the KLE fatal-error and missing-CSK exceptions, but before all other conditions, including the second group of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>> and the conditions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>. The hardware state of a locker with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
 A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`. An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>>, one that zeroizes or overwrites the locker without reading what it held before: a `kl.mgmt` opening a provisioning or an import, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` into it, but not `kl.swap`. Such an instruction sets every field in effect for the locker to _Dirty_, even if the locker was already _Unconfigured_. However, a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination performs no operation, raises no KLE locker-Off exception, and sets no field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
 +
-A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware locker as authoritative: a mode that held the authoritative image of the locker for lazy loading discards it, and M-mode, which alone emulates a locker, never again uses the emulated copy it held for it (<<Zkl-ISA-unpriv.adoc#KLE-unsupported-handling>>).
+A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware locker as authoritative: a mode that held the authoritative image of the locker for lazy loading discards it, and M-mode, which alone emulates a locker, never again uses the emulated copy it held for it (<<KLE-unsupported-handling>>).
 +
 `kl.getmd*` on a locker with an _Off_ field in effect traps like any other access. An implementation may return the MDH without trapping only if the result matches what the trap and subsequent restore would have produced.
 +
@@ -314,6 +314,21 @@ A handler therefore never services a KLE locker-Off exception for a field it can
 ====
 The _Off_ value and the KLE locker-Off exception provide an architectural hook for on-demand (lazy) locker loading. At context restore, a handler may leave a locker unrestored, set its `*llockerstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with a KLE locker-Off exception to M-mode, which forwards it to the mode that owns the _Off_ field; that handler then imports the SCC before resuming execution. The architecture defines no separate "`lazy`" state: software that marks a locker _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
+
+[[KLE-unsupported-handling]]
+==== Emulation of Unsupported Machines
+
+A KLE unsupported-Metadata exception (<<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>>) can be resolved only by M-mode, by emulating the Machine; a handler below M-mode treats it as unresolvable.
+An M-mode handler that emulates the Machine instead marks the locker _Off_, holds it in its own protected memory, and services every operation on it, including SCC import and export.
+For these, it needs either (a) the CSK and the Locality Secrets of the HW Binding Group, inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>) that it cannot otherwise obtain, or (b) implementation-specific primitives that compute these functions for it.
+
+An emulator keeps one copy per locker slot and replaces it:
+
+. at the next KLE unsupported-Metadata exception on that slot; or
+. at an emulated `kl.clone` naming the slot as destination, which also clears the slot's hardware locker and marks it _Off_, since the clone of an emulated locker is emulated too.
+
+A copy orphaned by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,destructive configuration instruction>> is never used again but lingers until replaced.
+As a robustness recommendation, as for a cleared locker (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clear>>), an emulator should zeroize a copy whose _Off_ mark is gone before M-mode next returns control to a less privileged mode; checking `mllockerstatus` whenever it runs finds such copies.
 
 // ////////////////////////////////////////////////////////////////////
 

@@ -149,7 +149,7 @@ class MLDSALocker:
                 return self.invalid()
             if self.use == 0:                      # MR6: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR73: RBG failure
+                if self.rnd is None:               # GR74: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after)
@@ -203,15 +203,15 @@ class KeyDest:
         self.state = SET_SCALAR if ecc and state is None else state or READY
 
 def kl_derive_exec(dest, src, length):
-    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, GR50) or a KeyDest."""
+    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, GR51) or a KeyDest."""
     if src.state not in OUT_F:
-        return src.invalid()                       # GR45 items 1-2
+        return src.invalid()                       # GR46 items 1-2
     name, w = OUT_F[src.state], src.use
     if isinstance(dest, KeyDest):
         if dest.state != (SET_SCALAR if dest.ecc else READY) or dest.keytype == 1 \
                 or length < dest.size or w + dest.size > src.size(name):
-            dest.state = INVALID                   # GR45 items 1-2; GR48; GR45 item 5
-        else:                                      # GR50, unrestricted: no GR46 narrowing
+            dest.state = INVALID                   # GR46 items 1-2; GR49; GR46 item 5
+        else:                                      # GR51, unrestricted: no GR47 narrowing
             dest.key = src.exec_C(dest.size)
         return
     if w + length > src.size(name):
@@ -480,7 +480,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR73)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR74)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -553,22 +553,22 @@ def t_progress():
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
 
 def t_derive():
-    section('kl.derive: emitted output as a source (GR50, <<KLE-derive-endpoints>>)')
+    section('kl.derive: emitted output as a source (GR51, <<KLE-derive-endpoints>>)')
     cc, absorbed = generated(), bytearray()
     cc.setst(PK_OUT)
     kl_derive_exec(absorbed, cc, 1000)
     kl_derive_exec(absorbed, cc, 312)
-    check('GR50: _pubkey_Output_ -> SHAKE256 in two transfers, MachineUse as Form C; SHAKE256(pubkey, 64) = tr',
+    check('GR51: _pubkey_Output_ -> SHAKE256 in two transfers, MachineUse as Form C; SHAKE256(pubkey, 64) = tr',
           bytes(absorbed).hex() == VECTORS['keyGen'][0]['pk'] and cc.state == SUCCESS and D.H(bytes(absorbed), 64) == cc.privkey[64:128])
     kl_derive_exec(absorbed, cc, 16)
-    check('transfer after the field is complete (source now in _Success_): source _Invalid_ (GR45)',
+    check('transfer after the field is complete (source now in _Success_): source _Invalid_ (GR46)',
           cc.state == INVALID and len(absorbed) == 1312)
     det = mu_vec(False)
     cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
     cc.setst(SIGN_GEN, 1)
     cc.exec_D()
     kl_derive_exec(absorbed := bytearray(), cc, 2420)
-    check('GR50: _Sign_Output_ -> a hash: the signature, MachineUse as Form C', bytes(absorbed).hex() == det['sig']
+    check('GR51: _Sign_Output_ -> a hash: the signature, MachineUse as Form C', bytes(absorbed).hex() == det['sig']
           and cc.state == SUCCESS)
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
     kd = KeyDest()
@@ -581,14 +581,14 @@ def t_derive():
     check('_pubkey_Output_ -> ECC `Scalar` in _Set_Scalar_: exactly 32 bytes, MachineUse as Form C',
           kd.key.hex() == VECTORS['keyGen'][0]['pk'][:64] and cc.use == 32 and cc.state == PK_OUT)
     for label, kd, n in (('ECC destination in _Ready_', KeyDest(state=READY), 64),
-                         ('ECC `Scalar` of KeyType 1 (GR48)', KeyDest(keytype=1), 64),
-                         ('length < 32 (GR45 item 5)', KeyDest(), 31)):
+                         ('ECC `Scalar` of KeyType 1 (GR49)', KeyDest(keytype=1), 64),
+                         ('length < 32 (GR46 item 5)', KeyDest(), 31)):
         kl_derive_exec(kd, cc, n)
         check(f'{label}: only the destination becomes _Invalid_', kd.state == INVALID and cc.state == PK_OUT
               and cc.use == 32)
     kd = KeyDest(ecc=False)
     kl_derive_exec(kd, cc, 64)
-    check('_pubkey_Output_ -> AES-256 `key` in _Ready_ (GR50, unusual but admitted): the next 32 bytes, MachineUse '
+    check('_pubkey_Output_ -> AES-256 `key` in _Ready_ (GR51, unusual but admitted): the next 32 bytes, MachineUse '
           'as Form C', kd.state == READY and kd.key.hex() == VECTORS['keyGen'][0]['pk'][64:128] and cc.use == 64)
 
 def t_hints():
