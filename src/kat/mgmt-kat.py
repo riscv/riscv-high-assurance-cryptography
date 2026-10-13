@@ -106,7 +106,7 @@ def decode(w):
         if f2 in (1, 3):                                            # kl.restrict*, kl.getmd*
             h, v = b(28, 28), b(29, 29)
             if b(25, 25) or b(27, 27) or rs2 or (h and v): raise Trap('illegal', 1)
-            if f2 == 1: return ('kl.restrict' + 'lhv'[h + 2 * v], lk(b(26, 26), rd))
+            if f2 == 1: return ('kl.restrict' + 'lhv'[h + 2 * v], lk(b(26, 26), rd, km=True))
             return (('kl.getmdl', 'kl.getmd', 'kl.getmdv')[h + 2 * v], lk(b(26, 26), rs1, km=True))
         if b(29, 29): raise Trap('illegal', 1)
         T, R = b(28, 27), b(26, 25)
@@ -877,8 +877,9 @@ class Unit:
     NAMED = {'l': ('MachinePolicy',), 'h': ('Locality', 'UsagePolicy', 'ExpirationDate')}   # never SCProtection
     def restrict(self, k, x, which='v', vec_bits=128):
         if which == 'v' and (not self.zklv or vec_bits < 128 or self.vstart): raise Trap('illegal', 1)   # GR4, GR5
-        k = self._idx(k)
+        k = self._idx(k, km=True)                                   # GR8: KLNL admitted
         self._pre()
+        if k == NONE: return 'noop'                                 # GR10: KLNL at 32
         self._off(k)
         cl = self.lockers[k]
         m, st = cl.mdh, cl.mdh['State']
@@ -2834,9 +2835,9 @@ def t_encodings():
        ({n: decoded(w) for n, w in words.items()},
         [decoded(enc_ls(st, 6)) for st in (False, True)], [decoded(enc_ls(st, f3=6)) for st in (False, True)]),
        ({n: 'illegal/1' for n in words}, [('kl.load', 'X6'), ('kl.store', 'X6')], [None, None]))
-    eq('GR8: KLNL (r = 1, X0) on kl.clear, kl.setst (any #immed7, kl.clearads included), kl.mgmt, kl.exec, '
-       'kl.getmd*, kl.size/kl.avail Form A; kl.clearall is #immed7 65 with Kd = 0, r = 0, its '
-       'other forms reserved; KLNL elsewhere (kl.restrict*, kl.clone, ...) reserved',
+    eq('GR8: KLNL (r = 1, X0) on every instruction that names a locker: kl.clear, kl.setst (any #immed7, kl.clearads '
+       'included), kl.mgmt, kl.exec, kl.getmd*, kl.size/kl.avail Form A, kl.restrict*; kl.clearall is #immed7 65 with '
+       'Kd = 0, r = 0, its other forms reserved',
        [decoded(enc_setst(0, r=1)), decoded(enc_setst(INVALID, r=1)), decoded(enc_setst(PROV, F=3, r=1, rs1=4)),
         decoded(enc_r(3, 2, rs1=0, rd=3)), decoded(enc_r(0, 6, rs1=0, rd=3)), decoded(enc_setst(CLEARALL)),
         decoded(enc_setst(CLEARALL, rd=3)), decoded(enc_setst(CLEARALL, r=1)), decoded(enc_setst(CLEARALL, F=1, rs1=2)),
@@ -2845,7 +2846,7 @@ def t_encodings():
        [('kl.clear', 'A', 'KLNL', 0), ('kl.setst', 'A', 'KLNL', INVALID), ('kl.mgmt', 'D', 'KLNL', PROV),
         ('kl.getmdl', 'KLNL'),
         ('kl.size', 'A', 'KLNL'), ('kl.clearall',)] + ['illegal/1'] * 3 + [('kl.exec', 'A', 'KLNL')]
-       + ['illegal/1'] * 2 + [('kl.setst', 'A', 'KLNL', 1), ('kl.clearads', 'A', 'KLNL', CLEAR_ADS)])
+       + [('kl.restrictl', 'KLNL'), 'illegal/1', ('kl.setst', 'A', 'KLNL', 1), ('kl.clearads', 'A', 'KLNL', CLEAR_ADS)])
     def outcome(u, op, k, *a):
         try:
             return op(u)(k, *a), u.getmd(5), u.klnamedlocker, bytes(u.kliobuf)
@@ -2936,19 +2937,22 @@ def t_klnl_pairs():
         u, v = rc(5, rc(2)).csrs(klnamedlocker=5), rc(5, rc(2)).csrs(klnamedlocker=5)
         r1, r2 = run(op(u), *a), run(op(v), *b)
         return (r1, [u.getmd(i) for i in (2, 3, 5)], u.klnamedlocker) == (r2, [v.getmd(i) for i in (2, 3, 5)], v.klnamedlocker)
-    eq('KLNL as the source or the destination acts as naming the locker it names, klnamedlocker following the CC',
+    eq('KLNL as the source or the destination acts as naming the locker it names, klnamedlocker following the CC; '
+       'kl.restricth on KLNL narrows the locker it names (GR8: every instruction that names a locker)',
        [twin(lambda u: u.clone, (3, 'KLNL'), (3, 5)), twin(lambda u: u.clone, ('KLNL', 2), (5, 2)),
         twin(lambda u: u.rename, (3, 'KLNL'), (3, 5)), twin(lambda u: u.rename, ('KLNL', 2), (5, 2)),
-        twin(lambda u: u.swap, (3, 'KLNL'), (3, 5)), twin(lambda u: u.swap, ('KLNL', 2), (5, 2))], [True] * 6)
+        twin(lambda u: u.swap, (3, 'KLNL'), (3, 5)), twin(lambda u: u.swap, ('KLNL', 2), (5, 2)),
+        twin(lambda u: u.restrict, ('KLNL', md(UsagePolicy=2), 'h'), (5, md(UsagePolicy=2), 'h'))], [True] * 7)
     w = rc(5, rc(3))
-    r = [w.clone(3, 'KLNL'), w.rename('KLNL', 3), w.swap(3, 'KLNL'), w.derive('KLNL', 3, 16), w.getst(3)]
+    r = [w.clone(3, 'KLNL'), w.rename('KLNL', 3), w.swap(3, 'KLNL'), w.derive('KLNL', 3, 16),
+         w.restrict('KLNL', md(UsagePolicy=2), 'h'), w.getst(3)]
     w.csrs(klnamedlocker=3)
     r += [w.clone(3, 'KLNL'), w.swap('KLNL', 3), trap_of(w.derive, 3, 'KLNL', 16), trap_of(w.clone, 'KLNL', 'KLNL'),
           trap_of(w.derive, 'KLNL', 0, 16) is None]
-    eq('KLNL at 32: clone, rename, swap and derive perform no operation, the other locker untouched; KLNL naming '
+    eq('KLNL at 32: clone, rename, swap, derive and restrict perform no operation, the other locker untouched; KLNL naming '
        'the other locker: clone and swap no-ops, derive illegal/2; KLNL for both (R = 11) illegal/1; KLNL and K0, '
        'whose encoded fields are both 0, are no self-derivation (M4)', r,
-       ['noop', 'noop', 'noop', 'noop', ToyCipher.ENCRYPT, 'noop', 'noop', 'illegal/2', 'illegal/1', True])
+       ['noop', 'noop', 'noop', 'noop', 'noop', ToyCipher.ENCRYPT, 'noop', 'noop', 'illegal/2', 'illegal/1', True])
 
 def t_rename_swap():
     section('kl.rename and kl.swap  <<KLE-instruction-clone>>')
