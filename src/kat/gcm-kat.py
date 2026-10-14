@@ -75,7 +75,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR77)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR74)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -480,7 +480,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR77): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR74): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 check('Form A kl.setst substituting each Form C one (Enc/Dec_Tag_Finalize, Hash_Verify), its input in the KLIOBUF: '
       'tc4 tag and verification; KLIOBUF bytes beyond 16 ignored (MR7); a wrong tag fails', True,
       (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],

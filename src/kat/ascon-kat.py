@@ -198,7 +198,7 @@ class AEAD(Locker):
         Locker.__init__(self)
         self.__dict__.update(flags)
         self.policy, self.key = policy, key & M128
-        if skid is not None: self.key_type, self.skid = 1, skid  # GR77
+        if skid is not None: self.key_type, self.skid = 1, skid  # GR74
         self._enter_ready()
     def _clear(self): self.key, self.skid, self.s, self.tag_len, self.last_blk_len = 0, None, [0] * 5, 0, 0
     def _layout(self):
@@ -312,7 +312,7 @@ class AEADMask(AEAD):
     def __init__(self, K1, K2, policy=0b11, skid=None): super().__init__(K1, policy, skid, K2=K2 & M128)
     def _clear(self): super()._clear(); self.K2 = 0
     def _nonce(self, N): return N ^ self.K2
-    def _system_keys(self, ent): self.key, self.K2 = ent          # GR78
+    def _system_keys(self, ent): self.key, self.K2 = ent          # GR75
     def derive_dest(self, data): self.key, self.K2 = b2v(data[:16]), b2v(data[16:]); self._enter_ready()
     def _layout(self):
         f = [('skid', 64), ('K2', 0)] if self.key_type else [('key', 128), ('K2', 128)]
@@ -416,7 +416,7 @@ def provision(pi, sks=None):
     assert f['Machine'] >> 4 == 8 and f['State'] == UNCONF
     mode, pol, kt = f['Machine'] & 0xF, f['MachinePolicy'], f['KeyType']
     if mode >= 3: return (Hash256, XOF, CXOF)[mode - 3]()           # the PI is the MDH alone
-    kw = 64 if kt else 128                                        # GR77
+    kw = 64 if kt else 128                                        # GR74
     k = sl(v, 127 + kw, 128)
     skid, ent = (k, (sks or {}).get(k)) if kt else (None, None)
     if mode == 0: cc = AEAD((ent or 0) if kt else k, pol, skid)
@@ -778,7 +778,7 @@ cc, ref_c = aead_to(ABSORB), aead_to(ABSORB)
 cc.exec('B', a, 256, halt_after=1); cc.exec('B', a, 256); ref_c.exec('B', a, 256)
 check('Form B over 2 AD blocks halted and resumed == uninterrupted', True, cc.s, ref_c.s)
 
-section('Serialized Content and provisioning (GR77 and GR78)')
+section('Serialized Content and provisioning (GR74 and GR75)')
 pi = build_pi(0, [(K, 128)], policy=0b11)
 res = [(ct + tag, cc.st) for cc, ct, tag in (aead_run(provision(pi), False, KAT_NONCE, h(ad), h(pt),
                                                       after=migrate(AEAD)) for _, ad, pt, _, _ in AEAD_KAT)]
@@ -837,7 +837,7 @@ check('Content1: K1, K2, state[0..4], last_blk_len, tag_len; 608 bits padded to 
 pi_s = build_pi(2, [(SKID_M, 64)], policy=0b11, key_type=1)
 cc = provision(pi_s, SKS)
 img = cc.export()[1]; c1 = b2v(img)
-check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR78: '
+check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR75: '
       'one SKID yields K1 and K2, migrated', True,
       (len(pi_s), len(img), sl(c1, 63, 0), sl(c1, 127, 64), seal(cc, after=migrate(AEADMask, SKS))),
       (32, 64, SKID_M, provision(pi_s, SKS).s[0], ref579(K1, Nm)))

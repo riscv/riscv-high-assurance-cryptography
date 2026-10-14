@@ -619,13 +619,13 @@ class Unit:
         self._pre()
         opening = imm in (PROV, IMP)
         if k == NONE:                                               # GR11, GR12: KLNL at 32, an opening included
-            self.klstart = 0                                        # GR37: common steps only
+            self.klstart = 0                                        # GR37.c: common steps only
             return 'noop'
         self._off(k, exempt=opening)
         if self.klnamedlocker not in (k, NONE): raise Trap('illegal', 2)
         self.klstart = 0                                            # common step 3: past the guard checks
         st = self.lockers[k].mdh['State']
-        if (imm == EXP and st == UNCONF) or (imm == END and (st == UNCONF or st in ERROR_STATES)):   # GR37
+        if (imm == EXP and st == UNCONF) or (imm == END and (st == UNCONF or st in ERROR_STATES)):   # GR37.c
             self.klnamedlocker = NONE if st == UNCONF else k
             return 'noop'
         if imm == END and st not in CONFIG: raise Trap('illegal', 2)
@@ -886,7 +886,7 @@ class Unit:
         self._off(k)
         cl = self.lockers[k]
         m, st = cl.mdh, cl.mdh['State']
-        if st == UNCONF or st in ERROR_STATES: return 'noop'          # GR20
+        if st == UNCONF or st in ERROR_STATES: return 'noop'          # GR20.a
         if st in PARTIAL: return self._exc_config(k)
         xv = x if isinstance(x, int) else pack(x)
         xs = unpack(xv & {'l': MASK64, 'h': MASK128 ^ MASK64, 'v': MASK128}[which])
@@ -1050,7 +1050,7 @@ class Unit:
         k = self.klnamedlocker                                    # the locker is never an operand
         self._pre()
         self._off(k)
-        if xl: raise Trap('illegal', 2)                             # Xl must be 0 for a locker transfer, before GR37
+        if xl: raise Trap('illegal', 2)                             # Xl must be 0 for a locker transfer, before GR37.a
         st = self.lockers[k].mdh['State']
         if st == UNCONF or st in ERROR_STATES: return None          # GR37: no operation
         if st not in ((PROV, IMP, PPI_IMP) if writing else (EXP, PPI_EXP)) or self.klstart % 16:
@@ -1072,7 +1072,7 @@ class Unit:
         return 'done'
     def _mem(self, mem, addr, xl=0, halt_after=None, restart=False, store=False):   # <<KLE-instruction-load>>, -store
         if self.klnamedlocker == NONE:                            # GR9: no named locker: kl.input / kl.output
-            if xl == 0:                                             # GR37: a no-op, before Zklio and GR8
+            if xl == 0:                                             # GR37.a: a no-op, before Zklio and GR8
                 self._pre()
                 self.klstart = 0
                 return 'empty'
@@ -1081,7 +1081,7 @@ class Unit:
         k = self._xfer_pre(not store, xl)
         kind = 'store' if store else 'load'
         if addr % 16: raise Trap(f'{kind}_misaligned', tval=addr)
-        if k is None:                                               # GR37: an empty transfer window
+        if k is None:                                               # GR37.a: an empty transfer window
             self.klstart = 0
             return 'noop'
         _, _, isize, iend = self.layout(self.lockers[k].mdh)
@@ -1100,7 +1100,7 @@ class Unit:
         if not self.zklmv or (vec_len is not None and not self.zklv): raise Trap('illegal', 1)
         if vec_len is not None and (sew not in KLV_SEWS or vec_len % 16 or self.vstart * sew // 8 % 16):
             raise Trap('illegal', 1)
-        if self.klnamedlocker == NONE:                            # GR37: no locker under management: a no-op
+        if self.klnamedlocker == NONE:                            # GR37.b: no locker under management: a no-op
             self._pre()
             return None, None
         k = self._xfer_pre(writing)
@@ -1152,7 +1152,7 @@ class Unit:
     def mv_iobuf(self, out=False):                                  # kl.mvin KLIOBUF / kl.mvout KLIOBUF
         if not self.zklmv or not self.zklio: raise Trap('illegal', 1)
         self._pre()
-        if self.klnamedlocker == NONE:                            # GR37: a no-op; kl.mvout zeros its destination
+        if self.klnamedlocker == NONE:                            # GR37.b: a no-op; kl.mvout zeros its destination
             if out:
                 self.kliobuf[:self.kliobuftop] = bytes(self.kliobuftop)
             return 'noop'
@@ -1671,7 +1671,7 @@ def t_usage():
     eq('enforcement matrix, 32 policies x 7 modes (Debug: bit 4 only)', bad, [])
     u = rc(UsagePolicy=1)
     u.mode = 'U'
-    eq('denied mode: kl.exec, kl.setst, kl.clearads -> kl_exc_privilege_violation (GR20)',
+    eq('denied mode: kl.exec, kl.setst, kl.clearads -> kl_exc_privilege_violation (GR20.c)',
        [trap_of(ex, u, 0), trap_of(u.setst, 0, READY), trap_of(u.setst, 0, CLEAR_ADS), u.getst(0)],
        ['privilege_violation'] * 3 + [ToyCipher.ENCRYPT])
     eq('not usage instructions: getmd, getst, size, avail, restrict, clone, error setst, mgmt, clear',
@@ -1756,7 +1756,7 @@ def t_restrict():
        (r0, trap_of(u.restrict, 0, md(UsagePolicy=1))), (('noop', 0), 'privilege_violation'))
     u = pv(fresh(), 0, cipher(ExpirationDate=10))
     u.setst(0, EXPIRED)
-    eq('Error State: no operation, whatever the request, and the MDH keeps its fields and Error State (GR20)',
+    eq('Error State: no operation, whatever the request, and the MDH keeps its fields and Error State (GR20.a)',
        [u.restrict(0, md(UsagePolicy=8, ExpirationDate=9)), u.getmd(0)['UsagePolicy'], u.getmd(0)['ExpirationDate'],
         u.getst(0), u.restrict(0, md(SCProtection=2)), u.restrict(0, md(MachineUse=1)), u.getst(0)],
        ['noop', 0, 10, EXPIRED, 'noop', 'noop', EXPIRED])
@@ -1968,12 +1968,12 @@ def t_mgmt():
        ['noop', 0, 'noop', INVALID, 0])
     v = fresh().csrs(klstart=16, klnamedlocker=0)
     v.siv, v.impqual, v.siv2 = 1, 2, 3
-    eq('GR37: opening an export on an Unconfigured locker is a no-op: authentication registers kept, common '
+    eq('GR37.c: opening an export on an Unconfigured locker is a no-op: authentication registers kept, common '
        'steps only', (v.mgmt(0, EXP), v.getst(0), v.klnamedlocker, v.klstart, (v.siv, v.impqual, v.siv2),
                       trap_of(fresh().csrs(klnamedlocker=3).mgmt, 0, EXP)),
        ('noop', UNCONF, 32, 0, (1, 2, 3), 'illegal/2'))
     v = fresh().csrs(klstart=16, klnamedlocker=0)
-    eq('GR37: end on an Unconfigured locker is a no-op: ml unread (Form A, no KLIOBUF), common steps only',
+    eq('GR37.c: end on an Unconfigured locker is a no-op: ml unread (Form A, no KLIOBUF), common steps only',
        (v.mgmt(0, END, form='A'), v.getst(0), v.klnamedlocker, v.klstart,
         trap_of(fresh().csrs(klnamedlocker=3).mgmt, 0, END)), ('noop', UNCONF, 32, 0, 'illegal/2'))
     zero, traps = [], set()
@@ -3016,7 +3016,7 @@ def t_rename_swap():
          w.klnamedlocker, w.rename(4, 3), w.klnamedlocker, w.getst(4), w.mgmt(8, PROV, cipher()),
          trap_of(w.clone, 9, 8), w.swap(9, 8), w.rename(8, 9), w.getst(8), w.klnamedlocker]
     eq('klnamedlocker follows rename and swap, 32 when overwritten; Configuration CC moves (GR44, GR41); '
-       'kl.load with klnamedlocker naming the vacated index is a no-op (GR37)', r,
+       'kl.load with klnamedlocker naming the vacated index is a no-op (GR37.a)', r,
        ['renamed', IMP, 0, 7, 48, True, 'noop', 'done', 'completed', True, True, 'swapped', 4, ToyCipher.ENCRYPT,
         PROV, 'swapped', 4, 'renamed', 32, ToyCipher.ENCRYPT, 'opened', 'privilege_violation', 'swapped', 'renamed',
         PROV, 8])
@@ -3031,7 +3031,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR65); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR65.a); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 

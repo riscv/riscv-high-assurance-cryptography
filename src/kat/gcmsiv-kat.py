@@ -660,7 +660,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR77): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR74): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)

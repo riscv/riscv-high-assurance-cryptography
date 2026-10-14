@@ -11,7 +11,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw that the bound of GR76 cut short
+TIMEOUT = object()                                  # an RBG draw that the bound of GR73 cut short
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -29,7 +29,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLE RBG-unavailable exception (GR76): random bits unavailable past the bound; State unchanged."""
+    """KLE RBG-unavailable exception (GR73): random bits unavailable past the bound; State unchanged."""
 
 class PrivViolation(Invalid):
     """Transition to Error State _Privilege Violation_ (GR47: a destination at a weaker level)."""
@@ -114,11 +114,11 @@ class Locker:
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
-    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR74)
+    def drop_ads(self):                 # kl.clearads (GR24), an import without Content2, or a kl.clone copy (GR72.c)
         self.discard()
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR72)."""
+        """Precise halt of the current long-running kl.exec (GR72.a)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
@@ -294,19 +294,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR76)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR73)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`, not the curve's default
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR76: bits unavailable past the bound: KLE
+            if k is TIMEOUT:                        # GR73: bits unavailable past the bound: KLE
                 self.rnd = entry[0]                 # RBG-unavailable exception, State unchanged, retryable
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR76: RBG failure
+            if k is None:                           # GR73: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -762,13 +762,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR76)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR73)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR76)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR73)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))

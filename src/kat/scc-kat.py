@@ -248,7 +248,7 @@ class Unit:
 
     def load(self, cl, mem, at=16):            # kl.load: step 6
         if cl.state == UNCONF or cl.state in ERROR_STATES:
-            return                             # GR37: no operation
+            return                             # GR37.a: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
             raise IllegalInstruction           # GR42
         self._check_transfer(cl)
@@ -265,7 +265,7 @@ class Unit:
     def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLE-SCC-export>>
         self._check_managed(cl)
         st = cl.state
-        if st == UNCONF:                       # GR37: common steps only
+        if st == UNCONF:                       # GR37.c: common steps only
             self.klnamedlocker = 32
             return
         if is_valid(st):
@@ -284,7 +284,7 @@ class Unit:
 
     def store(self, cl):                       # kl.store
         if cl.state == UNCONF:
-            return b''                         # GR37: no operation
+            return b''                         # GR37.a: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
             raise IllegalInstruction           # GR43
         self._check_transfer(cl)
@@ -298,7 +298,7 @@ class Unit:
         """kl_cfg_management_end for base type scc: <<KLE-SCC-import>> steps 7-15. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
-        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR37: common steps only
+        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR37.c: common steps only
             self.klnamedlocker = 32
             return
         st = fld(ml, 'State')
