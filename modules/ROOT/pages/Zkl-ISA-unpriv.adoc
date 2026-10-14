@@ -249,7 +249,7 @@ Insufficient capacity may prevent a configuration instruction from executing; un
 Corruption of a hart's KLF is unrecoverable: the hart's KLE architectural state is reset (<<KLE-reset-and-m-mode-only>>), and a KLE fatal-error exception (<<Zkl-ISA-priv.adoc#KLE-exceptions>>) is raised.
 
 The KLE unit holds three 128-bit _authentication registers_, with the authentication and identification data of the locker under management: `SIV`, `IMPQUAL` and `SIV2`. `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` access them as the leading bytes of the image they transfer (<<KLE-instruction-mv>>).
-The `kl.mgmt` that opens an export of a locker in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`. A `kl.mgmt` that opens an import, other than the short import of a locker in an Error State (<<KLE-error-state-transfer>>), zeroizes them, and the `kl.load` or `kl.mvin` that follows writes them, so that no value of an earlier management operation can be read back through the import image.
+The export-opening `kl.mgmt` of a locker in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`. An import-opening `kl.mgmt`, other than the short import of a locker in an Error State (<<KLE-error-state-transfer>>), zeroizes them, and the `kl.load` or `kl.mvin` that follows writes them, so that no value of an earlier management operation can be read back through the import image.
 
 [NOTE]
 ====
@@ -398,7 +398,7 @@ A CC provider that sends its keys to a secure receiver, such as a TEE applet tha
 _KeyType_ is 0 if the key is provisioned by value; it is then also exported and imported by value.
 _KeyType_ is 1 if the key is identified by a system-specific, 64-bit System Key Identifier (SKID) (<<KLE-system-keys>>).
 _KeyType_ is 2 if the key is generated randomly when provisioning completes, all keys of the Machine at once unless otherwise specified.
-The PI has the layout of one with _KeyType_ = 0, and the completing `kl.mgmt` replaces the values of its key fields; _KeyType_ is then set to 0, so the key is thereafter exported by value. If the RBG fails, Rule <<KLE-GR-rbg-failure>> applies.
+The PI has the layout of one with _KeyType_ = 0, and the provisioning-completing `kl.mgmt` replaces the values of its key fields; _KeyType_ is then set to 0, so the key is thereafter exported by value. If the RBG fails, Rule <<KLE-GR-rbg-failure>> applies.
 _KeyType_ = 2 thus occurs only in a PI and in a PCCC of base type `pi`.
 
 Value 3 is reserved: a PI or SCC that carries it is invalid Metadata (<<KLE-Metadata-validity>>).
@@ -931,9 +931,9 @@ _This section is informative and non-normative. It serves to place the managemen
 
 Setting aside the handling of lockers in an Error State, a *management* operation takes three steps: the first and the last are a single KLE instruction each, and the second is one or more `kl.mvin` or `kl.mvout` (alternatively, `kl.load` or `kl.store`) instructions:
 
-. `kl.mgmt` (<<KLE-instruction-mgmt>>) prepares the locker for the management operation.
+. An opening `kl.mgmt` (<<KLE-instruction-mgmt>>) prepares the locker for the management operation.
 . One or more `kl.mvin` (<<KLE-instruction-mv>>) load the rest of the information into the locker, or one or more `kl.mvout` move the locker's information out.
-. `kl.mgmt` completes the management operation and makes the locker available to software.
+. A completing `kl.mgmt` ends the management operation and makes the locker available to software.
 
 // Setting error handling aside, *provisioning* consists of the following three steps:
 //
@@ -1330,7 +1330,7 @@ A destination with a different KLE unit would drop the ADS anyway.
 _destructive configuration instructions_, the configuration instructions that discard the CC in a locker without reading it.
 The other destructive configuration instructions are:
 
-* a `kl.mgmt` that opens a provisioning or an import (defined in the next section, <<KLE-instruction-mgmt>>), which zeroizes the locker before configuring it;
+* a provisioning- or import-opening `kl.mgmt` (defined in the next section, <<KLE-instruction-mgmt>>), which zeroizes the locker before configuring it;
 * `kl.clone` and `kl.rename` (defined later in <<KLE-instruction-clone>>), which replace the CC of their destination locker with that of the source; and
 * `kl.swap` (same section), a special case that overwrites both its lockers, each with the CC of the other, so nothing is lost.
 
@@ -1365,8 +1365,9 @@ _Description_::
 For this instruction, Rules <<KLE-GR-klnamedlocker-override>> to <<KLE-GR-mgmt-klnamedlocker-check>> apply.
 
 `kl.mgmt` brackets the body of a locker management operation (<<KLE-management-operations>>): it opens a provisioning, an export or an import on locker `Kd`, and completes it.
+A `kl.mgmt` that opens, resp. completes, a management operation is an _opening_, resp. _completing_, `kl.mgmt`, named after its operation: a provisioning-opening `kl.mgmt`, an export-completing `kl.mgmt`, and so on.
 
-An opening for provisioning or import is allowed in every _State_ (Rule <<KLE-GR-opening-locker-when>>).
+A provisioning- or import-opening `kl.mgmt` is allowed in every _State_ (Rule <<KLE-GR-opening-locker-when>>).
 It is a <<KLE-destructive-config,destructive configuration instruction>>, which erases the memory of the locker before using it:
 this prevents any previous content from leaking into a nested management operation.
 
@@ -1858,7 +1859,7 @@ For `klnamedlocker` = 32:::
 [[KLE-ISA-rules-usage-control]]
 === Usage Control
 
-The first set of Rules determines when usage instructions can be used.
+The first set of Rules determines when certain classes of instructions may be issued.
 
 [horizontal]
 [[KLE-GR-usage-policy,GR7]]GR7:: The _UsagePolicy_ of the MDH determines whether an instruction can be issued in a given privilege mode.
@@ -1893,8 +1894,11 @@ The first set of Rules determines when usage instructions can be used.
 |===
 
 [horizontal]
-[[KLE-GR-iobuf-configured,GR8]]GR8:: The KLIOBUF instructions, `kl.input`, `kl.output` and the KLIOBUF variants of `kl.mvin` and `kl.mvout`, and the usage instructions that substitute the KLIOBUF for a vector operand (<<KLE-usage-input-output>>), require `Zklio` and a configured KLIOBUF, with a non-zero `kliobuflen`, even for an empty transfer window; otherwise they raise an illegal-instruction exception, after the checks of Rule <<KLE-GR-gate-order>> or <<KLE-GR-management-check-order>>.
-An unconfigured KLIOBUF is a ground of the second group of <<KLE-illegal-instruction-grounds>>: the issuing mode configures the KLIOBUF itself, so no handler can resolve it.
+[[KLE-GR-iobuf-configured,GR8]]GR8:: The KLIOBUF instructions, `kl.input`, `kl.output` and the KLIOBUF variants of `kl.mvin` and `kl.mvout`, and the usage instructions that substitute the KLIOBUF for a vector operand (<<KLE-usage-input-output>>), require: `Zklio` and a configured KLIOBUF, with a non-zero `kliobuflen`, even for an empty transfer window. Otherwise, they raise an illegal-instruction exception, after the checks of Rule <<KLE-GR-gate-order>> or <<KLE-GR-management-check-order>>.
++
+An unconfigured KLIOBUF is a ground of the second group of <<KLE-illegal-instruction-grounds>>.
+// the issuing mode configures the KLIOBUF itself, so no handler can resolve it.
++
 An instruction that performs no operation needs no configured KLIOBUF: `kl.mvin` and `kl.mvout` with no named locker, or an _Unconfigured_ or Error-State one (<<KLE-instruction-mv>>), a Form D `kl.exec` on such a locker (Rule <<KLE-GR-zero-unwritten-output>>), and `kl.input` and `kl.output` with `Xl` = 0, which need no `Zklio` either (<<KLE-instruction-load>>).
 
 [[KLE-named-locker-rules]]
@@ -1903,14 +1907,15 @@ An instruction that performs no operation needs no configured KLIOBUF: `kl.mvin`
 `klnamedlocker` (<<KLE-CSR-klnamedlocker>>) names the _named locker_ used by some management instructions.
 
 [horizontal]
-[[KLE-GR-locker-less-transfers,GR9]]GR9:: `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand and act on the locker whose number is provided by `klnamedlocker`.
+[[KLE-GR-locker-less-transfers,GR9]]GR9:: `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` are the only instructions that have no locker operand.
+Hence, they can only act on the locker named by `klnamedlocker`.
 
-[[KLE-GR-klnamedlocker-override,GR10]]GR10:: Every instruction that names a locker may name the _named locker_, written `KLNL`, instead; `kl.clone`, `kl.rename`, `kl.swap` and `kl.derive` may do so for one of their two lockers only.
+[[KLE-GR-klnamedlocker-override,GR10]]GR10:: Every instruction that names a locker may name the named locker, written `KLNL`, instead; `kl.clone`, `kl.rename`, `kl.swap` and `kl.derive` may do so for one of their two lockers only.
 `KLNL` is encoded as Rule <<KLE-GR-r-R-fields>> specifies, and denotes the locker that `klnamedlocker` names when the instruction issues.
 
-[[KLE-GR-klnl-openings,GR11]]GR11:: A `kl.mgmt` that opens a management operation on `KLNL` performs no operation when `klnamedlocker` = 32, which stays 32 (Rule <<KLE-GR-klnl-no-named-locker>>). Otherwise, it opens that locker, and `klnamedlocker` is not changed, except that an export opening on an _Unconfigured_ locker performs no operation and sets it to 32 (cf. Rules <<KLE-GR-cleared-under-management>> and <<KLE-GR-klnamedlocker-updates>>).
+[[KLE-GR-klnl-openings,GR11]]GR11:: An opening `kl.mgmt` on `KLNL` performs no operation when `klnamedlocker` = 32, which stays 32 (Rule <<KLE-GR-klnl-no-named-locker>>). Otherwise, it opens that locker, and `klnamedlocker` is not changed, except that an export opening on an _Unconfigured_ locker performs no operation and sets it to 32 (cf. Rules <<KLE-GR-cleared-under-management>> and <<KLE-GR-klnamedlocker-updates>>).
 
-[[KLE-GR-klnl-no-named-locker,GR12]]GR12:: When `klnamedlocker` = 32, an instruction naming `KLNL`, an opening included (Rule <<KLE-GR-klnl-openings>>), falls through as on an _Unconfigured_ locker (Rule <<KLE-GR-outcome-by-state>>): `kl.getmd*` returns zeros, `kl.size` and `kl.avail` return 0, and `kl.exec`, `kl.setst`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, `kl.derive` and `kl.mgmt` perform no operation, `kl.exec` zeroing its output (cf. Rule <<KLE-GR-zero-unwritten-output>>).
+[[KLE-GR-klnl-no-named-locker,GR12]]GR12:: When `klnamedlocker` = 32, an instruction naming `KLNL`, an opening `kl.mgmt` included (Rule <<KLE-GR-klnl-openings>>), falls through as on an _Unconfigured_ locker (Rule <<KLE-GR-outcome-by-state>>): `kl.getmd*` returns zeros, `kl.size` and `kl.avail` return 0, and `kl.exec`, `kl.setst`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, `kl.derive` and `kl.mgmt` perform no operation, `kl.exec` zeroing its output (cf. Rule <<KLE-GR-zero-unwritten-output>>).
 
 [[KLE-GR-mgmt-klnamedlocker-check,GR13]]GR13:: A `kl.mgmt` that names a locker explicitly raises an illegal-instruction exception unless `klnamedlocker` holds the number of the same locker or 32.
 
@@ -1918,7 +1923,7 @@ An instruction that performs no operation needs no configured KLIOBUF: `kl.mvin`
 
 * a `kl.mgmt` that leaves its target locker in a Configuration State or a Complete State sets it to, or leaves it at, that locker's number;
 * a `kl.mgmt` that performs no operation on an _Unconfigured_ locker sets `klnamedlocker` to 32 (Rule <<KLE-GR-cleared-under-management>>);
-* a `kl.mgmt` that opens a provisioning or an import and raises an exception after its zeroizing step sets it to the target locker's number;
+* a provisioning- or import-opening `kl.mgmt` that raises an exception after its zeroizing step sets it to the target locker's number;
 * a `kl.clear` or `kl.clearall` that clears the named locker sets `klnamedlocker` to 32;
 * a `kl.clone` or `kl.rename` from another locker into the named locker sets `klnamedlocker` to 32, a `kl.clone` even if it then traps; and
 * a `kl.rename` or `kl.swap` that moves the CC of the named locker sets `klnamedlocker` to the receiving locker's number (<<KLE-instruction-clone>>).
@@ -2036,10 +2041,10 @@ Other instructions, such as `kl.exec`, may also change the _State_, under condit
 --
 . _Unconfigured_ locker, locker in an Error State, or no named locker (`klnamedlocker` = 32, for an instruction that acts on the named locker, other than a `kl.load` or `kl.store` with a non-zero `Xl`, which acts on the KLIOBUF (Rule <<KLE-GR-cleared-under-management>>)): every instruction other than a <<KLE-destructive-config,destructive configuration instruction>> performs no operation and raises no exception; the _State_ is unchanged, an output operand is zeroed, and an inspection instruction returns zeros or the MDH (Rules <<KLE-GR-klnl-no-named-locker>>, <<KLE-GR-usage-locker-error-state>>–<<KLE-GR-cleared-under-management>>).
 A `kl.setst` that replaces an Error State is no exception: it overwrites essentially all the locker holds (Rule <<KLE-GR-error-state-locker-is-only-MDH>>).
-With no named locker, the destructive configuration instructions also perform no operation, an opening included (Rules <<KLE-GR-klnl-no-named-locker>> and <<KLE-GR-klnl-openings>>).
+With no named locker, the destructive configuration instructions also perform no operation, an opening `kl.mgmt` included (Rules <<KLE-GR-klnl-no-named-locker>> and <<KLE-GR-klnl-openings>>).
 . Locker in a Configuration State: the configuration instructions that the operation under way admits are admitted (Rules <<KLE-GR-config-instructions-config-state>>–<<KLE-GR-zkl-store-mv-allowed>>, <<KLE-locker-management>>); the others are wrong for a CC in transit and trap.
-A transfer of the other direction, or a `kl.mgmt` completing with an inconsistent `ml`._State_, raises an illegal-instruction exception (<<KLE-mv-locker-checks>>, <<KLE-locker-management>>); a usage instruction, or a `kl.clone` from or `kl.restrict*` on the locker, a KLE privilege-violation exception, the locker unchanged (Rule <<KLE-GR-usage-locker-config-state>>).
-. Locker in a Valid State: a management operation can always be opened (Rule <<KLE-GR-opening-locker-when>>), and every other configuration instruction is admitted, except a transfer or a closing `kl.mgmt`, which needs a management operation under way and raises an illegal-instruction exception (<<KLE-mv-locker-checks>>, Rule <<KLE-GR-cleared-under-management>>). A usage instruction that the _UsagePolicy_ forbids raises a KLE privilege-violation exception, the locker unchanged (Rule <<KLE-GR-usage-policy>>); one that the Machine, the State or _MachinePolicy_ does not admit performs no operation and transitions the locker to Error State _Invalid_ (Rules <<KLE-GR-no-exec-in-ready>>, <<KLE-GR-success-failure>>, <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>); any other performs its operation, after the checks of Rule <<KLE-GR-gate-order>>.
+A transfer of the other direction, or a completing `kl.mgmt` with an inconsistent `ml`._State_, raises an illegal-instruction exception (<<KLE-mv-locker-checks>>, <<KLE-locker-management>>); a usage instruction, or a `kl.clone` from or `kl.restrict*` on the locker, a KLE privilege-violation exception, the locker unchanged (Rule <<KLE-GR-usage-locker-config-state>>).
+. Locker in a Valid State: a management operation can always be opened (Rule <<KLE-GR-opening-locker-when>>), and every other configuration instruction is admitted, except a transfer or a completing `kl.mgmt`, which needs a management operation under way and raises an illegal-instruction exception (<<KLE-mv-locker-checks>>, Rule <<KLE-GR-cleared-under-management>>). A usage instruction that the _UsagePolicy_ forbids raises a KLE privilege-violation exception, the locker unchanged (Rule <<KLE-GR-usage-policy>>); one that the Machine, the State or _MachinePolicy_ does not admit performs no operation and transitions the locker to Error State _Invalid_ (Rules <<KLE-GR-no-exec-in-ready>>, <<KLE-GR-success-failure>>, <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>); any other performs its operation, after the checks of Rule <<KLE-GR-gate-order>>.
 
 A malformed or reserved encoding and a `kl.mgmt` that would interleave two management operations raise an illegal-instruction exception in every State group, and an instruction that requires an unconfigured KLIOBUF raises one after the checks of Rule <<KLE-GR-gate-order>> or <<KLE-GR-management-check-order>> (Rule <<KLE-GR-iobuf-configured>>, <<KLE-illegal-instruction-grounds>>).
 --
@@ -2094,7 +2099,7 @@ An in-place operation thus never leaves its input in place of the output it did 
 A Form D `kl.exec` that performs no operation takes a configured KLIOBUF as its output window, whatever its former native Form and with no length or granularity check, accesses no buffer if none is configured, and clears `klstart`.
 
 [[KLE-GR-transition-to-from-unconfigured,GR35]]GR35:: Only a configuration instruction can transition a locker from _Unconfigured_ to a Complete State; a usage instruction falls through (Rule <<KLE-GR-outcome-by-state>>), `kl.derive` if either endpoint is _Unconfigured_.
-A locker leaves an Error State for _Unconfigured_ through `kl.clear` or `kl.clearall`, a `kl.rename` naming it as source, a `kl.clone` or `kl.rename` naming it as destination with an _Unconfigured_ source, a `kl.clone` naming it as destination that then traps, a `kl.swap` with an _Unconfigured_ locker (<<KLE-instruction-clone>>), or a re-opening for provisioning or import, which is a <<KLE-destructive-config,destructive configuration instruction>>.
+A locker leaves an Error State for _Unconfigured_ through `kl.clear` or `kl.clearall`, a `kl.rename` naming it as source, a `kl.clone` or `kl.rename` naming it as destination with an _Unconfigured_ source, a `kl.clone` naming it as destination that then traps, a `kl.swap` with an _Unconfigured_ locker (<<KLE-instruction-clone>>), or a provisioning- or import-opening `kl.mgmt`, which is a <<KLE-destructive-config,destructive configuration instruction>>.
 
 [[KLE-GR-getmd-to-from-unconfigured,GR36]]GR36:: `kl.getmd*` (<<KLE-instruction-getmd>>) reads the MDH of an _Unconfigured_ locker as all zeros.
 
@@ -2179,7 +2184,7 @@ The same holds with `klnamedlocker` = 32 (for `kl.load` and `kl.store`, with `Xl
 | Return the MDH.
 
 | Instructions naming `KLNL` while `klnamedlocker` = 32 (Rule <<KLE-GR-klnl-no-named-locker>>)
-2+| As on an _Unconfigured_ locker, except that `kl.clone`, `kl.rename`, `kl.swap` and a `kl.mgmt` that opens a provisioning, an import or an export perform no operation (Rules <<KLE-GR-klnl-no-named-locker>> and <<KLE-GR-klnl-openings>>).
+2+| As on an _Unconfigured_ locker, except that `kl.clone`, `kl.rename`, `kl.swap` and an opening `kl.mgmt` perform no operation (Rules <<KLE-GR-klnl-no-named-locker>> and <<KLE-GR-klnl-openings>>).
 
 | <<KLE-instruction-restrict,kl.restrict*>>
 2+| No operation.
@@ -2223,7 +2228,7 @@ Cloning from the locker would put a second CC in transit, with one set of authen
 A locker in State `kl_cfg_exporting` may hold the only complete copy of its CC (<<KLE-CC-management>>), which an Error State would destroy (Rule <<KLE-SR-never-clear-exporting>>).
 <<KLE-instruction-clone>> covers such a locker as the destination of a `kl.clone`, or as both its source and destination.
 
-[[KLE-GR-completion-state,GR45]]GR45:: The `kl.mgmt` that completes a management operation (<<KLE-locker-management>>) leaves the locker:
+[[KLE-GR-completion-state,GR45]]GR45:: The completing `kl.mgmt` (<<KLE-locker-management>>) leaves the locker:
 +
 --
 * after a provisioning, in State _Ready_, with _StateExtension_ and _MachineUse_ zero;
@@ -2360,7 +2365,7 @@ A memory operation issued or resumed after the locker was cleared performs no op
 [[KLE-exception-state-change,GR63]]GR63:: A KLE fatal-error exception resets the KLE state (KLE fatal-error in <<KLE-exception-error-correspondence>>). Any other exception leaves the KLE state unchanged, except for these changes, made even when the instruction then raises an exception:
 +
 --
-* the destructive step (<<KLE-destructive-config>>) of a `kl.mgmt` that opens a provisioning or an import, which zeroizes the locker and writes its number to `klnamedlocker` (<<KLE-locker-management>>), and of a `kl.clone`, which clears its destination as `kl.clear` would (<<KLE-instruction-clone>>);
+* the destructive step (<<KLE-destructive-config>>) of a provisioning- or import-opening `kl.mgmt`, which zeroizes the locker and writes its number to `klnamedlocker` (<<KLE-locker-management>>), and of a `kl.clone`, which clears its destination as `kl.clear` would (<<KLE-instruction-clone>>);
 * the clearing of `klstart` by any `kl.mgmt` that passes its `klnamedlocker` check (<<KLE-locker-management>>); and
 * the completed prefix, and the `klstart` that records it, that a memory instruction commits when one of its component accesses raises a memory exception (Rules <<KLE-GR-memory-instructions>> and <<KLE-GR-resumability-options>>).
 --
@@ -2417,7 +2422,7 @@ A conflicting access is:
 * an ordinary load or store overlapping the memory region of the in-flight KLE operation;
 * an access to a locker that the operation uses, including the issue of another KLE instruction involving it;
 * a read or write of `klstart`, `vstart`, `klnamedlocker` or a KLIOBUF CSR, including by `kl.getnl`, `kl.setnl` and `kl.setnli`, since the operation may still update them (Rule <<KLE-GR-klstart-vstart>>, <<KLE-locker-management>>);
-* the issue of a KLE instruction that reads or writes the authentication registers `SIV`, `IMPQUAL` and `SIV2` (<<KLE-KLF>>), such as a `kl.mgmt` that opens an export or an import, while the operation reads or writes them;
+* the issue of a KLE instruction that reads or writes the authentication registers `SIV`, `IMPQUAL` and `SIV2` (<<KLE-KLF>>), such as an export- or import-opening `kl.mgmt`, while the operation reads or writes them;
 * a read or write of a GPR or vector register that the operation writes; or
 * a write to a vector register or to the KLIOBUF that the operation reads, including the issue of a `kl.input` targeting it.
 Scalar operands in GPRs are captured at issue, so accessing them is not a conflicting access.
@@ -2512,7 +2517,7 @@ _Handler_: none, Rule <<KLE-SR-handler-duty>> does not apply.
 KLE locker-Off:: An access to a locker marked _Off_ (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
 _Handler_: none, Rule <<KLE-SR-handler-duty>> does not apply.
 
-KLE unsupported-Metadata:: Unsupported Metadata at the opening of a provisioning or import, which leaves the locker _Unconfigured_ (<<KLE-MVR-open>>); only an M-mode handler can resolve it, by emulating the Machine (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>).
+KLE unsupported-Metadata:: Unsupported Metadata at a provisioning- or import-opening `kl.mgmt`, which leaves the locker _Unconfigured_ (<<KLE-MVR-open>>); only an M-mode handler can resolve it, by emulating the Machine (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>).
 Accessing or using a locker in State `kl_state_unsupported` raises no such exception.
 _Handler_: _Unsupported_.
 
@@ -2662,7 +2667,7 @@ A *base (management) operation* (also called the outermost operation) is opened 
 * a (base) _import_ of an SCC, in State `kl_cfg_importing`.
 
 Before opening an export, software saves the locker's MDH as `ml`; an import takes `ml` from the saved image.
-The `kl.mgmt` that completes an export or an import receives `ml` and restores its _State_; completing a base operation leaves the locker in a Complete State (Rule <<KLE-GR-completion-state>>).
+The export- or import-completing `kl.mgmt` receives `ml` and restores its _State_; completing a base operation leaves the locker in a Complete State (Rule <<KLE-GR-completion-state>>).
 
 An exception may interrupt an open operation.
 The handler may then save the locker by a *nested export*, an export opened on a locker in a Configuration State, and restore it later by a *nested import* of the resulting image; nested operations may themselves be interrupted and nested.
@@ -2688,7 +2693,7 @@ Clearing a locker ends all its open operations and leaves it _Unconfigured_.
 === Formats of PIs, SCCs, and Partially Configured Cryptographic Contexts
 
 Provisioning Input (PI).:::
-The MDH, with _State_ = _Unconfigured_, followed by `Content`; the completing `kl.mgmt` sets _State_ to _Ready_.
+The MDH, with _State_ = _Unconfigured_, followed by `Content`; the provisioning-completing `kl.mgmt` sets _State_ to _Ready_.
 
 Sealed Cryptographic Context (SCC).:::
 +
@@ -2724,8 +2729,8 @@ KLE generates an image with _ADSDropped_ = 1 only as an SCC-shaped PCCC, when a 
 Encryption during management.:::
 While an SCC is imported, or a locker is exported as an SCC, the locker holds its `Content` encrypted:
 
-. an export opening `kl.mgmt` encrypts the locker, generates `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`;
-. the `kl.mgmt` that completes the base import or export decrypts and authenticates it, once the MDH, `Content`, `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2` are in place; with _ADSDropped_ = 1, no `Content2` is loaded or authenticated.
+. an export-opening `kl.mgmt` encrypts the locker, generates `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`;
+. the base import- or export-completing `kl.mgmt` decrypts and authenticates it, once the MDH, `Content`, `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2` are in place; with _ADSDropped_ = 1, no `Content2` is loaded or authenticated.
   An export completion may instead restore the clear contents from an internal copy (<<KLE-mgmt-completes-export>>).
 
 Partially Configured Cryptographic Context (PCCC).:::
@@ -2759,7 +2764,7 @@ that of a PI if its base type is `pi` and that of an SCC if its base type is `sc
 
 . The *KLF capacity* of a locker depends only on _Machine_, _MachinePolicy_, _SCProtection_ and _KeyType_, and does not change once the locker is provisioned: dropping the ADS shortens its SCCs but not its capacity.
 A locker is allocated room for every field its Machine may use; the capacity depends on _KeyType_ because a SKID may denote a key that never enters the KLF.
-With _KeyType_ = 2 it is that of _KeyType_ = 0, so completing the provisioning allocates nothing more.
+With _KeyType_ = 2 it is that of _KeyType_ = 0, so the provisioning-completing `kl.mgmt` allocates nothing more.
 
 // No other MDH field, and no information in the `Content`, may affect any of these four quantities.
 
@@ -2819,11 +2824,11 @@ Three steps are common to every operation below and are not repeated in their de
 The four operations of `kl.mgmt` are described in the next four sections:
 
 [[KLE-MVR-open]]
-==== kl.mgmt opens a provisioning or an import
+==== Provisioning- and import-opening kl.mgmt
 
 Software first obtains the MDH, `ml`, and supplies it with a Form A, C or D `kl.mgmt`.
 
-NOTE: For an import, software first saves `ml` in its local state and supplies it to the `kl.mgmt` that completes the import, to restore the _State_ the locker had before the import started.
+NOTE: For an import, software first saves `ml` in its local state and supplies it to the import-completing `kl.mgmt`, to restore the _State_ the locker had before the import started.
 
 The instruction:
 
@@ -2862,7 +2867,7 @@ The locker is zeroized before any check that can fail, for consistency: invalid 
 It also lets the capacity check count the locker's own allocation as free, so that a CC can be reconfigured in place, and lets a handler that emulates an unsupported Machine (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>) find its target zeroized and named, even for `KLNL`.
 ====
 
-==== kl.mgmt opens an export
+==== Export-opening kl.mgmt
 
 Software first saves a copy, `ml`, of the locker's MDH, to restore the _State_ when completing the export.
 `kl.mgmt` can be of Form A, C or D, and ignores its auxiliary input. Depending on `ml`._State_:
@@ -2880,7 +2885,7 @@ The opening `kl.mgmt` changes no MDH field other than _State_: an implementation
 
 ... the locker's _State_ is set to `kl_cfg_ppi_exporting` or `kl_cfg_exporting`, according to its base type (<<KLE-nested-mgmt>>).
 
-==== kl.mgmt completes a management operation
+==== Completing kl.mgmt
 
 First, note that:
 
@@ -2900,7 +2905,7 @@ If locker.MDH._State_ is `kl_cfg_importing` or `kl_cfg_exporting`, `ml`._State_ 
 Any other `ml`._State_, including a Complete State for a locker of base type `pi` and the values 61–63, raises an illegal-instruction exception.
 A Complete `ml`._State_ is accepted only for a locker of base type `scc`, so the clear `Content` of a partially provisioned locker becomes usable only by completing its provisioning.
 
-* `*kl.mgmt*` *completes a provisioning.*
+* *Provisioning-completing `kl.mgmt`.*
 +
 --
 No MDH saved at provisioning start is needed: Forms C and D of `kl.mgmt` ignore their auxiliary input.
@@ -2915,10 +2920,10 @@ The operation makes the provisioned locker available to software by:
 ... setting _State_ to _Ready_, and _StateExtension_ and _MachineUse_ to 0.
 
 If a process is preempted during provisioning, `kl.store` or `kl.mvout` exports only the original PI information, unencrypted.
-Only the `kl.mgmt` that completes the provisioning may therefore generate secret random material needed to configure the locker, retrieve key material from the SKS, or derive, expand or re-share that material, so that no such material is exposed in an unencrypted export of a partially provisioned locker.
+Only the provisioning-completing `kl.mgmt` may therefore generate secret random material needed to configure the locker, retrieve key material from the SKS, or derive, expand or re-share that material, so that no such material is exposed in an unencrypted export of a partially provisioned locker.
 --
 
-* `*kl.mgmt*` *completes an import.*
+* *Import-completing `kl.mgmt`.*
 +
 --
 Software uses Form A, C or D of `kl.mgmt` to supply the value `ml` saved when the import started.
@@ -2935,7 +2940,7 @@ This makes the locker available to software.
 --
 
 [[KLE-mgmt-completes-export]]
-==== kl.mgmt completes an export
+==== Export-completing kl.mgmt
 
 Software uses Form A, C or D of `kl.mgmt` to supply the MDH value `ml` saved when the export began. Then:
 
@@ -3395,7 +3400,7 @@ Code that must interleave them, for instance in several threads of one process, 
 
 [[KLE-SR-no-unconditional-clear,SR13]]SR13:: System software must not clear a locker under management unconditionally at every context switch, since repeated restarts may prevent completion.
 
-[[KLE-SR-never-clear-exporting,SR14]]SR14:: Unless it terminates the owner, software must not clear a locker during an export, base or nested: it first completes the export with its closing `kl.mgmt`, and saves the image, with its MDH and any resumption state, in storage protected for the owner.
+[[KLE-SR-never-clear-exporting,SR14]]SR14:: Unless it terminates the owner, software must not clear a locker during an export, base or nested: it first completes the export with its completing `kl.mgmt`, and saves the image, with its MDH and any resumption state, in storage protected for the owner.
 It may then clear the locker, even one that was itself exporting, since the image preserves that outer export; it restores the image before the owner resumes.
 A clear during an export is not deferred: it destroys the CC.
 
@@ -3518,7 +3523,7 @@ Code that interleaves them must follow Rule <<KLE-SR-no-interleaving>>.
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`, then write 0 to `kliobuflen`.
 . Save every other locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
 
-Each export completes, with its closing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-never-clear-exporting>>).
+Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-never-clear-exporting>>).
 
 A handler that passes `ml` through the KLIOBUF for the other lockers configures `kliobuflen` {ge} 16 for their exports and imports, and restores the saved value afterwards.
 
