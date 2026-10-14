@@ -3281,16 +3281,15 @@ The `kl.mgmt Kd, #kl_cfg_importing` opening the import performs steps 1 to 5 (<<
 
 _This section is informative and non-normative._
 
-Omitting the nonce reduces the size of the payload and lets the system cache the encryption and authentication keys; the nonce-misuse resistance of AES-GCM-SIV keeps the construction secure for up to O(2^64^) 128-bit blocks observed by an adversary, enough for client applications.
-On cloud servers, each virtual machine and supervisor domain should use its own CSK;
-M-mode firmware moves a CC between domains by importing its SCC under the source CSK and exporting it under the target CSK.
+Omitting the nonce shrinks the payload and lets the derived keys be cached; the nonce-misuse resistance of AES-GCM-SIV keeps the construction secure for up to O(2^64^) blocks observed by an adversary.
+On cloud servers, each virtual machine and supervisor domain should have its own CSK; M-mode firmware moves a CC between them by importing its SCC under the source CSK and exporting it under the target CSK.
 
-The `SIV`, which is the GCM-SIV tag, encrypts the `POLYVAL` hash (<<KLE-SCC-POLYVAL>>) of the MDH with _ADSDropped_ cleared, the Locality Secrets and the Content.
-Hashing the Locality Secrets as associated data, rather than deriving the keys from them, binds the SCC to the Locality set for the cost of one `Montmul` per block, faster than most KDFs, and without generating new `enc_key` or `auth_key` when the set changes; distinct sets give the same `SIV` with probability at most (`len_AD` + `len_PC`) {times} 2^-126^.
-
-Taking `SIV` as ``AD2[1]`` binds the two payloads: `SIV2` and the second segment's keystream depend on the first payload, so the ADS of one SCC cannot be grafted onto another.
-
-As in AES-GCM-SIV, bit 127 separates tag inputs from keystream inputs; the extra bit `sep` (bit 126) costs one bit of security, and makes the keystreams of the two segments differ by design rather than with overwhelming probability.
+The `SIV`, the GCM-SIV tag, is the encryption of the `POLYVAL` hash (<<KLE-SCC-POLYVAL>>) of the MDH with _ADSDropped_ cleared, the Locality Secrets and the Content.
+Hashing the Locality Secrets, rather than deriving the keys from them, binds the SCC to the Localities for the cost of one `Montmul` per block.
+This is much faster than most KDFs and, like omitting the nonce, with no new derived keys when the set changes, it allows the keys to be cached.
+Distinct sets give the same `SIV` with probability at most (`len_AD` + `len_PC`) {times} 2^-126^.
+Taking `SIV` as ``AD2[1]`` makes `SIV2` and the second keystream depend on the first payload, so an ADS cannot be grafted onto another SCC.
+Bit 127 separates tag inputs from keystream inputs, as in AES-GCM-SIV; bit 126 makes the keystreams of the two segments differ by design, at the cost of one bit of security.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3313,11 +3312,11 @@ The `SIV`, `SIV2` and `IMPQUAL` registers take no part in this export and in the
 *Importing* such an image takes one step:
 
 . Issue `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand, carried whole by Form C or D, or by a Form A from the KLIOBUF. The instruction:
-  .. zeroizes the locker it names and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>);
-  .. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
+.. zeroizes the locker it names and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>);
+.. replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_.
 
-The instruction is uninterruptible since it only transfers the MDH, and it opens no management operation.
-Hence, no `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows; issuing one performs no operation (Rule <<KLE-GR-fall-through-mgmt>>).
+The instruction is uninterruptible. It only transfers the MDH.
+No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` needs to follows: issuing one performs no operation (Rule <<KLE-GR-fall-through-mgmt>>).
 
 // ////////////////////////////////////////////////////////////////////
 
