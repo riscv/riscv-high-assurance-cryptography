@@ -9,7 +9,7 @@ endif::[]
 
 _This chapter is informative and non-normative._
 
-This chapter states fourteen Design Principles, and nine Design Decisions taken on their basis, from which all the General Rules of <<Zkl-ISA-unpriv.adoc#KLE-unpriv>> follow.
+This chapter states sixteen Design Principles, and nine Design Decisions taken on their basis, from which all the General Rules of <<Zkl-ISA-unpriv.adoc#KLE-unpriv>> follow.
 The Decisions could be revisited without changing the Principles, and where a summary below and a Rule differ, the Rule prevails.
 No Principle is stated in terms of an individual instruction: each rule should read as one Principle applied to one instruction or State class.
 The SR rules are cited where a Principle or a Decision motivates them, and are not covered.
@@ -41,127 +41,38 @@ The Principles use only the following categories, all defined in the specificati
 
 == Design Principles
 
-The fourteen Principles fall into six groups.
+The sixteen Principles fall into seven groups.
 
+* _Foundation_: software uses a key without seeing it (<<KLE-Principle-hidden-keys>>), the key is bound to its algorithm and policies (<<KLE-Principle-key-binding>>), and every operation on it is atomic or prefix-complete (<<KLE-Principle-prefix-complete>>); these three Principles prompted the design of KLE and give the others their purpose, and the Security Principles keep them.
 * _Versatility_: several CCs in use at once, each with its own Machine, so that software can switch algorithms by switching lockers, and combined (<<KLE-Principle-multiple-algorithms>>). It requires the lockers and the derivation between them (<<KLE-Decision-derivation>>).
 * _Transparency_: the architecture describes all the state there is (<<KLE-Principle-management-architectural>>). It precedes the definition of a locker.
 * _Statefulness_: a CC keeps the state of its algorithm, not only its key (<<KLE-Principle-contexts-stateful>>).
 * _Scalability_: KLE works on every class of RISC-V core, from microcontrollers without vectors to vector cores, and on SoCs whose cores share one KLE unit (<<KLE-Principle-scalable>>). The Economy Principles limit the cost of what this requires.
 * _Economy_: simple instructions and short code, the least encoding space, the least architectural state, which also serves Security as the least attack surface (<<KLE-Principle-small-instructions-code>>–<<KLE-Principle-small-architectural-state>>). The Metadata Header (<<KLE-Decision-metadata>>) follows from <<KLE-Principle-management-architectural>>, <<KLE-Principle-encoding-pressure>> and <<KLE-Principle-small-architectural-state>>; the named locker (<<KLE-Decision-named-locker>>) from <<KLE-Principle-small-instructions-code>> and <<KLE-Principle-small-architectural-state>>; the attached-unit architecture (<<KLE-Decision-attached-unit>>) from <<KLE-Principle-small-instructions-code>> and <<KLE-Principle-encoding-pressure>>, with <<KLE-Principle-scalable>>, <<KLE-Principle-no-privilege-elevation>> and <<KLE-Principle-cia-inside>>.
-* _Security_: what software may always do, what it keeps, what it may never gain from a CC, inside a locker or outside, and what it cannot make an algorithm do (<<KLE-Principle-availability>>–<<KLE-Principle-no-misuse>>): the availability of the lockers, the persistence of the CCs and the atomicity of their operations, the confidentiality of the keys, the protection of the CCs inside and outside a locker, and the integrity of the algorithms. <<KLE-Principle-no-privilege-elevation>> gives the other Principles their purpose.
+* _Security_: the algorithm and the CC inside the unit, what software may always do and keep, the CC outside the unit, and what software may never gain (<<KLE-Principle-no-misuse>>–<<KLE-Principle-no-privilege-elevation>>): the integrity of the algorithms and the protection of the CCs inside a locker, the availability of the lockers, the persistence of the CCs, their protection outside a locker, and the confidentiality of the keys.
 
-[[KLE-Principle-multiple-algorithms,P1]]
-P1: _Multiple algorithms can be in use at the same time, and composed_::
+[[KLE-Principle-hidden-keys,P1]]
+P1: _KLE must allow software to use keys that are hidden from it_::
 +
 --
-Applications run several cryptographic operations at once and chain them: a protocol agrees on a key, derives session keys from it, and uses them to encrypt and authenticate while it hashes its transcript.
-KLE therefore holds several CCs at once, each with its own Machine, policies and State, so that operations on different lockers interleave, and combines them inside the unit (<<KLE-Decision-derivation>>).
+Software that uses a key need not, and cannot, see it: it names the locker that holds the key, and the KLE unit performs the operation.
+The key, and every secret derived from it, stays in the unit, or leaves it only sealed (<<KLE-Principle-confidentiality-integrity>>), so that compromising the software that uses a key does not disclose it.
 
-*Rules.* The lockers of <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>; through <<KLE-Decision-derivation>>, the <<Zkl-ISA-unpriv.adoc#KLE-derivation-rules>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-architectural-model>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>.
 --
 
-[[KLE-Principle-management-architectural,P2]]
-P2: _The entire resource management is architectural_::
+[[KLE-Principle-key-binding,P2]]
+P2: _Keys in Cryptographic Contexts are associated with an algorithm, their Machine, and with policies that limit their use to certain privilege modes and bind them to software and hardware environments_::
 +
 --
-Where other architectures cache keys to make several available to software, KLE exposes resource management to the caller through an architectural interface (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>): the lockers that <<KLE-Principle-multiple-algorithms>> requires share the capacity of the KLF, and capacity exhaustion is always reported to software, which handles it (<<KLE-Principle-availability>>).
+A key is usable only through the Machine that its MDH names, for the operations that _MachinePolicy_ enables, in the privilege modes that _UsagePolicy_ admits, and, where _Locality_ and _ExpirationDate_ bind it, only in that environment and until that date.
+The binding is set at provisioning and only narrowed afterwards (<<KLE-Principle-no-privilege-elevation>>).
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>; among the General Rules, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>> (progress outside the Content), <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>> (the ADS can be dropped), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-drawn-values>> (drawn values are architected) and <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>> (implementation-bound Metadata).
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-policy>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLE-Machine-field>>, <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLE-Metadata-expiration-date>>, <<Zkl-ISA-unpriv.adoc#KLE-Metadata-narrowing>>.
 --
 
-[[KLE-Principle-contexts-stateful,P3]]
-P3: _Cryptographic Contexts are stateful and active, not passive_::
-+
---
-Complex algorithms run in steps: a hash or MAC absorbs its input in pieces, an AEAD takes associated data, then the message, then the tag, and a key agreement or encapsulation emits and receives values between steps.
-Their intermediate state is often secret, so it stays in the CC (<<KLE-Principle-no-privilege-elevation>>): a CC holds the state of an algorithm, not only its key, each instruction of the caller advances it, and the _State_ records where the algorithm stands, so that it can be resumed, saved and restored (<<KLE-Principle-persistence>>) and checked against the sequences its standard allows (<<KLE-Principle-no-misuse>>).
-Each instruction therefore handles a bounded piece of data, held in registers, the KLIOBUF or a locker. Only memory is unbounded, and processing unbounded data in one instruction would make the Machine itself access memory; memory instructions instead only move data (<<KLE-Principle-small-instructions-code>>, <<KLE-Decision-invisible-asynchrony>>).
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-State-field>>; through <<KLE-Decision-machine-protocol>>, the Rules it lists; in the Machines, <<Zkl-ISA-machines.adoc#KLE-Machines>> and Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>.
---
-
-[[KLE-Principle-scalable,P4]]
-P4: _KLE must work on RISC-V cores with or without vector registers_::
-+
---
-Keys need protection on microcontrollers, many of which have no vector unit, and one KLE unit may serve cores with and without vectors on a SoC.
-
-This Principle drives `Zklio`: the KLIOBUF, `kl.input`, `kl.output` and the substitutions, which turn vector code directly into code without vectors. Such code runs on any core with `Zklio`; where `Zklv` exists, vector code is faster.
-
-Principles <<KLE-Principle-small-instructions-code>>–<<KLE-Principle-small-architectural-state>> shape the buffer rather than argue against it: `kl.input` and `kl.output` only move data, the substitutions reuse existing Forms, and there is only one buffer per hart, which a context switch need not save once software sets its length to zero. Every write to `kliobuflen` zeroes the buffer up to the new length, and the bytes beyond it are inaccessible, so no contents leak.
-
-*Rules.* The conformance requirements of <<Zkl-ISA-unpriv.adoc#KLE-extensions-overview-unpriv>>, <<Zkl-ISA-unpriv.adoc#KLE-usage-input-output>>, the KLIOBUF variants of `kl.mvin` and `kl.mvout` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-kliobuflen-zero>>.
---
-
-[[KLE-Principle-small-instructions-code,P5]]
-P5: _Make instructions as simple as possible, while still requiring short code sequences_::
-+
---
-From it follow:
-
-. <<KLE-Decision-named-locker>>, with <<KLE-Principle-small-architectural-state>>: the named-locker index, its implicit and `KLNL` operands, and the instructions that read and write it.
-. The "check once" property of <<KLE-Decision-fall-through>>: a routine checks the _State_ only after its last step.
-. One instruction clears every locker and the KLIOBUF.
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-r-R-fields>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
---
-
-[[KLE-Principle-encoding-pressure,P6]]
-P6: _Minimize the pressure on the encoding space_::
-+
---
-Opcode space is the scarcest resource of an ISA, while cryptographic algorithms are many, some short-lived, and standardization keeps adding new ones.
-KLE therefore encodes the algorithm, its mode and its parameters in the Metadata, not in opcodes:
-the instruction set stays fixed as Machines are added, and every Machine follows one protocol (<<KLE-Decision-machine-protocol>>).
-`kl.exec` performs every cryptographic operation and `kl.setst` drives every transition between a Machine's Valid States, with `kl.derive` moving material between lockers.
-
-The remaining instructions manage lockers, not algorithms, and none is specific to a Machine.
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-Machine-field>>, <<Zkl-ISA-unpriv.adoc#KLE-management-immeds>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>>.
---
-
-[[KLE-Principle-small-architectural-state,P7]]
-P7: _Additional architectural state beyond the lockers is kept to a minimum_::
-+
---
-Every added register must be saved and restored at a context switch and preserved by interposed software, and may leak between contexts: the less state is exposed, the smaller the attack surface.
-State that an operation needs only while under way therefore exists once per hart, not per locker.
-One set of authentication and identification registers, `SIV`, `IMPQUAL` and `SIV2`, 128 or 384 bits depending on the features, serves every locker, so that software keeps at most one management operation in flight per hart, saving it before starting another (<<KLE-Decision-named-locker>>).
-`klstart` and, with `Zklio`, the KLIOBUF (<<KLE-Principle-scalable>>) follow the same rule.
-
-With one `klstart`, an instruction honoring it starts from the value it finds, so an opening `kl.mgmt` clears it and interposed software saves and restores it.
-Touching the shared registers or the locker index while an operation is in flight is a conflicting access, and a long-running operation keeps its progress in its own locker (<<KLE-Decision-resumption>>).
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mgmt>> and <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (`klstart` cleared by `kl.mgmt`), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; through <<KLE-Decision-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-save>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-restore>> and <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
---
-
-[[KLE-Principle-availability,P8]]
-P8: _It must always be possible to configure new Cryptographic Contexts_::
-+
---
-No caller may be denied the KLE resources.
-Neither a Machine nor a _UsagePolicy_ may therefore restrict a configuration instruction: a management operation can always be opened on a Valid locker, and the instructions that destroy, replace or move a CC are admitted in every State group, so that even when all lockers are in use, a caller can reconfigure any of them, in an Error State or a Configuration State included.
-Only a configuration instruction that does not fit the management state of the locker traps (<<KLE-Decision-exceptions>>): a transfer or a completing `kl.mgmt` with no management operation under way, and, for a CC in transit, a transfer of the other direction, a clone from it or a restriction (<<KLE-Principle-prefix-complete>>, <<KLE-Decision-management-protocol>>).
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-opening-locker-when>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-triggers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>> (configuration instructions), <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-to-from-unconfigured>> (last sentence), `kl.mgmt` exception of <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>.
---
-
-[[KLE-Principle-persistence,P9]]
-P9: _Cryptographic Contexts support persistence_::
-+
---
-CCs can be stored and reloaded to survive context switches, power cycles, process and VM migrations.
-
-Persistence is the counterpart of <<KLE-Principle-availability>>: a CC evicted to make room is saved, not destroyed, and only its consumer, or more privileged software, decides when it is destroyed.
-An export therefore completes, and its image is saved, before the locker is cleared (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>).
-A CC is bound neither to its locker, nor to the hart, the power state or, unless its _Locality_ binds it, the machine: the whole CC, MDH and Content, is saved in a format independent of the implementation and of the ISA (<<Zkl-ISA-unpriv.adoc#KLE-SCC>>, <<Zkl-books.adoc#KLE-separation>>), and restoring it into any locker yields one that behaves as the saved one did.
-Persistence extends to an operation in progress: an interruption leaves a state that the locker, `klstart`, `vstart` and the ADS describe completely, from which resumption, also after a restore, yields what an uninterrupted operation would (<<KLE-Decision-resumption>>, <<KLE-Principle-prefix-complete>>).
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-exported-as-MDH>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-import>>, <<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-isolation>>.
---
-
-[[KLE-Principle-prefix-complete,P10]]
-P10: _Every operation is atomic or prefix-complete_::
+[[KLE-Principle-prefix-complete,P3]]
+P3: _Every operation is atomic or prefix-complete_::
 +
 --
 An operation that is interrupted, or fails, leaves either nothing of a partial execution or a complete prefix of it: it takes effect entirely or not at all (_atomic_), or for an initial part of its input, recording where it stopped (_prefix-complete_).
@@ -182,8 +93,160 @@ And no resource fails in mid-operation: an instruction that transfers data draws
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-idempotent-memory>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-memory-no-random-no-clock>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>, <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-halted-state>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-preemption>> (interruptibility), <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>> (interruption points, transfer size), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>> (halt points), <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> (key item); for management operations, <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-store-mv-allowed>>.
 --
 
-[[KLE-Principle-no-privilege-elevation,P11]]
-P11: _Privileges are never elevated_::
+[[KLE-Principle-multiple-algorithms,P4]]
+P4: _Multiple keys can be in use at the same time, and their algorithms composed_::
++
+--
+Applications run several cryptographic operations at once and chain them: a protocol agrees on a key, derives session keys from it, and uses them to encrypt and authenticate while it hashes its transcript.
+KLE therefore holds several CCs at once, each with its own Machine, policies and State, so that operations on different lockers interleave, and combines them inside the unit (<<KLE-Decision-derivation>>).
+
+*Rules.* The lockers of <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>; through <<KLE-Decision-derivation>>, the <<Zkl-ISA-unpriv.adoc#KLE-derivation-rules>>.
+--
+
+[[KLE-Principle-management-architectural,P5]]
+P5: _The entire resource management is architectural_::
++
+--
+Where other architectures cache keys to make several available to software, KLE exposes resource management to the caller through an architectural interface (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>): the lockers that <<KLE-Principle-multiple-algorithms>> requires share the capacity of the KLF, and capacity exhaustion is always reported to software, which handles it (<<KLE-Principle-availability>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>; among the General Rules, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>> (progress outside the Content), <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>> (the ADS can be dropped), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-drawn-values>> (drawn values are architected) and <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>> (implementation-bound Metadata).
+--
+
+[[KLE-Principle-contexts-stateful,P6]]
+P6: _Cryptographic Contexts are stateful and active, not passive_::
++
+--
+Complex algorithms run in steps: a hash or MAC absorbs its input in pieces, an AEAD takes associated data, then the message, then the tag, and a key agreement or encapsulation emits and receives values between steps.
+Their intermediate state is often secret, so it stays in the CC (<<KLE-Principle-no-privilege-elevation>>): a CC holds the state of an algorithm, not only its key, each instruction of the caller advances it, and the _State_ records where the algorithm stands, so that it can be resumed, saved and restored (<<KLE-Principle-persistence>>) and checked against the sequences its standard allows (<<KLE-Principle-no-misuse>>).
+Each instruction therefore handles a bounded piece of data, held in registers, the KLIOBUF or a locker. Only memory is unbounded, and processing unbounded data in one instruction would make the Machine itself access memory; memory instructions instead only move data (<<KLE-Principle-small-instructions-code>>, <<KLE-Decision-invisible-asynchrony>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-State-field>>; through <<KLE-Decision-machine-protocol>>, the Rules it lists; in the Machines, <<Zkl-ISA-machines.adoc#KLE-Machines>> and Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>.
+--
+
+[[KLE-Principle-scalable,P7]]
+P7: _KLE must work on RISC-V cores with or without vector registers_::
++
+--
+Keys need protection on microcontrollers, many of which have no vector unit, and one KLE unit may serve cores with and without vectors on a SoC.
+
+This Principle drives `Zklio`: the KLIOBUF, `kl.input`, `kl.output` and the substitutions, which turn vector code directly into code without vectors. Such code runs on any core with `Zklio`; where `Zklv` exists, vector code is faster.
+
+Principles <<KLE-Principle-small-instructions-code>>–<<KLE-Principle-small-architectural-state>> shape the buffer rather than argue against it: `kl.input` and `kl.output` only move data, the substitutions reuse existing Forms, and there is only one buffer per hart, which a context switch need not save once software sets its length to zero. Every write to `kliobuflen` zeroes the buffer up to the new length, and the bytes beyond it are inaccessible, so no contents leak.
+
+*Rules.* The conformance requirements of <<Zkl-ISA-unpriv.adoc#KLE-extensions-overview-unpriv>>, <<Zkl-ISA-unpriv.adoc#KLE-usage-input-output>>, the KLIOBUF variants of `kl.mvin` and `kl.mvout` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-kliobuflen-zero>>.
+--
+
+[[KLE-Principle-small-instructions-code,P8]]
+P8: _Make instructions as simple as possible, while still requiring short code sequences_::
++
+--
+From it follow:
+
+. <<KLE-Decision-named-locker>>, with <<KLE-Principle-small-architectural-state>>: the named-locker index, its implicit and `KLNL` operands, and the instructions that read and write it.
+. The "check once" property of <<KLE-Decision-fall-through>>: a routine checks the _State_ only after its last step.
+. One instruction clears every locker and the KLIOBUF.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-r-R-fields>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
+--
+
+[[KLE-Principle-encoding-pressure,P9]]
+P9: _Minimize the pressure on the encoding space_::
++
+--
+Opcode space is the scarcest resource of an ISA, while cryptographic algorithms are many, some short-lived, and standardization keeps adding new ones.
+KLE therefore encodes the algorithm, its mode and its parameters in the Metadata, not in opcodes:
+the instruction set stays fixed as Machines are added, and every Machine follows one protocol (<<KLE-Decision-machine-protocol>>).
+`kl.exec` performs every cryptographic operation and `kl.setst` drives every transition between a Machine's Valid States, with `kl.derive` moving material between lockers.
+
+The remaining instructions manage lockers, not algorithms, and none is specific to a Machine.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-Machine-field>>, <<Zkl-ISA-unpriv.adoc#KLE-management-immeds>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>>.
+--
+
+[[KLE-Principle-small-architectural-state,P10]]
+P10: _Additional architectural state beyond the lockers is kept to a minimum_::
++
+--
+Every added register must be saved and restored at a context switch and preserved by interposed software, and may leak between contexts: the less state is exposed, the smaller the attack surface.
+State that an operation needs only while under way therefore exists once per hart, not per locker.
+One set of authentication and identification registers, `SIV`, `IMPQUAL` and `SIV2`, 128 or 384 bits depending on the features, serves every locker, so that software keeps at most one management operation in flight per hart, saving it before starting another (<<KLE-Decision-named-locker>>).
+`klstart` and, with `Zklio`, the KLIOBUF (<<KLE-Principle-scalable>>) follow the same rule.
+
+With one `klstart`, an instruction honoring it starts from the value it finds, so an opening `kl.mgmt` clears it and interposed software saves and restores it.
+Touching the shared registers or the locker index while an operation is in flight is a conflicting access, and a long-running operation keeps its progress in its own locker (<<KLE-Decision-resumption>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mgmt>> and <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (`klstart` cleared by `kl.mgmt`), <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; through <<KLE-Decision-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>, <<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-save>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-klstart-restore>> and <<Zkl-ISA-unpriv.adoc#KLE-SR-klnamedlocker-write>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>.
+--
+
+[[KLE-Principle-no-misuse,P11]]
+P11: _Machines prevent all abuse of their algorithms that is not otherwise unavoidable_::
++
+--
+A hidden key is safe only if the algorithm that uses it cannot be driven to leak it.
+A Machine therefore admits only the sequences of operations that its referenced standard defines, so that no sequence of KLE instructions can manipulate its internal state by repeating, skipping or reordering steps; the final States _Success_ and _Failure_ admit none.
+A step outside these sequences may be an attack, so the locker fails closed (<<KLE-Decision-misuse>>).
+A same-State `kl.setst` repeats the entry operations instead of doing nothing, since otherwise later `kl.exec` instructions could act on internal state that the re-entry was expected to reset; where the repetition would itself yield a state that the standard does not define, the Machine forbids it.
+Abuse that software can commit anyway is not prevented, since a constraint that software can bypass protects nothing and costs complexity: an earlier SCC can always be re-imported (<<Zkl-ISA-unpriv.adoc#KLE-KLF>>), so the return to _Ready_ stays open, and nonce discipline remains the caller's, as do the limits on the use of a key.
+A length that no practical message reaches, such as one beyond a 64-bit counter, needs no check either.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>> and the endpoint definitions of <<Zkl-ISA-unpriv.adoc#KLE-derivation-rules>>; in the Machines, Rules <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>, <<Zkl-ISA-machines.adoc#KLE-MGR-no-hash-output-repeat>>, <<Zkl-ISA-machines.adoc#KLE-MGR-caller-limits>> and <<Zkl-ISA-machines.adoc#KLE-nonce-reuse>>.
+--
+
+[[KLE-Principle-cia-inside,P12]]
+P12: _Cryptographic Contexts keep their confidentiality, integrity and availability inside a locker_::
++
+--
+A CC spends most of its life in a locker that all the software of a hart can reach, and the binding of <<KLE-Principle-key-binding>> holds there only if nothing reaches the CC except through its Machine and the configuration instructions.
+The KLF, which only the KLE implementation, or M-mode firmware emulating it, can access, guarantees the confidentiality and integrity of its contents, and no mode but M-mode and authenticated Debug mode sees locker state in clear.
+
+* _Confidentiality_: no instruction returns a secret field (<<KLE-Principle-no-privilege-elevation>>), and no intermediate value of an operation in flight is observable (<<KLE-Decision-invisible-asynchrony>>).
+* _Integrity_: the Content changes only through its Machine, in the sequences its standard admits (<<KLE-Principle-no-misuse>>), or as a whole, through a configuration instruction (<<KLE-Principle-prefix-complete>>), and no access interferes with an operation in flight (<<KLE-Decision-invisible-asynchrony>>).
+* _Availability of resources_: the unit never evicts a CC, nor reclaims its locker or KLF capacity, on its own (<<KLE-Principle-management-architectural>>): short of a fatal error, a CC leaves its locker only when software destroys, replaces or moves it, or when it fails closed into an Error State that records why (<<KLE-Decision-error-states>>). The availability of the CC itself against software that can reach the locker is not an architectural goal (<<Zkl-introduction.adoc#KLE-threat-model>>).
+
+The lockers are shared by all privilege modes of a hart, so isolating them between modes is the duty of software.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-architectural-model>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (fatal errors), <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-clear-before-lower-mode>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>.
+--
+
+[[KLE-Principle-availability,P13]]
+P13: _It must always be possible to configure new Cryptographic Contexts_::
++
+--
+No caller may be denied the KLE resources.
+Neither a Machine nor a _UsagePolicy_ may therefore restrict a configuration instruction: a management operation can always be opened on a Valid locker, and the instructions that destroy, replace or move a CC are admitted in every State group, so that even when all lockers are in use, a caller can reconfigure any of them, in an Error State or a Configuration State included.
+Only a configuration instruction that does not fit the management state of the locker traps (<<KLE-Decision-exceptions>>): a transfer or a completing `kl.mgmt` with no management operation under way, and, for a CC in transit, a transfer of the other direction, a clone from it or a restriction (<<KLE-Principle-prefix-complete>>, <<KLE-Decision-management-protocol>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-opening-locker-when>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-config-instructions-config-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-triggers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>> (configuration instructions), <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-transition-to-from-unconfigured>> (last sentence), `kl.mgmt` exception of <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>.
+--
+
+[[KLE-Principle-persistence,P14]]
+P14: _Cryptographic Contexts support persistence_::
++
+--
+CCs can be stored and reloaded to survive context switches, power cycles, process and VM migrations.
+Persistence is the counterpart of <<KLE-Principle-availability>>: a CC evicted to make room is saved, not destroyed, and only its consumer, or more privileged software, decides when it is destroyed.
+An export therefore completes, and its image is saved, before the locker is cleared (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-never-clear-exporting>>).
+A CC is bound neither to its locker, nor to the hart, the power state or, unless its _Locality_ binds it, the machine: the whole CC, MDH and Content, is saved in a format independent of the implementation and of the ISA (<<Zkl-ISA-unpriv.adoc#KLE-SCC>>, <<Zkl-books.adoc#KLE-separation>>), and restoring it into any locker yields one that behaves as the saved one did.
+Persistence extends to an operation in progress: an interruption leaves a state that the locker, `klstart`, `vstart` and the ADS describe completely, from which resumption, also after a restore, yields what an uninterrupted operation would (<<KLE-Decision-resumption>>, <<KLE-Principle-prefix-complete>>).
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-exported-as-MDH>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-import>>, <<Zkl-ISA-unpriv.adoc#KLE-state-save-and-restore-order>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-isolation>>.
+--
+
+[[KLE-Principle-confidentiality-integrity,P15]]
+P15: _Cryptographic Contexts keep their confidentiality and integrity also outside a locker_::
++
+--
+Persistence (<<KLE-Principle-persistence>>) moves a CC through memory, storage and networks that the KLE unit does not control, and the binding of <<KLE-Principle-key-binding>> holds there only if the saved form carries them, as the locker does inside the unit (<<KLE-Principle-cia-inside>>).
+A CC outside a locker therefore reveals nothing of its secret material and cannot be altered undetected: export seals it with an AEAD under keys derived from the CSK, with the MDH and the Localities as associated data, and import verifies the seal before the CC becomes usable, a failure leaving an Error State, or, for the ADS alone, dropping it.
+The seal can be bound to a locality, a chip, a chip family or a system, and the CC is then restorable only there; implementation-defined Metadata is interpreted only by the implementation that wrote it, and zeroed elsewhere (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>).
+
+// A locality secret must not be withdrawn while a CC bound to it may still be exported.
+
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> (restricting a CC in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-single-skid>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-locality-unconfigure>>.
+--
+
+[[KLE-Principle-no-privilege-elevation,P16]]
+P16: _Privileges are never elevated_::
 +
 --
 Least privilege is enforceable only if no operation can widen or bypass the policies granted at provisioning and narrowed later.
@@ -211,49 +274,6 @@ A `kl.setst` that replaces an Error State overwrites the only information the lo
 A `kl.store` that falls through writes no memory, so software relies on an exported image only after checking the _State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-export-final-check>>).
 +
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mv>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-export-final-check>>.
---
-
-[[KLE-Principle-cia-inside,P12]]
-P12: _Cryptographic Contexts keep their confidentiality, integrity and availability inside a locker_::
-+
---
-A CC spends most of its life in a locker that all the software of a hart can reach, and the guarantees of <<KLE-Principle-no-privilege-elevation>> hold there only if nothing reaches the CC except through its Machine and the configuration instructions.
-The KLF, which only the KLE implementation, or M-mode firmware emulating it, can access, guarantees the confidentiality and integrity of its contents, and no mode but M-mode and authenticated Debug mode sees locker state in clear.
-
-* _Confidentiality_: no instruction returns a secret field (<<KLE-Principle-no-privilege-elevation>>), and no intermediate value of an operation in flight is observable (<<KLE-Decision-invisible-asynchrony>>).
-* _Integrity_: the Content changes only through its Machine, in the sequences its standard admits (<<KLE-Principle-no-misuse>>), or as a whole, through a configuration instruction (<<KLE-Principle-prefix-complete>>), and no access interferes with an operation in flight (<<KLE-Decision-invisible-asynchrony>>).
-* _Availability of resources_: the unit never evicts a CC, nor reclaims its locker or KLF capacity, on its own (<<KLE-Principle-management-architectural>>): short of a fatal error, a CC leaves its locker only when software destroys, replaces or moves it, or when it fails closed into an Error State that records why (<<KLE-Decision-error-states>>). The availability of the CC itself against software that can reach the locker is not an architectural goal (<<Zkl-introduction.adoc#KLE-threat-model>>).
-
-The lockers are shared by all privilege modes of a hart, so isolating them between modes is the duty of software.
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-architectural-model>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (fatal errors), <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>>; outside the GR series, Rules <<Zkl-ISA-unpriv.adoc#KLE-SR-clear-before-lower-mode>>–<<Zkl-ISA-unpriv.adoc#KLE-SR-save-shared-state>>.
---
-
-[[KLE-Principle-confidentiality-integrity,P13]]
-P13: _Cryptographic Contexts keep their confidentiality and integrity also outside a locker_::
-+
---
-Persistence (<<KLE-Principle-persistence>>) moves a CC through memory, storage and networks that the KLE unit does not control, and the guarantees of <<KLE-Principle-no-privilege-elevation>> hold there only if the saved form carries them, as the locker does inside the unit (<<KLE-Principle-cia-inside>>).
-A CC outside a locker therefore reveals nothing of its secret material and cannot be altered undetected: export seals it with an AEAD under keys derived from the CSK, with the MDH and the Localities as associated data, and import verifies the seal before the CC becomes usable, a failure leaving an Error State, or, for the ADS alone, dropping it.
-The seal can be bound to a locality, a chip, a chip family or a system, and the CC is then restorable only there; implementation-defined Metadata is interpreted only by the implementation that wrote it, and zeroed elsewhere (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>).
-
-// A locality secret must not be withdrawn while a CC bound to it may still be exported.
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>> (restricting a CC in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-single-skid>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-locality-unconfigure>>.
---
-
-[[KLE-Principle-no-misuse,P14]]
-P14: _Machines prevent all abuse of their algorithms that is not otherwise unavoidable_::
-+
---
-A hidden key is safe only if the algorithm that uses it cannot be driven to leak it.
-A Machine therefore admits only the sequences of operations that its referenced standard defines, so that no sequence of KLE instructions can manipulate its internal state by repeating, skipping or reordering steps; the final States _Success_ and _Failure_ admit none.
-A step outside these sequences may be an attack, so the locker fails closed (<<KLE-Decision-misuse>>).
-A same-State `kl.setst` repeats the entry operations instead of doing nothing, since otherwise later `kl.exec` instructions could act on internal state that the re-entry was expected to reset; where the repetition would itself yield a state that the standard does not define, the Machine forbids it.
-Abuse that software can commit anyway is not prevented, since a constraint that software can bypass protects nothing and costs complexity: an earlier SCC can always be re-imported (<<Zkl-ISA-unpriv.adoc#KLE-KLF>>), so the return to _Ready_ stays open, and nonce discipline remains the caller's, as do the limits on the use of a key.
-A length that no practical message reaches, such as one beyond a 64-bit counter, needs no check either.
-
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-no-exec-in-ready>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure>> and the endpoint definitions of <<Zkl-ISA-unpriv.adoc#KLE-derivation-rules>>; in the Machines, Rules <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>, <<Zkl-ISA-machines.adoc#KLE-MGR-no-hash-output-repeat>>, <<Zkl-ISA-machines.adoc#KLE-MGR-caller-limits>> and <<Zkl-ISA-machines.adoc#KLE-nonce-reuse>>.
 --
 
 == Design Decisions
@@ -292,7 +312,7 @@ Each CC therefore records its own errors, with no global error register (<<KLE-D
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>.
 
 [[KLE-Decision-error-states,D3(a)]]
-D3(a): _An error is recorded as an Error State_:::
+D3(a): _An error is recorded as an Error State_::
 A failure is recorded in the _State_ of the locker whose precondition failed, as an Error State naming the class of the cause: _Invalid_ for sequencing or a _MachinePolicy_ gate, _Privilege Violation_ for a narrowing or a binding, _Unsupported_ for Metadata, _Expired_ for the clock, _Authentication Failed_ for a seal.
 A negative result of the algorithm, such as a rejected signature, is not an error (_Failure_).
 An Error State is a value of the _State_ field, so an Error-State locker is its MDH alone (<<KLE-Decision-metadata>>): its Content and ADS are released on entry (<<KLE-Principle-no-privilege-elevation>>), and it is exported and imported as an MDH, without a management operation.
@@ -301,7 +321,7 @@ A handler that cannot resolve a condition records it by setting the Error State 
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-clear-locker-content-error-state>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-error-state>>, <<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>, the error list of <<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> (which locker transitions), <<Zkl-ISA-unpriv.adoc#KLE-GR-narrowing>> (_Privilege Violation_), <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> (_Invalid_, not _Failure_).
 
 [[KLE-Decision-exceptions,D3(b)]]
-D3(b): _Exceptions are raised only for error conditions that the fall-through mechanism would misreport_:::
+D3(b): _Exceptions are raised only for error conditions that the fall-through mechanism would misreport_::
 There are four: a malformed or reserved encoding, a programming error that an illegal-instruction exception signals; a sequencing error that would silently lose a CC (<<KLE-Principle-persistence>>); a use of unconfigured infrastructure, as opposed to an inert locker; and a policy violation, which the policy owner must see, not the caller (<<KLE-Principle-no-privilege-elevation>>).
 Their state-independent checks precede every condition on the locker, and the others, _UsagePolicy_ included, come in the order of Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>: an inert locker falls through unchecked, while a Configuration State traps.
 The other exceptions name a condition that a more privileged handler may resolve, by emulating a Machine, freeing memory, granting a right, or supplying a clock or entropy; Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-handler-duty>> says what a handler must do with one it cannot.
@@ -450,7 +470,7 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<KLE-Principle-no-privilege-elevation>>, <<KLE-Decision-instruction-outcome>>, <<KLE-Decision-fall-through>>, <<KLE-Decision-management-protocol>>
 
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-policy>>
-| <<KLE-Principle-no-privilege-elevation>>
+| <<KLE-Principle-key-binding>>, <<KLE-Principle-no-privilege-elevation>>
 |
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mgmt>>
 | <<KLE-Principle-small-architectural-state>>, <<KLE-Decision-instruction-outcome>>, <<KLE-Decision-fall-through>>
@@ -486,7 +506,7 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<KLE-Principle-prefix-complete>>, <<KLE-Decision-management-protocol>>, <<KLE-Decision-named-locker>>
 
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>
-| <<KLE-Principle-no-privilege-elevation>>, <<KLE-Principle-cia-inside>>, <<KLE-Principle-confidentiality-integrity>>
+| <<KLE-Principle-hidden-keys>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Principle-cia-inside>>, <<KLE-Principle-confidentiality-integrity>>
 |
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-usage-locker-config-state>>
 | <<KLE-Principle-prefix-complete>>, <<KLE-Principle-confidentiality-integrity>>, <<KLE-Decision-exceptions>>, <<KLE-Decision-management-protocol>>
@@ -576,7 +596,7 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<KLE-Principle-prefix-complete>>, <<KLE-Decision-resumption>>, <<KLE-Decision-invisible-asynchrony>>
 
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>
-| <<KLE-Principle-no-privilege-elevation>>, <<KLE-Decision-misuse>>
+| <<KLE-Principle-key-binding>>, <<KLE-Principle-no-privilege-elevation>>, <<KLE-Decision-misuse>>
 |
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-preemption>>
 | <<KLE-Principle-prefix-complete>>, <<KLE-Decision-resumption>>, <<KLE-Decision-invisible-asynchrony>>

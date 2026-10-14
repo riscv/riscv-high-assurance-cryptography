@@ -36,9 +36,21 @@ KLE lets software perform high-performance cryptographic operations without dire
 // * *Scalability.* One ISA and ABI serve embedded to server cores.
 //
 KLE achieves this feature through the concepts explained next.
+// They rest on the following Design Principles and Design Decisions, which <<Zkl-rules-explanation.adoc#KLE-rules-explanation>> develops; their terms are defined in <<KLE-concepts>>.
 
 [[KLE-concepts]]
 === Fundamental Concepts and Definitions
+
+[horizontal]
+[[KLE-ISA-Principle-hidden-keys,P1]]P1:: _KLE allows software to use keys that are hidden from it._
+[[KLE-ISA-Principle-key-binding,P2]]P2:: _KLE associates each key with an algorithm, and with policies that limit its use to certain privilege modes and bind it to software and hardware environments_.
+[[KLE-ISA-Principle-prefix-complete,P3]]P3:: _Every cryptographic operation is atomic. +
+(f an instruction performs multiple cryptographic operations, it must be prefix-complete.)_
+[[KLE-ISA-Principle-multiple-algorithms,P4]]P4:: _Multiple keys can be in use at the same time, and their algorithms composed_.
+
+//
+
+These four Principles prompt the definition of a _Cryptographic Context_:
 
 Cryptographic Context::
 (((Cryptographic Context)))
@@ -51,11 +63,36 @@ The MDH binds the use of the secrets in the Content to one set of cryptographic 
 The MDH requires integrity (except for hint bits); the Content requires integrity and confidentiality.
 KLE and the algorithms it implements enforce these requirements architecturally.
 
+[horizontal]
+[[KLE-ISA-Principle-contexts-stateful,P6]]P6:: _Cryptographic Contexts are stateful, and record and manage the progress of the algorithm._
+
+Multiple CCs can be active at the same time, a caller must be able to configure them as they need.
+This requires an architectural place for them.
+
+[horizontal]
+[[KLE-ISA-Principle-management-architectural,P5]]P5:: _Resource management is architectural: resources are managed by software, and their exhaustion is reported by the architecture so that software can take the necessary actions_.
+
+//
+
+KLE applies this Principle by defining Cryptographic Lockers.
+
 Cryptographic Locker::
 (((Cryptographic Locker)))
 CCs are created in *Cryptographic Lockers* (_lockers_ for short), per-hart architectural containers that safeguard their contents.
 *Provisioning* a locker writes Metadata and Content into it and binds them into a CC.
 A CC is usable only while in a locker, where only the KLE unit accesses or modifies it, under the rules of the architecture and its Machine; no instruction extracts the Content in a way that compromises its confidentiality.
+
+//
+
+A KLE implementation offers support for multiple lockers (in fact, 32).
+
+[horizontal]
+[[KLE-ISA-Principle-scalable,P7]]P7:: _KLE is scalable: it works on small and larger cores, with and without vector registers._
+[[KLE-ISA-Principle-small-instructions-code,P8]]P8:: _Instructions are as simple as possible, in accord with common RISC-V philosophy, and despite this code sequences must be kept short._
+[[KLE-ISA-Principle-encoding-pressure,P9]]P9:: _Minimize the pressure on the encoding space. This is achieved by various means, including embedding the encoding of the algorithm in the MDH._
+[[KLE-ISA-Principle-small-architectural-state,P10]]P10:: _Architectural state beyond the lockers is minimal, and exists once per hart._
+
+Algorithms are implemented by KLE Machines:
 
 KLE Machine::
 (((Machines)))
@@ -65,9 +102,23 @@ It is identified by fields in the MDH.
 A small set of KLE instructions operates all Machines: their inputs and outputs come from vector registers, GPRs, and memory, and their semantics depend on the Machine.
 Encapsulating Machine-specific behavior in the MDH rather than the instructions lets different primitives (e.g., AES-128, AES-256 and SM4) be used in the same modes (e.g., ECB, GCM-SIV and XTS) without changing the compiled code, and supports side-channel-resistant variants transparently.
 
+[horizontal]
+[[KLE-ISA-Principle-no-misuse,P11]]P11:: _A Machine admits only the sequences of operations that its specification defines._
+[[KLE-ISA-Principle-cia-inside,P12]]P12:: _Inside a locker, a CC is reached only through its Machine and the instructions managing it._
+[[KLE-ISA-Principle-availability,P13]]P13:: _Software can always configure a new CC._
+[[KLE-ISA-Principle-persistence,P14]]P14:: _A CC can be saved and restored, also into a different locker or on an different implementation, in order to support features such as context switching, sleep, hibernation, VM migration._
+[[KLE-ISA-Principle-confidentiality-integrity,P15]]P15:: _Outside a locker, a CC is sealed: it reveals nothing, and cannot be altered undetected._
+
+The mechanism for saving and restoring CCs is the generation of Sealed Cryptographic Contexts:
+
 Sealed Cryptographic Context::
 (((Cryptographic Context, sealed)))
 For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program. An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
+
+[horizontal]
+[[KLE-ISA-Principle-no-privilege-elevation,P16]]P16:: _No operation yields a key or widens a policy: secrets flow only downhill._
+
+Finally, as a consequence of Principle <<KLE-ISA-Principle-key-binding>>, KLE instructions are subdivided into classes which can only be used in various contexts. Instructions that use the secrets in CCs are bounded by usage policies, whereas those that, for instance, save and restore SCCs can be used anytime. Principle <<KLE-ISA-Principle-availability>> is there to prevent denial of service on the resources of the KLE implementation.
 
 Usage Control Policy::
 +
@@ -92,6 +143,25 @@ Localities::
 (((Cryptographic Context, Locality)))
 KLE can bind a CC to *Localities*, which restrict where its exported SCCs can be imported, and thus where it can be restored and used: specific devices or device classes, hardware configurations, physical or virtual boot cycles, and process domains at various privilege modes.
 // The Localities act as _tweaks_ in the encryption and decryption of SCCs.
+
+The entire architecture follows from these principles and definitions.
+
+// [horizontal]
+// [[KLE-ISA-Decision-metadata,D1]]D1:: One fixed-size Metadata Header alone says what a locker is, what it admits and how large it is (<<KLE-ISA-Principle-management-architectural>>, <<KLE-ISA-Principle-encoding-pressure>>, <<KLE-ISA-Principle-small-architectural-state>>).
+// [[KLE-ISA-Decision-machine-protocol,D2]]D2:: Every Machine follows one protocol: `kl.setst` names the next State, and `kl.exec` performs its operation (<<KLE-ISA-Principle-contexts-stateful>>, <<KLE-ISA-Principle-encoding-pressure>>).
+// [[KLE-ISA-Decision-error-architecture,D3]]D3:: Each CC records its own errors (<<KLE-ISA-Principle-multiple-algorithms>>, <<KLE-ISA-Principle-persistence>>):
+// [[KLE-ISA-Decision-error-states,D3(a)]]D3(a)::: as an Error State of its locker;
+// [[KLE-ISA-Decision-exceptions,D3(b)]]D3(b)::: with an exception only where falling through would misreport the error (<<KLE-ISA-Principle-no-privilege-elevation>>).
+// [[KLE-ISA-Decision-instruction-outcome,D4]]D4:: The outcome of an instruction depends only on the State group of its locker and on its class (<<KLE-ISA-Principle-availability>>, <<KLE-ISA-Principle-prefix-complete>>):
+// [[KLE-ISA-Decision-misuse,D4(a)]]D4(a)::: misuse invalidates a Valid locker (<<KLE-ISA-Principle-no-misuse>>);
+// [[KLE-ISA-Decision-fall-through,D4(b)]]D4(b)::: on an inert locker, instructions fall through, so that one check at the end of a sequence suffices (<<KLE-ISA-Principle-small-instructions-code>>).
+// [[KLE-ISA-Decision-management-protocol,D5]]D5:: A management operation runs from an opening to a completing `kl.mgmt`, the locker being in a Configuration State in between (<<KLE-ISA-Principle-availability>>, <<KLE-ISA-Principle-prefix-complete>>).
+// [[KLE-ISA-Decision-named-locker,D6]]D6:: `klnamedlocker` names the locker of the CC in transit, so management routines need no locker number (<<KLE-ISA-Principle-small-instructions-code>>, <<KLE-ISA-Principle-small-architectural-state>>).
+// [[KLE-ISA-Decision-resumption,D7]]D7:: `klstart` records the prefix-complete point of an interrupted instruction, and a long-running operation keeps its progress in its locker (<<KLE-ISA-Principle-persistence>>, <<KLE-ISA-Principle-prefix-complete>>).
+// [[KLE-ISA-Decision-derivation,D8]]D8:: `kl.derive` moves material between lockers inside the unit, so combined algorithms expose no key (<<KLE-ISA-Principle-multiple-algorithms>>, <<KLE-ISA-Principle-no-privilege-elevation>>).
+// [[KLE-ISA-Decision-attached-unit,D9]]D9:: KLE instructions are messages to an attached unit that alone accesses the lockers (<<KLE-ISA-Principle-scalable>>, <<KLE-ISA-Principle-no-privilege-elevation>>, <<KLE-ISA-Principle-cia-inside>>):
+// [[KLE-ISA-Decision-invisible-asynchrony,D9(a)]]D9(a)::: its asynchrony is invisible to the hart (<<KLE-ISA-Principle-cia-inside>>);
+// [[KLE-ISA-Decision-riscv-operands,D9(b)]]D9(b)::: its operands follow the RISC-V conventions (<<KLE-ISA-Principle-scalable>>, <<KLE-ISA-Principle-small-instructions-code>>).
 
 // ////////////////////////////////////////////////////////////////////
 
