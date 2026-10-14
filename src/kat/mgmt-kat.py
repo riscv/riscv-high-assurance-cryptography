@@ -28,7 +28,7 @@ CLEAR_ADS = 64
 CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klnamedlocker: no locker managed
 KLV_SEWS = (8, 16, 32, 64)                   # <<KLE-KLV>>: SEW values, ELEN = 64; others set vtype.vill
-MAX_RESTARTS = 2                             # GR68 option 5: this model's documented bound for memory instructions
+MAX_RESTARTS = 2                             # GR71 option 5: this model's documented bound for memory instructions
 VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
 EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
@@ -598,7 +598,7 @@ class Unit:
         m, supplied = self._md_operand(form, k, lo, m, vec_bits)
         return 0 if not supplied and m['State'] == UNCONF else self.available(m)
     def layout(self, m):
-        """(ContentOffset, content_size, image_size, image_end) of <<KLE-instruction-mv>>."""
+        """(ContentOffset, content_size, image_size, image_end) of <<KLE-serialized-image>>."""
         mach = MACHINES[m['Machine']]
         if BASE_TYPE.get(m['State']) == 'pi':
             n = mach.pi_content_size(m)
@@ -1061,7 +1061,7 @@ class Unit:
         while j < end:
             f = fault(j)
             if f or (halt_after is not None and j - self.klstart >= halt_after):
-                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR68: no restart on a fault, and
+                rs = restart and not f and self.restarts < MAX_RESTARTS     # GR71: no restart on a fault, and
                 self.restarts += rs                                 # option 3 once the bound is reached
                 self.klstart = 0 if rs else j
                 if f: raise Trap(f[0], tval=f[1])
@@ -2239,11 +2239,11 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR56: access fault at the byte, prefix committed; restart option for interrupts only (GR68)',
+    eq('GR56: access fault at the byte, prefix committed; restart option for interrupts only (GR71)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()
-    eq(f'GR68 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
+    eq(f'GR71 option 5: at most {MAX_RESTARTS} consecutive restarts of one kl.load, then option 3 resumes it',
        [(w.load(mem, BASE, halt_after=16, restart=True), w.klstart) for _ in range(MAX_RESTARTS + 1)]
        + [w.load(mem, BASE), img(w) == pc], [('halted', 0)] * MAX_RESTARTS + [('halted', 16), 'done', True])
     u, out, ref = rc(), Memory(), Memory()
@@ -2464,7 +2464,7 @@ def t_sgr():
     eq('getmd, size, avail, restrict, clone, rename, swap, setst leave klstart', ks, [16] * 8)
 
 def t_exec():
-    section('kl.exec and klstart  <<KLE-CSR-klstart>>, <<KLE-resumability>>')
+    section('kl.exec and klstart  <<KLE-klstart-rules>>, <<KLE-resumability>>')
     pt, ref = bytes(0x61 + i & 0xFF for i in range(64)), rc()
     whole = bytearray(pt)
     ref.exec_(0, 'A', vin=whole, vout=whole)
@@ -3031,7 +3031,7 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR65.a); Error, Success, Failure CCs move', r,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR68.a); Error, Success, Failure CCs move', r,
        ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 

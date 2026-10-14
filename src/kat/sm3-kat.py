@@ -125,7 +125,7 @@ class Sm3:
             p, prior = HART.klstart, prior or bytes(nbytes)
             if p >= nbytes:
                 HART.klstart = 0
-                return 'empty', prior  # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
+                return 'empty', prior  # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
             if p:  # not an interruption point: a hash reaches _Success_ before any
                 s.reset()
                 HART.klstart = 0

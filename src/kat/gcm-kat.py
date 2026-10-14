@@ -75,7 +75,7 @@ class Gcm:
 
     def _invalid(s): return s._error(INV)
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR74)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR77)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -220,7 +220,7 @@ class Gcm:
         if start is not None:
             s.klstart = start
             if 8 * start >= KLLEN:
-                s.klstart = 0                            # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
+                s.klstart = 0                            # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
                 return 0
             if start % 16 or start and s.state in (ELB, DLB, ETF):
                 return s._invalid()                      # not an interruption point
@@ -235,7 +235,7 @@ class Gcm:
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
-                s.klstart, s.halted = 16 * i, True       # GR70
+                s.klstart, s.halted = 16 * i, True       # GR73
                 return out
             blk = sl(INPUT, 128 * i + 127, 128 * i)
             if st == HA:
@@ -244,7 +244,7 @@ class Gcm:
             ctr = s._next_ctr()
             if ctr is None:
                 s._invalid()
-                return out                               # GR69
+                return out                               # GR72
             if st == DEC:
                 s._absorb(blk)
             s._set_ctr(ctr)
@@ -480,7 +480,7 @@ for label, *hx in VECTORS:
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
     c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
     check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR74): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR77): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 check('Form A kl.setst substituting each Form C one (Enc/Dec_Tag_Finalize, Hash_Verify), its input in the KLIOBUF: '
       'tc4 tag and verification; KLIOBUF bytes beyond 16 ignored (MR7); a wrong tag fails', True,
       (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],
@@ -537,14 +537,14 @@ check('GR21: Set_Aux_Value -> Ready part-way; next message (tc6) unaffected',
 info('Set_Aux_Value: a transfer not a multiple of b is admitted only if it reaches len (MR2); '
      'kl.setst out of the state part-way discards the IV (MR9)')
 
-section('multi-block kl.exec, GR69/GR70')
+section('multi-block kl.exec, GR72/GR73')
 for n in (2, 3):
     check(f'{n} blocks per kl.exec', kl_encrypt(K, IV, A, P, nblk=n)[:2] == (RC, RT))
 cl = at('enc')
 o1 = cl.exec('A', b2v(P[:48]), 384, None, 1)
 h = (cl.halted, cl.klstart)
 o2 = cl.exec('A', b2v(P[:48]), 384, 16)
-check('GR70: Encrypt halted after one block (klstart = 16) and resumed',
+check('GR73: Encrypt halted after one block (klstart = 16) and resumed',
       h == (True, 16) and cl.klstart == 0 and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) == RC[:48])
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
@@ -655,7 +655,7 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('GR69/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('GR72/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
 check('GR29/GR30: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))

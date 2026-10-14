@@ -215,7 +215,7 @@ class Sha3:
                 return s.fail(out)  # MR2
             p, top = HART.klstart, len(inp)
             if p >= top:
-                HART.klstart = 0  # empty window: only klstart = 0 (<<KLE-CSR-klstart>>)
+                HART.klstart = 0  # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
                 return 'empty'
             if p and s.block_base:
                 return s.fail(out)  # not an interruption point
@@ -470,7 +470,7 @@ check('[oracle] SHAKE128 512 B over kl.exec of 100+68+200+144 B; stays in _Hash_
 cl = squeezing('SHAKE128', MSG_ABC)
 out = bytearray(b'\xee' * 400)
 r = cl.exec('C', out=out, interrupt_at=1)
-check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR69)',
+check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR72)',
       (r, HART.klstart, bytes(out[168:])) == ('interrupted', 168, b'\xee' * 232))
 check('resumed squeeze retires with klstart = 0', (cl.exec('C', out=out), HART.klstart) == ('done', 0))
 check('[oracle] SHAKE128 400 B with interrupt/resume', None, bytes(out), oracle('SHAKE128', MSG_ABC, 400))

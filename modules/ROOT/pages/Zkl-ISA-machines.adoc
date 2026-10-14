@@ -231,7 +231,7 @@ significant position upwards, here and throughout this specification.
 A resumed `kl.exec` performs only the iterations from `i` = 8 {interpunct} `klstart` onwards (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>).
 +
 A State that the Machine describes as processing a single block, such as a last-block, tag-finalize or verify State, processes
-exactly one block whatever `KLLEN` is, unless its transfer window is invalid (Rule <<KLE-MGR-granularity>>) or empty (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>); a further `kl.exec` in a last-block State is governed by Rule <<KLE-MGR-single-last-block>>.
+exactly one block whatever `KLLEN` is, unless its transfer window is invalid (Rule <<KLE-MGR-granularity>>) or empty (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>); a further `kl.exec` in a last-block State is governed by Rule <<KLE-MGR-single-last-block>>.
 
 [[KLE-MGR-recomputed-fields,MR4]]MR4:: A field that a Machine can derive inexpensively
 from other fields of the same CC may be omitted from the Serialized Content. It is then recomputed when an import
@@ -292,7 +292,7 @@ A State _X_ that loads a long field from `INPUT`, or emits one to `OUTPUT`, over
 [[KLE-MGR-single-last-block,MR10]]MR10:: _Single final block._
 A State that processes a single final block, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_, admits at most one `kl.exec` (Rule <<KLE-MGR-one-klexec-per-block>>).
 Unless the Machine defines a transition of its own on its completion, the locker stays in the State, and a further `kl.exec` transitions it to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-instructions>>), with its output window zeroed (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>): a second final block is not a continuation of the input but an attempt to manipulate the internal state of the Machine.
-An empty input needs no `kl.exec`, as for an empty final block of the AD of OCB (<<KLE-OCB-mode>>), and a `kl.exec` whose transfer window is empty does not reach the Machine, so it is not the `kl.exec` that the State admits (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>).
+An empty input needs no `kl.exec`, as for an empty final block of the AD of OCB (<<KLE-OCB-mode>>; Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 
 [[KLE-MGR-policy-gate,MR11]]MR11:: _Policy gate and entry conditions._
 +
@@ -993,7 +993,7 @@ Besides `max_len`, `block`, and `state`, which are fixed for the duration of the
    `klstart <- input_base / 8`.
    Every iteration but the last of a window ends with a full block, so such a halt leaves `block_base` = 0;
    after the last one the instruction retires, keeping any partial block.
-   The interruption points of `kl.exec` in _Current_State_ (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>) are therefore 0 and every multiple of `granularity` (every byte offset without one) at which the `block_base` that the locker holds is 0: they are determined by architected state alone, without the value that `block_base` had when the halted instruction started.
+   The interruption points of `kl.exec` in _Current_State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>) are therefore 0 and every multiple of `granularity` (every byte offset without one) at which the `block_base` that the locker holds is 0: they are determined by architected state alone, without the value that `block_base` had when the halted instruction started.
    `input_base` is a whole number of bytes at this point, so the division is exact; the
    procedure defines no interruption point at a finer granularity, so `klstart` never has
    to describe a position inside a byte. The conversion matches the one State
@@ -2165,7 +2165,7 @@ State Machine::
      The multiple-of-8 requirement (Rule <<KLE-MGR-last-blk-len>>) is what makes the position of the padding bit below
      well-defined; `Xs` = 0 is admissible and is the empty-message case.
    . `last_blk_len <- Xs`.
-   . If `Xs` = 0, the empty final block is absorbed at once, without a `kl.exec` (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>): `(K1, K2) <- gen_subkeys(key)`, `hash <- enc_blk(key, hash xor (zeros(b-8) @ 0b10000000) xor K2)`, and the state changes to _Hash_Output_.
+   . If `Xs` = 0, the empty final block is absorbed at once, without a `kl.exec` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>): `(K1, K2) <- gen_subkeys(key)`, `hash <- enc_blk(key, hash xor (zeros(b-8) @ 0b10000000) xor K2)`, and the state changes to _Hash_Output_.
 
  ** In State _Hash_Absorb_Last_Block_, a single ``kl.exec`` instruction of Form B is expected, i.e., "`kl.exec Kn, INPUT`", to absorb the data block `INPUT`. `INPUT` is truncated to its `b` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
 +
@@ -2361,7 +2361,7 @@ The state then transitions to _Hash_Absorb_Last_Block_.
       ... `update()`
       ... `block_base <- 0`
       ... *Here* the instruction can be interrupted, with `klstart <- output_base / 8`.
-          A halt here leaves `block_base` = 0. The interruption points of `kl.exec` in _Hash_Output_ (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>) are therefore, for an XOF, 0 and every byte offset at which `block_base` is 0; a hash function, which never reaches `update()`, has 0 only.
+          A halt here leaves `block_base` = 0. The interruption points of `kl.exec` in _Hash_Output_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>) are therefore, for an XOF, 0 and every byte offset at which `block_base` is 0; a hash function, which never reaches `update()`, has 0 only.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3057,7 +3057,7 @@ Setting the tag length is an operation, not a State (Rule <<KLE-operation-immedi
  . `ASCON(8)`
 --
 +
-If the associated data is empty, the caller absorbs no block, not even a padding block, so no permutation is applied: no ``kl.exec`` is needed in this State (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>).
+If the associated data is empty, the caller absorbs no block, not even a padding block, so no permutation is applied: no ``kl.exec`` is needed in this State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 
 ** Upon entering State _Encrypt_ or _Decrypt_, by a Form A `kl.setst`, the following domain separation
    operation is performed:

@@ -114,7 +114,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # GR23; <<KLE-CSR-klstart>>: invalid length (MR2), also output only
+        if self.state != OP or KLLEN % B:     # GR23; <<KLE-GR-transfer-window-checks>>: invalid length (MR2), also output only
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:

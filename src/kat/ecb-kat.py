@@ -140,7 +140,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR23; MR2 (<<KLE-CSR-klstart>>: length first)
+            self.invalidate()                 # GR23; MR2 (<<KLE-GR-transfer-window-checks>>: length first)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
