@@ -31,7 +31,7 @@ Principles are labeled P__n__, where __n__ is a progressive number.
 
 These four Principles prompt the definition of a _Cryptographic Context_:
 
-Definition: Cryptographic Context::
+Definition: _Cryptographic Context_::
 (((Cryptographic Context)))
 Most KLE instructions run within the constraints set by a *Cryptographic Context* (CC).
 A CC is an indivisible structure consisting of a *Metadata Header* (MDH), with a fixed format and length, and a *Content*, whose size depends on the MDH.
@@ -55,7 +55,7 @@ This requires an architectural place for them.
 
 KLE applies this Principle by defining Cryptographic Lockers.
 
-Definition: Cryptographic Locker::
+Definition: _Cryptographic Locker_::
 (((Cryptographic Locker)))
 CCs are created in *Cryptographic Lockers* (_lockers_ for short), per-hart architectural containers that safeguard their contents.
 *Provisioning* a locker writes Metadata and Content into it and binds them into a CC.
@@ -79,7 +79,7 @@ Embedding the encoding of the algorithm in the MDH is the main mechanism to impl
 
 Algorithms are implemented by KLE Machines:
 
-Definition: KLE Machine::
+Definition: _KLE Machine_::
 (((Machines)))
 (((Cryptographic Context, object-oriented)))
 A *KLE Machine* (short: _Machine_) is a state machine that implements one or more cryptographic functions (primitives, modes, protocols) through the interface of this specification.
@@ -96,16 +96,18 @@ Encapsulating Machine-specific behavior in the MDH rather than the instructions 
 
 The mechanism for saving and restoring CCs is the generation of Sealed Cryptographic Contexts:
 
-Definition: Sealed Cryptographic Context::
+Definition: _Sealed Cryptographic Context_::
 (((Cryptographic Context, sealed)))
 For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program. An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
 
 [horizontal]
 [[KLE-ISA-Principle-no-privilege-elevation,P16]]P16:: _No operation yields a key or widens a policy: secrets flow only downhill._
 
+<<KLE-ISA-Principle-no-privilege-elevation>> is the same principle behind NIST's key-management recommendations on the associations of a key with its usage and related information (NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §§6.2.1.4 and 6.2.1.6) and on the cryptographic strength, separation and context binding of derived keys (NIST SP 800-108 Rev. 1, Update 1 cite:[nist-SP-800-108-r1], "Security Considerations").
+
 Finally, as a consequence of Principle <<KLE-ISA-Principle-key-binding>>, KLE instructions are subdivided into classes which can only be used in various contexts. Instructions that use the secrets in CCs are bounded by usage policies, whereas those that, for instance, save and restore SCCs can be used anytime. Principles <<KLE-ISA-Principle-availability>> and <<KLE-ISA-Principle-persistence>> exist to prevent denial of service on the resources of the KLE implementation.
 
-Definition: Instruction Classes and Usage Control::
+Definition: _Instruction Classes and Usage Control_::
 +
 --
 (((Cryptographic Context, usage control)))
@@ -124,7 +126,7 @@ Usage operations are cryptographic operations and state changes.
 To prevent denial of service, management operations are less restricted than usage operations: _Usage Control_ policies restrict only usage operations.
 --
 
-Definition: Localities::
+Definition: _Localities_::
 (((Cryptographic Context, Locality)))
 KLE can bind a CC to *Localities*, which restrict where its exported SCCs can be imported, and thus where it can be restored and used: specific devices or device classes, hardware configurations, physical or virtual boot cycles, and process domains at various privilege modes.
 // The Localities act as _tweaks_ in the encryption and decryption of SCCs.
@@ -889,7 +891,7 @@ The rules governing these aspects are grouped in <<KLE-ISA-rules>>._
 
 When describing an instruction's behavior requires a rule, the instruction's description states that behavior explicitly, with a reference to the rule.
 
-[[KLE-no-operation]]Definition: No Operation::
+[[KLE-no-operation]]Definition: _No Operation_::
 (((no operation)))
 An instruction that *performs no operation* performs none of the operations of the KLE unit, such as cryptographic operations, but may still have the effects that its description or a rule states, such as writing zeros to its output, writing 0 to `klstart`, setting `klnamedlocker`, or raising an exception.
 
@@ -1726,6 +1728,21 @@ The auxiliary input is always a GPR: `kl.derive` has no form without one, and no
 _Description_::
 +
 --
+A `kl.derive` transfers data from a _source endpoint_ to a _destination endpoint_; the architecture decides which pairs of endpoints are admitted.
+
+[[KLE-source-endpoint,Source Endpoint]]Definition: _Source endpoint:_::
+A source endpoint is a field or a value of _State_ and _StateExtension_ that a Machine lists as a source in <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>.
+It exports the _exportable field_ that its Machine lists for that State, whose availability _StateExtension_, or an MDH field that the Machine names, such as `OutputType` of ECC (<<Zkl-ISA-machines.adoc#KLE-ECC-MachineUse>>), may determine; if the Machine lists none, it exports its `kl.exec` _output_, the data that the Form C `kl.exec` instructions permitted in that State would emit. A field configured by a SKID is never exportable (Rule <<KLE-GR-SKID-no-export>>).
+
+[[KLE-destination-endpoint,Destination Endpoint]]Definition: _Destination endpoint:_::
+A destination endpoint is a field or a value of _State_ and _StateExtension_ that a Machine lists as a destination in <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>.
+It imports data either in an _importable field_, or consumes it as an `kl.exec` _input_, the data that the Form B `kl.exec` instructions of that State would absorb. A key field, that is, a symmetric or private key, is a destination only in State _Ready_ or in a State that the Machine names for loading it, such as _Set_Key_ of HMAC (<<Zkl-ISA-machines.adoc#KLE-HMAC>>) or _Set_Scalar_ of ECC (<<Zkl-ISA-machines.adoc#KLE-ECC>>), and never when _KeyType_ is 1 (Rule <<KLE-GR-SKID-no-export>>). The destination fixes the minimum, upper limit and granularity of the transfer.
+
+[[KLE-admitted-pairs,Admitted Pairs]]Definition: _Admitted pairs:_::
+An _admitted pair_ consists of a source endpoint and of a destination endpoint; the MDH of each locker, not an operand of `kl.derive`, determines its endpoint.
+Rules <<KLE-GR-shared-secret>>, <<KLE-GR-exec-implies-unrestricted>> and <<KLE-GR-DRBG-implies-unrestricted>> admit three families of pairs, and state for each whether the transfer is restricted or unrestricted; a Machine may define further pairs, which narrow but never relax any policy and respect Rule <<KLE-GR-shared-secret>>. Any other pair is not admitted.
+An admitted pair fixes the semantics of the transfer and its updates to the two States and to `klstart` (Rules <<KLE-GR-checks>>–<<KLE-GR-derive-rule-both-fixed-size>>); `kl.derive` changes no other state of the hart (<<KLE-instruction-properties>>).
+
 `kl.derive` moves up to `length` bytes, `length` being the value of the auxiliary GPR, from an endpoint of the source locker to an endpoint of the destination locker without exposing them to software: the output of one Machine becomes an input of another, possibly a key or another Content field.
 `length` is that of the whole transfer, also when it resumes from byte `klstart` (Rule <<KLE-GR-derive-rule-both-fixed-size>>).
 
@@ -1733,9 +1750,6 @@ A transfer is _unrestricted_ if software could also obtain the data moved by iss
 
 Source and destination must be different lockers; otherwise an illegal-instruction exception is raised, also when a `KLNL` operand names the other locker.
 Usage Control applies to both lockers (Rule <<KLE-GR-outcome-valid-state>>), and both are checked before any state change or transfer, in the order of Rule <<KLE-GR-checks>>.
-
-The _State_ and _StateExtension_ of each locker, and for some Machines another field of its MDH, determine its endpoint: _State_ determines the field it exports or imports, and, for an exported field, _StateExtension_, or the field that the Machine names, such as `OutputType` of ECC (<<Zkl-ISA-machines.adoc#KLE-ECC-MachineUse>>), determines whether it is available; or _State_ determines the data that `kl.exec` would generate or absorb in that State (<<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>). No parameter of `kl.derive` selects the endpoint.
-The pair of endpoints must be one the architecture admits, and an admitted pair fixes the length constraints, the semantics of the transfer and its updates to the two States and to `klstart` (Derivation Rules, <<KLE-GR-checks>>–<<KLE-GR-derive-rule-both-fixed-size>>); `kl.derive` changes no other state of the hart (<<KLE-instruction-properties>>).
 --
 
 
@@ -1800,7 +1814,7 @@ For `klnamedlocker` = 32::
 With `Xl` = 0, `kl.input` and `kl.output` perform no operation and write 0 to `klstart`, before any check of `Zklio` or of the KLIOBUF (Rules <<KLE-GR-fall-through-load-store>> and <<KLE-GR-iobuf-configured>>).
 Otherwise, they raise an illegal-instruction exception if `Zklio` is not in effect; if it is, they transfer the bytes of the <<KLE-iobuf-transfer-window>> below.
 
-[[KLE-iobuf-transfer-window,KLIOBUF transfer window]]Definition: KLIOBUF transfer window::
+[[KLE-iobuf-transfer-window,KLIOBUF transfer window]]Definition: _KLIOBUF transfer window_::
 The KLIOBUF transfer window of `kl.input` and `kl.output` is the offsets _j_ from `klstart` to min(`Xl`, `kliobuftop`) − 1.
 For each such _j_, `kl.input` copies the byte at memory address ``Xs + %offset + ``_j_ to byte _j_ of the KLIOBUF, and `kl.output` copies byte _j_ of the KLIOBUF to that address.
 Bytes outside the window are accessed on neither side, so an `Xl` beyond `kliobuftop` transfers only the window.
@@ -1970,15 +1984,6 @@ A Machine may store additional state information in _AuxInfo_, _MachineUse_ or t
 The immediate of `kl.setst` (<<KLE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further state-change operations: the architected `kl_cfg_clear_ads` (64, <<KLE-instruction-clearads>>) and `kl_cfg_clearall` (65, <<KLE-instruction-clearall>>), and the values 66–127, available to Machines.
 
 <<KLE-states-graph>> shows the default state transitions.
-Its legend is:
-
-* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
-* Single-bordered rounded rectangles: the Valid States.
-* Double-bordered rounded rectangles: the Error States.
-* Continuous edges: transitions induced by usage instructions.
-* Dashed edges: transitions induced by reaching the expiration date.
-* Dotted edges: transitions induced by configuration operations.
-
 
 [[KLE-states-graph]]
 .Default State Transitions
@@ -2012,6 +2017,15 @@ image::statestikz-3.svg[]
 INSERT TIKZ HERE
 ....
 ////
+
+The legend of this graph is:
+
+* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
+* Single-bordered rounded rectangles: the Valid States.
+* Double-bordered rounded rectangles: the Error States.
+* Continuous edges: transitions induced by usage instructions.
+* Dashed edges: transitions induced by reaching the expiration date.
+* Dotted edges: transitions induced by configuration operations.
 
 //
 
@@ -2069,7 +2083,7 @@ It discards the implementation-defined state, in the ADS and in _MachineUse_ and
 // The return may nevertheless erase session-bound internal state, such as randomly generated nonces, as the Machine specifies.
 
 [[KLE-GR-success-failure,GR27]]GR27:: In States _Success_ and _Failure_, the only KLE instructions permitted are `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLE-GR-setst-in-success-failure>>), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.rename`, `kl.swap` and `kl.restrict*`.
-No other usage instruction is admitted (Rule <<KLE-GR-outcome-valid-state>>, Rule <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>> in <<Zkl-ISA-machines.adoc#KLE-Machines>>), `kl.derive` included (<<KLE-derivation-rules>>).
+No other usage instruction is admitted (Rule <<KLE-GR-outcome-valid-state>>, Rule <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>> in <<Zkl-ISA-machines.adoc#KLE-Machines>>), `kl.derive` included (cf. definitions of <<KLE-source-endpoint>> and <<KLE-destination-endpoint>>).
 
 [[KLE-GR-policy-narrowing-state,GR28]]GR28:: In a Valid State, _MachinePolicy_ enables the operation of the State and satisfies its entry conditions (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>): a `kl.restrictl` or `kl.restrictv` (<<KLE-instruction-restrict>>) that would break this transitions the locker to Error State _Invalid_ instead.
 To narrow a locker during an operation, software first returns it to _Ready_ (Rule <<KLE-GR-to-ready>>).
@@ -2208,7 +2222,7 @@ A locker can always be reconfigured: a management operation can be opened in eve
 A saved SCC can always be reloaded, so refusing a configuration transition would protect nothing and only deny a resource.
 
 [horizontal]
-[[KLE-GR-opening-locker-when,GR40]]GR40:: _When a locker can be opened for import or export:_
+[[KLE-GR-opening-locker-when,GR40]]GR40:: _When a locker can be opened:_
 Opening a locker for provisioning or import, and executing `kl.clear`, is allowed in every State, since these are <<KLE-destructive-config,destructive configuration instructions>>; opening it for export is allowed in every Complete or Configuration State.
 No Machine may set conditions under which a locker can be opened for export or import, or cleared.
 
@@ -2218,10 +2232,7 @@ No Machine may set conditions under which a locker can be opened for export or i
 
 [[KLE-GR-zkl-store-mv-allowed,GR43]]GR43:: `kl.store` and `kl.mvout` are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`, on the locker that `klnamedlocker` names (Rule <<KLE-GR-locker-less-transfers>>).
 
-[[KLE-GR-usage-locker-config-state,GR44]]GR44:: Using, cloning, or restricting a locker in a Configuration State is forbidden. Such attempts trap (Rule <<KLE-GR-outcome-config-state>>) and leave the _State_ unchanged, so that the management operation under way can complete: a handler must not set an Error State on such a locker (<<KLE-error-architecture>>).
-Cloning from the locker would put a second CC in transit, with one set of authentication registers (<<KLE-KLF>>); restricting it would change the MDH that the operation has validated or will authenticate.
-A locker in State `kl_cfg_exporting` may hold the only complete copy of its CC (<<KLE-CC-management>>), which an Error State would destroy (Rule <<KLE-SR-never-clear-exporting>>).
-<<KLE-instruction-clone>> covers such a locker as the destination of a `kl.clone`, or as both its source and destination.
+[[KLE-GR-usage-locker-config-state,GR44]]GR44:: On a locker in a Configuration State, a usage instruction, a `kl.clone` into another locker, and a `kl.restrict*` raise a KLE privilege-violation exception and leave the _State_ unchanged.
 
 [[KLE-GR-completion-state,GR45]]GR45:: The completing `kl.mgmt` (<<KLE-locker-management>>) leaves the locker:
 +
@@ -2234,23 +2245,7 @@ A locker in State `kl_cfg_exporting` may hold the only complete copy of its CC (
 [[KLE-derivation-rules]]
 === Derivation Rules
 
-Secrets flow only downhill: material derived from a secret inherits every constraint of the secret, and moves only into a locker whose policies, after narrowing, are at least as strict as the source's (a _restricted transfer_). A transfer is exempt from narrowing (an _unrestricted transfer_) exactly when the caller could obtain its result with admitted instructions anyway, so the exemption adds no attack surface; a shared secret is restricted even where `kl.exec` can emit it (Rule <<KLE-GR-shared-secret>>).
-That restricted transfers inherit every policy of their source is a KLE choice, motivated by the key-management principles of NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §§6.2.1.4 and 6.2.1.6 (associations with usage and related key information), and of NIST SP 800-108 Rev. 1, Update 1 cite:[nist-SP-800-108-r1], "Security Considerations" (cryptographic strength, key separation and context binding).
-Any further transfer that a Machine defines must respect these restrictions.
-
-A `kl.derive` transfers data from a _source endpoint_ to a _destination endpoint_; the architecture decides which pairs of endpoints are admitted.
-A locker in State _Success_ or _Failure_ is neither a source nor a destination endpoint: a completed operation has delivered its output, and a failed one has none.
-
-Source endpoint:::
-A locker that its Machine lists as a source in <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>, by its _State_ and _StateExtension_ or another field of its MDH. It exports the _exportable field_ that its Machine lists for that State or, if there is none, its `kl.exec` _output_, the data that the Form C `kl.exec` instructions permitted in that State would emit. A field configured by a SKID is never exportable (Rule <<KLE-GR-SKID-no-export>>).
-
-Destination endpoint:::
-A locker whose _State_ and _StateExtension_ its Machine lists as a destination. It imports either an _importable field_, or its `kl.exec` _input_, the data that the Form B `kl.exec` instructions of that State would absorb. A key field, that is, a symmetric or private key, is a destination only in State _Ready_ or in a State that the Machine names for loading it, such as _Set_Key_ of HMAC (<<Zkl-ISA-machines.adoc#KLE-HMAC>>) or _Set_Scalar_ of ECC (<<Zkl-ISA-machines.adoc#KLE-ECC>>), and never when _KeyType_ is 1 (Rule <<KLE-GR-SKID-no-export>>). The destination fixes the minimum, upper limit and granularity of the transfer.
-
-Admitted pairs:::
-Rules <<KLE-GR-shared-secret>>, <<KLE-GR-exec-implies-unrestricted>> and <<KLE-GR-DRBG-implies-unrestricted>> admit three families of pairs, and state for each whether the transfer is restricted or unrestricted; a Machine may define further pairs, which narrow but never relax any policy and respect Rule <<KLE-GR-shared-secret>>. Any other pair is not admitted.
-
-//
+The Rules of this section apply Principle <<KLE-ISA-Principle-no-privilege-elevation>> to `kl.derive`, with the transfer classes that <<KLE-instruction-derive>> defines.
 
 [horizontal]
 [[KLE-GR-checks,GR46]]GR46:: The checks of Rule <<KLE-GR-gate-order>> apply to both lockers, in the order it gives for `kl.derive`.
@@ -2760,7 +2755,7 @@ A PCCC (<<KLE-nested-mgmt>>) has one of two shapes:
 Since each export saves its own `ml`, software keeps an implicit stack of _State_ values, one per nesting level.
 --
 
-[[KLE-serialized-image,serialized image]]Definition: Serialized image::
+[[KLE-serialized-image,serialized image]]Definition: _Serialized image_::
 `content_size` is the length in bytes of the serialized `Content` of the locker, as a PI or an SCC according to the base type of its image (<<KLE-length-rule>>), as given by the locker's MDH.
 In a PI, an SCC or a PCCC, the `Content` starts at a _ContentOffset_ that depends on that MDH:
 // the same case distinction of `kl.size` (<<KLE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
@@ -3412,7 +3407,7 @@ KLE splits complex operations into small instructions, and relies on software to
 This is normal for a RISC architecture, however the discipline involved is all the more critical because KLE is a security feature.
 Software, privileged or not, that ignores these Rules may lose functionality and cause security breached: it may compromise the integrity of cryptographic state and, through the checks of the KLE architecture, its availability, or reveal a CC to peer- or lower-privileged software environments not meant to receive it.
 
-[[KLE-interposed-software,interposed software]]Definition: Interposed software::
+[[KLE-interposed-software,interposed software]]Definition: _Interposed software_::
 (((interposed software)))
 _Interposed software_ is code that runs while other software may have a halted instruction, or a management operation in progress, in the live KLE state of the hart.
 It includes every trap handler, for an exception or an interrupt, in any mode, even that of the interrupted code (for instance a U-mode signal handler), and any other code that shares that KLE state, such as another thread of the same process.
