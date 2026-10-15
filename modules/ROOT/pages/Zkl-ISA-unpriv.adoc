@@ -678,7 +678,7 @@ Lockers provisioned with a system-specific format can be exported only in the KL
 An implementation may support several system-specific formats and distinguishes them in an implementation-defined way.
 
 KLE deliberately defines no system-specific export.
-To prevent loading on other implementations, specific Localities may be set, or all information may be kept in the ADS, gated by `IMPQUAL`.
+To prevent loading on other implementations, specific Localities may be set.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2701,8 +2701,8 @@ In a PI, an SCC or a PCCC, the `Content` starts at a _ContentOffset_ that depend
 The _serialized image_ `S` of the locker is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16 or 48, respectively; while the locker is under management, the authentication registers (<<KLE-KLF>>) hold its leading fields.
 Its size is `image_size` = _ContentOffset_ + `content_size`, the value that `kl.size` reports minus 16.
 +
-`max_admissible` is the length of the longest image of the locker's base type that the implementation can hold for the Machine: `pi_content_size` for base type `pi`, and `content1_size` plus the largest supported `content2_size` for base type `scc` (<<KLE-instruction-size>>); with _ADSDropped_ = 1, `content2_size` counts as zero.
-Bytes of an SCC beyond `max_admissible` belong to a discarded ADS (<<KLE-SCC-import>>), and are not transferred.
+`max_admissible` is the length in bytes of the longest `Content` of the locker's base type that the implementation can hold for the Machine: `pi_content_size` for base type `pi`, and `content1_size` plus the largest supported `content2_size` for base type `scc` (<<KLE-instruction-size>>); with _ADSDropped_ = 1, `content2_size` counts as zero.
+Bytes of `Content` beyond `max_admissible` belong to a discarded ADS (<<KLE-SCC-import>>), and are not transferred.
 The transferred part of `S` ends at `image_end` = _ContentOffset_ + min(`content_size`, `max_admissible`).
 
 // ////////////////////////////////////////////////////////////////////
@@ -3402,6 +3402,7 @@ Software may instead clear a locker in State `kl_cfg_importing`, whose import th
 
 [[KLE-SR-no-interleaving,SR12]]SR12:: Software should complete or discard a management operation before it performs cryptographic operations or manages other lockers.
 Code that must interleave them, for instance in several threads of one process, needs coordination, such as lightweight threads with KLE context-switching support, or a mutex.
+Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance to transfer data through the KLIOBUF (<<KLE-instruction-mv>>), must have no other import or export open that a nested export has not saved.
 
 [[KLE-SR-no-unconditional-clear,SR13]]SR13:: System software must not clear a locker under management unconditionally at every context switch, since repeated restarts may prevent completion.
 
@@ -3507,14 +3508,15 @@ A handler that skips the trapping instruction applies its retirement effects to 
 
 . Save `klstart`.
 . Save `klnamedlocker`.
-. If the saved `klnamedlocker` is in [0..31], save that locker first, with Form C or D `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst` on `KLNL`:
+. Let the _owner_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
+If there is an owner, save it first, with Form C or D `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is under management.
 . With `Zklio`:
 .. save `kliobuflen` and `kliobuftop`;
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`, then write 0 to `kliobuflen`.
-. Save every other locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
+. Save every locker other than the owner that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-never-clear-exporting>>).
 
@@ -3528,12 +3530,12 @@ A handler that passes `ml` through the KLIOBUF for the other lockers configures 
 === Context Restore Order
 
 . Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-restore-own-lockers>>).
-. Restore the lockers other than the one that the saved `klnamedlocker` indexes, with `klnamedlocker` = 32 between imports.
+. Restore the lockers other than the owner (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen`;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop`.
-. If the saved `klnamedlocker` is in [0..31] and an image was saved for the locker it indexes, restore that locker last, with Form C or D `kl.mgmt` and no KLIOBUF transfer.
+. If an image was saved for the owner, restore it last, with Form C or D `kl.mgmt` and no KLIOBUF transfer.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` last.
 
