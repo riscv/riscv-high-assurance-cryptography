@@ -77,7 +77,7 @@ def decode(w):
     b = functools.partial(sl, w)
     op, f3, rd, rs1, rs2 = b(6, 0), b(14, 12), b(11, 7), b(19, 15), b(24, 20)
     def lk(r, reg, km=False):
-        if r and reg == 0 and km: return 'KLNL'                       # GR3, GR9: the named locker
+        if r and reg == 0 and km: return 'KLNL'                       # GR3, GR11: the named locker
         if r: raise Trap('illegal', 1)                              # GR3: any other r or R value is reserved
         return f'K{reg}'
     if op == 0x0F and f3 == 4:
@@ -92,7 +92,7 @@ def decode(w):
                 if rd in (5, 6, 7) and rs2 == 0 and (rd != 7 or rs1 == 0):
                     return ('kl.mvout', ('IV', 'V', 'VI')[rd - 5], ('X', 'V', 'KLIOBUF')[rd - 5] + str(rs1) * (rd != 7))
                 raise Trap('illegal', 1)
-            k = lk(r, rs1, km=True)                                 # GR9: KLNL admitted
+            k = lk(r, rs1, km=True)                                 # GR11: KLNL admitted
             if form == 0: return ('kl.exec', 'A', k)
             if form == 1 and rd == 0: return ('kl.exec', 'B', k)
             if form == 2 and rs2 == 0: return ('kl.exec', 'C', k)
@@ -127,7 +127,7 @@ def decode(w):
         if imm in (SUCCESS, FAILURE, 54, 55):                       # GR26; reserved Error States
             raise Trap('illegal', 1)
         return ({0: 'kl.clear', CLEAR_ADS: 'kl.clearads'}.get(imm, 'kl.setst'), 'ABCD'[F], k, imm)
-    # kl.load / kl.input and kl.store / kl.output share one encoding each; klnamedlocker selects the target (GR8)
+    # kl.load / kl.input and kl.store / kl.output share one encoding each; klnamedlocker selects the target (GR10)
     return {(0x03, 7): ('kl.load', f'X{rd}'), (0x23, 5): ('kl.store', f'X{rs2}')}.get((op, f3))
 
 def decoded(w):
@@ -225,7 +225,7 @@ def narrow_up(cur, req):
 def narrow_skid(up, kp):
     return ((up | kp) & 0b01111) | (up & kp & 0b10000)
 
-def custom_value(m):                                                # GR14
+def custom_value(m):                                                # GR9
     return m['Machine'] >= 3072 or m['Version'] == 3
 
 # ---------------------------------------------------------------- toy Machines
@@ -524,7 +524,7 @@ class Unit:
         if not ro_id and self.kls_off: raise Trap('illegal', 1)
         if not ro_id and not self.csk: raise self._exc('no_csk')
     def _idx(self, k, km=False):
-        if k == 'KLNL':                                               # GR9: the named locker; NONE if there is none
+        if k == 'KLNL':                                               # GR11: the named locker; NONE if there is none
             if not km: raise Trap('illegal', 1)
             return self.klnamedlocker
         return k
@@ -583,7 +583,7 @@ class Unit:
     def getmd(self, k):
         k = self._idx(k, km=True)
         self._pre()
-        if k == NONE: return md()                                   # GR10: KLNL at 32 reads as Unconfigured
+        if k == NONE: return md()                                   # GR12: KLNL at 32 reads as Unconfigured
         self._off(k)
         return dict(self.lockers[k].mdh)
     def getmdl(self, k):
@@ -635,7 +635,7 @@ class Unit:
     def _mgmt(self, k, imm, ml, form, vec_bits=128, via_km=False):
         self._pre()
         opening = imm in (PROV, IMP)
-        if k == NONE:                                               # GR10: KLNL at 32, an opening included
+        if k == NONE:                                               # GR12: KLNL at 32, an opening included
             self.klstart = 0                                        # GR37.c: common steps only
             return 'noop'
         self._off(k, exempt=opening)
@@ -793,9 +793,9 @@ class Unit:
             if form == 'A' and k == 0: return self.clearall()
             raise Trap('illegal', 1)
         if form == 'C' and (not self.zklv or self.vstart): raise Trap('illegal', 1)          # GR5: no vstart value
-        k = self._idx(k, km=True)                                   # GR9: KLNL admitted
+        k = self._idx(k, km=True)                                   # GR11: KLNL admitted
         self._pre()
-        if k == NONE: return 'noop'                                 # GR10: KLNL at 32, as on an Unconfigured locker
+        if k == NONE: return 'noop'                                 # GR12: KLNL at 32, as on an Unconfigured locker
         if imm == UNCONF: return self.clear(k)
         self._off(k)
         if imm in ERROR_STATES:
@@ -849,7 +849,7 @@ class Unit:
     # -- kl.exec  <<KLE-instruction-exec>>
     def exec_(self, k, form='A', vin=None, vout=None, sew=8, halt_after=None):
         if form != 'D' and (not self.zklv or sew not in KLV_SEWS): raise Trap('illegal', 1)
-        k = self._idx(k, km=True)                                   # GR9: KLNL admitted
+        k = self._idx(k, km=True)                                   # GR11: KLNL admitted
         self._pre()
         if k != NONE: self._off(k)
         nb = sew // 8
@@ -861,7 +861,7 @@ class Unit:
                 self.kliobuf[self.klstart:self.kliobuftop] = bytes(max(0, self.kliobuftop - self.klstart))
             self.klstart = self.vstart = 0
             return result
-        if k == NONE: return stop('noop')                           # GR10: KLNL at 32, as on an Unconfigured locker
+        if k == NONE: return stop('noop')                           # GR12: KLNL at 32, as on an Unconfigured locker
         cl = self.lockers[k]
         m = cl.mdh
         mach = MACHINES.get(m['Machine'])
@@ -904,9 +904,9 @@ class Unit:
     NAMED = {'l': ('MachinePolicy',), 'h': ('Locality', 'UsagePolicy', 'ExpirationDate')}   # never SCProtection
     def restrict(self, k, x, which='v', vec_bits=128):
         if which == 'v' and (not self.zklv or vec_bits < 128 or self.vstart): raise Trap('illegal', 1)   # GR4, GR5
-        k = self._idx(k, km=True)                                   # GR9: KLNL admitted
+        k = self._idx(k, km=True)                                   # GR11: KLNL admitted
         self._pre()
-        if k == NONE: return 'noop'                                 # GR10: KLNL at 32
+        if k == NONE: return 'noop'                                 # GR12: KLNL at 32
         self._off(k)
         cl = self.lockers[k]
         m, st = cl.mdh, cl.mdh['State']
@@ -933,7 +933,7 @@ class Unit:
                     new['Locality'] = new['Locality'] & ~(((1 << hi - lo + 1) - 1) << lo) | rv << lo
             pv.append(new['Locality'] != m['Locality'] and self.locality_problem(new['Locality']))
         if new['Locality'] != m['Locality']:
-            bad.append(custom_value(new) and sl(new['Locality'], 1, 0) < 2)          # GR14
+            bad.append(custom_value(new) and sl(new['Locality'], 1, 0) < 2)          # GR9
         if xs['UsagePolicy']:
             new['UsagePolicy'] = narrow_up(m['UsagePolicy'], xs['UsagePolicy'])
         req = xs['ExpirationDate']
@@ -954,12 +954,12 @@ class Unit:
     # -- kl.clone, kl.rename, kl.swap  <<KLE-instruction-clone>>
     def _pair(self, kd, ks):
         if kd == ks == 'KLNL': raise Trap('illegal', 1)               # GR3: R = 11 reserved
-        kd, ks = self._idx(kd, km=True), self._idx(ks, km=True)       # GR3, GR9: KLNL for one of the two lockers
+        kd, ks = self._idx(kd, km=True), self._idx(ks, km=True)       # GR3, GR11: KLNL for one of the two lockers
         self._pre()
         return kd, ks
     def clone(self, kd, ks):
         kd, ks = self._pair(kd, ks)
-        if kd == ks or NONE in (kd, ks): return 'noop'              # GR10: KLNL at 32
+        if kd == ks or NONE in (kd, ks): return 'noop'              # GR12: KLNL at 32
         self._off(ks)
         self.clear(kd)                                  # destructive: Kd is cleared first, even if a trap follows
         src = self.lockers[ks]
@@ -1000,7 +1000,7 @@ class Unit:
         kd, ks = self._idx(kd, km=True), self._idx(ks, km=True)
         if kd == ks and not km: raise Trap('illegal', 1)
         self._pre()
-        if NONE in (kd, ks): return 'noop'                          # GR10: KLNL at 32
+        if NONE in (kd, ks): return 'noop'                          # GR12: KLNL at 32
         if kd == ks: raise Trap('illegal', 2)                       # KLNL names the other locker
         self._off(ks)
         self._off(kd)
@@ -1072,7 +1072,7 @@ class Unit:
             setattr(self, ('siv', 'impqual', 'siv2')[j // 16], b2v(bytes(blk)))
         elif j < iend:
             cl.img[j - off:j - off + 16] = bytes(blk)
-    def _xfer_pre(self, writing, xl=0):                             # GR8; <<KLE-mv-locker-checks>>: GR40, GR41
+    def _xfer_pre(self, writing, xl=0):                             # GR10; <<KLE-mv-locker-checks>>: GR40, GR41
         k = self.klnamedlocker                                    # the locker is never an operand
         self._pre()
         self._off(k)
@@ -1097,7 +1097,7 @@ class Unit:
         self.klstart = self.restarts = 0
         return 'done'
     def _mem(self, mem, addr, xl=0, halt_after=None, restart=False, store=False):   # <<KLE-instruction-load>>, -store
-        if self.klnamedlocker == NONE:                            # GR8: no named locker: kl.input / kl.output
+        if self.klnamedlocker == NONE:                            # GR10: no named locker: kl.input / kl.output
             if xl == 0:                                             # GR37.a: a no-op, before Zklio and GR21
                 self._pre()
                 self.klstart = 0
@@ -1121,7 +1121,7 @@ class Unit:
         return self._serial(isize if store else iend, 16, lambda j: mem.fault(addr + j, 16, kind), act,
                             halt_after, restart)
     load, store = functools.partialmethod(_mem, store=False), functools.partialmethod(_mem, store=True)
-    input_, output = load, store                                    # kl.input, kl.output: aliases (GR8)
+    input_, output = load, store                                    # kl.input, kl.output: aliases (GR10)
     def _mv_pre(self, writing, vec_len=None, sew=8):
         if not self.zklmv or (vec_len is not None and not self.zklv): raise Trap('illegal', 1)
         if vec_len is not None and (sew not in KLV_SEWS or vec_len % 16 or self.vstart * sew // 8 % 16):
@@ -1558,7 +1558,7 @@ def t_validity():
        [fresh(zklexpire=False).mgmt(0, PROV, cipher(ExpirationDate=9)),
         fresh(hw_missing=(0, 1, 2)).mgmt(0, PROV, cipher(Locality=loc(hw1=1)))], ['invalid'] * 2)
     u = fresh()
-    eq('GR14 ChipFamScrt/ChipScrt valid, SiPScrt (even substituted) not; AuxInfo and MachineUse unchecked '
+    eq('GR9 ChipFamScrt/ChipScrt valid, SiPScrt (even substituted) not; AuxInfo and MachineUse unchecked '
        '(<<KLE-MachineUse>>); zero signature bits',
        [provision(u, 0, md(Machine=M_CUSTOM, MachinePolicy=1, Locality=loc(hw1=2))),
         provision(u, 1, md(Machine=M_CUSTOM, MachinePolicy=1, Locality=loc(hw1=3))),
@@ -1667,7 +1667,7 @@ def t_lengths():
     fb = fresh(slocality=0)
     ul, gr, hr = cipher(State=2, Locality=loc(sloc=1)), md(Machine=M_CUSTOM, MachinePolicy=1, State=READY), \
         cipher(State=2, res=1 << 116)
-    eq('Form C checks [127:64] (Locality, GR14); Form B does not (nor a reserved bit above 63)',
+    eq('Form C checks [127:64] (Locality, GR9); Form B does not (nor a reserved bit above 63)',
        [fb.size('C', m=ul), fb.size('B', lo=pack(ul)), fb.size('C', m=gr), fb.size('B', lo=pack(gr)),
         fb.size('B', lo=pack(hr))], [0, 64, 0, 32 + MACHINES[M_CUSTOM].content1_size(gr), 64])
     eq('Form B: unsupported Version -> 0, an Error-State MDH -> 16 as in Form C',
@@ -2240,7 +2240,7 @@ def t_transfers():
     for k, imm, ml in ((1, IMP, cipher(State=1)), (2, PROV, cipher())):
         v.csrs(klnamedlocker=32).mgmt(k, imm, ml)
     eq('kl.store in 56, kl.load in 57 illegal; klnamedlocker = 32: kl.store (Xl = 0), kl.mvout, kl.mvin are no-ops '
-       '(GR37); klnamedlocker alone selects the locker (GR8), in 58 as in 56',
+       '(GR37); klnamedlocker alone selects the locker (GR10), in 58 as in 56',
        r + [v.csrs(klnamedlocker=32).mv_in(1), v.csrs(klnamedlocker=1).mv_in(1),
             v.csrs(klnamedlocker=2).mv_in(1)],
        ['illegal/2', 'opened', 'illegal/2', 'opened', 'empty', 0, 'done', 'noop', 'moved', 'moved'])
@@ -2265,7 +2265,7 @@ def t_transfers():
         u.clear(0)                                                  # a handler clears instead of saving
         r = [u.klnamedlocker, u.mv_in(2), u.load(Memory(), BASE), u.mgmt(0, END), u.getst(0),
              provision(u, 0, cipher())]
-        eq(f'GR12, GR37: locker cleared after the check ({at}): the clear leaves klnamedlocker = 32, and the next kl.mvin, '
+        eq(f'GR14, GR37: locker cleared after the check ({at}): the clear leaves klnamedlocker = 32, and the next kl.mvin, '
            'kl.load (Xl = 0) and end are no-ops; restart provisions', r, [32, 'noop', 'empty', 'noop', UNCONF, READY])
     vo = bytearray(b'\xAA' * 16)
     eq('klnamedlocker = 32: kl.load/kl.store with Xl = 0 are no-ops before the Zklio and KLIOBUF checks, klstart 0; '
@@ -2831,7 +2831,7 @@ def build_context(u):
 
 def save_context(u):
     """<<KLE-save-order>>: the named locker first, without the KLIOBUF (Rule SR11), then the KLIOBUF and the other
-    lockers, with 32 written before the KLIOBUF save and before each export (GR11)."""
+    lockers, with 32 written before the KLIOBUF save and before each export (GR13)."""
     ctx = {c: u.csr_read(c) for c in ('klstart', 'klnamedlocker', 'kliobuflen', 'kliobuftop')}
     mc, ctx['images'] = ctx['klnamedlocker'], {}
     if mc < 32 and u.getmd(mc)['State'] != UNCONF:
@@ -2911,7 +2911,7 @@ def t_encodings():
     d = lambda hi5, **kw: decoded(enc_r(2, hi5, **kw))
     names = ('kl.clone', 'kl.rename', 'kl.swap', 'kl.derive')
     eq('funct2 2: T selects clone, rename, swap, derive; R = 01 names KLNL as the destination, R = 10 as the source, '
-       'with X0 in that field (GR3, GR9); R = 11, or R with another register, reserved; clone rs2 or bit 29 reserved',
+       'with X0 in that field (GR3, GR11); R = 11, or R with another register, reserved; clone rs2 or bit 29 reserved',
        ([d(T << 2, rs1=3, rd=4)[0] for T in range(4)], [d(T << 2 | 1, rs1=6) for T in range(4)],
         [d(T << 2 | 2, rd=7) for T in range(4)], [d(T << 2 | 3) for T in range(4)],
         [d(T << 2 | R, rs1=6, rd=7) for T in range(4) for R in (1, 2)],
@@ -2925,11 +2925,11 @@ def t_encodings():
              'kl.getmdl': enc_r(3, 2, rs1=6, rd=3), 'kl.setst': enc_setst(2, F=1, r=1, rs1=4, rd=6),
              'kl.mgmt': enc_setst(PROV, F=3, r=1, rs1=4, rd=6)}
     eq('r = 1 with a register other than X0 is reserved (GR3); kl.load/kl.input and kl.store/kl.output share one '
-       'encoding each with Xl (GR8); the former funct3 = 6 encodings are not KLE',
+       'encoding each with Xl (GR10); the former funct3 = 6 encodings are not KLE',
        ({n: decoded(w) for n, w in words.items()},
         [decoded(enc_ls(st, 6)) for st in (False, True)], [decoded(enc_ls(st, f3=6)) for st in (False, True)]),
        ({n: 'illegal/1' for n in words}, [('kl.load', 'X6'), ('kl.store', 'X6')], [None, None]))
-    eq('GR9: KLNL (r = 1, X0) on every instruction that names a locker: kl.clear, kl.setst (any #immed7, kl.clearads '
+    eq('GR11: KLNL (r = 1, X0) on every instruction that names a locker: kl.clear, kl.setst (any #immed7, kl.clearads '
        'included), kl.mgmt, kl.exec, kl.getmd*, kl.size/kl.avail Form A, kl.restrict*; kl.clearall is #immed7 65 with '
        'Kd = 0, r = 0, its other forms reserved',
        [decoded(enc_setst(0, r=1)), decoded(enc_setst(INVALID, r=1)), decoded(enc_setst(PROV, F=3, r=1, rs1=4)),
@@ -2951,7 +2951,7 @@ def t_encodings():
     v, t = rc(5).csrs(klnamedlocker=5, kliobuflen=32), rc(5).csrs(klnamedlocker=5, kliobuflen=32)
     for u in (v, t):
         u.kliobuf[:32] = bytes(range(32))
-    eq('GR9: kl.setst (usage immediates and kl.clearads included) and kl.exec (Form D, KLIOBUF) name KLNL: each '
+    eq('GR11: kl.setst (usage immediates and kl.clearads included) and kl.exec (Form D, KLIOBUF) name KLNL: each '
        'acts on the named locker exactly as when naming it, klnamedlocker unchanged',
        [outcome(v, op, 'KLNL', *a) for op, *a in steps], [outcome(t, op, 5, *a) for op, *a in steps])
     u = opened(k=5)
@@ -2972,14 +2972,14 @@ def t_encodings():
     x.setst(4, INVALID)
     r2 += [v.mgmt(6, PROV, cipher()), x.csrs(klnamedlocker=4).mgmt('KLNL', PROV, cipher()),
            y.mgmt('KLNL', EXP), y.klnamedlocker, listing_provision(start=cipher(SCProtection=1))]
-    eq('GR10: a KLNL opening (provisioning, import, export) with klnamedlocker = 32 is a no-op: common steps only '
+    eq('GR12: a KLNL opening (provisioning, import, export) with klnamedlocker = 32 is a no-op: common steps only '
        '(klstart 0), klnamedlocker stays 32; '
        'otherwise it opens the locker, a Valid one included, and klnamedlocker is not changed; an explicit '
        'opening, or a KLNL opening of an Error-State locker, is not affected; a KLNL export opening on an '
        'Unconfigured locker is a no-op that sets 32; the provisioning listing reprovisions a Valid locker', r2,
        ['noop'] * 3 + [0, NONE, 'opened', PROV, 5, 'opened', IMP, 5, 'opened', EXP, 5, 'opened', 'opened', 'noop',
                             NONE, (READY, 0)])
-    eq('GR9-GR10: KLNL is the named locker (State, size, completion); after completion KLNL still names it; '
+    eq('GR11-GR12: KLNL is the named locker (State, size, completion); after completion KLNL still names it; '
        'an explicit '
        'locker is never redirected; KLNL at 32 reads as Unconfigured: kl.setst, kl.exec and end are no-ops, an '
        'export or a provisioning opening too', r,
@@ -3022,7 +3022,7 @@ def t_encodings():
        ([56, 57, 58, 63], [46, 47, 54, 55, 59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
 
 def t_klnl_pairs():
-    section('KLNL in kl.clone, kl.rename, kl.swap and kl.derive  (GR3, GR9, GR10)')
+    section('KLNL in kl.clone, kl.rename, kl.swap and kl.derive  (GR3, GR11, GR12)')
     def run(f, *a):
         try:
             return f(*a)
@@ -3033,7 +3033,7 @@ def t_klnl_pairs():
         r1, r2 = run(op(u), *a), run(op(v), *b)
         return (r1, [u.getmd(i) for i in (2, 3, 5)], u.klnamedlocker) == (r2, [v.getmd(i) for i in (2, 3, 5)], v.klnamedlocker)
     eq('KLNL as the source or the destination acts as naming the locker it names, klnamedlocker following the CC; '
-       'kl.restricth on KLNL narrows the locker it names (GR9: every instruction that names a locker)',
+       'kl.restricth on KLNL narrows the locker it names (GR11: every instruction that names a locker)',
        [twin(lambda u: u.clone, (3, 'KLNL'), (3, 5)), twin(lambda u: u.clone, ('KLNL', 2), (5, 2)),
         twin(lambda u: u.rename, (3, 'KLNL'), (3, 5)), twin(lambda u: u.rename, ('KLNL', 2), (5, 2)),
         twin(lambda u: u.swap, (3, 'KLNL'), (3, 5)), twin(lambda u: u.swap, ('KLNL', 2), (5, 2)),
@@ -3159,10 +3159,10 @@ def t_controls():
             runs[faithful] = t.tag
     eq('after kl.rename the interrupted import resumes on the new index', runs[True], 'done')
     control('a rename leaving klnamedlocker behind strands the import: kl.load is a no-op on the vacated index '
-            '(GR8, GR37)', runs[False] == 'noop')
+            '(GR10, GR37)', runs[False] == 'noop')
     eq('a handler clear at any one boundary of the provisioning listing: Ready after at most one restart (GR37)',
        [listing_provision(lambda s, at=at: s == at) for at in range(6)], [(READY, 0)] + [(READY, 1)] * 5)
-    eq('GR10: a clear between select_locker and the KLNL opening: the opening is a no-op and the check reads 0; the '
+    eq('GR12: a clear between select_locker and the KLNL opening: the opening is a no-op and the check reads 0; the '
        'listing restarts and provisions locker p, or returns an error when p = 32',
        [listing_provision(race=True), listing_provision(race=True, p=32)], [(READY, 1), ('no_locker', 1)])
     eq('a handler Error State at any boundary after the opening: the next instruction is a no-op, the listing '

@@ -796,7 +796,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klnamedlocker follows (2 -> 5)",
    (u.klnamedlocker, klf[2].snapshot()), (5, snap5))
 u.klnamedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR8, GR41)",
+check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR10, GR41)",
       raises(u.store, klf[5]))
 u.klnamedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
