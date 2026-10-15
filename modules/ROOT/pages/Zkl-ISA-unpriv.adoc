@@ -907,7 +907,7 @@ When the lowest register of a pair or quartet is `X0`, no register of the group 
 [[KLE-GR-vector-MDH-operand,GR4]]GR4:: Where a KLE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.restrictv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
 <<KLE-extensions-overview-unpriv>> lists the vector extensions that provide such a register.
 The same requirement applies to an MDH taken from the KLIOBUF: `kliobuftop` {ge} 16.
-`kl.mgmt` reads its MDH only where its operation needs one, which depends on the locker's _State_ (Rule <<KLE-GR-fall-through-mgmt>>), so for `kl.mgmt` this check is a ground of the second group (<<KLE-illegal-instruction-grounds>>), made after the `klnamedlocker` check and before any change to the locker.
+`kl.mgmt` reads its MDH only where its operation needs one, which depends on the locker's _State_ (Rule <<KLE-GR-fall-through-mgmt>>), so for `kl.mgmt` this check is a ground of the second group (<<KLE-illegal-instruction-grounds>>), made after the `klnamedlocker` check and before any change to the locker; an opening `kl.mgmt` whose KLIOBUF cannot supply the MDH transitions the locker to _Invalid_ instead (<<KLE-instruction-mgmt>>).
 
 [[KLE-GR-vector-legality,GR5]]GR5:: A vector register (group) operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
 Every KLE instruction with a vector operand sets `vstart` to 0 when it retires, and on a precise halt sets it as Rules <<KLE-GR-klstart-updates>> and <<KLE-GR-klstart-vstart>> prescribe.
@@ -1319,7 +1319,7 @@ The other destructive configuration instructions are:
 * `kl.clone` and `kl.rename` (defined later in <<KLE-instruction-clone>>), which replace the CC of their destination locker with that of the source; and
 * `kl.swap` (same section), a special case that overwrites both its lockers, each with the CC of the other, so nothing is lost.
 
-A destructive configuration instruction destroys the CC it replaces right after the state-independent checks of Rule <<KLE-GR-management-check-order>> and, for `kl.mgmt`, the check of its MDH operand (Rule <<KLE-GR-vector-MDH-operand>>), whatever the outcome.
+A destructive configuration instruction destroys the CC it replaces right after the state-independent checks of Rule <<KLE-GR-management-check-order>> and, for `kl.mgmt`, the check of an MDH operand in `Vs` (Rule <<KLE-GR-vector-MDH-operand>>), whatever the outcome.
 
 Only the accesses that overwrite a locker without reading it are exempt from the KLE locker-Off exception (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>): not the source access of `kl.clone` and `kl.rename`, nor either access of `kl.swap`.
 
@@ -1366,9 +1366,11 @@ The Forms supply the MDH as follows:
 
 * Form A carries no auxiliary operand. Where the operation needs the MDH, Form A is a
   substitution (<<KLE-usage-input-output>>) and reads it from bytes [0, 15] of the KLIOBUF,
-  ignoring `klstart`. After the `klnamedlocker` check and before any change to the locker, Rule
-  <<KLE-GR-iobuf-configured>> applies and, with the KLIOBUF configured, `kliobuftop` < 16 raises
-  an illegal-instruction exception (Rule <<KLE-GR-vector-MDH-operand>>).
+  ignoring `klstart`. If `Zklio` is not implemented, the KLIOBUF is unconfigured, or `kliobuftop` < 16,
+  a provisioning- or import-opening `kl.mgmt` zeroizes the locker and transitions it to Error State
+  _Invalid_ (<<KLE-MVR-open>>), whereas a completing `kl.mgmt` raises an illegal-instruction exception
+  after the `klnamedlocker` check and before any change to the locker, the _State_ kept (Rule
+  <<KLE-GR-vector-MDH-operand>>).
 * Form C carries it in the lowest 128 bits of `Vs`. Where the operation needs it, `VL` {times} `SEW` < 128 raises an illegal-instruction exception at the same point as for Form A (Rule <<KLE-GR-vector-MDH-operand>>).
 * Form D carries it as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
   <<KLE-GR-multiple-GPRs>>).
@@ -1901,7 +1903,7 @@ The named locker serves three purposes:
 [horizontal]
 [[KLE-GR-locker-less-transfers,GR8]]GR8:: `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand: they act on the locker that `klnamedlocker` names, and with `klnamedlocker` = 32, `kl.load` and `kl.store` are `kl.input` and `kl.output`, which act on the KLIOBUF (<<KLE-instruction-load>>, <<KLE-instruction-store>>).
 
-[[KLE-GR-klnamedlocker-override,GR9]]GR9:: Every instruction that names a locker may name the named locker, written `KLNL`, instead.
+[[KLE-GR-klnamedlocker-override,GR9]]GR9:: Every instruction that can encode a locker number may also encode the named locker, written `KLNL`, instead.
 `KLNL` is encoded as Rule <<KLE-GR-r-R-fields>> specifies, and denotes the locker that `klnamedlocker` names when the instruction issues.
 
 [[KLE-GR-klnl-no-named-locker,GR10]]GR10:: When `klnamedlocker` = 32, an instruction naming `KLNL`, an opening `kl.mgmt` included, falls through as on an _Unconfigured_ locker (Rule <<KLE-GR-outcome-inert>>): `kl.getmd*` returns zeros, `kl.size` and `kl.avail` return 0, and `kl.exec`, `kl.setst`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, `kl.derive` and `kl.mgmt` perform no operation, `kl.exec` zeroing its output (cf. Rule <<KLE-GR-zero-unwritten-output>>).
@@ -2473,7 +2475,7 @@ The second group depends on the state of the KLE unit:
 
 . A transfer that the locker's _State_ does not admit, or a misaligned `klstart` (<<KLE-mv-locker-checks>>).
 . A `kl.mgmt` out of sequence (Rule <<KLE-GR-mgmt-klnamedlocker-check>>, <<KLE-locker-management>>).
-. An MDH operand of `kl.mgmt`, in `Vs` or in the KLIOBUF, shorter than 128 bits (Rule <<KLE-GR-vector-MDH-operand>>, <<KLE-instruction-mgmt>>).
+. An MDH operand of `kl.mgmt` in `Vs` shorter than 128 bits, or, for a completing `kl.mgmt`, a KLIOBUF that cannot supply the MDH (Rule <<KLE-GR-vector-MDH-operand>>, <<KLE-instruction-mgmt>>).
 . A Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW` / 8 (Rule <<KLE-GR-klstart-vstart>>).
 . A non-zero `Xl` where <<KLE-instruction-load>> or <<KLE-instruction-store>> forbids it.
 . `kl.input` or `kl.output` without `Zklio`, or an unconfigured KLIOBUF (Rule <<KLE-GR-iobuf-configured>>).
@@ -2521,7 +2523,7 @@ Memory exceptions:: The load/store address breakpoint, address-misaligned, and p
 These conditions set an Error State without an exception:
 
 * _Invalid_:
-** invalid Metadata or SKID (<<KLE-MVR-open>>, <<KLE-system-keys>>, <<KLE-instruction-restrict>>);
+** invalid Metadata or SKID (<<KLE-MVR-open>>, <<KLE-system-keys>>, <<KLE-instruction-restrict>>), or an opening `kl.mgmt` whose KLIOBUF cannot supply the MDH (<<KLE-instruction-mgmt>>);
 ** an instruction that the Machine, its State or _MachinePolicy_ does not admit, a wrong Form included (Rules <<KLE-GR-no-exec-in-ready>>, <<KLE-GR-form-mismatch>>, <<KLE-GR-success-failure>>, <<KLE-GR-checks>>, <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>> and <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
 ** a transfer window of a length that the Machine does not admit, or a `klstart` inside it that is not an interruption point (Rule <<KLE-GR-transfer-window-checks>>);
 ** a permanent RBG failure (Rule <<KLE-GR-rbg-failure>>);
@@ -2833,6 +2835,7 @@ NOTE: For an import, software first saves `ml` in its local state and supplies i
 The instruction:
 
 .. zeroizes the target locker, as a <<KLE-destructive-config,destructive configuration instruction>>; bytes of the <<KLE-serialized-image,serialized image>> `S`, authentication fields included, not yet written by the management operation read as zero through every architectural access (`kl.store`, `kl.mvout`, verbatim export);
+.. transitions the locker to Error State _Invalid_, and skips the steps below, if Form A supplies the MDH and `Zklio` is not implemented, the KLIOBUF is unconfigured or `kliobuftop` < 16 (<<KLE-instruction-mgmt>>);
 //.. It checks the validity of the fields of the provided MDH `ml`. If any are invalid according to <<KLE-Metadata-validity>>, it transitions the locker to Error State _Invalid_.
 
 // .. if `#immed7` = `kl_cfg_importing` and `ml`._State_ is an Error State, configures the locker immediately and
@@ -3323,7 +3326,7 @@ No `kl.mgmt` with `#immed7` = `kl_cfg_management_end` needs to follow: issuing o
 The KLE unit operates only with an active Context Sealing Key (CSK).
 Without one, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except accesses to the `mklcsk` and Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK, and reads of the identification CSRs `klmvendorid`, `klmarchid`, `klmimpid` and `klmaxiobuflen` (<<KLE-CSR-impl-ids>>, <<KLE-CSR-klmaxiobuflen>>), so that firmware can identify the KLE unit before a CSK exists.
 
-The CSK is established in exactly one of four ways:
+Each hart accesses its own CSK, which is established in exactly one of four ways:
 
 . M-mode programs it through the `mklcsk` CSR group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>).
 . A secure hardware block exclusive to M-mode, such as Caliptra cite:[caliptra], or a port to one, configures it through a dedicated interface based on public-key encryption.
@@ -3331,8 +3334,9 @@ The CSK is established in exactly one of four ways:
 . It is hardwired at manufacturing time, per die or shared across batches.
 . A secure RBG (<<KLE-Prerequisites>>) generates it at boot, accessible to no software.
 +
-All harts of a well-defined subsystem of an SoC share it, and cannot exchange SCCs with other subsystems; it survives the reset or fatal condition of a single hart, and is regenerated only at the power-on reset of the subsystem.
+All harts of a well-defined subsystem of an SoC hold the same value, so that processes can migrate among them, and cannot exchange SCCs with other subsystems; it survives the reset or fatal condition of a single hart, and is regenerated only at the power-on reset of the subsystem.
 
+Harts among which processes or CCs migrate must hold the same CSK value: under the first and second ways, M-mode establishes it on each of them.
 Only M-mode, under the first way, can read the CSK in clear.
 The third and fourth ways suit mainly specialized embedded deployments: a hardwired CSK cannot be reconfigured or revoked, and a boot-generated one cannot preserve SCCs across power loss.
 With a hardwired CSK, the KLE unit is available from reset; otherwise, only once the CSK is established.

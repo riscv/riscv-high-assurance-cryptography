@@ -646,6 +646,11 @@ class Unit:
             self.klnamedlocker = NONE if st == UNCONF else k
             return 'noop'
         if imm == END and st not in CONFIG: raise Trap('illegal', 2)
+        if opening and form == 'A' and (not self.zklio or not self.kliobuflen or self.kliobuftop < 16):
+            self._zeroize(k)                                        # no MDH from the KLIOBUF: Invalid, not a trap
+            self.lockers[k].mdh = md(State=INVALID)
+            self._after_mgmt(k)
+            return 'invalid'
         if opening or (imm == END and st != PROV):
             ml = self._mgmt_md(form, ml, vec_bits)
         if imm == END and st != PROV and not (
@@ -1970,13 +1975,12 @@ def t_mgmt():
         trap_of(u.mgmt, 1, PROV, form='A')], ['illegal/2', 0, 'illegal/2', 'illegal/2', 'illegal/2'])
     eq('writing 32 releases the check; the first provisioning stays open',
        (provision(u.csrs(klnamedlocker=32), 1, cipher()), u.getst(0)), (READY, PROV))
-    u = rc()
-    b0 = snapshot(u)
-    r1 = (trap_of(u.mgmt, 0, PROV, form='A'), snapshot(u) == b0)
-    b0 = snapshot(u.csrs(kliobuflen=64, kliobuftop=15))
-    eq('Form A opening: unconfigured KLIOBUF, kliobuftop < 16 raise before any change',
-       (r1, (trap_of(u.mgmt, 0, IMP, form='A'), snapshot(u) == b0)),
-       (('illegal/2', True), ('illegal/2', True)))
+    got = []
+    for u, imm in ((rc(), PROV), (rc().csrs(kliobuflen=64, kliobuftop=15), IMP), (rc(unit=fresh(zklio=False)), PROV)):
+        got.append((u.mgmt(0, imm, form='A'), u.getmd(0), u.lockers[0].alloc, u.klnamedlocker, u.klstart))
+    eq('Form A opening whose KLIOBUF cannot supply the MDH (unconfigured, kliobuftop < 16, no Zklio): the locker '
+       'is zeroized and Invalid, no exception, no capacity, klnamedlocker names it',
+       got, [('invalid', md(State=INVALID), 0, 0, 0)] * 3)
     w, w2 = opened(IMP, cipher(State=1), zklio=False), opened()
     eq('Form A completion needing ml without Zklio illegal/2; export opening, PI completion need no KLIOBUF',
        (trap_of(w.mgmt, 0, END, form='A'), w2.mgmt(0, END, form='A'), w2.mgmt(0, EXP, form='A')),
