@@ -166,10 +166,8 @@ class Ocb:
         want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B' if n else '',
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
                 DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C'}.get(st, '')
-        if want == 'A' and form in 'BC':               # <<KLE-usage-input-output>>: no mixing
-            raise IllegalInstruction(form)
         if not want or form not in (want, 'D'):
-            s._invalid('Form')                         # MR1, GR24, GR28
+            s._invalid('Form')                         # MR1, GR24, GR28; a wrong Form (GR80)
         if st == SET_AUX:
             s._set_N(INPUT)
             return 0
@@ -231,22 +229,22 @@ class Ocb:
         return new
 
 def derive(src, dst, length):
-    """kl.derive into `key` (Ready; GR49/GR51 source) or `N` (Set_Aux_Value) from a listed source's bytes,
-    or from an Ocb source, which emits its tag in Enc_Tag_Finalize (GR50)."""
+    """kl.derive into `key` (Ready; GR54/GR56 source) or `N` (Set_Aux_Value) from a listed source's bytes,
+    or from an Ocb source, which emits its tag in Enc_Tag_Finalize (GR55)."""
     if dst.state in ERROR_STATES:
         return
     if isinstance(src, Ocb):
         if src.state != TAG_FIN:
-            src._invalid('GR45 items 1-2')             # Form C emits only the tag
+            src._invalid('GR50 items 1-2')             # Form C emits only the tag
         ok = dst.state == SET_AUX or dst.state == READY and dst.skid is None and len(dst.key) <= min(length, 16)
-        src = v2b(src.exec('C'), src.tag_len // 8) if ok else b''     # GR50: emitted as by Form C
-    if dst.state == SET_AUX:                           # GR44: min(length, q) bytes, zero-filled
+        src = v2b(src.exec('C'), src.tag_len // 8) if ok else b''     # GR55: emitted as by Form C
+    if dst.state == SET_AUX:                           # GR49: min(length, q) bytes, zero-filled
         q = (dst.N_len + 7) // 8
         return dst.exec('B', b2v(src[:min(length, q)]), 8 * q)
     if dst.state != READY:
-        dst._invalid('GR45 items 1-2')                # no endpoint in this State
+        dst._invalid('GR50 items 1-2')                # no endpoint in this State
     if dst.skid is not None or length < len(dst.key) or len(src) < len(dst.key):
-        dst._invalid('GR48 (GR45 item 2), GR45 item 5')
+        dst._invalid('GR53 (GR50 item 2), GR50 item 5')
     dst.key = src[:len(dst.key)]
 
 def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False, lay=None,
@@ -505,8 +503,8 @@ check("kl.exec in Ready -> Invalid (GR24); Content cleared (GR30); then no opera
       True, (cl.state, cl.key, cl.hash_A, cl.exec('A', 1234), cl.state), (INVALID, None, 0, 0, INVALID))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
-    check(f"kl.exec Form {form} where Form A is expected -> illegal instruction, State kept",
-          raises(cl.exec, form, 0) and cl.state == (DECRYPT if dec else ENCRYPT))
+    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR80, MR1)",
+          inval(cl.exec, form, 0) is not None and cl.state == INVALID)
 check("Form D kl.exec, Form A kl.setst substitutions: all vectors, both directions",
       all(run(*v[1:5], v[6], subst=True) == v[5] and run(*v[1:3], v[3], v[5], v[6], dec=True, subst=True)
           == (v[4], True) for v in VEC))
@@ -612,19 +610,19 @@ for length in (16, 32):
     check(f"`key` in Ready, length {length}, then vector 0D", True,
           run(None, N13, S40, S40, 128, cl=cl, per_exec=0), CT13)
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (GR45 item 5)", lambda: Ocb(bytes(16)), secret, 8),
-        ("length 0 into the key (GR45 item 5)", lambda: Ocb(bytes(16)), secret, 0),
-        ("12-byte source into the 16-byte key (GR45 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
-        ("into a locker in Hash_Absorb (GR45 items 1-2)", at_absorb, secret, 16),
-        ("into a locker in Success (GR45 items 1-2)", at_end, secret, 16),
-        ("into the key of a KeyType 1 locker (GR48, GR45 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
+        ("length 8 into the 16-byte key, no zero-fill (GR50 item 5)", lambda: Ocb(bytes(16)), secret, 8),
+        ("length 0 into the key (GR50 item 5)", lambda: Ocb(bytes(16)), secret, 0),
+        ("12-byte source into the 16-byte key (GR50 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
+        ("into a locker in Hash_Absorb (GR50 items 1-2)", at_absorb, secret, 16),
+        ("into a locker in Success (GR50 items 1-2)", at_end, secret, 16),
+        ("into the key of a KeyType 1 locker (GR53, GR50 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n) and cl.key is None)
 for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
     cl = Ocb(K128)
     cl.setst(SET_AUX, 'B', 96)
     derive(N13 + bytes(4), cl, n)
-    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (GR44 zero-fill)", True,
+    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (GR49 zero-fill)", True,
           run(None, None, S40, S40, 128, cl=cl), run(K128, nv, S40, S40, 128))
 cl, src = Ocb(K128), bytes(0xA5 ^ i for i in range(16))
 cl.setst(SET_AUX, 'B', 61)
@@ -632,12 +630,12 @@ derive(src, cl, 16)
 check("`N` in Set_Aux_Value, N_len = 61, length 16: ceil(61/8) = 8 bytes, pad bits of byte 7 ignored", True,
       run(None, None, S40, S40, 128, cl=cl), run(K128, src[:7] + bytes([src[7] & 0xF8]), S40, S40, 128, n_len=61))
 src, dst = at_crypt(), Ocb(bytes(16))
-check("OCB in Encrypt as a kl.derive source (no Form C output, GR45 item 1) -> only the source Invalid",
+check("OCB in Encrypt as a kl.derive source (no Form C output, GR50 item 1) -> only the source Invalid",
       inval(derive, src, dst, 16) and (src.state, dst.state, dst.key) == (INVALID, READY, bytes(16)))
 src, dst = at_last(finish=True)[0], Ocb(bytes(16))
 tag = v2b(at_last(finish=True)[0].exec('C'), 16)
 derive(src, dst, 16)
-check("the tag in Enc_Tag_Finalize into a 128-bit `key` (GR50, unusual but admitted): the key is the tag, the source "
+check("the tag in Enc_Tag_Finalize into a 128-bit `key` (GR55, unusual but admitted): the key is the tag, the source "
       "then Success", True, (src.state, dst.state, dst.key), (SUCCESS, READY, tag))
 src, dst, ref = at_last(finish=True)[0], Ocb(K128), Ocb(K128)
 tag = v2b(at_last(finish=True)[0].exec('C'), 16)
@@ -645,7 +643,7 @@ for c in (dst, ref):
     c.setst(SET_AUX, 'B', 96)
 derive(src, dst, 16)
 ref.exec('B', b2v(tag[:12]), 96)
-check("the tag in Enc_Tag_Finalize into `N` of another OCB (GR50): its first 12 bytes, as a Form B kl.exec; the "
+check("the tag in Enc_Tag_Finalize into `N` of another OCB (GR55): its first 12 bytes, as a Form B kl.exec; the "
       "source then Success", True, (src.state, dst.state, dst.N, dst.N_len), (SUCCESS, ref.state, ref.N, ref.N_len))
 
 section("nonces of any bit length 6..120 (REF on bit strings)")

@@ -185,10 +185,8 @@ class Siv:
         if st in ERROR_STATES:
             return 0                                     # GR19.a, GR34
         want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
-        if want == 'A' and form in 'BC':
-            raise IllegalInstruction(form)               # vector and KLIOBUF operands mixed: a forbidden substitution
         if want != form:
-            return s._invalid()                          # GR24, GR28, MR1
+            return s._invalid()                          # GR24, GR28, MR1; a wrong Form (GR80)
         if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
             return s._invalid()                          # MR2: length first (<<KLE-GR-transfer-window-checks>>)
         if start is not None:
@@ -221,7 +219,7 @@ class Siv:
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
-                s.klstart, s.halted = 16 * j, True       # GR70
+                s.klstart, s.halted = 16 * j, True       # GR75
                 return out
             blk = sl(INPUT, 128 * j + 127, 128 * j)
             if st == HA:
@@ -229,7 +227,7 @@ class Siv:
                 continue
             if s.ctr == 2**32:
                 s._invalid()
-                return out                               # GR69
+                return out                               # GR74
             o = blk ^ s._ks()
             if st == DEC:
                 s._absorb(o)
@@ -241,10 +239,10 @@ class Siv:
         """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready."""
         if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
             return                                       # Gate Order Rule
-        if isinstance(src, Siv):                         # GR45 item 1: no State emits Form C output (the tag
+        if isinstance(src, Siv):                         # GR50 item 1: no State emits Form C output (the tag
             return src._invalid()                        # comes from a Form A kl.exec)
         if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # GR48 (GR45 item 2); GR45 items 2, 5
+            return s._invalid()                          # GR53 (GR50 item 2); GR50 items 2, 5
         s.key = src[:s.k // 8]
         s._derive()                                      # MR4
 
@@ -560,7 +558,7 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
 m, ref = at('enc'), at('enc')
 m.ctr = ref.ctr = M32 - 1
 want = ref.exec('A', b2v(bytes(range(32))), 256)
-check('GR69/GR34/GR30: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
+check('GR74/GR34/GR30: ctr = 2^32 at block 3 of 4: prefix kept, rest zeroed, MDH only',
       m.exec('A', b2v(bytes(range(32)) + bytes(32)), 512) == want and m.state == INV and m.export() == (0, 0))
 m = at('dec')
 m.ctr = 2**32
@@ -598,7 +596,7 @@ tag = m.exec('A', len_block(a10, p10), 128)
 o1 = m.exec('A', b2v(p10), 384, None, 1)
 h2 = (m.halted, m.klstart)
 o2 = m.exec('A', b2v(p10), 384, 16)
-check('GR70: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
+check('GR75: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
       (h1, h2) == ((True, 32), (True, 16)) and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) + v2b(tag, 16) == w10)
 
 section('general rules')
@@ -630,9 +628,8 @@ for name, where, ops, *kw in [
     outs = [getattr(m, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
 ms = [at(w) for w in ('etf', 'enc', 'dec')]
-check('a Form B kl.exec where Form A is expected (Enc_Tag_Finalize, Encrypt, Decrypt): illegal-instruction exception, '
-      'State kept', True, ([raises(x.exec, 'B', LB0, 128) for x in ms], [x.state for x in ms]),
-      ([True] * 3, [ETF, ENC, DEC]))
+check('a Form B kl.exec where Form A is native (Enc_Tag_Finalize, Encrypt, Decrypt): a wrong Form, _Invalid_ '
+      '(GR80, MR1)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
 m = at('enc')
 snap = dict(vars(m))
 check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',
@@ -660,7 +657,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR74): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR81): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -698,25 +695,25 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR45, GR48; MR4)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR50, GR53; MR4)')
 src = bytes.fromhex(VECTORS[11]['key'])
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (GR45 items 1-2)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is no endpoint, GR45 items 1-2)', at('sav'), 12),
-                   ('in Success (GR45 items 1-2)', at('success'), 16),
-                   ('into a key configured by a SKID (GR48, GR45 item 2)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (GR45 item 5)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (GR45 item 5)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (GR45 item 5)', Siv.provisioned(K), 0)):
+for name, m, n in (('in Hash_Absorb (GR50 items 1-2)', at('ha'), 16),
+                   ('in Set_Aux_Value (nonce is no endpoint, GR50 items 1-2)', at('sav'), 12),
+                   ('in Success (GR50 items 1-2)', at('success'), 16),
+                   ('into a key configured by a SKID (GR53, GR50 item 2)', Siv.provisioned(skid=SKID), 16),
+                   ('of 8 bytes into a 128-bit key (GR50 item 5)', Siv.provisioned(K), 8),
+                   ('of 16 bytes into a 256-bit key (GR50 item 5)', Siv.provisioned(K256), 16),
+                   ('of 0 bytes into a key (GR50 item 5)', Siv.provisioned(K), 0)):
     m.derive(src, n)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
 s_, m = at('etf'), Siv.provisioned(K)
 m.derive(s_, 16)
-check('Enc_Tag_Finalize as a kl.derive source (no Form C output: the tag comes from a Form A kl.exec; GR45 item 1) '
+check('Enc_Tag_Finalize as a kl.derive source (no Form C output: the tag comes from a Form A kl.exec; GR50 item 1) '
       '-> only the source Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
 section('negative controls, spec notes')

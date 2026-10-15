@@ -30,7 +30,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR75)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR82)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -77,7 +77,7 @@ class XexLocker:
     def invalidate(s):                            # GR30
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
-    def _install(s, field, key2, importing):     # one SKID, two keys (GR75); KeyType 2: both random
+    def _install(s, field, key2, importing):     # one SKID, two keys (GR82); KeyType 2: both random
         r = install_key(s.keytype, field, importing, s.sks, lambda: (s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)),
                         (field, key2))
         if r is None:
@@ -159,14 +159,14 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # GR45 items 2, 5; GR48
+        if s.state != READY or s.keytype == 1 or length < n or len(src) < n:   # GR50 items 2, 5; GR53
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         return True
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX defines no source endpoint (GR45 items 1-2)."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (GR50 items 1-2)."""
     if isinstance(src, XexLocker):
         return src.invalidate() or False
     return dst.derive_dest(src, length)
@@ -475,11 +475,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR45 item 5)", None, src, 16),
-                        ("length 0 (GR45 item 5)", None, src, 0),
-                        ("24-byte source (GR45 item 5)", None, src[:24], 32),
-                        ("destination in Encrypt (GR45 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (GR48, GR45 item 2)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR50 item 5)", None, src, 16),
+                        ("length 0 (GR50 item 5)", None, src, 0),
+                        ("24-byte source (GR50 item 5)", None, src[:24], 32),
+                        ("destination in Encrypt (GR50 item 2)", tw, src, 32),
+                        ("KeyType 1 destination (GR53, GR50 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
