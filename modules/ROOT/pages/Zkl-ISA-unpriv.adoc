@@ -1909,6 +1909,12 @@ The first set of Rules determines when certain classes of instructions may be is
 [[KLE-named-locker-rules]]
 === Rules Governing the Named Locker
 
+The named locker serves three purposes:
+
+. a single management routine using the named locker can manage any locker, with significant code savings;
+. a clear inserted into a management operation, for instance by a handler, is detectable: it sets `klnamedlocker` to 32 (Rule <<KLE-GR-klnamedlocker-updates>>);
+. the outcome stays readable: `klnamedlocker` keeps its value on completion, on entry into an Error State and on any other KLE exception, so a check through `KLNL` reads the outcome.
+
 [horizontal]
 [[KLE-GR-locker-less-transfers,GR8]]GR8:: `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` are the only instructions that have no locker operand.
 Hence, they can only act on the locker named by `klnamedlocker`.
@@ -1920,7 +1926,7 @@ Hence, they can only act on the locker named by `klnamedlocker`.
 
 [[KLE-GR-mgmt-klnamedlocker-check,GR11]]GR11:: A `kl.mgmt` that names a locker explicitly raises an illegal-instruction exception unless `klnamedlocker` holds the number of the same locker or 32.
 
-[[KLE-GR-klnamedlocker-updates,GR12]]GR12:: Besides writes by software, through the CSR or `kl.setnl` and `kl.setnli` (<<KLE-instruction-get-set-nl>>), only the following change `klnamedlocker`:
+[[KLE-GR-klnamedlocker-updates,GR12]]GR12:: Besides writes by software, through the CSR or `kl.setnl` and `kl.setnli` (<<KLE-instruction-get-set-nl>>), only the following instructions affect `klnamedlocker`:
 
 . a `kl.mgmt` that leaves its target locker in a Configuration State or a Complete State sets it to, or leaves it at, that locker's number;
 . a `kl.mgmt` that performs no operation on an _Unconfigured_ locker sets `klnamedlocker` to 32 (Rule <<KLE-GR-fall-through-mgmt>>);
@@ -1928,15 +1934,6 @@ Hence, they can only act on the locker named by `klnamedlocker`.
 . a `kl.clear` or `kl.clearall` that clears the named locker sets `klnamedlocker` to 32;
 . a `kl.clone` or `kl.rename` from another locker into the named locker sets `klnamedlocker` to 32, a `kl.clone` even if it then traps; and
 . a `kl.rename` or `kl.swap` that moves the CC of the named locker sets `klnamedlocker` to the receiving locker's number (<<KLE-instruction-clone>>).
-
-[NOTE]
-====
-The named locker serves three purposes:
-
-. a single management routine using the named locker can manage any locker, with significant code savings;
-. a clear inserted into a management operation, for instance by a handler, is detectable: it sets `klnamedlocker` to 32 (Rule <<KLE-GR-klnamedlocker-updates>>);
-. the outcome stays readable: `klnamedlocker` keeps its value on completion, on entry into an Error State and on any other KLE exception, so a check through `KLNL` reads the outcome until software writes 32 to it.
-====
 
 //
 
@@ -1946,16 +1943,7 @@ The named locker serves three purposes:
 Rule <<KLE-GR-no-extraction>> protects the Content of a CC: it leaves a locker only sealed. Rule <<KLE-GR-custom-locality>> protects the Metadata that gives the Content its meaning: Metadata that only one chip can interpret leaves only to that chip.
 
 [horizontal]
-[[KLE-GR-no-extraction,GR13]]GR13:: _No extraction:_ Once a key has been sealed in a CC, that is, once the provisioning that bound it has completed, no instruction returns the value of the key, or of any other secret field of the Content, in clear:
-+
---
-. `kl.getmd*` returns only the MDH;
-. `kl.exec` returns only the output of the Machine's operation, and no Machine may define an operation whose output is a key field;
-. `kl.derive` moves material only into another locker, under Rules <<KLE-GR-derive-rule-both-fixed-size>>–<<KLE-GR-DRBG-implies-unrestricted>>, where it is again subject to this Rule;
-. every image of the locker, an SCC or an SCC-shaped PCCC, carries the Content encrypted and authenticated under a CSK (<<KLE-SCC>>, <<KLE-data-formats>>); a locker in an Error State has no Content to carry (Rule <<KLE-GR-clear-locker-content-error-state>>).
-
-Before sealing, a PI-shaped PCCC returns the clear Content of a provisioning still in progress, which the exporting software supplied itself; Rule <<KLE-SR-clear-before-lower-mode>> keeps it from a less privileged mode.
---
+[[KLE-GR-no-extraction,GR13]]GR13:: _No extraction:_ Once a key has been sealed in a CC, that is, once the provisioning that bound it to metadata has completed, no instruction returns the value of the key, or of any other secret field of the Content, in clear.
 
 [[KLE-GR-custom-locality,GR14]]GR14:: A CC whose MDH carries a custom _Machine_ or a system-specific _Version_ must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid.
 The implementation-defined subfields of _MachineUse_ and _AuxInfo_ are exempt from this Rule: they are interpreted only with a matching, authenticated `IMPQUAL`, and zeroed otherwise (<<KLE-MachineUse>>).
@@ -1976,6 +1964,14 @@ A Machine may store additional state information in _AuxInfo_, _MachineUse_ or t
 The immediate of `kl.setst` (<<KLE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further state-change operations: the architected `kl_cfg_clear_ads` (64, <<KLE-instruction-clearads>>) and `kl_cfg_clearall` (65, <<KLE-instruction-clearall>>), and the values 66–127, available to Machines.
 
 <<KLE-states-graph>> shows the default state transitions.
+The legend of the graph is:
+
+* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
+* Single-bordered rounded rectangles: the Valid States.
+* Double-bordered rounded rectangles: the Error States.
+* Continuous edges: transitions induced by usage instructions.
+* Dashed edges: transitions induced by reaching the expiration date.
+* Dotted edges: transitions induced by configuration operations.
 
 [[KLE-states-graph]]
 .Default State Transitions
@@ -2009,15 +2005,6 @@ image::statestikz-3.svg[]
 INSERT TIKZ HERE
 ....
 ////
-
-The legend of this graph is:
-
-* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
-* Single-bordered rounded rectangles: the Valid States.
-* Double-bordered rounded rectangles: the Error States.
-* Continuous edges: transitions induced by usage instructions.
-* Dashed edges: transitions induced by reaching the expiration date.
-* Dotted edges: transitions induced by configuration operations.
 
 //
 
@@ -2219,6 +2206,7 @@ No Machine may set conditions under which a locker can be opened for export or i
 [[KLE-GR-zkl-load-mv-allowed,GR40]]GR40:: `kl.load` and `kl.mvin` are allowed in States `kl_cfg_provisioning`, `kl_cfg_importing` and `kl_cfg_ppi_importing`.
 
 [[KLE-GR-zkl-store-mv-allowed,GR41]]GR41:: `kl.store` and `kl.mvout` are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`.
+The image they transfer is an SCC or an SCC-shaped PCCC, which carry the Content encrypted and authenticated under a CSK, or a PI-shaped PCCC, which carries only the clear Content that software supplied (<<KLE-data-formats>>).
 
 [[KLE-GR-usage-locker-config-state,GR42]]GR42:: A `kl.clone` from a locker in a Configuration State into another locker, or a `kl.restrict*` on it, leaves the _State_ unchanged.
 
