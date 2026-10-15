@@ -216,8 +216,9 @@ class MLKEMLocker(Locker):
         elif self.check_keys and name == 'encapsk' and not K.check_encaps_input(v, self.ps):
             self.zero('decapsk')                   # data error (MR12): a public key; flags stay clear
             self.transition(FAILURE)
-        else:
-            self.set_flags(1, name == 'decapsk')
+        else:                                      # a decapsk sets HasEncapsk only if its ek passes 7.2
+            ek = name != 'decapsk' or not self.check_keys or K.check_encaps_input(self.encapsk, self.ps)
+            self.set_flags(int(ek), name == 'decapsk')
 
     def exec_C(self, n):                           # Form C in an emitting State (MR9)
         if self.gate():
@@ -502,6 +503,12 @@ def t_input_checks():
     before = cc.state
     cc.exec_B(bad[784:])
     check('key check runs at the completing kl.exec: _Failure_', before == EK_IN and cc.state == FAILURE)
+    d, kb = K.keygen_internal(bytes(32), bytes(32), ps)[1], 384 * MLKEMLocker(ps).k
+    dk = d[:kb] + bad + K.H(bad) + d[2 * kb + 64:]                # the hash matches the malformed ek
+    cc = load(MLKEMLocker(ps), DK_IN, dk)
+    check('decapsk whose embedded encapsk fails the modulus check: passes 7.3, HasDecapsk only; '
+          '_Encapsulate_ is not admitted', K.check_decaps_key(dk, ps) and not K.check_encaps_input(bad, ps)
+          and cc.state == DK_IN and cc.se & 3 == 2 and moved(cc, ENC).state == INVALID)
     ok = True
     for p in SIZES:
         cc, (e, d) = MLKEMLocker(p), K.keygen_internal(bytes(32), bytes(32), p)
