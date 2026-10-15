@@ -2351,7 +2351,7 @@ The state then transitions to _Hash_Absorb_Last_Block_.
     . while (`output_base` < `KLLEN`) do: // as long as there is room in the OUTPUT
      .. `amount <- min(KLLEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
-           ``{fournbsp}{fournbsp}<- state[tag_offset + block_base + amount - 1 : tag_offset + block_base]``
+           ``{fournbsp}{fournbsp}state[tag_offset + block_base + amount - 1 : tag_offset + block_base]``
      .. `output_base <- output_base + amount`
      .. `block_base <- block_base + amount`
      .. if (`block_base` = `t`) then:
@@ -2423,7 +2423,7 @@ Machine-Specific Functions::
 State Machine::
 
 * *States:* _Ready_, _Hash_Absorb_, _Hash_Output_, and _Success_. There is no
-  _Hash_Absorb_Last_Block_ state: the caller supplies the padded message as whole blocks.
+  _Hash_Absorb_Last_Block_ state: in stand-alone hashing, the caller supplies the padded message as whole blocks.
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Output_ -> _Success_.
@@ -2603,7 +2603,7 @@ Deriving `K0` from the original key is the responsibility of whoever provisions 
   ** `hash_fn_state`: this is the entire state of the underlying hash function.
      We assume it has fields corresponding to the following ones:
   *** `state`: `n` bits.
-  *** `last_blk_len`: int. Present only if the underlying hash function provides special treatment for a last block that goes beyond padding and appending the length. The latter is the caller's responsibility.
+  *** `last_blk_len`: int. Present only if the underlying hash function provides special treatment for a last block that goes beyond padding and appending the length, which HMAC performs itself.
   *** `input_base`: int. Offset within input/output to read from/write to.
   *** `block_base`: int. Length of absorbed data so far for the current block. Only if needed by the Machine.
   *** `cumul_len`: int. Cumulative length of data absorbed so far, tracked by every HMAC Machine (for the `K0` load in _Set_Key_, and for the padding of SHA-2 and SM3).
@@ -3569,7 +3569,7 @@ The *Provisioning Input* contains only the MDH.
     for the implementation-defined tracking of long-running operations described above; it is
     the field _P_ of Rule <<KLE-MGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
  ** `block_base`: integer. The transfer counter of the "set" and "output"
-    operations in bytes, cleared on every state change.
+    operations in bytes, cleared on every state change; an immediate assignment of _Set_Generator_ or _Set_Scalar_ then sets it to the field size.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
  ** `SecondPt` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
     For signature verification and for multiplication by an unknown point, `SecondPt`
@@ -3706,7 +3706,7 @@ configured private key.
  ** To transition to State _Set_Generator_, a Form A or B `kl.setst` is used.
 
  *** If no parameter is given, or the value of the GPR used in the Form B `kl.setst` is zero:
-  . The default generator of the curve is set.
+  . The default generator of the curve is set, and `block_base` {leftarrow} `ub`/8, so that the load is complete (Rule <<KLE-MGR-load-long-field>>).
   . A state change operation can be issued, including to states that require a set `Generator`.
 
  *** Otherwise:
@@ -3722,8 +3722,8 @@ configured private key.
       Rule <<KLE-MGR-load-long-field>>, and ``Has``_X_ is set once the field is complete, where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `kl.setst` with a non-zero value in the GPR.
-    In this case, `Scalar` receives a random private key (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> applies if the RBG fails), no further
-    `kl.exec` is issued, the State loads nothing (Rule <<KLE-MGR-load-long-field>> does not apply), and the generated value is never disclosed: it leaves
+    In this case, `Scalar` receives a random private key (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> applies if the RBG fails), and
+    `block_base` {leftarrow} `b`/8, so that the load is complete and no `kl.exec` follows (Rule <<KLE-MGR-load-long-field>>); the generated value is never disclosed: it leaves
     the locker only as part of an SCC.
     The key is, for the NIST and Brainpool curves, an integer _d_ with 1 {le} _d_ < `n`, generated as cite:[nist-fips-186-5] Appendix A.2.1 or A.2.2 prescribes;
     for SM2, one with 1 {le} _d_ < `n` - 1 (cite:[GMT-0003-1-2012]); and for the Montgomery and Edwards curves, a uniformly random `b`-bit string.
@@ -3784,7 +3784,8 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      *** _shared secret_: the part of `SecondPt` that the standard of the curve uses as the shared secret: the X coordinate, `b` bits,
          for the NIST and Brainpool curves (the shared secret `Z` of NIST SP 800-56A {sect}5.7.1.2);
          X {vvert} Y, `ub` bits, for SM2 (`x~2~ {vvert} y~2~` of cite:[GMT-0003-4-2012]);
-         and the whole `b`-bit string for the Edwards and Montgomery curves (`K` of cite:[RFC7748] {sect}6).
+         the whole `b`-bit string for the Montgomery curves (`K` of cite:[RFC7748] {sect}6);
+         and the encoded point for the Edwards curves (cite:[RFC8032] {sect}5.1.2, resp. {sect}5.2.2).
    . In State _Output_, the output is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLE-MGR-load-long-field>>.
      A shared secret is also a `kl.derive` source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), as many times as the caller requires
      until it leaves _Output_, each transferring the whole field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>); a point or a signature is a `kl.exec` output source instead (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>).
@@ -4262,7 +4263,7 @@ Data Structures::
  ** `encapsk`: 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes). It is not stored separately: it is the `ek` sub-field of `decapsk`,
  at byte offset 384·`k` (768 / 1152 / 1536). When only an encapsulation key is held, the other bytes of `decapsk` are zero.
  ** `HasEncapsk`, `HasDecapsk`: Booleans, recording whether `encapsk`, resp. a complete `decapsk`, holds a configured value.
- They are bits 0 and 1 of _StateExtension_, resp., and follow the pattern of Rule <<KLE-MGR-load-long-field>>, with the departures stated below. `HasDecapsk` implies `HasEncapsk`.
+ They are bits 0 and 1 of _StateExtension_, resp., and follow the pattern of Rule <<KLE-MGR-load-long-field>>, with the departures stated below.
  ** `HasCiphertext`: Boolean, bit 2 of _StateExtension_, recording whether `ciphertext` holds a complete value, loaded and
  checked, or computed by _Encapsulate_. It follows the pattern of Rule <<KLE-MGR-load-long-field>>.
  ** `HasSharedKey`: Boolean, bit 3 of _StateExtension_, recording whether `sharedkey` holds the key that _Encapsulate_ or
@@ -4270,7 +4271,7 @@ Data Structures::
  `sharedkey` is zeroed. A _State_ {vvert} _StateExtension_ with _sharedkey_Output_ and `HasSharedKey` clear is not supported
  by the Machine: an SCC that carries it is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
  ** `ciphertext`: 6144 / 8704 / 12544 bits (768 / 1088 / 1568 bytes).
- ** `sharedkey` 256 bits.
+ ** `sharedkey`: 256 bits.
 
 `encapsk`, `decapsk`, resp. `sharedkey` correspond to `ek`, `dk`, resp. `K` in cite:[nist-fips-203].
 
@@ -4321,7 +4322,7 @@ State Machine::
 Besides
 _Ready_ (1) and
 _Failure_ (47),
-ML-KEM Machines define the following States; they never enter _Success_:
+ML-KEM Machines define the following States:
  ** _GenerateKeyPair_ (2)
  ** _Encapsulate_ (3)
  ** _Decapsulate_ (4)
@@ -4339,6 +4340,7 @@ ML-KEM Machines define the following States; they never enter _Success_:
  ** Once its field has been completely emitted: _encapsk_Output_ -> _Ready_; _ciphertext_Output_ -> _sharedkey_Output_ if `HasSharedKey` is set, as after _Encapsulate_, and -> _Ready_ otherwise.
  ** Once its field has been completely loaded: _ciphertext_Input_ -> _Ready_; _encapsk_Input_ -> _Failure_ if the encapsulation key check fails.
  ** _sharedkey_Output_ is entered only by these transitions: a `kl.setst` naming it in any other State transitions the locker to Error State _Invalid_.
+ ** ML-KEM Machines never enter _Success_.
 
 * *Behavior:*
 +
@@ -4378,7 +4380,7 @@ When a load completes and passes its check (see below), `HasEncapsk` is set for 
      (Rule <<KLE-MGR-policy-gate>>).
  . A failure of the decapsulation key check is a *configuration* error: the locker transitions to Error State
      _Invalid_, and the CC must be reconfigured before it can be used.
- . A failure of the encapsulation key check is a *data* error (Rule <<KLE-MGR-config-data-error>>): `encapsk` is a public key, usually
+ . A failure of the encapsulation key check of a loaded `encapsk`, or of an imported one that `HasEncapsk` marks, is a *data* error (Rule <<KLE-MGR-config-data-error>>): `encapsk` is a public key, usually
      a peer's. The whole `decapsk` field is zeroed, `HasEncapsk` and `HasDecapsk` stay clear, and the state machine
      transitions to State _Failure_, which is a valid state.
  . Upon completion of State _ciphertext_Input_, the *ciphertext type check* of
@@ -4451,7 +4453,7 @@ starts loading a replacement, or the locker enters an Error State.
 | _Decapsulate_ completes | kept | kept | computed | kept | kept
 | Leaving _sharedkey_Output_ | kept | kept | zeroed | kept | kept
 | Leaving _encapsk_Input_ or _decapsk_Input_ incomplete | zeroed (Rule <<KLE-MGR-load-long-field>>) | kept | kept | cleared | kept
-| A failed encapsulation key check (_Failure_) | the whole `decapsk` zeroed | kept | kept | cleared | kept
+| A failed check of a loaded or imported `encapsk` (_Failure_) | the whole `decapsk` zeroed | kept | kept | cleared | kept
 | Leaving _ciphertext_Input_ incomplete | kept | zeroed | kept | kept | clear
 | Entering an Error State 3+^| cleared, with the rest of the Content (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-clear-locker-content-error-state>>) 2+^| kept in the MDH
 |===
@@ -4610,7 +4612,7 @@ Besides
 _Ready_ (1),
 _Success_ (46),
 _Failure_ (47),
-ML-DSA Machines define (States 5 and 7 are not used):
+ML-DSA Machines define:
  ** _GenerateKeyPair_ (2)
  ** _pubkey_Output_ (3)
  ** _pubkey_Input_ (4)
@@ -4641,8 +4643,7 @@ ML-DSA Machines define (States 5 and 7 are not used):
 On completion the state machine transitions to State _Ready_, which keeps the key pair. The caller then transitions to a State that uses it, for instance _pubkey_Output_ or _Sign_Generate_.
 
 ** Upon entering State _privkey_Input_, `HasPrivKey` is set to false, and `pubkey` is
-erased and `HasPubKey` set to false, so that
-the locker never holds a private key and an unrelated public key together.
+erased and `HasPubKey` set to false, since the incoming private key is in general unrelated to it.
 // CC must be a matching pair, and the incoming private key is in general unrelated to
 // the public key that was there before; keeping the latter would leave the CC able to
 // verify under one key while signing under another.
@@ -4666,7 +4667,7 @@ with the progress recorded in _MachineUse_, in bytes.
 On completion the state machine transitions to State _Ready_, which keeps the key pair.
 
 ** To transition to State _Sign_Generate_, a Form B `kl.setst` is
-   used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
+   used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4:
 
 . Entering the State requires `HasPrivKey` (Rule <<KLE-MGR-policy-gate>>).
 . If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected and `Hedged` is set.

@@ -153,8 +153,10 @@ class Locker:
         elif f in ('sec', 'hash', 'sig'):
             setattr(self, f, None)
             self.has.discard(f)
-        if f and (xs or f != 'gen') and not (xs and f == 'scalar'):
-            self.loading = f
+        if f:
+            self.loading = f                    # the field of the Set State
+            if (f, bool(xs)) in (('gen', False), ('scalar', True)):
+                self.bb = self.size[f]          # an immediate assignment completes the load (MR9)
         elif t == SET_CTX:
             if xs > 255:
                 raise Invalid('ctxlen > 255')
@@ -860,6 +862,14 @@ cr = Locker(P256)
 cr.setst(SET_SCALAR, xs=1, rand=V256['x'])
 check('Form B Set_Scalar: random private key set, no kl.exec expected',
       b2v(cr.scalar) == V256['x'] and invalid(cr.exec_in, D256))
+cr, gs = Locker(P256), []
+for t, xs in ((SET_GEN, 0), (SET_SCALAR, 1)):
+    cr.setst(t, xs=xs, rand=V256['x'])
+    gs.append(cr.bb == cr.size['gen' if t == SET_GEN else 'scalar'])
+    cr.setst(READY)
+check('default Generator and random Scalar complete their load at once (block_base = field size, MR9), '
+      'so leaving the Set State keeps them', gs == [True, True] and cr.gen == cr.default_gen
+      and b2v(cr.scalar) == V256['x'])
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.exec_run()
 check('Output: block_base-tracked, 24 + 24 + 16 bytes, then Success',
