@@ -8,22 +8,6 @@ endif::[]
 _This section is normative.
 It fixes the notation, the representation of values, the concatenation operator and the finite-field operations used throughout this specification. Every formula is read under these conventions, and no Machine description may introduce a different one._
 
-== Endianness
-
-While some cryptographic algorithms specify the endianness of their inputs or
-outputs, and each algorithm uses different conventions, KLE assumes that all
-SCCs are stored and loaded in little-endian format. This decision was made to
-ease the process of VM migration across harts with different endianness.
-
-[NOTE]
-====
-Note to software developers:
-
-When an SCC is migrated from a little-endian system to a big-endian system,
-software must ensure that, before/after performing a KLE memory operation, the
-SCC is in little-endian.
-====
-
 // ////////////////////////////////////////////////////////////////////
 
 == Values, Bits, and Byte Strings
@@ -58,6 +42,11 @@ For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value
 * `foreach(i from a to b) { {ellipsis} }`: executes its body once for each integer `i` from `a` to `b`, both included, in increasing order, and not at all if `a` > `b`; `foreach(i from a to b by s)` advances `i` in steps of `s`, with `s` > 0.
 * `x^k^`: `x` raised to the power `k`; `x**k` in listing blocks.
 * `local x : T`: an internal variable of the pseudocode, not part of any architectural state.
+* `function f(a : T, {ellipsis}) → T' = { {ellipsis} }`, `struct { {ellipsis} }`, `array [i..j] of T`, `return`: function definition, record, array type, and result.
+* `if (c) then:` and `foreach({ellipsis}) do:` followed by indented lines: the same constructs, with the indented lines as their body.
+* `(a, b)` after `return`, and `x, y {leftarrow} f({ellipsis})`: a result with several components and its component-wise assignment, in declaration order; a result type written `{x : T, {ellipsis}}` is such a tuple.
+* `bool`, `true`, `false`: the Boolean type and its values.
+* A variable first assigned in a listing without `local` is local to that function.
 
 [[KLE-Notation-functions]]
 == Functions
@@ -65,7 +54,7 @@ For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value
 * `0`, `1`: a single bit equal to zero, resp. one.
 * `bin(n,m)`: the `m`-bit binary representation of the unsigned integer `n`, zero-extended or truncated to its `m` least significant bits; bit `i` is the coefficient of 2^i^, so `bin(int(V), m)` = `V` for an `m`-bit `V`, and `int(bin(n, m))` = `n` mod 2^m^.
 * `bswap(m)`: the byte string `m` with its byte order reversed; for a value `V` of `8n` bits, the value whose byte `i` is byte `n-1-i` of `V`.
-  An optional second argument gives the number of bytes whose order is reversed: `bswap(m, n)` = `bswap(m[8n-1:0])`.
+  An optional second argument `n` takes the `n` least significant bytes of `m` and reverses them, discarding the others: `bswap(m, n)` = `bswap(m[8n-1:0])`, an `8n`-bit value.
 * `ceil(x)`, also `{lceil}x{rceil}`: the smallest integer not smaller than `x`; `floor(x)`, also `{lfloor}x{rfloor}`: the largest integer not larger than `x`.
 * `double(S)`: doubling in the OCB3 field (<<Zkl-ISA-machines.adoc#KLE-OCB-mode>>).
 * `Galoismul(a, b)`: multiplication of `a` and `b` in the GHASH field (<<Zkl-ISA-machines.adoc#KLE-GCM-mode>>).
@@ -94,7 +83,7 @@ A formula taken from a standard is transcribed in two steps, in this order:
 Two examples:
 
 * cite:[RFC8452] {sect}4 builds each key-derivation input as the four-byte little-endian counter followed by the twelve-byte nonce, `LE32(i) {vvert} N`: step 1 gives `N @ LE32(i)`, and step 2 `N @ bin(i,32)`.
-* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV, `J0` = `IV {vvert} 0^31^ {vvert} 1`, whose trailing four bytes are the big-endian encoding of the integer 1: step 1 reverses `1 {vvert} 0^31^` onto the left of `IV`, and step 2 encodes the counter, giving `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
+* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV, `J0` = `IV {vvert} 0^31^ {vvert} 1`, whose trailing four bytes are the big-endian encoding of the integer 1: step 1 gives `1 @ 0^31^ @ IV`, and step 2 encodes the counter, giving `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
   The left-to-right transcription `IV @ zeros(31) @ 1` would place the IV in `J0[127:32]` and the counter in `J0[31:0]`, the reverse of what cite:[nist-SP-800-38D] requires.
 
 // ////////////////////////////////////////////////////////////////////

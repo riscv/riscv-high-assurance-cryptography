@@ -10,7 +10,7 @@ endif::[]
 _This chapter is informative and non-normative._
 
 This chapter states sixteen Design Principles, and nine Design Decisions taken on their basis, from which all the General Rules of <<Zkl-ISA-unpriv.adoc#KLE-unpriv>> follow.
-The Decisions could be revisited without changing the Principles, and where a summary below and a Rule differ, the Rule prevails.
+The Decisions could be revisited without changing the Principles, and where a summary below and a Rule differ, the Rule prevails; the Principle statements of <<Zkl-ISA-unpriv.adoc#KLE-concepts>> are authoritative, and the titles below paraphrase them.
 No Principle is stated in terms of an individual instruction: each rule should read as one Principle applied to one instruction or State class.
 The SR rules are cited where a Principle or a Decision motivates them, and are not covered.
 
@@ -72,7 +72,7 @@ The binding is set at provisioning and only narrowed afterwards (<<KLE-Principle
 --
 
 [[KLE-Principle-prefix-complete,P3]]
-P3: _Every operation is atomic or prefix-complete_::
+P3: _Every cryptographic operation is atomic, and an instruction that performs several reports prefix-complete progress_::
 +
 --
 An operation that is interrupted, or fails, leaves either nothing of a partial execution or a complete prefix of it: it takes effect entirely or not at all (_atomic_), or for an initial part of its input, recording where it stopped (_prefix-complete_).
@@ -146,7 +146,7 @@ From it follow:
 . The "check once" property of <<KLE-Decision-fall-through>>: a routine checks the _State_ only after its last step.
 . One instruction clears every locker and the KLIOBUF.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-r-R-fields>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, the NOTE under <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-r-R-fields>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnl-no-named-locker>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>, the NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mgmt>> and the NOTE after <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>.
 --
 
 [[KLE-Principle-encoding-pressure,P9]]
@@ -271,7 +271,7 @@ A `kl.setst` that replaces an Error State overwrites the only information the lo
 +
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-narrowing>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-DRBG-implies-unrestricted>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>; <<Zkl-ISA-unpriv.adoc#KLE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (zeroizing step) and <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>.
 
-. _Nothing stale is returned._ An instruction that performs no operation, or stops in an Error State, zeroes the unwritten part of its output window in registers or the KLIOBUF, and an inert locker reads as zeros: neither an input nor an earlier output there can pass for a result.
+. _Nothing stale is returned._ An instruction that performs no operation, or stops in an Error State, zeroes the unwritten part of its output window in registers or the KLIOBUF, and an inert locker reads as zeros, or as its MDH in an Error State: neither an input nor an earlier output there can pass for a result.
 A `kl.store` that falls through writes no memory, so software relies on an exported image only after checking the _State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-export-final-check>>).
 +
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-mv>>; outside the GR series, Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-export-final-check>>.
@@ -310,6 +310,7 @@ D3: _The error architecture_::
 --
 Algorithms in use at the same time fail independently (<<KLE-Principle-multiple-algorithms>>), an error must travel with its CC through context switches, exports and imports (<<KLE-Principle-persistence>>), and one check per locker must suffice (<<KLE-Principle-small-instructions-code>>).
 Each CC therefore records its own errors, with no global error register (<<KLE-Decision-error-states>>), and only what falling through would misreport traps (<<KLE-Decision-exceptions>>); either way, a handler or the locker's owner acts on the cause without decoding the instruction or reconstructing the sequence.
+
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>.
 
 [[KLE-Decision-error-states,D3(a)]]
@@ -350,7 +351,7 @@ The locker then stays inert (<<KLE-Decision-fall-through>>), with no history kep
 [[KLE-Decision-fall-through,D4(b)]]
 D4(b): _Inert lockers let instructions fall through_:::
 A locker becomes inert asynchronously, when a handler clears or invalidates it (<<KLE-Principle-prefix-complete>>): the instructions that follow must neither trap nor act on something else, and the original error must stay readable (<<KLE-Decision-error-states>>), so that one check at the end of a sequence suffices (<<KLE-Principle-small-instructions-code>>).
-Every instruction other than a destructive one therefore falls through with the _State_ unchanged: a transfer leaves `klstart` as an empty window would, and an inspection reads what is there, zeros or the MDH.
+Every instruction other than a destructive one therefore falls through with the _State_ unchanged: a transfer leaves `klstart` as an empty window would, and an inspection reads what is there: zeros, the MDH, or a size or availability derived from it.
 A destructive instruction is issued to destroy the error, and `kl.swap` keeps it readable in the other locker; a `kl.setst` that replaces an Error State counts as destructive, since it overwrites essentially all the locker holds.
 As `klstart` does not advance on an inert locker, a transfer sequence is bounded by the caller's own count (Rule <<Zkl-ISA-unpriv.adoc#KLE-SR-no-klstart-loop>>).
 A locker in a Configuration State falls under <<KLE-Principle-prefix-complete>> and <<KLE-Decision-exceptions>> instead.

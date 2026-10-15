@@ -2291,6 +2291,11 @@ def t_transfers():
        'kliobuftop % 16 illegal/2; klnamedlocker 32 a no-op; no Zklio illegal/1; unconfigured KLIOBUF illegal/2', r,
        ['moved', 32, True, 'illegal/2', 'noop', 'illegal/1', 'illegal/2', 'completed', 'opened', 'moved',
         True, 32])
+    u.kliobuf[:48] = b'\xEE' * 48
+    r = [u.csrs(kliobuftop=48).mv_iobuf(out=True), bytes(u.kliobuf[:16]) == bytes(u._s_get(u.klnamedlocker, 32)), bytes(u.kliobuf[16:48]),
+         u.klstart]
+    eq('KLIOBUF kl.mvout across image_end: the block before it moves, the later ones are zeroed, klstart stops '
+       'at image_end (M2 of review52)', r, ['moved', True, bytes(32), 48])
     w, mem = opened(m=xof()), Memory(v2b(0xEF, 16) + v2b(0xCD, 16))
     w.mv_in(0xAB)
     eq('kl.mvin and kl.load combined: each byte holds the value last written',
