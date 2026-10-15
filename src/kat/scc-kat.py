@@ -162,7 +162,7 @@ class Unit:
     def _set_managed(self, cl):                # common step 2
         self.klnamedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR42, GR43
+    def _check_transfer(self, cl):             # GR40, GR41
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klnamedlocker:
             raise IllegalInstruction
 
@@ -250,7 +250,7 @@ class Unit:
         if cl.state == UNCONF or cl.state in ERROR_STATES:
             return                             # GR37.a: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
-            raise IllegalInstruction           # GR42
+            raise IllegalInstruction           # GR40
         self._check_transfer(cl)
         off, c1 = content_offset(cl.mdh), self.content1_size(cl.mdh)
         end = off + min(c1 + content2_size(cl.mdh), self.max_admissible(cl.mdh))   # image_end
@@ -286,7 +286,7 @@ class Unit:
         if cl.state == UNCONF:
             return b''                         # GR37.a: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
-            raise IllegalInstruction           # GR43
+            raise IllegalInstruction           # GR41
         self._check_transfer(cl)
         S = v2b(self.reg_SIV, 16) + (v2b(self.reg_IMPQUAL, 16) + v2b(self.reg_SIV2, 16)
                                      if content_offset(cl.mdh) == 48 else b'')
@@ -796,7 +796,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klnamedlocker follows (2 -> 5)",
    (u.klnamedlocker, klf[2].snapshot()), (5, snap5))
 u.klnamedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR43)",
+check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR8, GR41)",
       raises(u.store, klf[5]))
 u.klnamedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
@@ -807,7 +807,7 @@ u.mgmt_open_import(klf[7], mdh_i)
 klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
 snap1 = klf[1].snapshot()
 kl_rename(u, klf, 1, 7)
-eq("kl.rename onto the named locker discards its import (GR18); klnamedlocker -> 32",
+eq("kl.rename onto the named locker discards its import (GR16); klnamedlocker -> 32",
    (u.klnamedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
 u.mgmt_open_import(klf[4], mdh_i)
 u.load(klf[4], Mem(tampered(scc_i, 8 * (off1 + 6))))
@@ -819,7 +819,7 @@ section("Error States (<<KLE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))
 cl_fail, res = import_image(unit, Mem(bad_c1))
 failed = err_mdh(mdh_i, AUTH)
-eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR29); "
+eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR30); "
    "also after a dropped ADS", (res, cl_fail.snapshot(), import_image(small, Mem(bad_c1))[0].snapshot()),
    (AUTH_F, (failed, (), None), (failed, (), None)))
 before = (unit.reg_SIV, unit.reg_IMPQUAL, unit.reg_SIV2)

@@ -157,7 +157,7 @@ class Blake2:
         elif self.st == LAST:
             limit, final = self.last_blk_len, True
         else:
-            return self.invalid()                         # GR23 in _Ready_, MR1 elsewhere
+            return self.invalid()                         # GR24 in _Ready_, MR1 elsewhere
         bits, ib = 8 * len(data), 0
         while ib < bits:
             amount = min(bits - ib, limit - self.block_base)

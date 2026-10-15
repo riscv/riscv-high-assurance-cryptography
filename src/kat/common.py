@@ -247,6 +247,11 @@ KL_STATE_SUCCESS, KL_STATE_FAILURE = 46, 47
 (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_OUT_OF_MEMORY, KL_STATE_MGMT_AUTH,
  KL_STATE_PRIV_VIOLATION, KL_STATE_EXPIRED) = range(48, 54)
 ERROR_STATES = range(48, 56)
+
+def inert(state) -> bool:
+    """GR19.a: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
+    performs no operation and raises no exception, its unwritten output zeroed (GR34)."""
+    return state == KL_STATE_UNCONFIGURED or state in ERROR_STATES
 (KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
  KL_CFG_PPI_IMPORTING) = range(56, 61)
 KL_CFG_MANAGEMENT_END = 63
