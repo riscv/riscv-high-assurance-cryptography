@@ -100,7 +100,7 @@ The KLE fatal-error exception precedes every exception that depends on the state
 | TBD  | *KLE fatal-error*             | Fatal system failure in the KLE unit.
 |  2   | Illegal-instruction            | The other KLE grounds decided without accessing the state of the KLE unit, such as a reserved encoding, listed first in <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>.
 | TBD  | *KLE missing-CSK*             | Use of the KLE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>, <<KLE-CSR-mklcsk>>). Only M-mode can establish a CSK.
-| TBD  | *KLE locker-Off*              | Any access, as defined in <<KLE-CSR-llockerstatus>>, to a locker whose `*llockerstatus` field is _Off_; M-mode forwards it to the mode that owns the _Off_ field.  This exception enables on-demand (lazy) locker loading and trap-and-emulate.
+| TBD  | *KLE locker-Off*              | Any access, as defined in <<KLE-CSR-llockerstatus>>, to a locker whose `*llockerstatus` field is _Off_; it reaches the mode that owns the _Off_ field by delegation or forwarding.  This exception enables on-demand (lazy) locker loading and trap-and-emulate.
 |  2   | Illegal-instruction            | Raised if the KLE grounds for an illegal-instruction exception that require the state of the KLE unit are fulfilled, listed second in <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>.
 For a usage instruction, an unconfigured KLIOBUF is evaluated in the order of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>>, after the KLE privilege-violation exception for a locker in a Configuration State.
 // For a usage instruction, the _Unconfigured_, Error-State and Configuration-State conditions of <<Zkl-ISA-unpriv.adoc#KLE-GR-gate-order>> precede the grounds that depend on the operation of the State, namely a forbidden KLIOBUF substitution: on an _Unconfigured_ or Error-State locker the instruction performs no operation, and in a Configuration State it raises a KLE privilege-violation exception.
@@ -117,7 +117,7 @@ For a usage instruction, an unconfigured KLIOBUF is evaluated in the order of Ru
 `kl.load` and `kl.input` raise the load causes (4, 13, 21, 5), and `kl.store` and `kl.output` the store/AMO causes (6, 15, 23, 7).
 The relative order of the standard exceptions is that of the Privileged Specification, reproduced for reference only; the load/store address breakpoint and the load/store faults are evaluated per component access, because the component addresses of a KLE memory instruction are determined from the state of the KLE unit.
 
-The `medeleg` bits of all KLE exception causes are read-only zero: KLE exceptions are never delegated below M-mode.
+NOTE: The `medeleg` and `hedeleg` bits of all KLE exceptions follow the standard ISA definition and therefore may be read-only zero or writable, but never read-only one.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -310,12 +310,14 @@ A direct write to `vsllockerstatus`(__i__) changes neither `mllockerstatus`(__i_
 
 The `*llockerstatus` fields that an instruction sets to _Dirty_ are those in effect, that is those owned by the privilege modes above the one in which it executes; an instruction never writes the field owned by its own mode.
 
-The KLE locker-Off exception is a single exception cause and is not delegable below M-mode, whichever `*llockerstatus` field is _Off_: when raising it, the hardware does not know which mode holds the authoritative copy of the locker. The M-mode handler examines the fields in effect in the order `mllockerstatus`, `sllockerstatus`, `vsllockerstatus`. If `mllockerstatus`(__i__) is _Off_, it resolves the condition itself, and otherwise forwards the exception to the most privileged mode whose field is _Off_, which owns that field and can write it.
+The KLE locker-Off exception is a single exception cause, whichever `*llockerstatus` field is _Off_, and `medeleg` and `hedeleg` delegate it as any other cause.
+A mode that set any own field to _Off_ keeps the cause undelegated, in `medeleg` if M-mode or `hedeleg` if HS-mode.
+The handler that takes the exception examines the fields in effect, in the order `mllockerstatus`, `sllockerstatus`, `vsllockerstatus`, starting from the field owned by its own mode. If its own field (__i__) is _Off_, it resolves the condition itself, and otherwise forwards the exception to the most privileged mode whose field is _Off_, which owns that field and can write it.
 A handler therefore never services a KLE locker-Off exception for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
 
 [NOTE]
 ====
-The _Off_ value and the KLE locker-Off exception provide an architectural hook for on-demand (lazy) locker loading. At context restore, a handler may leave a locker unrestored, set its `*llockerstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with a KLE locker-Off exception to M-mode, which forwards it to the mode that owns the _Off_ field; that handler then imports the SCC before resuming execution. The architecture defines no separate "`lazy`" state: software that marks a locker _Off_ is responsible for ensuring that the authoritative SCC is restored.
+The _Off_ value and the KLE locker-Off exception provide an architectural hook for on-demand (lazy) locker loading. At context restore, a handler may leave a locker unrestored, set its `*llockerstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with a KLE locker-Off exception to the mode that owns the _Off_ field, directly by delegation or forwarded by a more privileged handler; that handler then imports the SCC before resuming execution. The architecture defines no separate "`lazy`" state: software that marks a locker _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
 
 [[KLE-unsupported-handling]]
