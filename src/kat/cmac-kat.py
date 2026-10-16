@@ -33,11 +33,10 @@ def ref_cmac(K, M):
 
 # ---------------------------------------------------------------- KLE model
 class Invalid(Exception): pass
-class Unsupported(Exception): pass
 SKS = {}
 
 def layout(kbits):
-    return [('key', kbits), ('hash', B), ('last_blk_len', 32)]
+    return [('key', kbits), ('hash', B), ('last_block_len', 32), ('tag_len', 32), ('absorbed_any', 1), ('absorbed_all', 1)]
 
 def pack(vals, lay):
     """Rows from bit 0 upwards, zero-padded to a multiple of 128 bits."""
@@ -55,18 +54,22 @@ def unpack(data, lay):
     return out
 
 class Cmac:
-    def __init__(s, key, skid=None, policy=0, **nc):
-        """policy: _MachinePolicy_, unused by CMAC: a non-zero value is unsupported Metadata (<<KLE-CMAC-mode>>)."""
-        if policy:
-            raise Unsupported('MachinePolicy')
+    def __init__(s, key, skid=None, policy=3, **nc):
+        """policy: _MachinePolicy_, bit 0 generation (_Hash_Output_), bit 1 verification (_Hash_Verify_);
+        zero is invalid Metadata (<<KLE-CMAC-mode>>, <<KLE-Metadata-validity>>)."""
+        if not policy or policy > 3:
+            raise Invalid('MachinePolicy')
         s.key, s.skid, s.state, s.policy = key, skid, READY, policy
-        s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False), **nc)
+        s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False, min_tag=64), **nc)
         if skid is not None:
             SKS[skid] = key
-        s.hash = s.last_blk_len = 0
+        s._ready()
+    def _ready(s):
+        s.hash = s.last_block_len = s.tag_len = 0
+        s.absorbed_any = s.absorbed_all = False
     def _invalid(s, why=None):
         s.state, s.key, s.skid = INVALID, None, None   # GR30
-        s.hash = s.last_blk_len = 0
+        s._ready()
         if why:
             raise Invalid(why)
     def enc(s, v):
@@ -75,30 +78,41 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L)
         return L, K1, s.nc['dbl'](K1)
-    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MR17); VERIFY Form A: KLIOBUF substitution
+    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MR17)
     SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
-             (VERIFY, 'C'): (OUTPUT,), (VERIFY, 'A'): (OUTPUT,)}
+             (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
         if s.state in ERROR_STATES:               # GR19.a
             return
         if immed == READY:                        # GR22
-            s.state, s.hash, s.last_blk_len = READY, 0, 0
-            return
+            s.state = READY
+            return s._ready()
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MR1, GR27
         if immed == LAST:
+            if s.absorbed_all:
+                s._invalid('a second last block')  # GR23: the same-State kl.setst is forbidden
             if aux > B or aux % 8:
                 s._invalid('Xs')
-            s.last_blk_len = aux
+            s.last_block_len = aux
             if aux == 0:                          # empty final block: padded, absorbed, no kl.exec
-                s.hash, s.state = s.enc(s.hash ^ cat((0, B - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), OUTPUT
-                return
-        s.state = immed if immed != VERIFY else SUCCESS if sl(aux, B - 1, 0) == s.hash else FAILURE
+                if s.absorbed_any:
+                    s._invalid('Xs = 0 after a block')  # whole blocks end with a full last block
+                s.hash, s.absorbed_all = s.enc(s.hash ^ cat((0, B - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), True
+        elif immed in (OUTPUT, VERIFY) and not s.policy & (1 if immed == OUTPUT else 2):
+            s._invalid('MachinePolicy')           # MR11: generation, resp. verification, not permitted
+        elif immed in (OUTPUT, VERIFY) and not s.absorbed_all:
+            s._invalid('last block not absorbed')  # entering _Hash_Output_ or _Hash_Verify_
+        elif immed == VERIFY:
+            if aux < s.nc['min_tag'] or aux % 8:
+                s._invalid('tag_len')
+            s.tag_len = min(aux, B)
+        s.state = immed
     def exec(s, form, INPUT=0, klen=B):
         st = s.state
         if st in ERROR_STATES:                    # GR19.a, GR34
             return 0
-        if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD'}.get(st) or ''):
+        if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD', VERIFY: 'BD'}.get(st) or ''):
             s._invalid('Form')                    # MR1, GR24, GR28
         if st == ABSORB:
             if klen % B:
@@ -106,32 +120,46 @@ class Cmac:
             pos = range(0, klen, B)               # MR3
             for i in (reversed(pos) if s.nc['msb_first'] else pos):
                 s.hash = s.enc(s.hash ^ sl(INPUT, i + B - 1, i))
+                s.absorbed_any = True
             return 0
         if st == OUTPUT:
+            if klen < 64:
+                s._invalid('MR2: a tag of fewer than 64 bits')
             s.state = SUCCESS
-            return s.hash & ((1 << klen) - 1)     # MR8
-        n = s.last_blk_len
+            return s.hash & ((1 << klen) - 1)     # MR8: the bits beyond b are cleared
+        if st == VERIFY:                          # MR15: constant-time compare of the first tag_len bits
+            n = s.tag_len
+            if klen < n:
+                s._invalid('KLLEN < tag_len')     # MR2
+            s.state = SUCCESS if sl(INPUT, n - 1, 0) == sl(s.hash, n - 1, 0) else FAILURE
+            return 0
+        if s.absorbed_all:
+            s._invalid('second last block')
+        n = s.last_block_len
         if klen < n:
-            s._invalid('KLLEN < last_blk_len')
+            s._invalid('KLLEN < last_block_len')
         INPUT = sl(INPUT, B - 1, 0)               # MR7
         _, K1, K2 = s.gen_subkeys()
         if n == B:
             tmp = INPUT ^ (K2 if s.nc['k2full'] else K1)
         else:                                     # 0 < n < B (n = 0 never reaches a kl.exec)
             tmp = cat((0, B - 8 - n), (0x80, 8), (sl(INPUT, n - 1, 0), n)) ^ K2
-        s.hash, s.state = s.enc(s.hash ^ tmp), OUTPUT
+        s.hash, s.absorbed_all = s.enc(s.hash ^ tmp), True
         return 0
     def lay(s):
         return layout(64 if s.skid is not None else 8 * len(s.key))
     def export(s, lay=None):
         return pack(dict(key=s.skid if s.skid is not None else b2v(s.key), hash=s.hash,
-                         last_blk_len=s.last_blk_len), lay or s.lay())
+                         last_block_len=s.last_block_len, tag_len=s.tag_len,
+                         absorbed_any=int(s.absorbed_any), absorbed_all=int(s.absorbed_all)),
+                    lay or s.lay())
     def imported(s, c1, lay=None):
         """A fresh locker with this locker's MDH, loaded from Content1."""
         f = unpack(c1, lay or s.lay())
         new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, s.policy, **s.nc)
         new.state, new.hash = s.state, f.get('hash', 0)
-        new.last_blk_len = f['last_blk_len']
+        new.last_block_len, new.tag_len = f['last_block_len'], f.get('tag_len', 0)
+        new.absorbed_any, new.absorbed_all = bool(f.get('absorbed_any', 0)), bool(f.get('absorbed_all', 0))
         return new
 
 class ExecOut(bytes):
@@ -159,8 +187,9 @@ def derive(src, dst, length):
     dst.key = data[:len(dst.key)]
 
 def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
-        skid=None, **nc):
-    """<<KLE-pseudocode-CMAC>> up to _Hash_Output_; hop exports/imports after every instruction."""
+        skid=None, to=OUTPUT, **nc):
+    """<<KLE-pseudocode-CMAC>> up to the last block, then into `to` (None: stay in
+    _Hash_Absorb_Last_Block_); hop exports/imports after every instruction."""
     fB = 'D' if subst else 'B'
     cl = cl or Cmac(K, skid, **nc)
     nxt = (lambda c: c.imported(c.export(lay), lay)) if hop else (lambda c: c)
@@ -176,6 +205,9 @@ def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
         cl.exec(fB, b2v(tail) | junk_above(8 * len(tail)), 2 * B)
     elif tail:
         cl.exec(fB, b2v(tail), 8 * len(tail))
+    cl = nxt(cl)
+    if to == OUTPUT:
+        cl.setst(OUTPUT)
     return nxt(cl)
 
 def tag(*a, **kw):
@@ -222,9 +254,10 @@ for lab, K, *pub in SUBKEYS:
     check(f"{lab} L, K1, K2 (KLE, REF)", True, (got, ref_cmac(K, b'')[1]), (pub, pub))
 
 section("vectors")
-def verified(K, M, t):
-    cl = run(K, M)
-    cl.setst(VERIFY, 'C', t)
+def verified(K, M, t, tag_len=B, form='B'):
+    cl = run(K, M, to=None)
+    cl.setst(VERIFY, 'B', tag_len)
+    cl.exec(form, t, 2 * B)
     return cl.state
 for lab, K, M, W in VEC:
     for name, got, want in (
@@ -237,11 +270,17 @@ for lab, K, M, W in VEC:
             ("export/import after every instruction", tag(K, M, hop=True), W)):
         check(f"{lab} {name}", True, got, want)
 for lab, K, M, W in (v for v in VEC if not v[2]):
-    cl = Cmac(K)
-    cl.setst(ABSORB)
-    cl.setst(LAST, 'B', 0)
-    check(f"{lab}: Xs = 0 enters _Hash_Output_ directly, without a kl.exec", True, (cl.state, v2b(cl.exec('C'), 16)),
-          (OUTPUT, W))
+    cl, cv = Cmac(K), Cmac(K)
+    for c in (cl, cv):
+        c.setst(ABSORB)
+        c.setst(LAST, 'B', 0)
+    st, ab = cl.state, cl.absorbed_all
+    cl.setst(OUTPUT)
+    cv.setst(VERIFY, 'B', B)
+    cv.exec('B', b2v(W))
+    check(f"{lab}: Xs = 0 absorbs the empty block without a kl.exec, stays in _Hash_Absorb_Last_Block_; then "
+          "output and verification both work", True, (st, ab, v2b(cl.exec('C'), 16), cv.state),
+          (LAST, True, W, SUCCESS))
 
 section("Form B kl.setst #hash_last_block: Xs")
 def at_absorb(K=K128, **kw):
@@ -252,24 +291,29 @@ for Xs, bad in [(x, True) for x in (136, 129, 4, 12, 127)] + [(x, False) for x i
     cl = at_absorb()
     check(f"Xs = {Xs} {'-> Invalid' if bad else 'admissible'}", True,
           (raises(cl.setst, LAST, 'B', Xs, exc=Invalid), cl.state),
-          (bad, INVALID if bad else OUTPUT if Xs == 0 else LAST))
+          (bad, INVALID if bad else LAST))
 
 section("Serialized Content")
 info("<<KLE-CMAC-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
 fits = True
-for vals in ((MASK128, B), (0, 0), (1, B - 8)):
+for vals in ((MASK128, B, B, True, True), (0, 0, 0, False, False), (1, B - 8, 64, True, False)):
     cl = Cmac(K128)
-    cl.hash, cl.last_blk_len = vals
+    cl.hash, cl.last_block_len, cl.tag_len, cl.absorbed_all, cl.absorbed_any = vals
     fits &= vars(cl.imported(cl.export())) == vars(cl)
 check("every admissible value fits its row", fits)
 check("export/import after every instruction, 64-bit SKID key: ex4", True,
       tag(K128, MSG[:40], hop=True, skid=0x0123456789ABCDEF), W4)
 
 section("state machine")
-def done_ok(verify=None):
+def done_ok(verify=None, tag_len=B):
     """ex4 run to Success (tag emitted), or to Success/Failure by verification."""
-    cl = run(K128, MSG[:40])
-    cl.exec('C') if verify is None else cl.setst(VERIFY, 'C', verify)
+    if verify is None:
+        cl = run(K128, MSG[:40])
+        cl.exec('C')
+        return cl
+    cl = run(K128, MSG[:40], to=None)
+    cl.setst(VERIFY, 'B', tag_len)
+    cl.exec('B', verify)
     return cl
 def last_set():
     cl = at_absorb()
@@ -278,14 +322,36 @@ def last_set():
 INVALID_CASES = [
     ("kl.exec in Ready (GR24)", lambda: Cmac(K128), lambda c: c.exec('B')),
     ("kl.setst #hash_last_block from Ready", lambda: Cmac(K128), lambda c: c.setst(LAST, 'B', 0)),
-    ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'C', 0)),
+    ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'B', B)),
+    ("kl.setst #hash_output before the last block is absorbed", last_set, lambda c: c.setst(OUTPUT)),
+    ("kl.setst #hash_verify before the last block is absorbed", last_set, lambda c: c.setst(VERIFY, 'B', B)),
+    ("kl.setst #hash_verify with Xs = 0: a 0-bit compare would accept any tag", lambda: run(K128, MSG[:40], to=None),
+     lambda c: c.setst(VERIFY, 'B', 0)),
+    ("kl.setst #hash_verify with Xs = 56 < 64", lambda: run(K128, MSG[:40], to=None), lambda c: c.setst(VERIFY, 'B', 56)),
+    ("kl.setst #hash_verify with Xs = 100, not a multiple of 8", lambda: run(K128, MSG[:40], to=None),
+     lambda c: c.setst(VERIFY, 'B', 100)),
+    ("kl.setst #hash_verify of Form C", lambda: run(K128, MSG[:40], to=None), lambda c: c.setst(VERIFY, 'C', B)),
+    ("Xs = 0 after a block was absorbed: not a CMAC of any message", lambda: (lambda c: (c.exec('B', 0), c)[1])(at_absorb()),
+     lambda c: c.setst(LAST, 'B', 0)),
+    ("same-State kl.setst #hash_verify (GR23)",
+     lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)), lambda c: c.setst(VERIFY, 'B', 64)),
+    ("kl.setst #hash_output with MachinePolicy = 2 (verify only, MR11)",
+     lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=2)), lambda c: c.setst(OUTPUT)),
+    ("kl.setst #hash_verify with MachinePolicy = 1 (generate only, MR11)",
+     lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=1)), lambda c: c.setst(VERIFY, 'B', B)),
+    ("same-State kl.setst #hash_last_block after the last block (GR23)", lambda: run(K128, MSG[:40], to=None),
+     lambda c: c.setst(LAST, 'B', 0)),
+    ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR2)",
+     lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)), lambda c: c.exec('B', 0, 64)),
+    ("kl.exec Form C in Hash_Verify", lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)),
+     lambda c: c.exec('C')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.exec Form C in Hash_Absorb", at_absorb, lambda c: c.exec('C')),
     ("KLLEN = 64 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 64)),
     ("KLLEN = 136 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
-    ("KLLEN = 56 < last_blk_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
-    ("second kl.exec after the last block", lambda: run(K128, MSG[:40]), lambda c: c.exec('B', 0, 64)),
+    ("KLLEN = 56 < last_block_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
+    ("second kl.exec after the last block", lambda: run(K128, MSG[:40], to=None), lambda c: c.exec('B', 0, 64)),
     ("second tag kl.exec, in Success (GR28)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (GR27)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (GR27)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
@@ -299,18 +365,29 @@ raises(cl.exec, 'B', exc=Invalid)
 check("Error State: Content cleared (GR30); kl.exec no operation, OUTPUT 0 (GR19.a, GR34)", True,
       (cl.key, cl.hash, cl.exec('C'), cl.state), (None, 0, 0, INVALID))
 subst = all(tag(K, M, subst=True) == W for _, K, M, W in VEC)
-cl = run(K128, MSG[:40], subst=True)
-cl.setst(VERIFY, 'A', b2v(W4))
-check("Form D kl.exec, Form A kl.setst #hash_verify substitutions: all vectors",
-      subst and cl.state == SUCCESS)
-vcl = run(K128, MSG[:40])
-vcl.setst(VERIFY, 'C', b2v(W4))
-check("MachinePolicy is unused: with it zero, a locker both emits and verifies the tag; any non-zero value is "
-      "unsupported Metadata", True,
-      (vcl.state, tag(K128, MSG[:40]), [raises(Cmac, K128, policy=p, exc=Unsupported) for p in (1, 2, 3)]),
-      (SUCCESS, W4, [True] * 3))
-check("truncated 64-bit tag -> Failure (all b bits compared)", True,
-      done_ok(b2v(W4[:8])).state, FAILURE)
+check("Form D kl.exec substitutions, verification included: all vectors",
+      subst and all(verified(K, M, b2v(W), form='D') == SUCCESS for _, K, M, W in VEC))
+vcl = done_ok(b2v(W4))
+def policy_run(p):
+    g = tag(None, MSG[:40], cl=Cmac(K128, policy=p)) if p & 1 else None
+    cl = run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=p))
+    if p & 2:
+        cl.setst(VERIFY, 'B', B)
+        cl.exec('B', b2v(W4))
+    return g, cl.state if p & 2 else None
+check("MachinePolicy: 1 generates only, 2 verifies only (a verify-only key), 3 both; 0 is invalid Metadata", True,
+      ([policy_run(p) for p in (1, 2, 3)], vcl.state, raises(Cmac, K128, policy=0, exc=Invalid)),
+      ([(W4, None), (None, SUCCESS), (W4, SUCCESS)], SUCCESS, True))
+check("truncated tags (SP 800-38B MSB_Tlen = the first bytes): 64 and 96 bits verify, a wrong bit in them "
+      "fails, one beyond them is not compared; Xs = 200 compares all b bits", True,
+      [done_ok(b2v(W4[:8]), 64).state, done_ok(b2v(W4[:12]), 96).state, done_ok(b2v(W4[:8]) ^ 1 << 63, 64).state,
+       done_ok(b2v(W4) ^ 1 << 64, 64).state, done_ok(b2v(W4[:8]), 200).state, done_ok(b2v(W4), 200).state],
+      [SUCCESS, SUCCESS, FAILURE, SUCCESS, FAILURE, SUCCESS])
+check("_Hash_Output_ with KLLEN 64 and 96 emits the first 8, resp. 12, bytes (SP 800-38B MSB_Tlen)", True,
+      [v2b(run(K128, MSG[:40]).exec('C', klen=n), n // 8) for n in (64, 96)], [W4[:8], W4[:12]])
+cl = run(K128, MSG[:40])
+check("_Hash_Output_ with KLLEN = 32 < 64 (MR2) -> Invalid", True, (raises(cl.exec, 'C', 0, 32, exc=Invalid), cl.state),
+      (True, INVALID))
 for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
                  ("Hash_Absorb", at_absorb)):
     cl = mk()
@@ -339,11 +416,13 @@ cl = at_absorb()
 derive(ExecOut(MSG[:32]), cl, 32)
 cl.setst(LAST, 'B', 64)
 cl.exec('B', b2v(MSG[32:40]), 64)
+cl.setst(OUTPUT)
 check("32 bytes of hash output into Hash_Absorb (GR55), then the last block: ex4", True, v2b(cl.exec('C'), 16), W4)
 src, dst = run(K128, MSG[:16]), at_absorb(K256)
 derive(src, dst, 16)
 dst.setst(LAST, 'B', 64)
 dst.exec('B', b2v(MSG[:8]), 64)
+dst.setst(OUTPUT)
 check("CMAC tag (Hash_Output) into another CMAC's Hash_Absorb: REF; source in Success", True,
       (v2b(dst.exec('C'), 16), src.state), (ref_cmac(K256, VEC[1][3] + MSG[:8])[0], SUCCESS))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
@@ -365,6 +444,20 @@ control("subkeys via little-endian update_mask", any(tag(K, M, dbl=update_mask) 
                                                      for _, K, M, W in VEC))
 control("multi-block kl.exec, most significant block first",
         all(tag(K, M, per_exec=0, msb_first=True) != W for _, K, M, W in VEC if len(M) >= 40))
+cl = at_absorb()
+cl.exec('B', b2v(MSG[:16]))
+cl.absorbed_any = False                           # the check removed: Xs = 0 after one full block
+cl.setst(LAST, 'B', 0)
+cl.setst(OUTPUT)
+control("without the `absorbed_any` check, Xs = 0 after a full block yields no standard CMAC of that block",
+        v2b(cl.exec('C'), 16) != ref_cmac(K128, MSG[:16])[0])
+cl = run(K128, MSG[:40], to=None, min_tag=0)
+cl.setst(VERIFY, 'B', 0)
+cl.exec('B', 0)
+control("without the 64-bit minimum, a 0-bit comparison accepts a forged tag", cl.state == SUCCESS)
+control("Serialized Content without `absorbed_all`: after an import the absorbed last block is lost, and the "
+        "output is refused", raises(tag, K128, MSG[:40], hop=True,
+                                    lay=[r for r in layout(128) if r[0] != 'absorbed_all'], exc=Invalid))
 control("Serialized Content without `hash`",
         all(tag(K, M, hop=True, lay=[r for r in layout(8 * len(K)) if r[0] != 'hash']) != W
             for _, K, M, W in VEC if len(M) >= 16))

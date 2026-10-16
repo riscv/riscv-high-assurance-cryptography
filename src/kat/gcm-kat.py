@@ -55,6 +55,8 @@ def galoismul_def(a, b):
 SKID = 0x0123456789ABCDEF
 SKS = {SKID: bytes.fromhex('feffe9928665731c6d6a8f9467308308')}
 
+TAG_LENS = (128, 120, 112, 104, 96, 64)            # SP 800-38D 5.2.1.2; 32 excluded (floor 64)
+
 class Gcm:
     """A GCM (set_iv False) or GCM with Set IV locker; MDH reduced to State, MachinePolicy
     (bit 0 encrypt, bit 1 decrypt), KeyType.  le_counter, iv_into_J0, stale_auth_key, ready_keeps_ctr:
@@ -69,7 +71,7 @@ class Gcm:
 
     def _error(s, st):                                   # GR30
         s.state, s.key, s.k, s.key_type, s.skid = st, b'', 0, 0, 0
-        s.J0 = s.auth_key = s.tag = s.start_ctr = s.last_blk_len = 0
+        s.J0 = s.auth_key = s.tag = s.start_ctr = s.last_block_len = 0
         s.len = s.input_base = s.block_base = s.cumul_len = 0
         return 0
 
@@ -83,20 +85,20 @@ class Gcm:
         return kb
 
     @staticmethod
-    def pi(key=None, J0=None, skid=None):
+    def pi(key=None, iv=None, skid=None):
         v, n = (skid, 64) if skid is not None else (b2v(key), 8 * len(key))
-        if J0 is not None:
-            v, n = v | J0 << n, n + 128
+        if iv is not None:                               # GCM with Set IV: a 96-bit IV, never J0
+            v, n = v | sl(iv, 95, 0) << n, n + 96
         return v, pad128(n)
 
     @classmethod
-    def provisioned(cls, key=None, J0=None, skid=None, **kw):
-        s = cls(set_iv=J0 is not None, **kw)
-        v = cls.pi(key, J0, skid)[0]
+    def provisioned(cls, key=None, iv=None, skid=None, **kw):
+        s = cls(set_iv=iv is not None, **kw)
+        v = cls.pi(key, iv, skid)[0]
         kb = s._load_key(v, 8 * len(SKS[skid] if skid else key), int(skid is not None))
-        if s.set_iv:
-            s.J0 = sl(v, kb + 127, kb)
-            s.start_ctr = s._bs(sl(s.J0, 127, 96))       # "Upon provisioning"
+        if s.set_iv:                                     # J0 <- bswap(bin(1, 32)) @ IV, start_ctr <- 1
+            s.J0 = cat((s._bs(1), 32), (sl(v, kb + 95, kb), 96))
+            s.start_ctr = 1
         s.state = READY
         s._ready()
         return s
@@ -107,7 +109,7 @@ class Gcm:
         kb = 64 if s.key_type else s.k
         slot = (cat((s.cumul_len, 48), (s.block_base, 16), (0, 16), (s.len, 16))   # ii.b padding, ii.e J0_padding
                 if s.state == SAV else s.J0)
-        return (cat((s.last_blk_len, 16), (s.start_ctr, 32), (s.tag, 128), (slot, 128),
+        return (cat((s.last_block_len, 16), (s.start_ctr, 32), (s.tag, 128), (slot, 128),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 304))
 
     @classmethod
@@ -119,7 +121,7 @@ class Gcm:
             s.len, s.block_base, s.cumul_len = sl(slot, 15, 0), sl(slot, 47, 32), sl(slot, 95, 48)
         else:
             s.J0 = slot
-        s.tag, s.start_ctr, s.last_blk_len = (
+        s.tag, s.start_ctr, s.last_block_len = (
             sl(v, kb + 255, kb + 128), sl(v, kb + 287, kb + 256), sl(v, kb + 303, kb + 288))
         s.state = state
         if not s.stale:
@@ -152,8 +154,8 @@ class Gcm:
             t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (GR23, MR9)
         return t.get((st, immed))
 
-    def setst(s, immed, form='A', aux=0):
-        """form 'A/iobuf': a Form A kl.setst with `aux` the KLIOBUF bytes [0, kliobuftop-1]; where the State
+    def setst(s, immed, form='A', aux=0, klen=128):
+        """klen: KLLEN of a Form C operand; form 'A/iobuf': a Form A kl.setst with `aux` the KLIOBUF bytes [0, kliobuftop-1]; where the State
         expects Form C it is a substitution that reads its input there (<<KLE-usage-input-output>>)."""
         st = s.state
         if immed in (46, 47, 54, 55):                    # reserved #immed7 (GR26): first group, State kept
@@ -163,7 +165,7 @@ class Gcm:
         if st in ERROR_STATES:
             return                                       # GR19.a
         if form == 'A/iobuf':                            # klstart ignored; truncated to 128 bits below (MR7)
-            form, aux = ('C', b2v(aux)) if s._form(st, immed) == 'C' else ('A', 0)
+            form, klen, aux = (('C', 8 * len(aux), b2v(aux)) if s._form(st, immed) == 'C' else ('A', klen, 0))
         if immed == READY and form == 'A':               # GR27, GR22
             if st == SAV:                                # IV left incomplete: discarded, no finalize() (MR9)
                 s.tag = s.J0 = s.len = s.block_base = s.cumul_len = 0
@@ -171,7 +173,7 @@ class Gcm:
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
             return s._invalid()                          # GR28/GR27, MR1
-        if st == immed and st in (ELB, DLB) and not s.last_blk_len:
+        if st == immed and st in (ELB, DLB) and not s.last_block_len:
             return s._invalid()                          # GR23: no second final block (MR10)
         if immed in (ENC, DEC) and not s.policy & (1 if immed == ENC else 2):
             return s._invalid()
@@ -184,12 +186,15 @@ class Gcm:
         elif immed in (ELB, DLB):
             if not (0 < aux < 128 and aux % 8 == 0):
                 return s._invalid()
-            s.last_blk_len = aux
+            s.last_block_len = aux
         elif immed in (ETF, DTF):
             s._absorb(aux & MASK128)
             s.tag ^= s._enc(cat((s._bs(s.start_ctr), 32), (sl(s.J0, 95, 0), 96)))
-        elif immed == HV:
-            immed = SUCC if aux & MASK128 == s.tag else FAIL
+        elif immed == HV:                               # t = KLLEN, truncated to 128 (MR7); SP 800-38D 5.2.1.2
+            t = min(klen, 128)
+            if t not in TAG_LENS:
+                return s._invalid()
+            immed = SUCC if sl(aux, t - 1, 0) == sl(s.tag, t - 1, 0) else FAIL
         elif st == SAV:
             return s._invalid()                          # _Hash_Absorb_ needs a complete IV (MR11)
         s.state = immed
@@ -215,7 +220,7 @@ class Gcm:
         if want != form:
             return s._invalid()                          # GR24, GR28, MR1; a wrong Form (GR79, GR80)
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
-                KLLEN < s.last_blk_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
+                KLLEN < s.last_block_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
             return s._invalid()                          # MR2, <<KLE-truncation-vs-length>>: length first
         if start is not None:
             s.klstart = start
@@ -256,7 +261,7 @@ class Gcm:
         return out
 
     def _exec_last(s, INPUT, KLLEN):
-        lbl = s.last_blk_len
+        lbl = s.last_block_len
         if lbl == 0:                                   # MR10: the final block was already processed
             return s._invalid()
         ctr = s._next_ctr()
@@ -266,11 +271,11 @@ class Gcm:
         m = (1 << lbl) - 1
         x, o = INPUT & m, (INPUT ^ s._enc(s.J0)) & m
         s._absorb(o if s.state == ELB else x)
-        s.last_blk_len = 0
+        s.last_block_len = 0
         return o
 
     def _exec_vli(s, INPUT, KLLEN, resuming, stop):
-        """process_VLI(len, tag, b, tag, b, input_base, block_base, 0, cumul_len, ..., xor_accumulate, b)."""
+        """PROCESS_VLI(len, tag, b, tag, b, input_base, block_base, 0, cumul_len, ..., xor_accumulate, b)."""
         if KLLEN % 128 and s.cumul_len + KLLEN < s.len:
             return s._invalid()                          # MR2: granularity b (kl.derive)
         if s.cumul_len >= s.len:
@@ -307,12 +312,12 @@ class Gcm:
                 return src._invalid()                    # GR50 item 1: Form C emits only the tag
             if s.state == SAV and length > 16:
                 return src._invalid()                    # GR50 item 9
-            ok = s.state == SAV or s.state == READY and s.key_type != 1 and length >= s.k // 8 <= 16
+            ok = s.state == SAV or s.state == READY and not s.set_iv and s.key_type != 1 and length >= s.k // 8 <= 16
             src = v2b(src.exec('C'), 16) if ok else b''  # GR55: emitted as by Form C
         if s.state == SAV:                               # GR49: consumed as a Form B kl.exec would be
             return s._exec_vli(b2v(src[:length]), 8 * length, False, None) if length else None
-        if s.key_type == 1 or s.state != READY or length < s.k // 8 or len(src) < s.k // 8:
-            return s._invalid()                          # GR53 (GR50 item 2); GR50 items 2, 5
+        if s.set_iv or s.key_type == 1 or s.state != READY or length < s.k // 8 or len(src) < s.k // 8:
+            return s._invalid()                          # Set IV / GR53: no endpoint (GR50 item 2); GR50 items 2, 5
         s.key = src[:s.k // 8]
         if not s.stale:
             s.auth_key = s._enc(0)                       # MR4
@@ -445,7 +450,7 @@ def at(where, **kw):
     if where == 'success':
         return kl_encrypt(K, IV, A, P, **kw)[2]
     if where == 'setiv':
-        return Gcm.provisioned(K, J0=b2v(J0B), **kw)
+        return Gcm.provisioned(K, iv=b2v(IV), **kw)
     cl = Gcm.provisioned(K, **kw)
     if where == 'sav':
         cl.setst(SAV, 'B', 480)
@@ -478,9 +483,43 @@ for label, *hx in VECTORS:
     check(f'decrypt {label} -> Success', kl_decrypt(Kx, IVx, Ax, Cx, Tx)[:2] == (Px, SUCC))
     check(f'decrypt {label}, corrupted tag -> Failure',
           kl_decrypt(Kx, IVx, Ax, Cx, bxor(Tx, b'\x80' + bytes(15)))[1] == FAIL)
-    c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, J0=b2v(ref_j0(Kx, IVx))))
-    check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
+    if len(IVx) == 12:                                   # GCM with Set IV provisions only a 96-bit IV
+        c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, iv=b2v(IVx)))
+        check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
 check('key given by a SKID (GR84): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+def at_hv(key=K):                                  # tc4 decrypted up to _Dec_Tag_Finalize_ done
+    cl = Gcm.provisioned(key)
+    cl.setst(SAV, 'B', 8 * len(IV))
+    feed(cl, IV)
+    feed(cl, pad16(A), 4096)
+    cl.setst(DEC)
+    crypt(cl, RC, max(1, len(RC) // 16), DLB)
+    cl.setst(DTF, 'C', len_block(8 * len(RC), 8 * len(A)))
+    return cl
+res = []
+for t in (128, 120, 112, 104, 96, 64):
+    cl = at_hv()
+    cl.setst(HV, 'C', b2v(RT[:t // 8]), t)
+    bad = at_hv()
+    bad.setst(HV, 'C', b2v(RT[:t // 8]) ^ 1 << (t - 1), t)
+    res.append((cl.state, bad.state))
+check('_Hash_Verify_ with a truncated tag MSB_t(T), t = KLLEN in {128, 120, 112, 104, 96, 64} (SP 800-38D 5.2.1.2): '
+      'the first t/8 bytes -> Success; its last bit flipped -> Failure', True, res, [(SUCC, FAIL)] * 6)
+res = []
+for t in (32, 88, 8):
+    cl = at_hv()
+    cl.setst(HV, 'C', b2v(RT[:t // 8]), t)
+    res.append(cl.state)
+check('_Hash_Verify_ with t = 32, 88 or 8 (not admitted; floor 64) -> Invalid', True, res, [INV] * 3)
+cl = Gcm.provisioned(K)
+cl.setst(SAV, 'B', 8 * len(IV))
+feed(cl, IV)
+feed(cl, pad16(A), 4096)
+cl.setst(ENC)
+crypt(cl, P)
+cl.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))
+check('_Enc_Tag_Finalize_ with KLLEN = 96: the truncated tag MSB_96(T), then Success', True,
+      (v2b(cl.exec('C', 0, 96), 12), cl.state), (RT[:12], SUCC))
 def wrong(where, f, *a, zklio=True):
     cl = Gcm.provisioned(K)
     if where in (ENC, HA):
@@ -510,7 +549,7 @@ check('kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction ex
 for n in (1, 8, 15, 21):
     check(f'{n}-byte plaintext matches REF', kl_encrypt(K, IV, A, P[:n])[:2] == ref_gcm(K, IV, A, P[:n]))
 
-section('Set_Aux_Value (process_VLI)')
+section('Set_Aux_Value (PROCESS_VLI)')
 for label, *hx in VECTORS[5::6]:
     Kx, IVx, Ax, Px, Cx, Tx = map(bytes.fromhex, hx)
     for chunk, stop in ((16, None), (32, None), (60, None), (32, 1), (48, 1)):
@@ -521,7 +560,7 @@ for n in (1, 8, 13, 16, 20, 32, 64, 1024):
     check(f'{8 * n}-bit IV matches REF', kl_encrypt(K, iv, A, P)[:2] == ref_gcm(K, iv, A, P))
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
-check('entering: len <- Xs, tag and process_VLI counters cleared',
+check('entering: len <- Xs, tag and PROCESS_VLI counters cleared',
       (cl.len, cl.tag, cl.input_base, cl.block_base, cl.cumul_len) == (96, 0, 0, 0, 0))
 cl.exec('B', b2v(IV + bytes(4)), 128)
 check('96-bit IV in a 128-bit transfer: excess ignored, J0 = IV || 0^31 || 1, tag = 0, start_ctr = 1',
@@ -600,11 +639,11 @@ for nbits in (8, 16, 56, 96, 120):
     pt = d.exec('A', ct, 128)
     d.setst(DTF, 'C', lb)
     d.setst(HV, 'C', e.exec('C', 0, 128))
-    check(f'last_blk_len = {nbits}: round trip -> Success, OUTPUT clear above it (MR8)',
+    check(f'last_block_len = {nbits}: round trip -> Success, OUTPUT clear above it (MR8)',
           (pf, pt, d.state) == (b2v(bytes(range(32))), x, SUCC) and ct >> nbits == 0)
 bad = (0, 1, 7, 60, 100, 127, 128, 200)
 for where, last in (('enc', ELB), ('dec', DLB)):
-    check(f'{"Enc" if last == ELB else "Dec"}_Last_Block: last_blk_len in {bad} -> Invalid',
+    check(f'{"Enc" if last == ELB else "Dec"}_Last_Block: last_block_len in {bad} -> Invalid',
           all(at(where).setst(last, 'B', n) == 0 for n in bad))
 cl = at('enc')
 cl.setst(ELB, 'B', 96)
@@ -619,9 +658,9 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     cl = at(where)
     cl.setst(last, 'B', 64)
     cl.setst(last, 'B', 96)
-    ok = cl.last_blk_len == 96 and cl.exec('A', b2v(P[:12]), 96)
+    ok = cl.last_block_len == 96 and cl.exec('A', b2v(P[:12]), 96)
     cl.setst(last, 'B', 96)
-    check(f'GR23: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block replaces last_blk_len '
+    check(f'GR23: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block replaces last_block_len '
           'before its kl.exec, and is _Invalid_ after it (MR10)', ok and cl.state == INV)
 for fin in (ETF, DTF):
     cl = at('enc' if fin == ETF else 'dec')
@@ -679,13 +718,20 @@ check('GR30: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))
 
 section('GCM with Set IV')
-pi, n = Gcm.pi(K, b2v(J0B))
-check('PI Content: key, then J0; 256 bits for k = 128', n == 256 and v2b(pi, 32) == K + J0B)
-pi, n = Gcm.pi(J0=b2v(J0B), skid=SKID)
-check('PI Content with a SKID: 64 + 128 bits, padded to 256', n == 256 and sl(pi, 191, 64) == b2v(J0B))
-j = ref_j0(K, bytes.fromhex(IV8))
-check('provisioning: start_ctr <- int(bswap(J0[127:96]))',
-      Gcm.provisioned(K, J0=b2v(j)).start_ctr == int.from_bytes(j[12:], 'big'))
+pi, n = Gcm.pi(K, b2v(IV))
+check('PI Content: key, then the 96-bit IV; 224 bits padded to 256 for k = 128', n == 256 and v2b(pi, 32) == K + IV + bytes(4))
+pi, n = Gcm.pi(iv=b2v(IV), skid=SKID)
+check('PI Content with a SKID: 64 + 96 bits, padded to 256', n == 256 and sl(pi, 159, 64) == b2v(IV))
+cl = Gcm.provisioned(K, iv=b2v(IV))
+check('provisioning forms J0 = IV || 0^31 || 1 (SP 800-38D 7.1) and start_ctr = 1', (v2b(cl.J0, 16), cl.start_ctr) == (J0B, 1))
+H0 = aes_encrypt(K, bytes(16))
+dec = Gcm.provisioned(K, iv=0, policy=2)
+dec.setst(HA)
+dec.setst(DEC)
+ks = v2b(dec.exec('A', 0, 128), 16)
+check('decrypt-only Set IV locker, IV = 0: the first keystream block is E(K, 0^96 || 2), never H = E(K, 0) '
+      'or a tag mask E(K, IV || 1): software cannot choose the counter blocks', True,
+      (ks != H0, ks == aes_encrypt(K, bytes(12) + bytes([0, 0, 0, 2]))), (True, True))
 cl = at('setiv')
 cl.setst(HA)
 cl.setst(ENC)
@@ -736,7 +782,7 @@ for name, where, ops, *kw in [
         ('MR1: Form A kl.exec in Set_Aux_Value', 'sav', [('exec', 'A', 0, 128)]),
         ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 384, 8)]),
-        ('KLLEN (96) < last_blk_len (104)', 'enc', [('setst', ELB, 'B', 104), ('exec', 'A', 0, 96)]),
+        ('KLLEN (96) < last_block_len (104)', 'enc', [('setst', ELB, 'B', 104), ('exec', 'A', 0, 96)]),
         ('GR24: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
         ('GR28: kl.exec in Success', 'success', [('exec', 'A', 0, 128)]),
         ('GR28/GR27: kl.setst Encrypt in Success', 'success', [('setst', ENC)]),
@@ -801,7 +847,7 @@ for k, skid, nblk in ((16, None, 4), (24, None, 4), (32, None, 5), (16, SKID, 3)
 cl = at('enc')
 cl.exec('A', B16, 128)
 v = cl.export()[0]
-check('layout: key, J0, tag, bin(start_ctr,32), last_blk_len',
+check('layout: key, J0, tag, bin(start_ctr,32), last_block_len',
       (sl(v, 127, 0), sl(v, 255, 128), sl(v, 383, 256), sl(v, 415, 384), sl(v, 431, 416), v >> 432)
       == (b2v(K), cl.J0, cl.tag, 1, 0, 0))
 c2 = Gcm.imported(ENC, v, 128)
@@ -855,10 +901,10 @@ cl = iv_by_derive(IV60B, 0)
 check('kl.derive of 0 bytes into Set_Aux_Value changes nothing (GR50 item 7)', (cl.state, cl.cumul_len) == (SAV, 0))
 check('kl.derive of 20 bytes into a 480-bit IV (granularity b, GR50 item 4) -> Invalid',
       iv_by_derive(IV60B, 20).state == INV)
-cl = Gcm.provisioned(bytes(16), J0=b2v(J0B))
+cl = Gcm.provisioned(bytes(16), iv=b2v(IV))
 cl.derive(SRC, 16)
-check('GCM with Set IV: kl.derive into `key` in Ready; message matches REF',
-      kl_encrypt(None, None, A, P, cl=cl)[:2] == ref_gcm(SRC[:16], IV, A, P))
+check('GCM with Set IV is not a kl.derive destination (<<KLE-GCM-with-IV-mode>>, GR50 item 2) -> Invalid',
+      cl.state == INV)
 for name, cl, n in (('in Hash_Absorb (GR50 items 1-2)', at('ha'), 16),
                     ('in Success (GR50 items 1-2)', at('success'), 16),
                     ('into a key configured by a SKID (GR53, GR50 item 2)', Gcm.provisioned(skid=SKID), 16),

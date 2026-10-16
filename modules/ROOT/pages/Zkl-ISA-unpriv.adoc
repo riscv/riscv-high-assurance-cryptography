@@ -390,7 +390,8 @@ _Machine_ is a 12-bit field. Values 0–3071 are architecture-defined, with enco
 The meaning of _MachinePolicy_ depends on the Machine:
 
 * For encryption/decryption primitives and modes, bit 0 of _MachinePolicy_ permits encryption and bit 1 decryption. At least one bit must be set.
-* For asymmetric primitives that support signatures, bit 0 permits signature generation and bit 1 verification. For a Machine with other operations as well, a zero field leaves those operations available.
+* For asymmetric primitives that support signatures, bit 0 permits signature generation and bit 1 verification. For a Machine with other operations as well, a zero field leaves those operations available, unless the Machine requires a set bit, as EdDSA does (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>).
+* For MACs that generate and verify tags, CMAC (<<Zkl-ISA-machines.adoc#KLE-CMAC-mode>>), HMAC (<<Zkl-ISA-machines.adoc#KLE-HMAC>>), `KMAC128` and `KMAC256` (<<Zkl-ISA-machines.adoc#KLE-KMAC>>), bit 0 permits generation and bit 1 verification. At least one bit must be set. BLAKE2 with a system key (<<Zkl-ISA-machines.adoc#KLE-BLAKE2>>) only generates tags: bit 0 must be set.
 * For other primitives, _MachinePolicy_ may encode further Machine identifiers, extending the encoding space of _Machine_.
 
 For a Machine that only signs and verifies, a zero _MachinePolicy_ disables all the locker's operations but is not invalid.
@@ -2263,7 +2264,7 @@ A field that fails a check when its transfer completes (Rule <<Zkl-ISA-machines.
 . The destination must be a destination endpoint; otherwise the destination.
 . The pair must be admitted; otherwise both.
 . The effective length (Rule <<KLE-GR-derive-rule-both-fixed-size>>) must meet the length constraints of the destination, a final partial input unit included, and the untransferred suffix must fit its remaining capacity; otherwise the destination.
-. A destination key field of `dest_length` bytes is always loaded in full: it requires `length` {ge} `dest_length`, `klstart` = 0, and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes; otherwise the destination. The key field receives exactly `dest_length` bytes, which complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
+. A destination key field of `dest_length` bytes is always loaded in full: it requires `length` {ge} `dest_length`, `klstart` = 0, and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes; otherwise the destination. The `K0` of <<Zkl-ISA-machines.adoc#KLE-HMAC,HMAC>> instead admits a shorter key: it requires `klstart` = 0, and a source field, or remaining `kl.exec` output, of exactly `eff_length` bytes; otherwise the destination. The key field receives `eff_length` bytes, zero-filled beyond them, which complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
 A message input receiving a shared secret that Rule <<KLE-GR-shared-secret>> restricts requires `length` at least the length of the secret, and `klstart` = 0; otherwise the destination.
 . The endpoint granularities must be compatible as Rule <<KLE-GR-derive-rule-both-fixed-size>> specifies; otherwise both.
 . For any other destination, if `klstart` {ge} `eff_length`, `length` = 0 included, the instruction retires with `klstart` = 0, skipping the remaining checks and changing nothing else.
@@ -2281,12 +2282,12 @@ The narrowed policies govern the transfer, but are written only with its first c
 
 [[KLE-GR-SKID-no-export,GR53]]GR53:: A field configured by a SKID is _never_ exportable, and a key field of a locker whose _KeyType_ is 1 is _never_ importable. No rule may be defined to export or import such a field.
 
-[[KLE-GR-shared-secret,GR54]]GR54:: A shared secret of a key-agreement or key-encapsulation Machine whose export through `kl.exec` the Machine does not explicitly allow, such as the ML-KEM `sharedkey`, moves only as a _restricted transfer_: into a key field of a symmetric Machine or a private key field of a public-key Machine, which receives the first `dest_length` bytes of the secret, and into the `kl.exec` input of a hash function, MAC or XOF that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists for it, which receives the whole secret.
+[[KLE-GR-shared-secret,GR54]]GR54:: A shared secret of a key-agreement or key-encapsulation Machine whose export through `kl.exec` the Machine does not explicitly allow, such as the ML-KEM `sharedkey`, moves only as a _restricted transfer_: into a key field of a symmetric Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a destination, which receives the first `eff_length` bytes of the secret (Rule <<KLE-GR-checks>> item 5), and into the `kl.exec` input of a hash function, MAC or XOF that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists for it, which receives the whole secret.
 Both transfers are uninterruptible (Rule <<KLE-GR-uninterruptible-class>>).
 No other message input receives such a secret, not even one that a Machine defines.
-A shared secret whose export through `kl.exec` its Machine explicitly allows, such as that of an ECC Machine in _Output_, moves as a `kl.exec` output instead (Rule <<KLE-GR-exec-implies-unrestricted>>).
+A shared secret whose export through `kl.exec` its Machine explicitly allows, such as that of an ECC Machine in _Output_, moves instead as an unrestricted transfer of its field, to the destinations that Rule <<KLE-GR-exec-implies-unrestricted>> admits for a `kl.exec` output.
 
-[[KLE-GR-exec-implies-unrestricted,GR55]]GR55:: The `kl.exec` output of a source can always be moved, as an _unrestricted transfer_, into the `kl.exec` input of a destination, such as that of a hash function, MAC or XOF, or into a key field of a symmetric Machine or a private key field of a public-key Machine, which receives the first `dest_length` bytes of the output (Rule <<KLE-GR-checks>> item 5).
+[[KLE-GR-exec-implies-unrestricted,GR55]]GR55:: The `kl.exec` output of a source can be moved, as an _unrestricted transfer_, into any destination endpoint that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists, a `kl.exec` input or a field, a key field of a symmetric Machine and a private key field of a public-key Machine included. A key field receives the first `eff_length` bytes of the output (Rule <<KLE-GR-checks>> item 5).
 // +
 // NOTE: Such transfers are allowed and unrestricted because the caller can obtain the same data and write the destination fields.
 // NOTE: Such a destination may be a key field, such as the `Scalar` of an ECC Machine or the `K0` of HMAC. Moving any `kl.exec` output into it does not increase the attack surface, which is why
@@ -2348,7 +2349,7 @@ For a resumed instruction, the unchanged state is that at its resumption, with t
 [[KLE-GR-klstart-updates,GR67]]GR67:: An instruction that honors `klstart` (<<KLE-CSR-klstart>>) records in it a prefix-complete point on a precise halt (Rule <<KLE-GR-precise-halt>>) and writes 0 to it when it retires, except `kl.mvin` and `kl.mvout`, which keep it (<<KLE-instruction-mv>>).
 `kl.clearall`, `kl.mgmt` after its check of `klnamedlocker` (<<KLE-locker-management>>), and a Form D `kl.exec` that performs no operation (Rule <<KLE-GR-zero-unwritten-output>>) write 0 to it; every other instruction leaves it unchanged.
 
-[[KLE-GR-interruption-point,GR68]]GR68:: An _interruption point_ of a KLE instruction in a State of a Machine is a `klstart` value that the instruction can itself produce on a precise halt in that State: the whole multiples of the Machine's granularity within the transfer window, unless the Machine, or a procedure such as `process_VLI` (<<Zkl-ISA-machines.adoc#KLE-process-VLI>>), defines another set.
+[[KLE-GR-interruption-point,GR68]]GR68:: An _interruption point_ of a KLE instruction in a State of a Machine is a `klstart` value that the instruction can itself produce on a precise halt in that State: the whole multiples of the Machine's granularity within the transfer window, unless the Machine, or a macro such as `PROCESS_VLI` (<<Zkl-ISA-machines.adoc#KLE-process-VLI>>), defines another set.
 
 [[KLE-GR-transfer-window-checks,GR69]]GR69:: A Form A–C `kl.exec`, or a Form D `kl.exec` that substitutes for one (<<KLE-usage-input-output>>), checks its transfer window after the checks of Rule <<KLE-GR-gate-order>> and those that make it illegal in the locker's _State_ (Rules <<KLE-GR-no-exec-in-ready>> and <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>), in this order:
 +
@@ -2579,7 +2580,7 @@ For instance, a Form B or C `kl.exec` where Form A is native is a wrong Form, an
 A substitution that these Rules admit fails as follows:
 If `kliobuflen` is zero, it raises an illegal-instruction exception (Rule <<KLE-GR-iobuf-configured>>). If `kliobuflen` is non-zero but `kliobuftop` is an invalid length for the Machine, the locker transitions to Error State _Invalid_, whether the KLIOBUF serves as input or only as output (Rule <<KLE-GR-transfer-window-checks>>); for an MDH operand, however, `kliobuftop` < 16 raises an illegal-instruction exception (Rule <<KLE-GR-vector-MDH-operand>>).
 
-Where <<Zkl-ISA-machines.adoc#KLE-Machines>> says that a Form of `kl.exec`, `kl.setst` or `kl.mgmt` is _expected_, rather than _required_ or _the only Form allowed_, the substitutions above apply implicitly.
+Every native Form of `kl.exec`, `kl.setst` or `kl.mgmt` that <<Zkl-ISA-machines.adoc#KLE-Machines>> specifies admits its substitution, however the Machine words it.
 <<KLE-replacement-instructions>> gives examples of equivalent sequences using `kl.input` and `kl.output`.
 
 [[KLE-replacement-instructions]]

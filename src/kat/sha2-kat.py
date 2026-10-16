@@ -151,7 +151,7 @@ class Sha2:
         return r, bytes(nbytes)
 
     def process_vli(s, INPUT, KLLEN, halt, resume):
-        """process_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, None, P, None, assign)."""
+        """PROCESS_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, None, P, None, assign)."""
         ib = 8 * HART.klstart if resume else 0
         while ib < KLLEN:
             amount = min(KLLEN - ib, s.b - s.block_base)

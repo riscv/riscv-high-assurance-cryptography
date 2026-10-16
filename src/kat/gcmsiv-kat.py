@@ -113,7 +113,7 @@ class Siv:
 
     def _error(s, st):                                   # GR30
         s.state, s.k, s.key_type, s.skid, s.key = st, 0, 0, 0, b''
-        s.enc_key = s.auth_key = s.nonce = s.ctr = s.SIV = s.tmp = s.last_blk_len = 0
+        s.enc_key = s.auth_key = s.nonce = s.ctr = s.SIV = s.tmp = s.last_block_len = 0
         return 0
 
     def _invalid(s): return s._error(INV)
@@ -135,7 +135,7 @@ class Siv:
         if s.state in ERROR_STATES:
             return 0, 0                                  # GR30
         kb = 64 if s.key_type else s.k
-        return (cat((s.ctr >> 32 << 15 | s.last_blk_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr & M32, 32), (s.nonce, 96),
+        return (cat((s.ctr >> 32 << 15 | s.last_block_len, 16), (s.tmp, 128), (s.SIV, 128), (s.ctr & M32, 32), (s.nonce, 96),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 400))
 
     @classmethod
@@ -144,7 +144,7 @@ class Siv:
         s.k, s.key, s.state = k, v2b(sl(v, k - 1, 0), k // 8), state
         s.nonce, lo, s.SIV, s.tmp, vi = (sl(v, k + hi, k + lo) for hi, lo in
                                          ((95, 0), (127, 96), (255, 128), (383, 256), (399, 384)))
-        s.ctr, s.last_blk_len = (vi >> 15 & 1) << 32 | lo, vi & 0x7F     # ctr[32] in bit 15 of field vi
+        s.ctr, s.last_block_len = (vi >> 15 & 1) << 32 | lo, vi & 0x7F     # ctr[32] in bit 15 of field vi
         if not s.stale:
             s._derive()                                  # MR4
         return s
@@ -164,7 +164,7 @@ class Siv:
             return s._ready()
         if st in (SUCC, FAIL) or FORMS.get((st, immed)) != form:
             return s._invalid()                          # GR28/GR27, MR1
-        if st == immed and st in (ELB, DLB) and not s.last_blk_len:
+        if st == immed and st in (ELB, DLB) and not s.last_block_len:
             return s._invalid()                          # GR23: no second final block (MR10)
         if immed in (ETF, DEC) and not s.policy & (1 if immed == ETF else 2):
             return s._invalid()
@@ -176,7 +176,7 @@ class Siv:
         elif immed in (ELB, DLB):
             if not (0 < aux <= 120 and aux % 8 == 0):
                 return s._invalid()
-            s.last_blk_len = aux
+            s.last_block_len = aux
         s.state = immed
 
     def exec(s, form, INPUT=0, KLLEN=128, start=None, stop=None):
@@ -187,7 +187,7 @@ class Siv:
         want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
         if want != form:
             return s._invalid()                          # GR24, GR28, MR1; a wrong Form (GR80)
-        if KLLEN < s.last_blk_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
+        if KLLEN < s.last_block_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
             return s._invalid()                          # MR2: length first (<<KLE-GR-transfer-window-checks>>)
         if start is not None:
             s.klstart = start
@@ -197,6 +197,8 @@ class Siv:
             if start % 16 or start and s.state in (ELB, DLB, ETF, DTF):
                 return s._invalid()                      # not an interruption point
         if st in (ETF, DTF):
+            if KLLEN < 128:
+                return s._invalid()                      # MR7: the length block is a 128-bit fixed-width input
             s._absorb(INPUT & MASK128)                   # MR7
             s.probe = s.tmp
             s.tmp = s._enc(cat((0, 1), (sl(s.tmp, 126, 96), 31), (sl(s.tmp, 95, 0) ^ s.nonce, 96)))
@@ -206,7 +208,7 @@ class Siv:
             s.SIV, s.state = s.tmp, ENC
             return s.SIV & ((1 << KLLEN) - 1)            # MR8
         if st in (ELB, DLB):
-            lbl = s.last_blk_len
+            lbl = s.last_block_len
             if lbl == 0:                                 # MR10: the final block was already processed
                 return s._invalid()
             if s.ctr == 2**32:                           # one block more than P_MAX
@@ -214,7 +216,7 @@ class Siv:
             o = (INPUT ^ s._ks()) & ((1 << lbl) - 1)
             if st == DLB:
                 s._absorb(o)
-            s.ctr, s.last_blk_len = s.ctr + 1, 0
+            s.ctr, s.last_block_len = s.ctr + 1, 0
             return o
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
@@ -570,21 +572,21 @@ check('ctr = 2^32 survives export/import (bit 32 in field vi): the next block ->
 bad = (0, 4, 12, 121, 128)
 for where, last in (('enc', ELB), ('dec', DLB)):
     nm = 'Enc' if last == ELB else 'Dec'
-    check(f'{nm}_Last_Block: last_blk_len in {bad} -> Invalid', all(at(where).setst(last, 'B', n) == 0 for n in bad))
-    check(f'{nm}_Last_Block: last_blk_len 8 and 120 accepted',
+    check(f'{nm}_Last_Block: last_block_len in {bad} -> Invalid', all(at(where).setst(last, 'B', n) == 0 for n in bad))
+    check(f'{nm}_Last_Block: last_block_len 8 and 120 accepted',
           all(at(where).setst(last, 'B', n) is None for n in (8, 120)))
     m = at(where)
     m.setst(last, 'B', 64)
     first = m.exec('A', b2v(bytes(range(1, 17))), 128)
-    check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear (MR8); '
+    check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_block_len clear (MR8); '
           'a second kl.exec -> _Invalid_, output zeroed (MR10)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
     m = at(where)
     m.setst(last, 'B', 64)
     m.setst(last, 'B', 32)
-    ok = m.last_blk_len == 32 and m.exec('A', b2v(bytes(range(1, 17))), 128)
+    ok = m.last_block_len == 32 and m.exec('A', b2v(bytes(range(1, 17))), 128)
     m.setst(last, 'B', 32)
-    check(f'GR23: same-State kl.setst into {nm}_Last_Block replaces last_blk_len before its kl.exec, '
+    check(f'GR23: same-State kl.setst into {nm}_Last_Block replaces last_block_len before its kl.exec, '
           'and is _Invalid_ after it (MR10)', ok and m.state == INV)
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
@@ -604,6 +606,8 @@ LB0 = len_block(b'', b'')
 for name, where, ops, *kw in [
         ('MR1: Form C kl.setst to Enc_Tag_Finalize', 'ha', [('setst', ETF, 'C', LB0)]),
         ('MR1: Form A kl.exec in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'A', LB0, 128)]),
+        ('MR7: KLLEN = 64 < 128 for the length block in Enc_Tag_Finalize', 'ha', [('setst', ETF), ('exec', 'A', LB0, 64)]),
+        ('MR7: KLLEN = 64 < 128 for the length block in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'B', LB0, 64)]),
         ('MR1: Form C kl.setst to Decrypt', 'ha', [('setst', DEC, 'C', 0)]),
         ('MR1: Form A kl.setst to Set_Aux_Value', 'ready', [('setst', SAV)]),
         ('MR1: kl.exec in Set_Aux_Value', 'sav', [('exec', 'B', 0, 128)]),
@@ -620,8 +624,8 @@ for name, where, ops, *kw in [
         ('MR2: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', 1, 120)]),
         ('MR2: KLLEN = 120 in Decrypt', 'dec', [('exec', 'A', 1, 120)]),
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 256, 8)]),
-        ('Enc_Last_Block: KLLEN (56) < last_blk_len (64)', 'enc', [('setst', ELB, 'B', 64), ('exec', 'A', 0, 56)]),
-        ('Dec_Last_Block: KLLEN (56) < last_blk_len (64)', 'dec', [('setst', DLB, 'B', 64), ('exec', 'A', 0, 56)]),
+        ('Enc_Last_Block: KLLEN (56) < last_block_len (64)', 'enc', [('setst', ELB, 'B', 64), ('exec', 'A', 0, 56)]),
+        ('Dec_Last_Block: KLLEN (56) < last_block_len (64)', 'dec', [('setst', DLB, 'B', 64), ('exec', 'A', 0, 56)]),
         ('MachinePolicy decrypt-only: -> Enc_Tag_Finalize', 'ha', [('setst', ETF)], {'policy': 2}),
         ('MachinePolicy encrypt-only: -> Decrypt', 'ha', [('setst', DEC)], {'policy': 1})]:
     m = at(where, **(kw[0] if kw else {}))
@@ -663,7 +667,7 @@ m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
 m.exec('A', b2v(p5[:16]), 128)
 v = m.export()[0]
-check('layout: key, nonce, ctr[31:0], SIV, tmp, ctr[32] @ last_blk_len',
+check('layout: key, nonce, ctr[31:0], SIV, tmp, ctr[32] @ last_block_len',
       (sl(v, 127, 0), sl(v, 223, 128), sl(v, 255, 224), sl(v, 383, 256), sl(v, 511, 384), v >> 512)
       == (b2v(k5), b2v(n5), 1, siv, m.tmp, 0))
 

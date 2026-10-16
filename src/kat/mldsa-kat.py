@@ -15,7 +15,7 @@ LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Failure', 47)]   # the ML-DSA 
 FORM_B = (SIGN_GEN,)                               # every other State is entered with Form A
 IN_F = {PK_IN: 'pubkey', MU_IN: 'mu', SIGN_IN: 'signature', SK_IN: 'privkey'}
 OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
-SE = {'HasPrivKey': 1, 'HasPubKey': 2, 'Hedged': 4}   # StateExtension bits 0, 1, 2
+SE = {'HasPrivKey': 1, 'HasPubKey': 2, 'Hedged': 4, 'HasMu': 8}   # StateExtension bits 0, 1, 2, 3
 mc = lambda typ, mode: typ << 4 | mode             # <<KLE-exec-encodings>>
 MLDSA = {44: mc(11, 3), 65: mc(11, 4), 87: mc(11, 5)}
 SHAKE256 = mc(6, 5)
@@ -73,9 +73,10 @@ class MLDSALocker:
         if (self.state in (SUCCESS, FAILURE) and st != READY                                  # GR27
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # MR1
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
-                or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey'))
-                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey'))               # MR11 entry conditions
+                or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
+                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR11
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
+                or st == PK_IN and self.flag('HasPrivKey')                       # pubkey from compute_pubKey
                 or st == SIGN_OUT and self.state != SIGN_OUT):          # entered only from _Sign_Generate_
             return self.invalid()
         name = IN_F.get(self.state)
@@ -85,6 +86,9 @@ class MLDSALocker:
         self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # MR6; MR9 W
         if st == READY:
             self.clear()
+            self.set_flag('HasMu', 0)
+        if st == MU_IN:
+            self.set_flag('HasMu', 0)
         if st in IN_F:
             setattr(self, IN_F[st], b'')           # MR9: reloading replaces
         if st == SIGN_GEN:
@@ -112,6 +116,8 @@ class MLDSALocker:
             self.set_flag('HasPrivKey', 1)
         elif self.use == self.size(name) and name == 'pubkey':
             self.set_flag('HasPubKey', 1)
+        elif self.use == self.size(name) and name == 'mu':
+            self.set_flag('HasMu', 1)                 # MR9: set when the load completes
         return n
 
     def exec_C(self, n):                           # Form C in an emitting State (MR9)
@@ -172,11 +178,17 @@ class MLDSALocker:
             return self.put('State', SUCCESS if ok else FAILURE)
         else:
             return self.invalid()                  # GR24 in _Ready_, MR1 elsewhere
-        if st in (GEN, COMPUTE_PK):                # R13: back to _Ready_, which keeps the key pair
+        if st == GEN:                              # the key pair, then _pubkey_Output_ emits pubkey
+            self.set_flag('HasPubKey', 1)
+            self.set_flag('HasPrivKey', 1)
+            self.put('State', PK_OUT)
+            self.use = 0
+        elif st == COMPUTE_PK:                     # R13: back to _Ready_, which keeps the key pair
             self.set_flag('HasPubKey', 1)
             self.set_flag('HasPrivKey', 1)
             self.put('State', READY)
             self.clear()
+            self.set_flag('HasMu', 0)
             self.use = 0
         else:
             self.put('State', SIGN_OUT)
@@ -278,8 +290,20 @@ def t_mdh():
     run(cc, GEN, xi=bytes(32))
     check('HasPrivKey and HasPubKey in StateExtension bits 0 and 1', cc.get('StateExtension') == 0b011
           and loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk']))).get('StateExtension') == 0b010)
+    cc.setst(MU_IN)
+    check('entering _mu_Input_ clears HasMu', not cc.flag('HasMu'))
+    cc.exec_B(bytes(64))
+    check('HasMu in StateExtension bit 3, set when the load of mu completes (MR9)', cc.get('StateExtension') == 0b1011)
     cc.setst(SIGN_GEN, 0)
-    check('Hedged in StateExtension bit 2', cc.get('StateExtension') == 0b111)
+    check('Hedged in StateExtension bit 2', cc.get('StateExtension') == 0b1111)
+    cc.setst(READY)
+    check('_Ready_ clears mu and HasMu', cc.mu == b'' and not cc.flag('HasMu'))
+    c3 = generated()
+    c3.setst(SIGN_GEN, 1)
+    c4 = generated()
+    c4.setst(SIGN_VERIFY, None)
+    check('_Sign_Generate_ and _Sign_Verify_ without a loaded mu (HasMu clear, MR11): _Invalid_',
+          (c3.state, c4.state) == (INVALID, INVALID))
     vals = (0x00, 0x43, 0x65, 0x61, 0x01, 0x46, 0x6A, 0x83, 0xFFFF)
     check('AuxInfo is never checked: pure, SHA2-512, SHAKE256, SHA3-256, AES128_CBC, SHA2-224_HMAC, KMAC128, '
           'Ascon-Hash256 and 0xFFFF all provision to _Ready_ and survive export/import unchanged (<<KLE-PQC-ML-DSA>>)',
@@ -291,7 +315,7 @@ def t_mdh():
     sv.setst(SIGN_VERIFY, None)
     check('MachinePolicy 0 admitted (useless): provisioned and key generated, but _Sign_Generate_ and '
           '_Sign_Verify_ -> _Invalid_', (cc.state, cc.flag('HasPrivKey'), sg.state, sv.state)
-          == (READY, 1, INVALID, INVALID))
+          == (PK_OUT, 1, INVALID, INVALID))
     cc = MLDSALocker(44)
     cc.restrictl_policy(0b01)
     check('kl.restrictl narrows MachinePolicy to verify-only', cc.get('MachinePolicy') == 0b10)
@@ -352,16 +376,20 @@ def t_state_machine():
     check('provisioned: HasPrivKey = HasPubKey = false, _Ready_',
           not cc.flag('HasPrivKey') and not cc.flag('HasPubKey') and cc.state == READY)
     cc = generated()
-    check('_GenerateKeyPair_: back to _Ready_ (R13), both flags, the ACVP keys; privkey embeds tr = SHAKE256(pubkey, 64)',
-          cc.state == READY and cc.flag('HasPrivKey') and cc.flag('HasPubKey') and cc.privkey == sk
+    check('_GenerateKeyPair_: then _pubkey_Output_, both flags, the ACVP keys; privkey embeds tr = SHAKE256(pubkey, 64)',
+          cc.state == PK_OUT and cc.flag('HasPrivKey') and cc.flag('HasPubKey') and cc.privkey == sk
           and cc.pubkey == pk and cc.privkey[64:128] == D.H(pk, 64))
     kv2 = VECTORS['keyGen'][1]
     c2 = generated()
     run(c2, GEN, xi=h(kv2['seed']))
-    check('re-entering _GenerateKeyPair_ generates another key pair, back to _Ready_',
-          c2.state == READY and (c2.pubkey, c2.privkey) == D.keygen_internal(h(kv2['seed']), 44) != (pk, sk))
+    check('re-entering _GenerateKeyPair_ generates another key pair, then _pubkey_Output_',
+          c2.state == PK_OUT and (c2.pubkey, c2.privkey) == D.keygen_internal(h(kv2['seed']), 44) != (pk, sk))
     c2.exec_D()
-    check('Form D kl.exec in _Ready_: _Invalid_ (GR24)', c2.state == INVALID)
+    check('Form D kl.exec in _pubkey_Output_: _Invalid_ (MR1)', c2.state == INVALID)
+    c5 = generated()
+    c5.setst(READY)
+    c5.exec_D()
+    check('Form D kl.exec in _Ready_: _Invalid_ (GR24)', c5.state == INVALID)
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ zeroes MachineUse', cc.use == 0)
     check('_pubkey_Output_ emits the ACVP pubkey, then _Success_ (MR9)',
@@ -385,10 +413,12 @@ def t_state_machine():
     check('privkey loaded in chunks; HasPrivKey set on completion', cc.privkey == sk and cc.flag('HasPrivKey')
           and cc.use == 2560)
     cc.setst(PK_IN)
-    check('entering _pubkey_Input_ clears HasPubKey only',
-          not cc.flag('HasPubKey') and cc.flag('HasPrivKey') and cc.privkey == sk)
+    check('entering _pubkey_Input_ with HasPrivKey set (MR11): _Invalid_; the key pair comes from _compute_pubKey_',
+          cc.state == INVALID)
+    cc = loaded(44)
+    cc.setst(PK_IN)
     cc.exec_B(pk)
-    check('pubkey loaded; HasPubKey set; privkey untouched', cc.flag('HasPubKey') and cc.pubkey == pk and cc.privkey == sk)
+    check('pubkey loaded into a CC without a private key; HasPubKey set', cc.flag('HasPubKey') and cc.pubkey == pk)
     cc = loaded(44, (SK_IN, sk[:2048]))
     took = cc.exec_B(sk[2048:] + b'\x5a' * 100)
     check('excess of the final loading transfer ignored', took == 512 and cc.privkey == sk and cc.flag('HasPrivKey'))

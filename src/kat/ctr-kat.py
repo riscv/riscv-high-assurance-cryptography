@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CTR/XCTR keystream Machines (<<KLE-keystream-modes>>) through a model locker, against
 SP 800-38A F.5 and the google/hctr2 XCTR reference vectors; also the general rules, the
-PI/SCC layout and kl.derive.  (n, j) = (96, 32) in CTR, (b, b) in XCTR."""
+PI/SCC layout and kl.derive.  (n, j) = (96, 32) in CTR, (b, 64) in XCTR."""
 import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
@@ -17,7 +17,7 @@ CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
 MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <<KLE-exec-encodings>>
            for m, mode in (('CTR', 1), ('XCTR', 2))}
 KIND = {v: k for k, v in MACHINE.items()}
-NJ = {'CTR': (96, 32), 'XCTR': (B, B)}                                       # (n, j)
+NJ = {'CTR': (96, 32), 'XCTR': (B, 64)}                                       # (n, j)
 
 fld = lambda m, name: sl(m, *MDH_FIELD[name])
 
@@ -294,8 +294,13 @@ eq("XCTR with ctr = 1 as left by Ready matches the reference", kl_xctr(key, b2v(
    ref_xctr(key, iv, 1, m64))
 eq("XCTR streams with ctr = 0 and ctr = 1 differ",
    kl_xctr(key, b2v(iv), m64, 0) != kl_xctr(key, b2v(iv), m64, 1), True)
-eq("XCTR Form B: bin(Xs, 128) zero-extends the 64-bit Xs",
-   kl_xctr(key, b2v(iv), m64, ONES64), ref_xctr(key, iv, ONES64, m64))
+eq("XCTR Form B: ctr <- bin(Xs, 64), the whole 64-bit Xs; the first block matches HCTR2's counter 2^64 - 1",
+   kl_xctr(key, b2v(iv), m64[:16], ONES64), ref_xctr(key, iv, ONES64, m64[:16]))
+cl = ctr_cl(key, b2v(iv), ONES64, mode='XCTR')
+two = keystream(cl, 32)
+eq("XCTR: the 64-bit ctr wraps modulo 2^64 (2^64 - 1, then 0), and the Content1 ctr field is 64 bits",
+   (two, cl.ctr, len(cl.content1()), cl.content1()[32:40]),
+   (ref_xctr(key, iv, ONES64, bytes(16)) + ref_xctr(key, iv, 0, bytes(16)), 1, 48, v2b(1, 8)))
 eq("CTR and XCTR keystreams differ",
    kl_ctr(key, b2v(iv[:12]), m64) != kl_xctr(key, b2v(iv[:12] + bytes(4)), m64), True)
 

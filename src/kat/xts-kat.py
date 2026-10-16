@@ -84,6 +84,8 @@ class XexLocker:
             return s.invalidate()                 # <<KLE-MVR-open>>
         (s.key1, s.key2), s.skid, kt = r
         s.mdh = fset(s.mdh, 'KeyType', kt)
+        if s.key1 == s.key2:
+            return s.invalidate()                 # key2 = key1: configuration error (MR12, MR14)
     def provision(s, pi):
         s.mdh = b2v(pi[:16])
         w1, w2 = s.widths
@@ -163,6 +165,9 @@ class XexLocker:
             s.invalidate()
             return False
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
+        if s.key1 == s.key2:
+            s.invalidate()                        # MR12, MR14: checked when the keys are written
+            return False
         return True
 
 def derive(src, dst, length):
@@ -174,6 +179,11 @@ def derive(src, dst, length):
 def new_xex(key1, key2, policy=POL_ENC | POL_DEC, **kw):
     cl = XexLocker(**kw)
     cl.provision(build_pi(XEX_OF[f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2), policy))
+    return cl
+
+def XexLocker_ready(cipher='AES-128'):
+    cl = XexLocker()
+    cl.provision(build_pi(XEX_OF[cipher], 0, 1, 2))
     return cl
 
 def cl_run(cl, data, per_block=False, klstart=0, halt_after=None):
@@ -356,6 +366,10 @@ check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
 
 section("KLE XEX locker, full blocks (tweak = bin(i, 128))")
 for name, k1, k2, i, p, c in FULL:
+    if k1 == k2:                                  # IEEE 1619 vector 1: the Machine rejects equal keys
+        check(f"{name}: key2 = key1 -> _Invalid_ at provisioning (MR12, MR14); REF checked above", True,
+              new_xex(k1, k2).state, INVALID)
+        continue
     check(f"{name}: encrypt (one multi-block kl.exec, MR3), decrypt, one kl.exec per block", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
           (c, p, c))
@@ -434,15 +448,17 @@ for q in (1, 7, 31):
 m0 = b2v(aes_encrypt(k1, v2b(bin_(i, B), 16)))
 m1 = kl_update_mask(m0)
 enc1 = lambda m: b2v(aes_encrypt(k1, v2b(b2v(data[:16]) ^ m, 16))) ^ m
-check("key2 = key1: the mask is the raw enc_blk(key1, T), no alpha applied", True,
-      (tw(new_xex(k1, k1)).exec1(b2v(data[:16])), enc1(m0) != enc1(m1)), (enc1(m0), True))
+check("key2 = key1 -> _Invalid_ at provisioning and after a kl.derive (MR12, MR14): the single-key XEX without "
+      "alpha, whose mask would be the raw enc_blk(key1, T), cannot arise", True,
+      (new_xex(k1, k1).state, derive(k1 + k1, XexLocker_ready(), 2 * len(k1)), enc1(m0) != enc1(m1)),
+      (INVALID, False, True))
 
 section("Provisioning Input and Serialized Content")
 SKID = 0x0123456789abcdef
 SKS = {SKID: (b2v(k1), b2v(k2))}
 for cipher, kt, size in (('AES-128', 0, 48), ('AES-256', 0, 80), ('AES-128', 1, 32)):
     kk = CIPHERS[cipher]
-    pi = build_pi(XEX_OF[cipher], kt, SKID if kt else (1 << kk) - 1, 0 if kt else (1 << kk) - 1)
+    pi = build_pi(XEX_OF[cipher], kt, SKID if kt else (1 << kk) - 1, 0 if kt else (1 << kk) - 2)
     cl = XexLocker(sks=SKS)
     cl.provision(pi)
     check(f"{cipher} {'SKID' if kt else 'by value'}: PI {size} B, Content1 {size} B, kl.size", True,
@@ -471,7 +487,7 @@ check("KeyType 2: two independent random keys, KeyType 0, Content1 48 B", True,
 section("kl.derive: `key1 || key2` in Ready")
 src = k1 + k2 + bytes.fromhex("5a" * 16)
 for length in (32, 48):
-    cl = new_xex(bytes(16), bytes(16))
+    cl = new_xex(bytes(16), b'\x01' * 16)
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
@@ -484,10 +500,10 @@ for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR50 item 5)", None, src
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
     else:
-        cl = new_xex(bytes(16), bytes(16))
+        cl = new_xex(bytes(16), b'\x01' * 16)
         mk and mk(cl)
     check(f"{what} -> Invalid", True, (derive(s_, cl, n), cl.state, cl.key1), (False, INVALID, None))
-src_l, dst = new_xex(k1, k2), new_xex(bytes(16), bytes(16))
+src_l, dst = new_xex(k1, k2), new_xex(bytes(16), b'\x01' * 16)
 check("an XEX locker as a kl.derive source (no source endpoint) -> only the source Invalid", True,
       (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, READY))
 

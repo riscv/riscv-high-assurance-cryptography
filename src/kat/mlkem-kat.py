@@ -49,7 +49,7 @@ DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', {**key(192)
         mc(0, 3): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {SET_KEY: ('K0', 512)}),
         mc(6, 1): ('SHA3-256', {HASH_ABSORB: ('input', 0)}), mc(6, 10): ('KMAC128', {HASH_ABSORB: ('input', 0)}),
         mc(10, 0): ('secp256r1', {SET_SCALAR: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {SET_SCALAR: ('Scalar', 384)}),
-        mc(10, 3): ('ed25519', {SET_SCALAR: ('Scalar', 256)})}
+        mc(10, 3): ('x25519', {SET_SCALAR: ('Scalar', 256)})}
 AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
 FILL = b'\x5a'                                     # placeholder key of a provisioned destination
 USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}     # <<KLE-UsagePolicy>>
@@ -334,8 +334,8 @@ def kl_derive(dest, src, length):
     bad = [lk for lk, ok in ((src, out or src.state in SK_SRC and src.se & 8),
                              (dest, field and not (is_key and dest.get('KeyType') == 1))) if not ok]
     cmac_in = field == 'input' and dest.name.endswith('CMAC')
-    if not bad and not out and (field == 'J0' or cmac_in):
-        bad = [src, dest]                          # GR50 item 3: GR54 admits no IV and no CMAC input
+    if not bad and not out and (field in ('J0', 'Scalar') or cmac_in):
+        bad = [src, dest]                          # GR50 item 3: GR54 admits no IV, no CMAC input, no `Scalar`
     for lk in bad:                                 # GR50 items 1-3; GR53
         lk.enter_error(INVALID)
     if bad:
@@ -879,13 +879,11 @@ def t_derive():
               derived(Dest(AES128_GCM, state=st), src).state == INVALID and src.state == SK_OUT)
     for code in (mc(10, 0), mc(10, 3)):
         dest = derived(Dest(code, state=SET_SCALAR), src, 32)
-        check(f'{dest.name} in _Set_Scalar_ receives sharedkey as its private key Scalar (GR54)',
-              dest.key == ss and dest.state == SET_SCALAR)
+        check(f'{dest.name} in _Set_Scalar_: sharedkey is not a `Scalar` (GR54): both lockers _Invalid_ (GR50 item 3)',
+              dest.state == INVALID and src.state == INVALID)
+        src = shared()
     check('secp256r1 in _Ready_ (endpoint in _Set_Scalar_): destination _Invalid_, source untouched',
           derived(Dest(mc(10, 0)), src, 32).state == INVALID and src.state == SK_OUT)
-    check('secp384r1: Scalar longer than sharedkey: destination _Invalid_ (GR50 item 5)',
-          derived(Dest(mc(10, 1), state=SET_SCALAR), src, 48).state == INVALID and src.state == SK_OUT
-          and src.sharedkey == ss)
     dv = vec('decaps', ps, 'valid')
     cd = decaps_ready(dv)
     cd.exec_D()

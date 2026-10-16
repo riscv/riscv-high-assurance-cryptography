@@ -53,7 +53,7 @@ PARAMS = {'SHA3-224': (448, 1152, 224, False, (0, 1)), 'SHA3-256': (512, 1088, 2
           'SHA3-384': (768, 832, 384, False, (0, 1)), 'SHA3-512': (1024, 576, 512, False, (0, 1)),
           'SHAKE128': (256, 1344, 1344, True, (1, 1, 1, 1)), 'SHAKE256': (512, 1088, 1088, True, (1, 1, 1, 1))}
 MACHINE = {name: (6 << 4) | mode for mode, name in enumerate(PARAMS)}
-N, GRANULARITY = 1600, 32
+N, GRANULARITY = 1600, 8
 
 def ref_hash(name, msg, nbytes=None):
     c, b, t, xof, D = PARAMS[name]
@@ -103,6 +103,80 @@ VECTORS = {
                             '2d700caae7396ece96604440577da4f3aa22aeb8857f961c4cd8e06f0ae6610b',
 }
 V = lambda name, mid: bytes.fromhex(VECTORS[name, mid])
+CAVP_BITS = [  # NIST CAVP bit-oriented vectors (CAVS 19.0: SHA3AllBits1-28-16, SHAKE3AllBitsGT)
+    # (name, Len, whole bytes absorbed in _Hash_Absorb_, exercises, Msg, MD / Output)
+    ('SHA3-224', 5, 0, 'piece only',
+     '1f',
+     '65ad282dcf9642a2facc1e7545c58f3b17523e795fee58e4d21b10bf'),
+    ('SHA3-224', 1149, 100, 'two-block padding',
+     'cbcdc748275692f43e01048321e8e07dc87201200876efa8bfa3b0ce521fe18f596e052e98961c7c3280785719a2cc71'
+     'c9db8653369e5ea102532f9ff4fa06f4a61279ae7db93b87de14ed669ff13629bcab15a24c4e76dfb3fc04af18903f61'
+     '1a80cecfbe08169cac850bb99c1f462e0baa591732ce5fec3866d706a727b25f1d82aa9a44cbd643039a7b57f6722607',
+     '9c8ec99effb33fdad7d56d06732992a9cf96a6d8f6c5990133b85be0'),
+    ('SHA3-256', 5, 0, 'piece only',
+     '1f',
+     '3620b189e194c3ca52f6357aefb4d2473ef4ca23011ca75eccb4cc4cb438d54b'),
+    ('SHA3-256', 1085, 100, 'two-block padding',
+     'ae9a9e2be9f4b0d29b20a1dc23d4e24990b31483b416c040790c48a979a01dbcc85a33ef1408b216f1bdef866e1b9a7b'
+     'ecce39b73059d46cb615f25c4876c53fd091a2656bdbb49cbe34f0548d244b0189642bc16aa01c3f3e7bc5d701d41afb'
+     '6d47d3d513f71c2dab8b8e8ea9775ea4117dd4e98b73ff81ba46a861ca3f84b74885ad8637e45311',
+     'bfd6c9d1de5548e9373e8832bb833ac961fd003031258ec0c8812cfb95e3acba'),
+    ('SHA3-384', 5, 0, 'piece only',
+     '03',
+     'e920d1d4daddf9632104373762c8b61e27a3f44700c2f7321c40e8612fcae37c3f8911547104780e49748cb5365fb379'),
+    ('SHA3-384', 829, 100, 'two-block padding',
+     '1d82c883e189f86909bf8d42f8c7325dcc1a0a9dee4de9dae793c58476826789df1a6679850356e9bb163d15d81f46c9'
+     '89e1ba816c5b2bcfda4af3fd04efddf34112215ca6479605d87023851e837623ba8ef9f47af802448a094b378caca1b0'
+     'ea74e0726bde1e06',
+     '54c8e154fab200096f212cfe1114357812b930500514ca5ddce6cdc0c55010b3d796c7278ead7c231f7e39b8efeafe4f'),
+    ('SHA3-512', 5, 0, 'piece only',
+     '00',
+     '831a797057a769057ebf9663817495b71f2d00dd6503f8ac5f76433d4c5cb1e834e0727841e2d3761fd2489c728d7721'
+     '0916b43e7d27398a9ec66f0376135e45'),
+    ('SHA3-512', 573, 40, 'two-block padding',
+     'acf697ea3aa0dc8b49e5fe9bf875b38757322d46ccfa9fd4b6c0fee251e205ccdab67bcbf366b86c48ff664073c485d5'
+     '1dc8b1e666bca8cf87050743b61254414bec4144200e2f1b',
+     'b9d89cbb1ad32fc08004fe4fcf74a4df4a80a30e084be96fd663412c28960da1b9b3fe9945ec38bf283123a6cd0cdd89'
+     'f804ec56ec882a697cce8f13f272d19b'),
+    ('SHAKE128', 5, 0, 'piece only',
+     '16',
+     '385ad8869459c849df754797ea900692'),
+    ('SHAKE128', 1339, 100, 'two-block padding',
+     '7e5ce2606ab1d7df0f9cca2fe4080739c2b950879931304c62d58ca4544c7b1c5b285875c6c815a53f7cd11f01ebad54'
+     '45b2dc7afd4efa8cc53c9f92175e3322bea104278ddd95e150fd3a2d035fe107427e334d01cedcc57de7266272e6cdc3'
+     '8f100ffd27b9029a29652ae2522c4b59a1637c880c787d00711e4a9dcfaaf008b6bda07ffc2402d9b2fccbc4561a9252'
+     '4aaae0b485158645892933ca957445f71bf0e03674e63d05',
+     '95ecd5dcf37aad409bf8168fb5046c8d'),
+    ('SHAKE256', 5, 0, 'piece only',
+     '0f',
+     'ae9b76a226ac1b0b8b75dc60ce74724fba5a98f68b5544bd54746f5673bfffda'),
+    ('SHAKE256', 1083, 100, 'two-block padding',
+     '9cd56b9c1f83ff404cef23de9eb7cc1d6bed97bec569c58a9f63838930416f759dad596ed2eb46efb069bb016e9838af'
+     '39fb02b91e7e258d2a08ba72d05366078afc23ecc3d643bff584b24a0f477bfa19148d931aeac0233a62133524883746'
+     'aee9527dbcedfd9661678e20486b9de85360c1b581559b3515991638f585ec1c509d6d8883d87c06',
+     'da4a3e02de8337573033a8900c39e6013945087e5ad3ce84028069135508a86d'),
+    ('SHA3-512', 1153, 100, 'piece crosses a block boundary',
+     '5c2b3cfb98248aa4232fa1fd83104190ac3534d7bb989647e6e7758db3e39a176906a5d6c4686042ede34d9fa975817f'
+     'd1e7b58902ac9b78950c6e67d282cd4b6062c9c100be3d0a7c8b5e53d900923ad43f868f8d377a577dc9e017ad29264f'
+     '2a88d044b4f0c902b66ffba27b771dc99e85cc71c201deec8465f325aea24c2aadc0e1e746c4ad3484d64d13f5a3c932'
+     '00',
+     'fc6c2b313a4ece52c4d4688daf433262e95d9680aec58e2b3d7c043770322ee6ae111e1d34fe5341048837776224e5b6'
+     '805910481aa2766419ce5548bea53e5a'),
+    ('SHAKE128', 1357, 100, 'piece crosses a block boundary',
+     '756e24114a111ad25e0dba7822e3102a2e9c95d2d50a5d7efd5093062da523efe854b68f3a07e3729046a3fdcd3b0651'
+     '99b82572fc7b58a92db0a926a4b788ea7628c0e4e214a95a278e9f8b996ab493f445a28ef0c604001622c575d1e6d864'
+     'c8f129596bbfd453ccee966bb1fa80b7e74cf36ed973c84d61b1cf39ddb97b2586b7db36fd91cc25276c6ee63b73d487'
+     '19d3005ade0a0e56b562afbbf0b8d9f55782bdc3bf11fa98df13',
+     'd846859ba7da90c700f9f8fc8e718ecd'),
+    ('SHAKE256', 2176, 136, 'Form A: a full-block piece',
+     '0e3bd320a9b1dff29504e1371ea0a95898dc39174e2463d0bb579afefd6e0200865fc91e1540bac7e4b00f1c237387b3'
+     'a65cb994db70a888fe48979490b71fc005ad7e1cbd5b32053598c7a57f84edb9ef6bcd9718ec9d6ff65a72d16d62566f'
+     'f2ee9b25894a6f36ef85b0d9181b01f4dcd01d27eddf6b0c0c54d3bd7cb7d197b7eac73e615498e17a4072c0d77febeb'
+     'd355504c429339e7a6006161a6fdb5bfbb69ab712dc3d58f3e8eb662a4fad4263dc00e0eff4e30892e24c5c4d17e2d70'
+     '6633efc5d5dd50c7a33a24c868d2e42e83da01760c5978790a89a7eee6805e31200f3a4341eb2e11110a63f90950428a'
+     '0b6bcf8b51fc383fa4f7ade8ce4c738a51c734f159349af5f0c81cfd71bc17c2',
+     'e5c33665acd47f77ec88cff924e6e770fb3836343d3ca75730a1fefcb8961c0a'),
+]
 
 # ---------------------------------------------------------------- KLE model
 
@@ -110,7 +184,7 @@ class Hart:
     klstart = 0  # bytes, <<KLE-CSR-klstart>>
 
 HART = Hart()
-C1_BITS = -(-(N + 16) // 128) * 128  # Serialized Content: state, block_base; padded to 128
+C1_BITS = -(-(N + 32) // 128) * 128  # Serialized Content: state, block_base, last_block_len; padded to 128
 
 def kl_size(st):
     """<<KLE-instruction-size>>, AuxDataLen = 0; a supplied PI MDH is _Unconfigured_."""
@@ -129,7 +203,7 @@ class Sha3:
         s.reset(KL_STATE_UNCONFIGURED)
 
     def reset(s, st=KL_STATE_INVALID):  # GR30 for an Error State
-        s.st, s.state, s.block_base = st, 0, 0
+        s.st, s.state, s.block_base, s.last_block_len = st, 0, 0, 0
 
     def set_machine(s, machine):
         s.machine, s.name = machine, {v: k for k, v in MACHINE.items()}[machine]
@@ -147,7 +221,10 @@ class Sha3:
 
     def export(s, at_order=False):
         """Serialized Content in table order from bit 0; at_order: built with `@` (negative control)."""
-        v = cat((s.state, N), (s.block_base, 16)) if at_order else s.state | s.block_base << N
+        if at_order:
+            v = cat((s.state, N), (s.block_base, 16), (s.last_block_len, 16))
+        else:
+            v = s.state | s.block_base << N | s.last_block_len << (N + 16)
         return v2b(v, C1_BITS // 8)
 
     @classmethod
@@ -155,7 +232,8 @@ class Sha3:
         s, f, v = cls(), mdh_unpack(b2v(mdh)), b2v(content)
         s.set_machine(f['Machine'])
         s.st, s.state, s.block_base = f['State'], sl(v, N - 1, 0), sl(v, N + 15, N)
-        if s.block_base >= s.b:  # not a position within a block: inconsistent Content
+        s.last_block_len = sl(v, N + 31, N + 16)
+        if s.block_base >= s.b or s.last_block_len > s.b:  # inconsistent Content
             s.reset()
         return s
 
@@ -173,7 +251,7 @@ class Sha3:
             s.state = keccak(s.state ^ (S >> room))
         s.block_base, s.st = 0, KL_STATE_HASH_OUTPUT  # block[t-1:0] <- finalize() is the identity
 
-    def setst(s, immed, form='A'):
+    def setst(s, immed, form='A', xs=None):
         if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
             raise IllegalInstruction  # GR26
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
@@ -184,8 +262,14 @@ class Sha3:
         elif immed == KL_STATE_READY:
             s.reset(KL_STATE_READY)
         elif form == 'A' and (s.st, immed) == (KL_STATE_READY, KL_STATE_HASH_ABSORB):
-            s.st = immed  # Form A: max_len is set by the Machine
-        elif form == 'A' and (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT):
+            s.st, s.last_block_len = immed, s.b  # Form A: max_len is set by the Machine
+        elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
+                form == 'A' or form == 'B' and xs is not None and 0 < xs <= s.b):
+            s.st = immed  # Form A keeps last_block_len = b; any bit length (MR16, FIPS 202 bit order)
+            if form == 'B':
+                s.last_block_len = xs
+        elif form == 'A' and immed == KL_STATE_HASH_OUTPUT and (
+                s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
             s.enter_output()
         else:
             s.reset()  # MR1, GR28, MR17, <<KLE-process-VLI>> same-State rule
@@ -216,6 +300,17 @@ class Sha3:
             if p and s.block_base:
                 return s.fail(out)  # not an interruption point
             r = s.process_vli(b2v(inp), 8 * top, 8 * p, *halt, klstart_bits)
+        elif s.st == KL_STATE_HASH_LAST_BLOCK and form in 'BD' and inp is not None and out is None:
+            if sew is not None and sew < GRANULARITY:
+                return s.fail(out)  # MR2
+            p, top = HART.klstart, len(inp)
+            if p >= top:
+                HART.klstart = 0  # empty window: only klstart = 0
+                return 'empty'
+            if p or s.last_block_len == 0 or 8 * top < s.last_block_len:
+                return s.fail(out)  # only interruption point 0; MR10; MR2
+            s.process_vli(sl(b2v(inp), s.last_block_len - 1, 0), s.last_block_len, 0, None, False)
+            s.last_block_len, r = 0, 'done'  # process_last_block() = None; atomic: no halt
         elif s.st == KL_STATE_HASH_OUTPUT and form in 'CD' and inp is None and out is not None:
             p, top = HART.klstart, len(out)
             if p >= top:
@@ -231,7 +326,7 @@ class Sha3:
         return r
 
     def process_vli(s, INPUT, KLLEN, ib, interrupt_at, end_halt, klstart_bits=False):
-        """process_VLI(0, state, b, state, n, input_base, block_base, 0, None, P(), None, xor_accumulate)."""
+        """PROCESS_VLI(0, state, b, state, n, input_base, block_base, 0, None, P(), None, xor_accumulate)."""
         while ib < KLLEN:
             amount = min(KLLEN - ib, s.b - s.block_base)
             s.state ^= sl(INPUT, ib + amount - 1, ib) << s.block_base
@@ -244,7 +339,7 @@ class Sha3:
         return 'done'
 
     def absorb_bits(s, val, nbits):
-        """The process_VLI loop on a bit-granular input (no kl.exec transfers this)."""
+        """The PROCESS_VLI loop on a bit-granular input (no kl.exec transfers this)."""
         assert s.st == KL_STATE_HASH_ABSORB
         s.process_vli(sl(val, nbits - 1, 0), nbits, 0, None, False)
 
@@ -386,11 +481,10 @@ check('SHA3-512 a3_200, transfers 12+60+100+28 B', None,
       kl_hash('SHA3-512', MSG_A3, None, [MSG_A3[:12], MSG_A3[12:72], MSG_A3[72:172], MSG_A3[172:]])[0],
       V('SHA3-512', 'a3_200'))
 cl = absorbing('SHA3-256')
-check('Form B with SEW = 16 < granularity -> _Invalid_ (MR2)',
-      cl.exec('B', inp=MSG_A3[:16], sew=16) == 'invalid' and cl.st == KL_STATE_INVALID)
-cl = absorbing('SHA3-256')
-check('Form B with SEW = 32 and 64 accepted', cl.exec('B', inp=MSG_A3[:8], sew=32) == 'done'
-      and cl.exec('B', inp=MSG_A3[8:24], sew=64) == 'done' and cl.block_base == 192)
+check('Granularity 8 bits: Form B with SEW = 8, 16, 32 and 64 accepted',
+      cl.exec('B', inp=MSG_A3[:1], sew=8) == 'done' and cl.exec('B', inp=MSG_A3[1:3], sew=16) == 'done'
+      and cl.exec('B', inp=MSG_A3[3:7], sew=32) == 'done'
+      and cl.exec('B', inp=MSG_A3[7:23], sew=64) == 'done' and cl.block_base == 184)
 
 section('Interrupted absorption')
 cl = absorbing('SHA3-256')
@@ -525,7 +619,8 @@ for label, name, prep, act in [
         ('Form B kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
          lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B')),
         ('same-State kl.setst in _Hash_Absorb_', 'SHA3-256', ab, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
-        ('kl.setst #kl_state_hash_last_block', 'SHA3-256', ab, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B')),
+        ('Form B kl.setst to _Hash_Absorb_Last_Block_, Xs = 0', 'SHA3-256', ab,
+         lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1)', 'SHA3-256', ab, lambda c: c.exec('C', out=bytearray(32))),
         ('Form A kl.exec in _Hash_Absorb_ (MR1)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
@@ -559,12 +654,13 @@ for mid in ('_Hash_Absorb_', '_Hash_Output_'):
 section('Provisioning Input and Serialized Content')
 check('PI = MDH only; kl.size of a PI MDH = 16',
       len(make_pi('SHA3-256')) == 16 and kl_size(KL_STATE_UNCONFIGURED) == 16)
-check('Serialized Content 1600 + 16 bits padded to 1664; kl.size 32 + 208; Error State 16',
+check('Serialized Content 1600 + 16 + 16 bits padded to 1664; kl.size 32 + 208; Error State 16',
       (C1_BITS, kl_size(KL_STATE_HASH_ABSORB), kl_size(KL_STATE_INVALID)) == (1664, 240, 16))
 cl = absorbing('SHA3-256', MSG_A3[:100])
 c1 = cl.export()
-check('layout: [0,200) state, [200,202) bin(block_base, 16) = 800 bits, [202,208) zero',
-      (len(c1), c1[:200], c1[200:202], c1[202:]) == (208, v2b(cl.state, 200), v2b(800, 2), bytes(6)))
+check('layout: [0,200) state, [200,202) block_base = 800, [202,204) last_block_len = b = 1088, [204,208) zero',
+      (len(c1), c1[:200], c1[200:202], c1[202:204], c1[204:])
+      == (208, v2b(cl.state, 200), v2b(800, 2), v2b(1088, 2), bytes(4)))
 for label, name, n_abs, n_out, want in [
         ('SHA3-256 in _Hash_Absorb_, block_base 800', 'SHA3-256', 100, None, V('SHA3-256', 'a3_200')),
         ('SHA3-512 in _Hash_Absorb_, block_base 0', 'SHA3-512', 144, None, V('SHA3-512', 'a3_200')),
@@ -626,6 +722,69 @@ check('GR55: SHAKE128(abc) -> a 16-byte `key` in _Ready_ (length 32: 16 B), the 
       (kl_derive(dst, src, 32), dst.key, squeeze(src, 16)[1], kl_derive(d224, s224, 32), d224.st, s224.st),
       ('done', xof[:16], xof[16:32], 'invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
 
+section('Final piece of any bit length: _Hash_Absorb_Last_Block_ (NIST CAVP bit-oriented vectors)')
+
+def piece_hash(name, nbits, nb, msg, nout, form=None, junk=True, msb_piece=False, split_at=None):
+    """Whole bytes msg[:nb] in _Hash_Absorb_, then the final nbits - 8 nb bits in _Hash_Absorb_Last_Block_;
+    junk: the bits of INPUT above last_block_len set, plus one extra byte (MR7)."""
+    L, cl = nbits - 8 * nb, absorbing(name, msg[:nb])
+    pv = sl(b2v(msg[nb:]), L - 1, 0)
+    if msb_piece:  # negative control: a partial last byte taken from its most significant bits
+        pv = sl(b2v(msg[nb:]), 8 * ((L + 7) // 8) - 1, 8 * ((L + 7) // 8) - L) if L % 8 else pv
+    inp = v2b(pv | (((1 << 8 * ((L + 7) // 8 + 1)) - 1) >> L << L if junk else 0), (L + 7) // 8 + junk)
+    form = form or ('A' if L == cl.b else 'B')
+    cl.setst(KL_STATE_HASH_LAST_BLOCK, form, None if form == 'A' else L)
+    snap = (cl.st, cl.last_block_len)
+    r = cl.exec('B', inp=inp, interrupt_at=0)
+    cl.setst(KL_STATE_HASH_OUTPUT)
+    return squeeze(cl, nout)[1], snap, r, cl.pad_case
+
+for name, nbits, nb, what, msg, md in CAVP_BITS:
+    msg, md = bytes.fromhex(msg), bytes.fromhex(md)
+    got, snap, r, case = piece_hash(name, nbits, nb, msg, len(md))
+    L = nbits - 8 * nb
+    check(f'CAVP {name} Len = {nbits}: {nb} B, then a {L}-bit piece ({what})', None, got, md)
+    check(f'  = bit-level reference sponge', None,
+          ref_sponge(PARAMS[name][1], sl(b2v(msg), nbits - 1, 0), nbits, PARAMS[name][4], len(md)), md)
+    if what == 'two-block padding':
+        check(f'  {name}: b - block_base < |D| + 2: two-block clause', case == 2)
+check('the piece kl.exec is atomic: interrupt_at = 0 does not halt it, klstart = 0, last_block_len -> 0', None,
+      (r, HART.klstart, snap), ('done', 0, (KL_STATE_HASH_LAST_BLOCK, PARAMS[name][1])))
+
+def last(name='SHA3-256', L=13, nb=10):
+    cl = absorbing(name, MSG_A3[:nb])
+    cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
+    return cl
+for label, prep, act in [
+        ('Xs = 0', lambda: absorbing('SHA3-256', MSG_A3[:10]), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)),
+        ('Xs = b + 1', lambda: absorbing('SHA3-256', MSG_A3[:10]),
+         lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089)),
+        ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8)),
+        ('KLLEN = 8 < last_block_len = 13 (MR2)', last, lambda c: c.exec('B', inp=b'\x01')),
+        ('a second kl.exec (MR10)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
+        ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
+        ('same-State kl.setst (GR23)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
+        ('klstart = 1: not an interruption point', last,
+         lambda c: (setattr(HART, 'klstart', 1), c.exec('B', inp=b'\x01\x02')))]:
+    cl = prep()
+    act(cl)
+    check(f'_Invalid_: _Hash_Absorb_Last_Block_, {label}', cl.st == KL_STATE_INVALID)
+    HART.klstart = 0
+cl = last()
+check('_Hash_Absorb_Last_Block_ -> _Ready_ with the piece pending: restarts (abc)', None,
+      (cl.setst(KL_STATE_READY), cl.last_block_len, kl_hash('SHA3-256', MSG_ABC)[0]),
+      (KL_STATE_READY, 0, V('SHA3-256', 'abc')))
+name, nbits, nb, what, msg, md = CAVP_BITS[-3]  # SHA3-512 Len = 1153, the piece crosses a block boundary
+msg, md, L = bytes.fromhex(msg), bytes.fromhex(md), nbits - 8 * nb
+cl = absorbing(name, msg[:nb])
+cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
+c1 = cl.export()
+cl = Sha3.load(cl.mdh(), c1)
+cl.exec('B', inp=msg[nb:])
+cl.setst(KL_STATE_HASH_OUTPUT)
+check(f'export/import between the kl.setst and the kl.exec of the piece: last_block_len = {L} serialized', None,
+      (c1[202:204], squeeze(cl, 64)[1]), (v2b(L, 2), md))
+
 section('Negative controls')
 control('SHA3-256 suffix byte 0x06 MSB-aligned',
         kl_hash('SHA3-256', b'', wrong_suffix=True)[0] != V('SHA3-256', 'empty'))
@@ -638,7 +797,9 @@ cl = Sha3.load(cl.mdh(), cl.export(at_order=True))
 cl.exec('B', inp=MSG_A3[100:])
 cl.setst(KL_STATE_HASH_OUTPUT)
 control('Serialized Content built with @ (first field most significant)', squeeze(cl, 32)[1] != V('SHA3-256', 'a3_200'))
+name, nbits, nb, what, msg, md = CAVP_BITS[0]
+control('a partial final byte taken from its most significant bits (CAVP SHA3-224 Len = 5)',
+        piece_hash(name, nbits, nb, bytes.fromhex(msg), 28, msb_piece=True)[0] != bytes.fromhex(md))
 
-info('the two-block padding clause needs b - block_base < |D| + 2 <= 6, unreachable with whole-byte transfers; '
-     'exercised at bit level')
+info('the two-block padding clause needs b - block_base < |D| + 2 <= 6: reached only through a final piece')
 done()

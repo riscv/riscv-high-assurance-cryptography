@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, KL_CFG_PROVISIONING,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_OUTPUT as OUTPUT,
+                    KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY, KL_STATE_FAILURE as FAILURE,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_INVALID as INVALID,
                     section, check, control, info, spec_note, done)
 
@@ -184,12 +185,12 @@ def provision_blocks(sec, K, S):
     return cb, kb
 
 
-def make_pi(sec, xof, K, S, skid=None, keytype=None):
+def make_pi(sec, xof, K, S, skid=None, keytype=None, policy=0b11):
     """PI; with a SKID (_KeyType_ = 1, GR84) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
     _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
     kt = int(skid is not None) if keytype is None else keytype
     cb, kb = provision_blocks(sec, b'' if kt == 1 else K, S)
-    mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=kt)
+    mdh = mdh_pack(Machine=0x60 | MODE[kname(sec, xof)], State=UNCONF, KeyType=kt, MachinePolicy=policy)
     return v2b(mdh, 16) + cb + (v2b(skid, 8) if kt == 1 else kb)
 
 
@@ -205,6 +206,7 @@ class Kmac:
 
     def __init__(self, hart, bad=()):
         self.hart, self.bad, self.st, self.b = hart, set(bad), UNCONF, 0
+        self.policy = 0b11
         self.keytype = self.skid = 0
         self._clear()
 
@@ -215,7 +217,7 @@ class Kmac:
         self.D = (1, 1, 1, 1) if 'suffix' in self.bad else (0, 0)       # cSHAKE suffix
 
     def _clear(self):                                                    # GR30
-        self.state = self.block_base = self.cb = self.kb = self.L = 0
+        self.state = self.block_base = self.last_block_len = self.cb = self.kb = self.L = 0
 
     def invalidate(self):
         self.st = INVALID
@@ -237,6 +239,9 @@ class Kmac:
     def provision(self, pi):
         f = mdh_unpack(b2v(pi[:16]))
         self._machine(f['Machine'])
+        self.policy = f['MachinePolicy']
+        if not self.xof and not self.policy & 3:
+            return self.invalidate()                                     # KMAC: at least one bit (invalid Metadata)
         w, kt = self.b // 8, f['KeyType']
         assert f['State'] == UNCONF and len(pi) == kl_size(UNCONF, self.b, kt)
         self.cb = b2v(pi[16:16 + w])
@@ -247,23 +252,25 @@ class Kmac:
         self.ready()
 
     def fields(self):
-        return [(self.state, 1600), (self.block_base, 16), (0, 48), (self.cb, self.b),
+        return [(self.state, 1600), (self.block_base, 16), (self.last_block_len, 16), (0, 32), (self.cb, self.b),
                 (self.skid, 64) if self.keytype else (self.kb, self.b), (self.L, 32)]
 
     def export(self, at=False):
         """(MDH, Serialized Content); at=True is the negative control that orders with `@`."""
         v = cat(*self.fields()) if at else pack(self.fields())
-        return mdh_pack(Machine=self.machine, State=self.st, KeyType=self.keytype), v2b(v, scc_len(self.b, self.keytype))
+        return (mdh_pack(Machine=self.machine, State=self.st, KeyType=self.keytype, MachinePolicy=self.policy),
+                v2b(v, scc_len(self.b, self.keytype)))
 
     def import_(self, mdh, content):
         f = mdh_unpack(mdh)
         self._machine(f['Machine'])
+        self.policy = f['MachinePolicy']
         self.st, v, self.keytype = f['State'], b2v(content), f['KeyType']
         vals = []
         for _, w in self.fields():
             vals.append(v & ((1 << w) - 1))
             v >>= w
-        self.state, self.block_base, _, self.cb, key, self.L = vals
+        self.state, self.block_base, self.last_block_len, _, self.cb, key, self.L = vals
         if self.keytype:
             self._resolve(key)                                           # GR84: SKID resolved after import
         else:
@@ -272,9 +279,8 @@ class Kmac:
             self.invalidate()
         return self
 
-    def ready(self):
-        self.st, self.block_base = READY, 0
-        self.state = keccak(keccak(self.cb) ^ self.kb)
+    def ready(self):                                                     # SHA-3: `state` zeroed; L <- 0
+        self.st, self.block_base, self.last_block_len, self.state, self.L = READY, 0, 0, 0, 0
 
     def setst(self, immed, form='A', aux=None):
         if immed == UNCONF:
@@ -283,16 +289,28 @@ class Kmac:
             return
         if immed == READY:                                               # GR22
             return self.ready()
-        if immed == ABSORB and self.st == READY and form == 'A':         # no same-State (process_VLI)
-            self.st = ABSORB
+        if immed == ABSORB and self.st == READY and form == 'A':         # no same-State (PROCESS_VLI)
+            self.state = keccak(keccak(self.state ^ self.cb) ^ self.kb)  # the key enters `state` only here
+            self.st, self.last_block_len = ABSORB, self.b
             return
-        if immed == OUTPUT and self.st == ABSORB and form == ('A' if self.xof else 'B'):
+        if immed == LAST and self.st == ABSORB and (form == 'A' or form == 'B' and aux is not None
+                                                    and 0 < aux <= self.b):
+            self.st = LAST                                               # a final piece of any bit length
+            if form == 'B':
+                self.last_block_len = aux
+            return
+        done = self.st == ABSORB or self.st == LAST and self.last_block_len == 0
+        if immed == OUTPUT and done and form == ('A' if self.xof else 'B') and (self.xof or self.policy & 1):
             if self.xof or 0 < aux < 1 << 32:                         # 0 < L < 2^32
                 self.L = aux or 0
                 return self._to_output()
+        if immed == VERIFY and done and form == 'B' and not self.xof and self.policy & 2:   # MR11
+            if aux is not None and aux % 8 == 0 and 64 <= aux <= self.b:
+                self.L = aux
+                return self._to_output(VERIFY)
         self.invalidate()
 
-    def _to_output(self):
+    def _to_output(self, target=OUTPUT):
         enc = (left_encode if 'left_encode' in self.bad else right_encode)(self.L)
         self._vli(b2v(enc), 8 * len(enc), 0)
         room, D = self.b - self.block_base, self.D                       # <<KLE-SHA-3>> padding
@@ -302,7 +320,7 @@ class Kmac:
         self.state = keccak(self.state ^ (S & ((1 << room) - 1)) << self.block_base)
         if n > room:
             self.state = keccak(self.state ^ S >> room)
-        self.st, self.block_base = OUTPUT, 0
+        self.st, self.block_base = target, 0
         if 'raw_last_byte' in self.bad and not self.xof:
             self.L = 8 * -(-self.L // 8)
 
@@ -318,7 +336,7 @@ class Kmac:
         which to halt at the next interruption point; `sew` = vector element width."""
         if self.st in ERROR_STATES:
             return self._end('noop', out)
-        if self.st == ABSORB and inp is not None and out is None and (sew or 32) >= 32:  # MR1, MR2
+        if self.st == ABSORB and inp is not None and out is None and (sew or 8) >= 8:  # MR1, MR2
             p, top = self.hart.klstart, len(inp)
             if p >= top:
                 return self._end('empty')                                # empty window: only klstart = 0
@@ -327,8 +345,22 @@ class Kmac:
                 return self._end('invalid')
             st = self._vli(b2v(inp), 8 * top, 8 * p, halt, literal)
             return st if st == 'interrupted' else self._end(st)
+        if self.st == LAST and inp is not None and out is None and (sew or 8) >= 8:
+            p, top, L = self.hart.klstart, len(inp), self.last_block_len
+            if p >= top:
+                return self._end('empty')
+            if p or not L or 8 * top < L:                                # point 0 only; MR10; MR2
+                self.invalidate()
+                return self._end('invalid')
+            self._vli(sl(b2v(inp), L - 1, 0), L, 0)                      # atomic, the L low bits (MR7)
+            self.last_block_len = 0
+            return self._end('done')
         if self.st == OUTPUT and inp is None and out is not None:
             return self._squeeze(out, halt)
+        if self.st == VERIFY and inp is not None and out is None and self.hart.klstart == 0 and 8 * len(inp) >= self.L:
+            L = self.L                                                   # MR15: constant-time compare of L bits
+            self.st = SUCCESS if sl(b2v(inp), L - 1, 0) == sl(self.state, L - 1, 0) else FAILURE
+            return self._end('done')
         self.invalidate()                                                # MR1, GR24, GR28
         return self._end('invalid', out)
 
@@ -403,9 +435,9 @@ def derive(hart, dst, src, length):
 
 
 # ------------------------------------------------------------------ drivers
-def locker(sec, xof=False, S=TAG, hart=None, bad=()):
+def locker(sec, xof=False, S=TAG, hart=None, bad=(), policy=0b11):
     c = Kmac(hart or Hart(), bad)
-    c.provision(make_pi(sec, xof, KEY, S))
+    c.provision(make_pi(sec, xof, KEY, S, policy=policy))
     return c
 
 
@@ -474,7 +506,7 @@ for nm, sec, c_ in (('KMAC128', 128, 256), ('KMACXOF128', 128, 256), ('KMAC256',
     check(f'{nm}: Type 6 Mode {MODE[nm]}, c = {c_}, b = t = 1600 - c = 8 * {RATE[sec]}, _Ready_',
           True, (c.name, c.b, c.t, c.st), (nm, 1600 - c_, 8 * RATE[sec], READY))
 
-section('Absorption through process_VLI (granularity 32 bits)')
+section('Absorption through PROCESS_VLI (granularity 8 bits)')
 got, _ = kl_kmac(128, DATA200, 256, TAG, n=32,
                  chunks=[DATA200[:68], DATA200[68:72], DATA200[72:172], DATA200[172:]])
 check('KMAC128 #3 in 68+4+100+28 B transfers (partial-block edges)', True, got, WANT[2])
@@ -485,8 +517,8 @@ got, _ = kl_kmac(128, DATA200, 256, TAG, xof=True, n=32,
                  chunks=[DATA200[i:i + 8] for i in range(0, 200, 8)])
 check('KMACXOF128 #3 in 25 transfers of 8 B', True, got, WANT[8])
 c = absorbing(128)
-check('MR2: SEW = 8 < granularity -> _Invalid_', True, (c.exec(inp=DATA200[:8], sew=8), c.st),
-      ('invalid', INVALID))
+check('granularity 8 bits: a Form B kl.exec with SEW = 8 is admitted', True, (c.exec(inp=DATA200[:8], sew=8), c.st),
+      ('done', ABSORB))
 
 section('Interrupted absorption (klstart <- input_base / 8)')
 h = Hart()
@@ -688,11 +720,12 @@ for sec, pi_len, c1_len in ((128, 352, 560), (256, 288, 496)):
     c = squeezing(sec, DATA4, 1234)
     squeeze(c, 8)
     ct = c.export()[1]
-    check(f'KMAC{sec} Content1: state, block_base = 64, 48-bit padding, cshake_block, key_block, '
-          f'L = 1234 - 64 bits left, zero padding', True,
-          (ct[:200], ct[200:202], ct[202:208], ct[208:208 + w], ct[208 + w:208 + 2 * w],
+    check(f'KMAC{sec} Content1: state, block_base = 64, last_block_len = b, 32-bit padding, cshake_block, '
+          f'key_block, L = 1234 - 64 bits left, zero padding', True,
+          (ct[:200], ct[200:202], ct[202:204], ct[204:208], ct[208:208 + w], ct[208 + w:208 + 2 * w],
            ct[208 + 2 * w:212 + 2 * w], ct[212 + 2 * w:]),
-          (v2b(c.state, 200), v2b(64, 2), bytes(6), cbk, kbk, v2b(1234 - 64, 4), bytes(c1_len - 212 - 2 * w)))
+          (v2b(c.state, 200), v2b(64, 2), v2b(b, 2), bytes(4), cbk, kbk, v2b(1234 - 64, 4),
+           bytes(c1_len - 212 - 2 * w)))
 xof256 = ref_kmac(256, KEY, DATA200, 0, TAG, True, 300)
 for label, sec, xof, n_abs, L, n_out, want in (
         ('KMAC128 in _Ready_', 128, False, None, None, None, WANT[2]),
@@ -714,6 +747,10 @@ for label, sec, xof, n_abs, L, n_out, want in (
         to_output(c2, 256)
     check(f'export/import round trip, {label}', True,
           head + bytes(squeeze(c2, len(want) - len(head))[0][1]), want)
+cs = Kmac(Hart())
+cs.provision(make_pi(128, False, KEY, TAG, skid=0x0123456789ABCDEF))
+check('the _Ready_ Content1 holds `state` = 0, with the key by value and with a SKID (key absorbed on leaving _Ready_)',
+      None, [locker(128).export()[1][:200], cs.export()[1][:200]], [bytes(200)] * 2)
 c = squeezing(256, DATA200, 4096)
 (_, o1), = squeeze(c, 300)
 c2 = Kmac(Hart()).import_(*c.export())
@@ -759,6 +796,95 @@ check('GR55: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), 
       '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR50 item 5): destination _Invalid_', True,
       (bytes(dst.key), bytes(squeeze(src, 16)[0][1]), bytes(d2.key), s2.st, d3.st, s3.st),
       (stream[:16], stream[16:32], WANT[3][:32], OUTPUT, INVALID, OUTPUT))
+
+section('A message X of any bit length (_Hash_Absorb_Last_Block_, <<KLE-SHA-3>>)')
+
+def ref_kmac_bits(sec, K, xv, xbits, L, S=TAG, xof=False, n=None):
+    """Bit-level SP 800-185 KMAC: bytepad(...) || bytepad(...) || X (xbits) || right_encode(L) || 00 || pad10*1."""
+    w = RATE[sec]
+    pre = bytepad(encode_string(b'KMAC') + encode_string(S), w) + bytepad(encode_string(K), w)
+    enc = right_encode(0 if xof else L)
+    m = 8 * len(pre) + xbits + 8 * len(enc)
+    P = b2v(pre) | sl(xv, xbits - 1, 0) << 8 * len(pre) | b2v(enc) << (8 * len(pre) + xbits)
+    plen = ((m + 3) // (8 * w) + 1) * 8 * w
+    P |= 0b100 << m | 1 << (plen - 1)
+    st, out = 0, b''
+    for off in range(0, plen, 8 * w):
+        st = keccak(st ^ sl(P, off + 8 * w - 1, off))
+    nb = n if xof else (L + 7) // 8
+    while len(out) < nb:
+        out += v2b(sl(st, 8 * w - 1, 0), w)
+        st = keccak(st)
+    return out[:nb] if xof else trunc_bits(out[:nb], L)
+
+for sec, xof in ((128, False), (256, True)):
+    check(f'bit-level reference = SP 800-185 reference on whole bytes, {kname(sec, xof)}', True,
+          ref_kmac_bits(sec, KEY, b2v(DATA200), 1600, 256, xof=xof, n=64), ref_kmac(sec, KEY, DATA200, 256, TAG, xof, 64))
+for sec, xof in ((128, False), (256, False), (128, True), (256, True)):
+    b = 8 * RATE[sec]
+    for nb, Lp, what in ((0, 5, 'piece only'), (100, 3, 'piece after 100 B'),
+                         (b // 8 - 4, 45, 'piece crosses a block boundary'), (b // 8, b, 'Form A: a full block')):
+        xbits = 8 * nb + Lp
+        xv = sl(b2v(DATA200 + DATA200), xbits - 1, 0)
+        c = absorbing(sec, (DATA200 + DATA200)[:nb], xof)
+        if Lp == b:
+            c.setst(LAST)
+        else:
+            c.setst(LAST, 'B', Lp)
+        piece = v2b(sl(xv, xbits - 1, 8 * nb) | 0xff << Lp, (Lp + 7) // 8 + 1)
+        r = c.exec(inp=piece)
+        to_output(c, 0 if xof else 256)
+        got = bytes(squeeze(c, 32 if not xof else 64)[0][1])
+        check(f'{kname(sec, xof)}: {nb} B, then a {Lp}-bit piece ({what}) = bit-level reference', True,
+              (r, got), ('done', ref_kmac_bits(sec, KEY, xv, xbits, 256, xof=xof, n=64)))
+for label, act in (('Xs = 0', lambda c: c.setst(LAST, 'B', 0)),
+                   ('_Hash_Output_ before the piece', lambda c: (c.setst(LAST, 'B', 13), to_output(c, 256))),
+                   ('a second piece (MR10)', lambda c: (c.setst(LAST, 'B', 13), c.exec(inp=DATA4), c.exec(inp=DATA4)))):
+    c = absorbing(128, DATA4)
+    act(c)
+    check(f'KMAC128 _Hash_Absorb_Last_Block_ -> _Invalid_: {label}', True, c.st, INVALID)
+c = absorbing(256, DATA200[:7])
+c.setst(LAST, 'B', 13)
+c2 = Kmac(Hart()).import_(*c.export())
+c2.exec(inp=DATA200[7:9])
+to_output(c2, 256)
+check('KMAC256: export/import between the kl.setst and the kl.exec of a 13-bit piece', True,
+      bytes(squeeze(c2, 32)[0][1]), ref_kmac_bits(256, KEY, b2v(DATA200), 69, 256))
+
+section('_Hash_Verify_ and _MachinePolicy_ (KMAC128/256: generate bit 0, verify bit 1; KMACXOF: none)')
+def verifying(sec, L, X=DATA200, policy=0b11):
+    c = locker(sec, policy=policy)
+    c.setst(ABSORB)
+    c.exec(inp=X)
+    c.setst(VERIFY, 'B', L)
+    return c
+res = []
+for sec in (128, 256):
+    for L in (256, 64, 8 * RATE[sec]):
+        tag = ref_kmac(sec, KEY, DATA200, L, TAG)
+        ok, bad = verifying(sec, L), verifying(sec, L)
+        ok.exec(inp=tag)
+        bad.exec(inp=bytes([tag[0] ^ 1]) + tag[1:])
+        res.append((ok.st, bad.st))
+check('KMAC128/256 _Hash_Verify_ with L = 256, 64 and b (L enters right_encode, as SP 800-185 requires): match -> '
+      'Success, first byte flipped -> Failure', True, res, [(SUCCESS, FAILURE)] * 6)
+res = []
+for label, act in (('L = 56 < 64', lambda: verifying(128, 56)), ('L = 100, not a multiple of 8', lambda: verifying(128, 100)),
+                   ('L = b + 8', lambda: verifying(128, 8 * RATE[128] + 8)),
+                   ('KLLEN = 64 < L = 256', lambda: (lambda c: (c.exec(inp=bytes(8)), c)[1])(verifying(128, 256))),
+                   ('same-State kl.setst', lambda: (lambda c: (c.setst(VERIFY, 'B', 256), c)[1])(verifying(128, 256))),
+                   ('verify with MachinePolicy = 0b01', lambda: verifying(128, 256, policy=1)),
+                   ('output with MachinePolicy = 0b10', lambda: (lambda c: (c.setst(ABSORB), to_output(c, 256), c)[2])(
+                       locker(128, policy=2))),
+                   ('KMACXOF: _Hash_Verify_ does not exist (MR1)', lambda: (lambda c: (c.setst(ABSORB), c.setst(VERIFY, 'B', 256), c)[2])(
+                       locker(128, xof=True)))):
+    res.append(act().st)
+check('KMAC _Invalid_: L = 56, 100, b + 8; KLLEN < L; same-State; verify on 0b01; output on 0b10; KMACXOF Hash_Verify',
+      True, res, [INVALID] * 8)
+check('MachinePolicy = 0: KMAC128 invalid Metadata; KMACXOF128 gates nothing and computes #3', True,
+      (locker(128, policy=0).st, kl_kmac(128, DATA200, 256, TAG, xof=True, n=32)[0] ==
+       (lambda c: (c.setst(ABSORB), c.exec(inp=DATA200), to_output(c, 0), bytes(squeeze(c, 32)[0][1]))[3])(
+           locker(128, xof=True, policy=0))), (INVALID, True))
 
 section('Negative controls')
 control('left_encode(L) in place of right_encode(L) (#2, #6)',
