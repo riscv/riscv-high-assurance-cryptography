@@ -733,7 +733,7 @@ eq("sep enters tag and keystream; a segment-1 payload does not authenticate with
    (t1 != t2, e1 != e2, SCC_Decrypt(AD1, 0, 0, t1, e1, CSK)[0], SCC_Decrypt(AD1, 0, 1, t1, e1, CSK)[0]),
    (True, True, True, False))
 
-section("ADSDropped, an unauthenticated format hint (<<KLE-data-formats>>)")
+section("ADSDropped, an unauthenticated format hint (<<KLE-management-formats-and-states>>)")
 ref_snap = import_image(unit, Mem(scc_i))[0].snapshot()
 set47, mem = tampered(scc_i, 47), Mem(tampered(scc_i, 47))
 cl, res = import_image(unit, mem)

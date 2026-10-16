@@ -2050,7 +2050,7 @@ def t_mgmt():
        ['unsupported', 0, 6, 'short import', UNSUP])
 
 def t_nested():
-    section('Nested management and PCCCs  <<KLE-nested-mgmt>>, <<KLE-data-formats>>')
+    section('Nested management and PCCCs  <<KLE-management-formats-and-states>>')
     table = {st: [s for s in range(64) if trap_of(white_box(st, bytearray(32) if BASE_TYPE[st] == 'pi' else None).mgmt,
                                                   0, END, md(State=s)) is None] for st in (EXP, IMP, PPI_EXP, PPI_IMP)}
     scc_ok = sorted(set(COMPLETE) | {57, 58})

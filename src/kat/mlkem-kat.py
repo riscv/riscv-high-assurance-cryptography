@@ -119,7 +119,7 @@ class MLKEMLocker(Locker):
         self.pi = mdh_pack(Machine=MLKEM[ps], **mdh) | pi_extra       # the PI is the MDH alone
         self.provision()
 
-    def provision(self):                           # the completing kl.mgmt (<<KLE-data-formats>>, <<KLE-length-rule>>)
+    def provision(self):                           # the completing kl.mgmt (<<KLE-management-formats-and-states>>, <<KLE-length-rule>>)
         self.mdh = fset(fset(fset(self.pi, 'State', READY), 'StateExtension', 0), 'MachineUse', 0)
         self.clear_content()
 
