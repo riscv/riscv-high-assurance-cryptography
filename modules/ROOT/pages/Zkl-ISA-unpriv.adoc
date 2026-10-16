@@ -2732,34 +2732,25 @@ The transferred part of `S` ends at `image_end` = _ContentOffset_ + min(`content
 [[KLE-length-rule]]
 === Length of External Formats and KLF Capacity Usage of a Locker
 
-The lengths of a PI, an SCC or a PCCC, and the KLF capacity of a locker are determined by fields contained in bits [63:0] of the MDH.
-The following items do not apply to a locker in an Error State (<<KLE-error-state-transfer>>):
+[horizontal]
+[[KLE-GR-image-length,GR81]]GR81:: _Image length:_ The length of an external image depends only on fields in bits [63:0] of its MDH:
++
+* a PI: _Machine_, _MachinePolicy_ and _KeyType_;
+* an SCC: _Machine_, _MachinePolicy_, _KeyType_, _StateExtension_, _AuxDataLen_ and _ADSDropped_ (<<KLE-Auxiliary-Data-Section>>), not _State_ or _SCProtection_ (Rule <<KLE-GR-single-share>>);
+* a PCCC: as the format of its base type (<<KLE-management-formats-and-states>>);
+* an image with _Version_ = 3: 16 + 16 {times} _AuxDataLen_ bytes (Rule <<KLE-GR-sysfmt-mdh>>); and
+* an Error State image: the length is fixed at 16 bytes (Rule <<KLE-GR-error-state-locker-is-only-MDH>>).
 
-. The length of a *Provisioning Input* depends only on _Machine_, _MachinePolicy_ and _KeyType_.
-_AuxDataLen_ and _ADSDropped_ must be zero in a PI, and in a PI-shaped PCCC, since these carry no ADS; `kl.mgmt` ignores and zeroes _StateExtension_ and _MachineUse_ upon provisioning.
-
-. The length of a *Sealed Cryptographic Context* depends only on _Machine_, _MachinePolicy_, _KeyType_, _StateExtension_, _AuxDataLen_ and _ADSDropped_ (<<KLE-Auxiliary-Data-Section>>), not on _State_ or _SCProtection_ (<<KLE-rules-masked-implementations>>).
-_ADSDropped_ removes only `Content2`: the presence of `IMPQUAL` and `SIV2`, and the offset and length of `Content1`, do not change.
-
-. The length of a *Partially Configured Cryptographic Context* is that of the format corresponding to its base type, i.e.,
-that of a PI if its base type is `pi` and that of an SCC if its base type is `scc`.
-
-. The *KLF capacity* of a locker depends only on _Machine_, _MachinePolicy_, _SCProtection_ and _KeyType_, and does not change once the locker is provisioned: dropping the ADS shortens its SCCs but not its capacity.
-A locker is allocated room for every field its Machine may use; the capacity depends on _KeyType_ because a SKID may denote a key that never enters the KLF.
-With _KeyType_ = 2 it is that of _KeyType_ = 0, so the provisioning-completing `kl.mgmt` allocates nothing more.
-
-// No other MDH field, and no information in the `Content`, may affect any of these four quantities.
-
-A PI cannot be in an Error State.
+[[KLE-GR-klf-capacity,GR82]]GR82:: _KLF capacity:_ The KLF capacity of a locker depends only on _State_, _Machine_, _MachinePolicy_, _SCProtection_ and _KeyType_, covers every field that its Machine may use, and does not change once the locker is provisioned, unless it enters an Error State, which releases it (Rule <<KLE-GR-clear-locker-content-error-state>>); with _KeyType_ = 2 it is that of _KeyType_ = 0.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-rules-masked-implementations]]
-==== Single-Share Key Export Rule for Masked Implementations
+=== Single-Share Key Export Rule for Masked Implementations
 
-A multi-share implementation of a Machine provisions, imports and exports all its keys and secrets as reconstructed values, so that SCCs stay compact and interoperable.
-(((KLE, Machine, side-channel protection variants)))
-Architecturally every value is a single share: a side-channel-protected Machine is an implementation variant of the unprotected one, distinguished only by the _SCProtection_ field of the MDH.
+[horizontal]
+[[KLE-GR-single-share,GR83]]GR83:: _Single-share export:_ A multi-share implementation of a Machine provisions, imports and exports all its keys and secrets as reconstructed values.
+(((KLE, Machine, side-channel protection variants)))Architecturally every value is a single share: a side-channel-protected Machine is an implementation variant of the unprotected one, distinguished only by the _SCProtection_ field of the MDH.
 The reconstruction may be only conceptual, and is protected as <<KLE-KLF>> recommends.
 
 NOTE: Reconstructing or re-randomizing a key is usually cheap, for instance when a block cipher in counter mode generates the masks; an implementation with a slower mask generator may keep shares or masks in the ADS.
@@ -2767,28 +2758,22 @@ NOTE: Reconstructing or re-randomizing a key is usually cheap, for instance when
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-system-keys]]
-==== System Keys
+=== System Keys
 
-A PI or SCC encodes a System Key as a 64-bit SKID, from which a system-specific SKS retrieves the key.
-Hence:
+A System Key is identified by a 64-bit SKID, from which a system-specific SKS retrieves the key:
 
 [horizontal]
-[[KLE-GR-skid-field,GR81]]GR81:: In a PI, an SCC, or a PCCC, the key field of a System Key holds its SKID instead of the key value, and so shrinks from the key size to 64 bits.
+[[KLE-GR-skid-field,GR84]]GR84:: In a PI, an SCC, or a PCCC, the key field of a System Key holds its SKID instead of the key value, and so shrinks from the key size to 64 bits.
 
-[[KLE-GR-single-skid,GR82]]GR82:: For a Machine with more than one key, such as XEX/XTS, a single SKID retrieves all its keys from the SKS.
+[[KLE-GR-single-skid,GR85]]GR85:: For a Machine with more than one key, such as XEX/XTS, a single SKID retrieves all its keys from the SKS.
 
-The SKS resolves a SKID as a function of the SKID alone, if the SKID is allowed for the _Machine_ and _MachinePolicy_; the key value depends on neither.
-If the SKS also encodes policies for a key, they narrow the policies of the locker as <<KLE-Metadata-narrowing>> describes.
-For a key that the system intends to protect, the SKS associates at least a _UsagePolicy_ with its SKID, since the SKS policies are the only architectural control on which modes may use it; a _UsagePolicy_ that admits every mode, for instance for a public signature-verification key, is a deliberate choice and the responsibility of the system's architects.
-The current privilege mode does not affect whether the SKS may resolve a SKID.
-
-A SKID that the SKS does not resolve transitions the locker to Error State _Invalid_ (<<KLE-Metadata-validity>>).
-Whenever a SKID is resolved, the policies that the SKS associates with the key narrow the MDH of the locker (<<KLE-Metadata-narrowing>>); if the narrowing fails, the locker transitions to Error State _Privilege Violation_.
-
+[[KLE-GR-skid-resolution,GR86]]GR86:: _SKID resolution:_ The SKS resolves a SKID that is allowed for the _Machine_ and _MachinePolicy_ as a function of the SKID alone, whatever the current privilege mode; the key value depends on neither.
 A SKID carried in an SCC is resolved only after the SCC is authenticated.
 
-A multi-share implementation may copy System Key material from the SKS into the locker and expand it into multiple shares, but must still export the key as a SKID.
-Shares or masks included in the ADS (<<KLE-rules-masked-implementations>>) must not allow or facilitate recovering the key value from those values alone.
+[[KLE-GR-skid-outcome,GR87]]GR87:: A SKID that the SKS does not resolve transitions the locker to Error State _Invalid_ (<<KLE-Metadata-validity>>).
+The policies that the SKS associates with a resolved key narrow the MDH of the locker (<<KLE-Metadata-narrowing>>); if the narrowing fails, the locker transitions to Error State _Privilege Violation_.
+
+[[KLE-GR-skid-shares,GR88]]GR88:: A multi-share implementation may copy System Key material from the SKS into the locker and expand it into shares (Rule <<KLE-GR-single-share>>), but exports the key only as its SKID (Rule <<KLE-GR-skid-field>>); shares or masks in the ADS must not allow or facilitate recovering the key value from those values alone.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2889,7 +2874,7 @@ For a locker whose MDH has _Version_ = 3, `ml`._State_ must instead be _Unconfig
 Any other `ml`._State_, including a Complete State for a locker of base type `pi` and the values 61–63, raises an illegal-instruction exception.
 A Complete `ml`._State_ is accepted only for a locker of base type `scc`, so the clear `Content` of a partially provisioned locker becomes usable only by completing its provisioning.
 
-* *Provisioning-completing kl.mgmt.*
+* *Provisioning-Completing kl.mgmt.*
 +
 --
 No MDH saved at provisioning start is needed: Forms C and D of `kl.mgmt` ignore their auxiliary input.
@@ -2907,7 +2892,7 @@ If a process is preempted during provisioning, `kl.store` or `kl.mvout` exports 
 Only the provisioning-completing `kl.mgmt` may therefore generate secret random material needed to configure the locker, retrieve key material from the SKS, or derive, expand or re-share that material, so that no such material is exposed in an unencrypted export of a partially provisioned locker.
 --
 
-* *Import-completing kl.mgmt.*
+* *Import-Completing kl.mgmt.*
 +
 --
 Software uses Form A, C or D of `kl.mgmt` to supply the value `ml` saved when the import started.
@@ -3470,6 +3455,14 @@ Software that writes 32 to `klnamedlocker` while its own import or export is ope
 [horizontal]
 [[KLE-SR-csk-change,SR20]]SR20:: The architecture does not block a change of the CSK (<<KLE-CSK-requirements>>) while an export is open.
 M-mode must not change the CSK of a hart until every export open on it, base or nested, has completed and its image has been saved.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLE-SR-system-keys]]
+=== Requirements on System Keys
+
+[horizontal]
+[[KLE-SR-skid-usage-policy,SR21]]SR21:: A system that intends to protect a System Key (<<KLE-system-keys>>) associates at least a _UsagePolicy_ with its SKID in the SKS; a _UsagePolicy_ that admits every mode, as for a public signature-verification key, is a deliberate choice.
 
 // ////////////////////////////////////////////////////////////////////
 

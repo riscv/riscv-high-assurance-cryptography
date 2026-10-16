@@ -185,7 +185,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None, keytype=None):
-    """PI; with a SKID (_KeyType_ = 1, GR81) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
+    """PI; with a SKID (_KeyType_ = 1, GR84) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
     _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
     kt = int(skid is not None) if keytype is None else keytype
     cb, kb = provision_blocks(sec, b'' if kt == 1 else K, S)
@@ -265,7 +265,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # GR81: SKID resolved after import
+            self._resolve(key)                                           # GR84: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
