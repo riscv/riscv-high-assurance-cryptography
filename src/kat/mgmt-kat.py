@@ -1531,9 +1531,11 @@ def t_states():
     eq('kl.mgmt immediates 56, 57, 58, 63; 59-62 reserved',
        [i for i in range(56, 64) if trap_of(fresh().mgmt, 0, i, md()) != 'illegal/1'], [56, 57, 58, 63])
     def st_46_47(u, i):
-        res = [None]
-        tag = trap_of(lambda: res.__setitem__(0, u.setst(0, i)))
-        return tag or res[0], u.getst(0)
+        try:
+            r = u.setst(0, i)
+        except Trap as t:
+            r = t.tag
+        return r, u.getst(0)
     def in_prov():
         u = fresh()
         u.mgmt(0, PROV, cipher())
