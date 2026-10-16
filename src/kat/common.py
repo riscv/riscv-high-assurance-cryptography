@@ -122,6 +122,69 @@ def aes_encrypt(key: bytes, block: bytes) -> bytes:
         s = _add_rk(s, rks[r])
     return bytes(s)
 
+# ---------------------------------------------------------------- DES / TDEA (FIPS 46-3, SP 800-67): 64-bit blocks
+_DES_IP = [58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4, 62, 54, 46, 38, 30, 22, 14, 6,
+           64, 56, 48, 40, 32, 24, 16, 8, 57, 49, 41, 33, 25, 17, 9, 1, 59, 51, 43, 35, 27, 19, 11, 3,
+           61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7]
+_DES_FP = [_DES_IP.index(i) + 1 for i in range(1, 65)]
+_DES_E = [32, 1, 2, 3, 4, 5, 4, 5, 6, 7, 8, 9, 8, 9, 10, 11, 12, 13, 12, 13, 14, 15, 16, 17,
+          16, 17, 18, 19, 20, 21, 20, 21, 22, 23, 24, 25, 24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32, 1]
+_DES_P = [16, 7, 20, 21, 29, 12, 28, 17, 1, 15, 23, 26, 5, 18, 31, 10,
+          2, 8, 24, 14, 32, 27, 3, 9, 19, 13, 30, 6, 22, 11, 4, 25]
+_DES_PC1 = [57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35, 27, 19, 11, 3,
+            60, 52, 44, 36, 63, 55, 47, 39, 31, 23, 15, 7, 62, 54, 46, 38, 30, 22, 14, 6, 61, 53, 45, 37,
+            29, 21, 13, 5, 28, 20, 12, 4]
+_DES_PC2 = [14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4, 26, 8, 16, 7, 27, 20, 13, 2,
+            41, 52, 31, 37, 47, 55, 30, 40, 51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32]
+_DES_SHIFTS = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
+_DES_S = [
+    [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7, 0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
+     4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0, 15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13],
+    [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10, 3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5,
+     0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15, 13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9],
+    [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8, 13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1,
+     13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7, 1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12],
+    [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15, 13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9,
+     10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4, 3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14],
+    [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9, 14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6,
+     4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14, 11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3],
+    [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11, 10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8,
+     9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6, 4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13],
+    [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1, 13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6,
+     1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2, 6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12],
+    [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7, 1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2,
+     7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8, 2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]]
+
+def _des_perm(x: int, table, width: int) -> int:
+    """FIPS 46-3 permutation: output bit i (1 = leftmost) is input bit table[i] of a `width`-bit value."""
+    return sum(((x >> (width - t)) & 1) << (len(table) - 1 - i) for i, t in enumerate(table))
+
+def _des_subkeys(key: bytes):
+    cd = _des_perm(int.from_bytes(key, 'big'), _DES_PC1, 64)
+    c, d, ks = cd >> 28, cd & 0xFFFFFFF, []
+    for s in _DES_SHIFTS:
+        c, d = ((c << s) | (c >> (28 - s))) & 0xFFFFFFF, ((d << s) | (d >> (28 - s))) & 0xFFFFFFF
+        ks.append(_des_perm(c << 28 | d, _DES_PC2, 56))
+    return ks
+
+def _des(key: bytes, block: bytes, decrypt=False) -> bytes:
+    ks = _des_subkeys(key)
+    x = _des_perm(int.from_bytes(block, 'big'), _DES_IP, 64)
+    l, r = x >> 32, x & 0xFFFFFFFF
+    for k in (reversed(ks) if decrypt else ks):
+        e, f = _des_perm(r, _DES_E, 32) ^ k, 0
+        for i in range(8):
+            six = (e >> (42 - 6 * i)) & 0x3F
+            f = f << 4 | _DES_S[i][(six & 0x20) | (six & 1) << 4 | (six >> 1) & 0xF]
+        l, r = r, l ^ _des_perm(f, _DES_P, 32)
+    return _des_perm(r << 32 | l, _DES_FP, 64).to_bytes(8, 'big')
+
+def tdea_encrypt(key: bytes, block: bytes) -> bytes:
+    """TDEA (SP 800-67) EDE encryption of one 8-byte block; key = K1 || K2 || K3 (24 bytes) or K1 || K2 (16)."""
+    assert len(block) == 8 and len(key) in (16, 24)
+    k1, k2, k3 = key[:8], key[8:16], key[16:24] or key[:8]
+    return _des(k3, _des(k2, _des(k1, block), decrypt=True))
+
 def aes_decrypt(key: bytes, block: bytes) -> bytes:
     assert len(block) == 16
     rks, nr = _key_expand(key)
@@ -196,17 +259,17 @@ def mulx_polyval(v: int) -> int:
 
 # ---------------------------------------------------------------- XTS / OCB doublings
 
-def update_mask(v: int) -> int:
-    """XEX/XTS mask update (little-endian doubling), per KLE-XEX-XTS-modes."""
-    c = v >> 127
-    v = (v << 1) & MASK128
+def update_mask(v: int, b: int = 128) -> int:
+    """XEX/XTS mask update (little-endian doubling), per KLE-XEX-XTS-modes: R_128 = 0x87, R_64 = 0x1B."""
+    c = v >> (b - 1)
+    v = (v << 1) & ((1 << b) - 1)
     if c:
-        v ^= 0x87
+        v ^= {128: 0x87, 64: 0x1B}[b]
     return v
 
-def double_ocb(v: int) -> int:
+def double_ocb(v: int, b: int = 128) -> int:
     """OCB3/CMAC doubling over the big-endian string view: bswap(update_mask(bswap(S)))."""
-    return bswap(update_mask(bswap(v, 16)), 16)
+    return bswap(update_mask(bswap(v, b // 8), b), b // 8)
 
 # ---------------------------------------------------------------- MDH and States
 
@@ -368,6 +431,13 @@ def selftest(verbose: bool = False) -> bool:
     L = aes_encrypt(bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c"), bytes(16))
     K1 = double_ocb(b2v(L))
     chk("CMAC K1 (38B D.1)", v2b(K1, 16).hex(), "fbeed618357133667c85e08f7236a8de")
+
+    # DES (the classic FIPS 46 worked example) and TDEA CMAC subkeys (NIST CMAC-TDES examples, 3-key)
+    chk("DES", _des(bytes.fromhex("133457799bbcdff1"), bytes.fromhex("0123456789abcdef")).hex(), "85e813540f0ab405")
+    L = tdea_encrypt(bytes.fromhex("0123456789abcdef23456789abcdef01456789abcdef0123"), bytes(8))
+    chk("CMAC-TDES L", L.hex(), "4eba739c998bcb60")
+    chk("CMAC-TDES K1, K2 (R_64)", [v2b(double_ocb(b2v(L), 64), 8).hex(),
+        v2b(double_ocb(double_ocb(b2v(L), 64), 64), 8).hex()], ["9d74e739331796c0", "3ae9ce72662f2d9b"])
     return ok
 
 if __name__ == "__main__":

@@ -124,7 +124,7 @@ def decode(w):
         if imm >> 3 == 0b0111:
             if 59 <= imm <= 62 or F == 1: raise Trap('illegal', 1)
             return ('kl.mgmt', 'ABCD'[F], k, imm)
-        if imm in (SUCCESS, FAILURE, 54, 55):                       # GR26; reserved Error States
+        if imm in (54, 55):                                         # reserved Error States
             raise Trap('illegal', 1)
         return ({0: 'kl.clear', CLEAR_ADS: 'kl.clearads'}.get(imm, 'kl.setst'), 'ABCD'[F], k, imm)
     # kl.load / kl.input and kl.store / kl.output share one encoding each; klnamedlocker selects the target (GR10)
@@ -354,9 +354,11 @@ class ToyHash(Machine):
 
 MACHINES = {m.ident: m for m in (ToyCipher(M_CIPHER), ToyXof(M_XOF), ToySig(M_SIG), ToyCustom(M_CUSTOM),
                                  ToyKex(M_KEX), ToyHash(M_HASH))}
-# toy kl.derive endpoints, shaped as <<KLE-derive-endpoints>>
-SRC_EP = {M_XOF: ({ToyXof.FINAL}, True), M_KEX: ({ToyKex.SHARED}, False)}    # (States, kl.exec-obtainable)
-DST_EP = {M_CIPHER: ('key', {READY}), M_XOF: ('absorb', {READY, ToyXof.ABSORB}), M_SIG: ('key', {ToySig.SET_SCALAR})}
+# toy kl.derive endpoints, shaped as <<KLE-derive-endpoints>>: ENCRYPT stands for the keystream in Operate (its
+# output on zero blocks), SHARED for the restricted ML-KEM sharedkey field; XOF output and the signature key are none
+SRC_EP = {M_CIPHER: ({ToyCipher.ENCRYPT}, 'stream'), M_KEX: ({ToyKex.SHARED}, 'secret')}     # (States, kind)
+DST_EP = {M_CIPHER: ('key', {READY}), M_XOF: ('absorb', {READY, ToyXof.ABSORB})}
+ADMITTED = {'stream': {'key'}, 'secret': {'key', 'absorb'}}                  # <<KLE-admitted-pairs>>: GR54, GR55
 
 def content2_size(m):
     return 16 * (m['AuxDataLen'] - 2) if m['AuxDataLen'] >= 2 and not m['ADSDropped'] else 0
@@ -786,7 +788,7 @@ class Unit:
 
     # -- kl.setst family  <<KLE-instruction-setst>>
     def setst(self, k, imm, aux=None, form='A', vec_bits=128):
-        if imm in (SUCCESS, FAILURE, 54, 55) or imm == EXPIRED and not self.zklexpire:   # GR26; reserved Error States
+        if imm in (54, 55) or imm == EXPIRED and not self.zklexpire:   # reserved Error States
             raise Trap('illegal', 1)
         if 56 <= imm <= 63: return self.mgmt(k, imm, aux, form=form, vec_bits=vec_bits)
         if imm == CLEARALL:                                         # kl.clearall: Form A, locker 0, r = 0
@@ -811,6 +813,9 @@ class Unit:
             cl.c2 = b''
             self._dirty(k)
             return 'ads cleared'
+        if imm in (SUCCESS, FAILURE):                               # GR26: admitted in no State (MR1)
+            self._enter_error(k, INVALID)
+            return 'invalid'
         if m['State'] in (SUCCESS, FAILURE) and imm != READY:       # GR28, GR27
             self._enter_error(k, INVALID)
             return 'invalid'
@@ -993,8 +998,12 @@ class Unit:
         self._dirty(kd)
         return 'swapped'
 
-    # -- kl.derive  <<KLE-instruction-derive>>
+    # -- kl.derive  <<KLE-instruction-derive>>, uninterruptible (GR71.a)
     def derive(self, kd, ks, length):
+        r = self._derive(kd, ks, length)
+        self.klstart = 0                                            # GR67: written 0 on retirement, not on a trap
+        return r
+    def _derive(self, kd, ks, length):
         km = 'KLNL' in (kd, ks)
         if kd == ks == 'KLNL': raise Trap('illegal', 1)               # GR3: R = 11 reserved
         kd, ks = self._idx(kd, km=True), self._idx(ks, km=True)
@@ -1020,19 +1029,18 @@ class Unit:
         se, de = SRC_EP.get(S['Machine']), DST_EP.get(D['Machine'])
         ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR50 items 1-2, GR53
               (kd, bool(de) and D['State'] in de[1] and not (de[0] == 'key' and D['KeyType'] == 1)))
-        bad = [e for e, good in ok if not good]
+        bad = [e for e, good in ok if not good] or ([] if de[0] in ADMITTED[se[1]] else [ks, kd])   # GR50 item 3
         if bad:
             for e in bad:
                 self._enter_error(e, INVALID)
             return 'invalid'
-        key, dlen = de[0] == 'key', MACHINES[D['Machine']].key_len
-        slen = MACHINES[M_KEX].state_len if not se[1] else 1 << 30
-        if key and (length < dlen or slen < dlen) or not key and not se[1] and length < slen:   # GR50 item 5 (GR54)
+        key, dlen, secret = de[0] == 'key', MACHINES[D['Machine']].key_len, se[1] == 'secret'
+        slen = MACHINES[M_KEX].state_len if secret else 1 << 30     # a field, or the unbounded keystream
+        if self.klstart or (length < dlen or slen < dlen if key else length != slen):   # GR50 item 5, GR54
             self._enter_error(kd, INVALID)
             return 'invalid'
-        if length == 0:                                             # GR49
-            return 'nothing'
-        if not se[1]:                                               # GR54 restricted (GR51); XOF output: GR55 unrestricted
+        # GR50 items 6-7 bind no toy pair: these destinations require klstart = 0, and both sources suffice
+        if secret:                                                  # GR54 restricted (GR51); GR55 unrestricted
             if sc_rank(D['SCProtection']) < sc_rank(S['SCProtection']):   # GR51: never to a weaker level
                 self._enter_error(kd, PRIV)
                 return 'privilege_violation'
@@ -1043,12 +1051,12 @@ class Unit:
             D.update(UsagePolicy=narrow_skid(D['UsagePolicy'], S['UsagePolicy']), Locality=union)
             if self.zklexpire:
                 D['ExpirationDate'] = min([x for x in (D['ExpirationDate'], S['ExpirationDate']) if x] or [0])
-        n = min(length, dlen) if key else length
+        n = min(length, dlen) if key else length                    # GR49 eff_length
         scl, dcl = self.lockers[ks], self.lockers[kd]
-        if se[1]:
-            data = b''.join(MACHINES[M_XOF].squeeze(self, scl) for _ in range(n))
-        else:
+        if secret:                                                  # GR49: a field source does not advance
             data = MACHINES[M_KEX].get_state(scl)[:n]
+        else:                                                       # whole blocks, the unused bytes discarded
+            data = b''.join(MACHINES[M_CIPHER].process(self, scl, bytes(16)) for _ in range(-(-n // 16)))[:n]
         if key:
             dcl.c1 = data + dcl.c1[dlen:]
         else:
@@ -1522,8 +1530,21 @@ def t_states():
        (1, 46, 47, list(range(48, 54)), ['pi', 'scc', 'scc', 'pi', 'pi']))
     eq('kl.mgmt immediates 56, 57, 58, 63; 59-62 reserved',
        [i for i in range(56, 64) if trap_of(fresh().mgmt, 0, i, md()) != 'illegal/1'], [56, 57, 58, 63])
-    eq('kl.setst #46, #47 reserved even on an Unconfigured locker (GR26)',
-       (trap_of(fresh().setst, 0, 46), trap_of(fresh().setst, 0, 47)), ('illegal/1',) * 2)
+    def st_46_47(u, i):
+        res = [None]
+        tag = trap_of(lambda: res.__setitem__(0, u.setst(0, i)))
+        return tag or res[0], u.getst(0)
+    def in_prov():
+        u = fresh()
+        u.mgmt(0, PROV, cipher())
+        return u
+    eq('kl.setst #46, #47 (GR26): Ready, Encrypt, Success, Failure -> Invalid (MR1); Unconfigured, Error State: '
+       'no operation (GR19.a); Provisioning: as any usage instruction, an exception, State kept (GR20)',
+       [st_46_47(mk(), i) for i in (46, 47) for mk in (lambda: pv(fresh(), 0, cipher()), rc,
+        lambda: final_cipher(SUCCESS), lambda: final_cipher(FAILURE), fresh,
+        lambda: (lambda u: (u.setst(0, OOM), u)[1])(pv(fresh(), 0, cipher())), in_prov)],
+       [('invalid', INVALID)] * 4 + [('noop', UNCONF), ('noop', OOM), ('privilege_violation', PROV)]
+       + [('invalid', INVALID)] * 4 + [('noop', UNCONF), ('noop', OOM), ('privilege_violation', PROV)])
     eq("'andi 0x38; beq 0x30' is true exactly on the Error States", {s for s in range(64) if s & 0x38 == 0x30},
        set(ERROR_STATES))
 
@@ -2645,19 +2666,21 @@ def t_derive():
     section('kl.derive  <<KLE-instruction-derive>>, <<KLE-derive-endpoints>>')
 
     def pair(**kw):
-        return pv(xof_squeezing(fresh(**kw), 0), 1, cipher())
-    expect = bytearray(32)
-    xof_squeezing(fresh(), 0).exec_(0, 'C', vout=expect)
+        return pv(rc(0, fresh(**kw)), 1, cipher())
+    src0, expect = pair().lockers[0].c1, bytearray(48)
+    rc().exec_(0, 'A', vin=bytearray(48), vout=expect)
     u, u2, u3 = pair(), pair(), pair()
-    eq('XOF output into a Ready key field (GR55), source advanced as by kl.exec; length < key -> '
-       'destination Invalid',
-       (u.derive(1, 0, 32), u.lockers[1].c1[:32], u.getmd(0)['MachineUse'], u.getst(1), u2.derive(1, 0, 40),
-        u2.getmd(0)['MachineUse'], u3.derive(1, 0, 16), u3.getst(1), u3.getst(0)),
-       ('transferred', bytes(expect), 32, READY, 'transferred', 32, 'invalid', INVALID, ToyXof.FINAL))
-    info('Toy endpoints follow <<KLE-derive-endpoints>>: any listed source with any listed destination, subject to '
-         'GR49-GR56; the XOF source is its kl.exec output in its output State, unrestricted also into a key (GR55 key '
-         'derivation); the KEX shared secret is restricted (GR54); the signature private key is a destination '
-         'only in its Machine-named State (GR50 item 2).')
+    nxt = bytearray(16)
+    eq('CTR keystream into a Ready key field (GR55), the source advanced as by kl.exec of whole blocks, the unused '
+       'bytes discarded; length < key -> destination Invalid',
+       (u.derive(1, 0, 32), u.lockers[1].c1[:32], u.exec_(0, 'A', vin=bytearray(16), vout=nxt), bytes(nxt),
+        u.getst(1), u2.derive(1, 0, 40), u2.exec_(0, 'A', vin=bytearray(16), vout=nxt), bytes(nxt),
+        u3.derive(1, 0, 16), u3.getst(1), u3.getst(0), u3.lockers[0].c1 == src0),
+       ('transferred', bytes(expect[:32]), 'done', bytes(expect[32:]), READY, 'transferred', 'done',
+        bytes(expect[32:]), 'invalid', INVALID, ToyCipher.ENCRYPT, True))
+    info('Toy endpoints follow <<KLE-derive-endpoints>> and <<KLE-admitted-pairs>>: the cipher in ENCRYPT stands for '
+         'the keystream in Operate, unrestricted into a key only (GR55); the KEX shared secret is a restricted field '
+         'into a key or, whole, into a XOF input (GR54); XOF output and the signature key are no endpoints.')
     u = [pair() for _ in range(6)]
     u[1].setst(1, EXPIRED)
     u[2].setst(0, 0)
@@ -2666,12 +2689,12 @@ def t_derive():
     u[5].lockers[0].mdh['ExpirationDate'] = u[5].lockers[1].mdh['ExpirationDate'] = 1
     u[5].clock = 9
     eq('equal indices; Error-State endpoint no-op; Unconfigured; Configuration; UsagePolicy; both expire',
-       [trap_of(u[0].derive, 0, 0, 32), u[1].derive(1, 0, 32), u[1].getmd(0)['MachineUse'],
+       [trap_of(u[0].derive, 0, 0, 32), u[1].derive(1, 0, 32), u[1].lockers[0].c1 == src0,
         u[2].derive(1, 0, 32),
         trap_of(u[3].derive, 1, 0, 32), trap_of(u[4].derive, 1, 0, 32), u[5].derive(1, 0, 32), u[5].getst(0),
         u[5].getst(1)],
-       ['illegal/1', 'noop', 0, 'noop', 'privilege_violation', 'privilege_violation', 'expired', EXPIRED, EXPIRED])
-    u = [pair() for _ in range(7)]
+       ['illegal/1', 'noop', True, 'noop', 'privilege_violation', 'privilege_violation', 'expired', EXPIRED, EXPIRED])
+    u = [pair() for _ in range(8)]
     u[0].setst(1, ToyCipher.ENCRYPT, 1)
     u[1].setst(1, ToyCipher.VERIFY, MACHINES[M_CIPHER].verify_tag(u[1], u[1].lockers[1]))
     u[2].setst(0, READY)
@@ -2680,23 +2703,27 @@ def t_derive():
     provision(u[5], 2, sig())
     u[6].setst(0, READY)
     u[6].setst(1, ToyCipher.ENCRYPT, 1)
-    eq('GR50 items 1-2: only the offending lockers (State, no destination endpoint, KeyType-1 or non-key-State key)',
+    provision(u[7], 2, sig())
+    u[7].setst(2, ToySig.SET_SCALAR)
+    eq('GR50 items 1-2: only the offending lockers (State, no destination endpoint, KeyType-1 key, a signature key '
+       'in Ready or in its Machine-named State)',
        [(u[0].derive(1, 0, 32), u[0].getst(1), u[0].getst(0)), (u[1].derive(1, 0, 32), u[1].getst(1)),
         (u[2].derive(1, 0, 32), u[2].getst(0), u[2].getst(1)), (u[3].derive(2, 0, 32), u[3].getst(0), u[3].getst(2)),
-        (u[4].derive(3, 0, 32), u[4].getst(3), u[4].getst(0), u[4].getmd(0)['MachineUse']),
-        (u[5].derive(2, 0, 64), u[5].getst(2), u[5].getst(0)), (u[6].derive(1, 0, 32), u[6].getst(0), u[6].getst(1))],
-       [('invalid', INVALID, ToyXof.FINAL), ('invalid', INVALID), ('invalid', INVALID, READY),
-        ('invalid', ToyXof.FINAL, INVALID),
-        ('invalid', INVALID, ToyXof.FINAL, 0), ('invalid', INVALID, ToyXof.FINAL), ('invalid', INVALID, INVALID)])
-    u = pv(pair(), 4, xof())
-    eq('length 0 into an absorb destination changes nothing; a XOF destination absorbs',
-       (u.derive(4, 0, 0), u.getst(4), u.getmd(0)['MachineUse'], u.derive(4, 0, 5), u.getst(4),
-        u.getmd(0)['MachineUse']),
-       ('nothing', READY, 0, 'transferred', ToyXof.ABSORB, 5))
+        (u[4].derive(3, 0, 32), u[4].getst(3), u[4].getst(0), u[4].lockers[0].c1 == src0),
+        (u[5].derive(2, 0, 64), u[5].getst(2), u[5].getst(0)), (u[6].derive(1, 0, 32), u[6].getst(0), u[6].getst(1)),
+        (u[7].derive(2, 0, 64), u[7].getst(2), u[7].getst(0))],
+       [('invalid', INVALID, ToyCipher.ENCRYPT), ('invalid', INVALID), ('invalid', INVALID, READY),
+        ('invalid', ToyCipher.ENCRYPT, INVALID),
+        ('invalid', INVALID, ToyCipher.ENCRYPT, True), ('invalid', INVALID, ToyCipher.ENCRYPT),
+        ('invalid', INVALID, INVALID), ('invalid', INVALID, ToyCipher.ENCRYPT)])
+    u, u2 = pv(pair(), 4, xof()), pv(pair(), 4, xof())
+    eq('GR50 item 3: the keystream into a XOF input is no admitted pair, both Invalid, length 0 included',
+       (u.derive(4, 0, 32), u.getst(4), u.getst(0), u2.derive(4, 0, 0), u2.getst(4), u2.getst(0)),
+       ('invalid', INVALID, INVALID, 'invalid', INVALID, INVALID))
     u = pair()
     u.lockers[0].mdh.update(UsagePolicy=1, Locality=loc(hw1=2))
     before = u.getmd(1)
-    eq('XOF output into a key (GR55) is an unrestricted transfer: no narrowing (GR52)',
+    eq('the keystream into a key (GR55) is an unrestricted transfer: no narrowing (GR52)',
        (u.derive(1, 0, 32), u.getmd(1)), ('transferred', before))
 
     def kex(src=None, dst=None, dst_md=cipher, **kw):
@@ -2708,27 +2735,37 @@ def t_derive():
     secret = MACHINES[M_KEX].get_state(w.lockers[0])
     w2, w3, w4 = kex(src=dict(ExpirationDate=500)), kex(src=dict(SCProtection=1), dst=dict(SCProtection=2)), \
         kex(src=dict(UsagePolicy=4), dst_md=xof)
-    w5, w6 = kex(src=dict(SCProtection=2), dst=dict(SCProtection=1)), kex(dst_md=xof)
-    eq('shared secret: restricted into a key and, whole, into a XOF (GR51, GR54; 32 of 64 B: destination Invalid, '
-       'GR50 item 5); a destination at a level not lower than the source receives it, its level unchanged; a lower '
-       'one: Privilege Violation, nothing moved',
+    w5, w6, w7 = kex(src=dict(SCProtection=2), dst=dict(SCProtection=1)), kex(dst_md=xof), kex(dst_md=xof)
+    eq('shared secret: restricted into a key and, whole, into a XOF (GR51, GR54; 32 or 65 of 64 B: destination '
+       'Invalid, GR50 item 5); a destination at a level not lower than the source receives it, its level unchanged; '
+       'a lower one: Privilege Violation, nothing moved',
        [w.derive(1, 0, 32), w.lockers[1].c1[:32] == secret[:32], w.getmd(1)['UsagePolicy'], w.getmd(1)['Locality'],
         w.getmd(1)['ExpirationDate'], w.getst(0), w2.derive(1, 0, 32), w2.getmd(1)['ExpirationDate'],
         w3.derive(1, 0, 32), w3.getmd(1)['SCProtection'], w4.derive(1, 0, 64), w4.getmd(1)['UsagePolicy'],
-        w6.derive(1, 0, 32), w6.getst(1), w5.derive(1, 0, 32), w5.getst(1), w5.lockers[1].c1, w5.getst(0)],
+        w6.derive(1, 0, 32), w6.getst(1), w7.derive(1, 0, 65), w7.getst(1), w5.derive(1, 0, 32), w5.getst(1),
+        w5.lockers[1].c1, w5.getst(0)],
        ['transferred', True, 0b10011, loc(hw1=2, mloc=1, sloc=1), 500, ToyKex.SHARED, 'transferred', 500, 'transferred',
-        2, 'transferred', 4, 'invalid', INVALID, 'privilege_violation', PRIV, b'', ToyKex.SHARED])
-    p1, p2, x, out = kex(src=dict(UsagePolicy=1), dst_md=sig), kex(dst_md=sig), pv(pair(), 2, sig()), bytearray(64)
+        2, 'transferred', 4, 'invalid', INVALID, 'invalid', INVALID, 'privilege_violation', PRIV, b'', ToyKex.SHARED])
+    pv(w2, 2, cipher())
+    eq('a field source does not advance: the shared secret is derived again, whole, into a second key (GR49)',
+       (w2.derive(2, 0, 32), w2.lockers[2].c1[:32] == w2.lockers[1].c1[:32] == secret[:32], w2.getst(0)),
+       ('transferred', True, ToyKex.SHARED))
+    rows = []
+    for w, n in ((kex(), 32), (kex(dst_md=xof), 64), (pair(), 32)):
+        w.csrs(klstart=16)
+        rows.append((w.derive(1, 0, n), w.getst(1), w.klstart))
+    w = fresh().csrs(klstart=16)
+    eq('GR50 item 5: a key or a shared-secret input requires klstart = 0, else destination Invalid; every retirement '
+       'writes klstart = 0 (GR67), a no-op included',
+       rows + [(w.derive(1, 0, 32), w.getst(1), w.klstart)], [('invalid', INVALID, 0)] * 3 + [('noop', UNCONF, 0)])
+    p1, x = kex(src=dict(UsagePolicy=1), dst_md=sig), pv(pair(), 2, sig())
     p1.setst(1, ToySig.SET_SCALAR)
     x.setst(2, ToySig.SET_SCALAR)
-    x.lockers[0].mdh['UsagePolicy'] = 1
-    xof_squeezing(fresh(), 0).exec_(0, 'C', vout=out)
-    s1 = MACHINES[M_KEX].get_state(p1.lockers[0])
-    eq('private key in its Machine-named State (GR50 item 2): secret narrowed (GR54), XOF output not (GR55 key '
-       'derivation); Ready Invalid',
-       [p1.derive(1, 0, 64), p1.lockers[1].c1 == s1, p1.getmd(1)['UsagePolicy'], p1.getst(1), x.derive(2, 0, 64),
-        x.lockers[2].c1 == bytes(out), x.getmd(2)['UsagePolicy'], p2.derive(1, 0, 64), p2.getst(1), p2.getst(0)],
-       ['transferred', True, 1, ToySig.SET_SCALAR, 'transferred', True, 0, 'invalid', INVALID, ToyKex.SHARED])
+    eq('a private key is no destination, also in its Machine-named State (GR50 item 2): neither the shared secret '
+       'nor the keystream moves, only the destination Invalid',
+       [p1.derive(1, 0, 64), p1.getst(1), p1.getst(0), x.derive(2, 0, 64), x.getst(2),
+        x.getst(0)],
+       ['invalid', INVALID, ToyKex.SHARED, 'invalid', INVALID, ToyCipher.ENCRYPT])
     rows = []
     for kw in (dict(src=dict(Locality=loc(boot=1)), dst=dict(Locality=loc(boot=2))),
                dict(src=dict(Locality=loc(sloc=1)))):
@@ -2790,7 +2827,7 @@ def t_errors():
     eq('Off locker: each access traps; first group precedes; precedes the second group; source never exempt',
        [trap_of(u.getmd, 0), trap_of(u.size, k=0), trap_of(u.exec_, 0, 'D'), trap_of(u.restrict, 0, 0, 'h'),
         trap_of(u.clone, 1, 0), trap_of(u.mgmt, 0, EXP), trap_of(u.csrs(klnamedlocker=0).load, Memory(), BASE),
-        trap_of(u.mv_in, 1), trap_of(u.setst, 0, 46), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
+        trap_of(u.mv_in, 1), trap_of(u.setst, 0, 54), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
        ['locker_off'] * 8 + ['illegal/1', 'locker_off', 'locker_off'])
     u.csrs(klnamedlocker=32)
     u.llstatus.update({0: 'clean', 6: 'off', 7: 'clean', 8: 'off', 9: 'off'})
@@ -3015,11 +3052,12 @@ def t_encodings():
        [('kl.mvin', 'I', 'X9'), ('kl.mvin', 'II', 'V9'), ('kl.mvin', 'III', 'KLIOBUF'), ('kl.mvout', 'IV', 'X9'),
         ('kl.mvout', 'V', 'V9'), ('kl.mvout', 'VI', 'KLIOBUF'), ('kl.exec', 'D', 'K6')] + ['illegal/1'] * 5)
     names = [decoded(enc_setst(i, F=3, rs1=4, rd=6)) for i in range(128)]
-    eq('#immed7: 0111xxx kl.mgmt (59-62, Form B reserved); 46, 47, 54, 55 reserved; 0, 64; 65 only as kl.clearall; '
+    eq('#immed7: 0111xxx kl.mgmt (59-62, Form B reserved); 54, 55 reserved; 46, 47 kl.setst (GR26); 0, 64; '
+       '65 only as kl.clearall; '
        '66-127',
        ([i for i in range(128) if names[i][0] == 'kl.mgmt'], [i for i in range(128) if names[i] == 'illegal/1'],
         decoded(enc_setst(56, F=1, rs1=4, rd=6)), names[0][0], names[64][0], {names[i][0] for i in range(66, 128)}),
-       ([56, 57, 58, 63], [46, 47, 54, 55, 59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
+       ([56, 57, 58, 63], [54, 55, 59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
 
 def t_klnl_pairs():
     section('KLNL in kl.clone, kl.rename, kl.swap and kl.derive  (GR3, GR11, GR12)')

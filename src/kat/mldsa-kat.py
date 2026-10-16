@@ -2,7 +2,7 @@
 """KATs for the KLE ML-DSA Machines (<<KLE-PQC-ML-DSA>>): fips204.py against NIST ACVP-Server vectors
 (ML-DSA-keyGen/sigGen/sigVer-FIPS204 internalProjection.json, fetched 2026-08-26, case ids in each
 record), including the external-mu interface the unit exposes, and a model of an ML-DSA locker."""
-import os, sys
+import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips204 as D  # noqa: E402
 from common import (ERROR_STATES, MDH_FIELD, IllegalInstruction, LoopBound, check, control, done, info,  # noqa: E402
@@ -65,8 +65,6 @@ class MLDSALocker:
 
     def setst(self, st, aux=None):
         """Form A (aux None) or Form B (aux = Xs)."""
-        if st in (SUCCESS, FAILURE):
-            raise IllegalInstruction               # GR26
         if self.state in ERROR_STATES:
             return
         pol = self.get('MachinePolicy')
@@ -209,26 +207,25 @@ class MLDSALocker:
         return new
 
 class KeyDest:
-    """A key destination of <<KLE-derive-endpoints>>: an ECC `Scalar` in _Set_Scalar_ or a symmetric `key`."""
+    """A symmetric `key` in _Ready_ (a destination of <<KLE-derive-endpoints>>), or an ECC `Scalar` in
+    _Set_Scalar_ (no longer a destination)."""
     def __init__(self, ecc=True, size=32, state=None, keytype=0):
         self.ecc, self.size, self.keytype, self.key = ecc, size, keytype, bytes(size)
         self.state = SET_SCALAR if ecc and state is None else state or READY
 
-def kl_derive_exec(dest, src, length):
-    """Emitted output into a hash in _Hash_Absorb_ (dest: its absorbed bytes, GR55) or a KeyDest."""
-    if src.state not in OUT_F:
-        return src.invalid()                       # GR50 items 1-2
-    name, w = OUT_F[src.state], src.use
-    if isinstance(dest, KeyDest):
-        if dest.state != (SET_SCALAR if dest.ecc else READY) or dest.keytype == 1 \
-                or length < dest.size or w + dest.size > src.size(name):
-            dest.state = INVALID                   # GR50 items 1-2; GR53; GR50 item 5
-        else:                                      # GR55, unrestricted: no GR51 narrowing
-            dest.key = src.exec_C(dest.size)
-        return
-    if w + length > src.size(name):
-        return src.invalid()                       # MR9
-    dest += src.exec_C(length)
+class SecretSrc:
+    """A source endpoint of <<KLE-derive-endpoints>> standing in for a shared secret (ECC or ML-KEM)."""
+    def __init__(self, secret=bytes(range(32))):
+        self.secret, self.state = secret, READY
+
+def kl_derive(dest, src, length):
+    """kl.derive into a hash in _Hash_Absorb_ (dest: its absorbed bytes), a KeyDest or an ML-DSA locker.
+    No ML-DSA State is a source endpoint, nor is the ML-DSA Machine a destination (<<KLE-derive-endpoints>>)."""
+    if isinstance(src, MLDSALocker):
+        return src.invalid()                       # GR50 item 1: the source; nothing transferred
+    if isinstance(dest, MLDSALocker):
+        return dest.invalid()                      # GR50 item 2: the destination; nothing transferred
+    raise NotImplementedError('only the ML-DSA endpoints are modelled')
 
 # ---------------------------------------------------------------- helpers
 
@@ -330,9 +327,9 @@ def t_mdh():
         cc = generated(policy=pol)
         cc.setst(st, 1 if st == SIGN_GEN else None)
         check(f'{name} clear: _Invalid_', cc.state == INVALID)
-    cc = MLDSALocker(44)
     for imm in (SUCCESS, FAILURE):
-        check(f'kl.setst #{imm}: illegal instruction (GR26)', raises(cc.setst, imm) and cc.state == READY)
+        cc = MLDSALocker(44)
+        check(f'kl.setst #{imm} -> Invalid (GR26, MR1)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
     for imm in (14, 45):
         cc = MLDSALocker(44)
         cc.setst(imm)
@@ -616,43 +613,32 @@ def t_loop_bounds():
         D.BOUNDS.update(RejBoundedPoly=None, RejNTTPoly=None, SampleInBall=None)
 
 def t_derive():
-    section('kl.derive: emitted output as a source (GR55, <<KLE-derive-endpoints>>)')
-    cc, absorbed = generated(), bytearray()
-    cc.setst(PK_OUT)
-    kl_derive_exec(absorbed, cc, 1000)
-    kl_derive_exec(absorbed, cc, 312)
-    check('GR55: _pubkey_Output_ -> SHAKE256 in two transfers, MachineUse as Form C; SHAKE256(pubkey, 64) = tr',
-          bytes(absorbed).hex() == VECTORS['keyGen'][0]['pk'] and cc.state == SUCCESS and D.H(bytes(absorbed), 64) == cc.privkey[64:128])
-    kl_derive_exec(absorbed, cc, 16)
-    check('transfer after the field is complete (source now in _Success_): source _Invalid_ (GR50)',
-          cc.state == INVALID and len(absorbed) == 1312)
+    section('kl.derive: ML-DSA is no endpoint (<<KLE-derive-endpoints>>)')
     det = mu_vec(False)
-    cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
-    cc.setst(SIGN_GEN, 1)
-    cc.exec_D()
-    kl_derive_exec(absorbed := bytearray(), cc, 2420)
-    check('GR55: _Sign_Output_ -> a hash: the signature, MachineUse as Form C', bytes(absorbed).hex() == det['sig']
-          and cc.state == SUCCESS)
+    sg = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
+    sg.setst(SIGN_GEN, 1)
+    sg.exec_D()
+    pk = generated()
+    pk.setst(PK_OUT)
+    for st, cc in (('pubkey_Output', pk), ('Sign_Output', sg)):
+        res = []
+        for dest, n in ((bytearray(), 1312), (KeyDest(ecc=False), 64), (KeyDest(), 64)):
+            src = copy.deepcopy(cc)
+            kl_derive(dest, src, n)
+            res.append((src.state, bytes(dest) if isinstance(dest, bytearray) else (dest.state, dest.key), src.use))
+        check(f'source in _{st}_ (the output of an ML-DSA Machine is not a source) into SHAKE256 '
+              '_Hash_Absorb_, an AES-256 `key` in _Ready_ or an ECC `Scalar`: source _Invalid_ (GR50 item 1), '
+              'nothing transferred, destination unchanged', True, res,
+              [(INVALID, b'', 0), (INVALID, (READY, bytes(32)), 0), (INVALID, (SET_SCALAR, bytes(32)), 0)])
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
-    kd = KeyDest()
-    kl_derive_exec(kd, cc, 64)
-    check('source in _privkey_Input_ (no endpoint): only it becomes _Invalid_', cc.state == INVALID
-          and kd.state == SET_SCALAR and kd.key == bytes(32))
-    cc = generated()
-    cc.setst(PK_OUT)
-    kl_derive_exec(kd, cc, 64)
-    check('_pubkey_Output_ -> ECC `Scalar` in _Set_Scalar_: exactly 32 bytes, MachineUse as Form C',
-          kd.key.hex() == VECTORS['keyGen'][0]['pk'][:64] and cc.use == 32 and cc.state == PK_OUT)
-    for label, kd, n in (('ECC destination in _Ready_', KeyDest(state=READY), 64),
-                         ('ECC `Scalar` of KeyType 1 (GR53)', KeyDest(keytype=1), 64),
-                         ('length < 32 (GR50 item 5)', KeyDest(), 31)):
-        kl_derive_exec(kd, cc, n)
-        check(f'{label}: only the destination becomes _Invalid_', kd.state == INVALID and cc.state == PK_OUT
-              and cc.use == 32)
     kd = KeyDest(ecc=False)
-    kl_derive_exec(kd, cc, 64)
-    check('_pubkey_Output_ -> AES-256 `key` in _Ready_ (GR55, unusual but admitted): the next 32 bytes, MachineUse '
-          'as Form C', kd.state == READY and kd.key.hex() == VECTORS['keyGen'][0]['pk'][64:128] and cc.use == 64)
+    kl_derive(kd, cc, 64)
+    check('source in _privkey_Input_ (no endpoint): only it becomes _Invalid_ (GR50 item 1)', cc.state == INVALID
+          and kd.state == READY and kd.key == bytes(32))
+    cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
+    kl_derive(cc, SecretSrc(), 32)
+    check('a shared-secret source into an ML-DSA locker (no destination endpoint): destination _Invalid_ '
+          '(GR50 item 2), privkey cleared', True, (cc.state, cc.privkey), (INVALID, b''))
 
 def t_hints():
     section('FIPS 204 Algorithm 21 hint checks')

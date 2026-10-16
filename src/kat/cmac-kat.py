@@ -3,7 +3,7 @@
 state machine, Serialized Content and kl.derive endpoints."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, cat, bxor, aes_encrypt, update_mask, double_ocb, MASK128,
+from common import (b2v, v2b, sl, cat, bxor, aes_encrypt, tdea_encrypt, update_mask, double_ocb, MASK128,
                     KL_STATE_READY as READY, KL_STATE_HASH_ABSORB as ABSORB,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_HASH_OUTPUT as OUTPUT, KL_STATE_SUCCESS as SUCCESS,
@@ -35,8 +35,8 @@ def ref_cmac(K, M):
 class Invalid(Exception): pass
 SKS = {}
 
-def layout(kbits):
-    return [('key', kbits), ('hash', B), ('last_block_len', 32), ('tag_len', 32), ('absorbed_any', 1), ('absorbed_all', 1)]
+def layout(kbits, b=128):
+    return [('key', kbits), ('hash', b), ('last_block_len', 32), ('tag_len', 32), ('absorbed_any', 1), ('absorbed_all', 1)]
 
 def pack(vals, lay):
     """Rows from bit 0 upwards, zero-padded to a multiple of 128 bits."""
@@ -54,12 +54,13 @@ def unpack(data, lay):
     return out
 
 class Cmac:
-    def __init__(s, key, skid=None, policy=3, **nc):
+    def __init__(s, key, skid=None, policy=3, cipher='aes', **nc):
         """policy: _MachinePolicy_, bit 0 generation (_Hash_Output_), bit 1 verification (_Hash_Verify_);
         zero is invalid Metadata (<<KLE-CMAC-mode>>, <<KLE-Metadata-validity>>)."""
         if not policy or policy > 3:
             raise Invalid('MachinePolicy')
         s.key, s.skid, s.state, s.policy = key, skid, READY, policy
+        s.cipher, s.b = cipher, 64 if cipher == 'tdea' else 128   # <<KLE-CMAC-mode>>: b = 64 or 128
         s.nc = dict(dict(dbl=double_ocb, k2full=False, msb_first=False, min_tag=64), **nc)
         if skid is not None:
             SKS[skid] = key
@@ -73,11 +74,12 @@ class Cmac:
         if why:
             raise Invalid(why)
     def enc(s, v):
-        return b2v(aes_encrypt(s.key, v2b(v, 16)))
+        E = tdea_encrypt if s.cipher == 'tdea' else aes_encrypt
+        return b2v(E(s.key, v2b(v, s.b // 8)))
     def gen_subkeys(s):
         L = s.enc(0)
-        K1 = s.nc['dbl'](L)
-        return L, K1, s.nc['dbl'](K1)
+        K1 = s.nc['dbl'](L, s.b)
+        return L, K1, s.nc['dbl'](K1, s.b)
     # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MR17)
     SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
@@ -92,13 +94,13 @@ class Cmac:
         if immed == LAST:
             if s.absorbed_all:
                 s._invalid('a second last block')  # GR23: the same-State kl.setst is forbidden
-            if aux > B or aux % 8:
+            if aux > s.b or aux % 8:
                 s._invalid('Xs')
             s.last_block_len = aux
             if aux == 0:                          # empty final block: padded, absorbed, no kl.exec
                 if s.absorbed_any:
                     s._invalid('Xs = 0 after a block')  # whole blocks end with a full last block
-                s.hash, s.absorbed_all = s.enc(s.hash ^ cat((0, B - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), True
+                s.hash, s.absorbed_all = s.enc(s.hash ^ cat((0, s.b - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), True
         elif immed in (OUTPUT, VERIFY) and not s.policy & (1 if immed == OUTPUT else 2):
             s._invalid('MachinePolicy')           # MR11: generation, resp. verification, not permitted
         elif immed in (OUTPUT, VERIFY) and not s.absorbed_all:
@@ -106,20 +108,21 @@ class Cmac:
         elif immed == VERIFY:
             if aux < s.nc['min_tag'] or aux % 8:
                 s._invalid('tag_len')
-            s.tag_len = min(aux, B)
+            s.tag_len = min(aux, s.b)
         s.state = immed
-    def exec(s, form, INPUT=0, klen=B):
+    def exec(s, form, INPUT=0, klen=None):
+        klen = s.b if klen is None else klen
         st = s.state
         if st in ERROR_STATES:                    # GR19.a, GR34
             return 0
         if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD', VERIFY: 'BD'}.get(st) or ''):
             s._invalid('Form')                    # MR1, GR24, GR28
         if st == ABSORB:
-            if klen % B:
+            if klen % s.b:
                 s._invalid('MR2')
-            pos = range(0, klen, B)               # MR3
+            pos = range(0, klen, s.b)               # MR3
             for i in (reversed(pos) if s.nc['msb_first'] else pos):
-                s.hash = s.enc(s.hash ^ sl(INPUT, i + B - 1, i))
+                s.hash = s.enc(s.hash ^ sl(INPUT, i + s.b - 1, i))
                 s.absorbed_any = True
             return 0
         if st == OUTPUT:
@@ -138,16 +141,16 @@ class Cmac:
         n = s.last_block_len
         if klen < n:
             s._invalid('KLLEN < last_block_len')
-        INPUT = sl(INPUT, B - 1, 0)               # MR7
+        INPUT = sl(INPUT, s.b - 1, 0)               # MR7
         _, K1, K2 = s.gen_subkeys()
-        if n == B:
+        if n == s.b:
             tmp = INPUT ^ (K2 if s.nc['k2full'] else K1)
-        else:                                     # 0 < n < B (n = 0 never reaches a kl.exec)
-            tmp = cat((0, B - 8 - n), (0x80, 8), (sl(INPUT, n - 1, 0), n)) ^ K2
+        else:                                     # 0 < n < s.b (n = 0 never reaches a kl.exec)
+            tmp = cat((0, s.b - 8 - n), (0x80, 8), (sl(INPUT, n - 1, 0), n)) ^ K2
         s.hash, s.absorbed_all = s.enc(s.hash ^ tmp), True
         return 0
     def lay(s):
-        return layout(64 if s.skid is not None else 8 * len(s.key))
+        return layout(64 if s.skid is not None else 8 * len(s.key), s.b)
     def export(s, lay=None):
         return pack(dict(key=s.skid if s.skid is not None else b2v(s.key), hash=s.hash,
                          last_block_len=s.last_block_len, tag_len=s.tag_len,
@@ -156,34 +159,30 @@ class Cmac:
     def imported(s, c1, lay=None):
         """A fresh locker with this locker's MDH, loaded from Content1."""
         f = unpack(c1, lay or s.lay())
-        new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, s.policy, **s.nc)
+        new = Cmac(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.skid, s.policy, s.cipher, **s.nc)
         new.state, new.hash = s.state, f.get('hash', 0)
         new.last_block_len, new.tag_len = f['last_block_len'], f.get('tag_len', 0)
         new.absorbed_any, new.absorbed_all = bool(f.get('absorbed_any', 0)), bool(f.get('absorbed_all', 0))
         return new
 
-class ExecOut(bytes):
-    """The kl.exec output of another Machine, such as a hash (GR55)."""
+class Keystream(bytes):
+    """The keystream that a Keystream generation locker in _Operate_ supplies (GR55)."""
 
 def derive(src, dst, length):
-    """kl.derive; src is a Cmac locker, an ExecOut, or the bytes of a GR54/GR56 source.
-    Endpoints: output in Hash_Output (GR55 source); `key` in Ready, input in Hash_Absorb (destination)."""
+    """kl.derive; src is a Cmac locker, a Keystream, or the bytes of a GR54/GR56 source.
+    Endpoints: `hash` in Hash_Output (GR55 source, b/8 bytes); `key` in Ready (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(c.state in ERROR_STATES for c in lockers):
         return                                    # Gate Order Rule
-    bad = [c for c, ok in ((src, src.state == OUTPUT) if isinstance(src, Cmac) else (src, True),
-                           (dst, dst.state == ABSORB or (dst.state == READY and dst.skid is None))) if not ok]
-    for c in bad:                                 # GR50 items 1-2 (GR53): only the offending lockers
-        c._invalid('GR50 items 1-2' if c is bad[-1] else None)
-    if dst.state == ABSORB and not isinstance(src, (Cmac, ExecOut)):
-        dst._invalid('GR50 item 3')               # GR54 excepts CMAC, GR56 feeds keys only
-    # GR50 item 3 holds otherwise: GR54/GR56 sources into the key, and GR55 (any kl.exec output, into a key too)
-    avail = B // 8 if isinstance(src, Cmac) else len(src)
-    if dst.state == READY and (length < len(dst.key) or avail < len(dst.key)):
+    if isinstance(src, Cmac) and src.state != OUTPUT:
+        src._invalid('GR50 item 1')
+    if dst.state != READY or dst.skid is not None:
+        dst._invalid('GR50 item 2')               # the kl.exec input is no destination; GR53
+    # GR50 item 3 holds: GR54-GR56 admit every source here into a key
+    avail = src.b // 8 if isinstance(src, Cmac) else len(src)
+    if length < len(dst.key) or avail < len(dst.key):
         dst._invalid('GR50 item 5')
-    data = v2b(src.exec('C', klen=8 * length), length) if isinstance(src, Cmac) else src
-    if dst.state == ABSORB:                       # consumed as kl.exec would be (GR49)
-        return dst.exec('B', b2v(data[:length]), 8 * length)
+    data = v2b(src.exec('C'), avail) if isinstance(src, Cmac) else src
     dst.key = data[:len(dst.key)]
 
 def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
@@ -405,37 +404,84 @@ for name, mk, src, n in [
         ("length 8 into the 16-byte key, no zero-fill (GR50 item 5)", new16, secret, 8),
         ("length 0 into the key (GR50 item 5)", new16, secret, 0),
         ("12-byte source into the 16-byte key (GR50 item 5)", new16, K128[:12], 16),
-        ("into a locker in Hash_Absorb_Last_Block (GR50 items 1-2)", last_set, secret, 16),
-        ("into a locker in Success (GR50 items 1-2)", done_ok, secret, 16),
+        ("into a locker in Hash_Absorb_Last_Block (GR50 item 2)", last_set, secret, 16),
+        ("into a locker in Success (GR50 item 2)", done_ok, secret, 16),
         ("into the key of a KeyType 1 locker (GR53, GR50 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
-        ("24 bytes of hash output into Hash_Absorb: short block (GR49, MR2)", at_absorb, ExecOut(MSG[:24]), 24),
-        ("a shared secret into Hash_Absorb (GR54 excepts CMAC; GR50 item 3)", at_absorb, secret, 32)]:
+        ("keystream into Hash_Absorb: the kl.exec input is no destination (GR50 item 2)", at_absorb,
+         Keystream(MSG[:32]), 32),
+        ("a shared secret into Hash_Absorb (no destination; GR50 item 2)", at_absorb, secret, 32)]:
     cl = mk()
     check(f"{name} -> Invalid", raises(derive, src, cl, n, exc=Invalid) and cl.key is None)
-cl = at_absorb()
-derive(ExecOut(MSG[:32]), cl, 32)
-cl.setst(LAST, 'B', 64)
-cl.exec('B', b2v(MSG[32:40]), 64)
-cl.setst(OUTPUT)
-check("32 bytes of hash output into Hash_Absorb (GR55), then the last block: ex4", True, v2b(cl.exec('C'), 16), W4)
+cl = Cmac(bytes(16))
+derive(Keystream(MSG[:32]), cl, 32)
+check("32 keystream bytes (GR55) into the 16-byte `key` in Ready: its first 16 bytes, then MSG[:40]: REF", True,
+      (cl.key, tag(None, MSG[:40], cl=cl)), (MSG[:16], ref_cmac(MSG[:16], MSG[:40])[0]))
 src, dst = run(K128, MSG[:16]), at_absorb(K256)
-derive(src, dst, 16)
-dst.setst(LAST, 'B', 64)
-dst.exec('B', b2v(MSG[:8]), 64)
-dst.setst(OUTPUT)
-check("CMAC tag (Hash_Output) into another CMAC's Hash_Absorb: REF; source in Success", True,
-      (v2b(dst.exec('C'), 16), src.state), (ref_cmac(K256, VEC[1][3] + MSG[:8])[0], SUCCESS))
+check("CMAC (Hash_Output) into another CMAC's Hash_Absorb (no destination, GR50 item 2) -> only the destination "
+      "Invalid", raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
+for n in (16, 32):
+    src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
+    derive(src, dst, n)
+    check(f"CMAC (Hash_Output, b/8 = 16 bytes) into another CMAC's `key` in Ready (GR55, unrestricted), length {n}, "
+          "then MSG[:40]: REF", True, (src.state, dst.state, dst.key, tag(None, MSG[:40], cl=dst)),
+          (SUCCESS, READY, VEC[1][3], ref_cmac(VEC[1][3], MSG[:40])[0]))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
-derive(src, dst, 16)
-check("CMAC tag into another CMAC's `key` in Ready (GR55, unrestricted), then MSG[:40]: REF",
-      True, (src.state, dst.state, dst.key, tag(None, MSG[:40], cl=dst)),
-      (SUCCESS, READY, VEC[1][3], ref_cmac(VEC[1][3], MSG[:40])[0]))
+check("CMAC as a source with length 8 < 16 (GR50 item 5; the source supplies all b/8 bytes, never a truncated tag) "
+      "-> only the destination Invalid",
+      raises(derive, src, dst, 8, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(32))
-check("16-byte CMAC tag into a 32-byte `key` (GR50 item 5) -> only the destination Invalid",
+check("16-byte CMAC into a 32-byte `key` (GR50 item 5) -> only the destination Invalid",
       raises(derive, src, dst, 32, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = at_absorb(), Cmac(bytes(16))
-check("CMAC in Hash_Absorb as a source (no source endpoint) -> only the source Invalid",
+check("CMAC in Hash_Absorb as a source (no source endpoint, GR50 item 1) -> only the source Invalid",
       raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, READY))
+src, dst = at_absorb(), at_absorb(K256)
+check("neither endpoint valid: GR50 item 1 fails first -> only the source Invalid",
+      raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, ABSORB))
+
+section("b = 64: CMAC-TDES (NIST CMAC examples, SP 800-38B R_64)")
+TK3 = bytes.fromhex("0123456789ABCDEF23456789ABCDEF01456789ABCDEF0123")
+TK2 = TK3[:16]                                    # 2-key TDEA: K3 = K1
+TM = bytes.fromhex("6BC1BEE22E409F96E93D7E117393172AAE2D8A571E03AC9C9EB76FAC45AF8E51")
+TDES = [(TK3, 0, "7DB0D37DF936C550"), (TK3, 16, "30239CF1F52E6609"), (TK3, 20, "6C9F3EE4923F6BE2"),
+        (TK3, 32, "99429BD0BF7904E5"), (TK2, 0, "79CE52A7F786A960"), (TK2, 16, "CC18A0B79AF2413B")]
+
+def run64(K, M, hop=False, to=OUTPUT):
+    cl = Cmac(K, cipher='tdea')
+    nxt = (lambda c: c.imported(c.export())) if hop else (lambda c: c)
+    cl.setst(ABSORB); cl = nxt(cl)
+    nfull = (len(M) - 1) // 8 if M else 0
+    for a in range(nfull):
+        cl.exec('B', b2v(M[8 * a:8 * a + 8]), 64); cl = nxt(cl)
+    tail = M[8 * nfull:]
+    cl.setst(LAST, 'B', 8 * len(tail)); cl = nxt(cl)
+    if tail:
+        cl.exec('B', b2v(tail), 8 * len(tail)); cl = nxt(cl)
+    if to == OUTPUT:
+        cl.setst(OUTPUT)
+    return nxt(cl)
+
+check("CMAC-TDES subkeys (3-key): L, K1 = double(L), K2 = double(K1) with R_64 = 0x1B", True,
+      [v2b(x, 8).hex().upper() for x in Cmac(TK3, cipher='tdea').gen_subkeys()],
+      ["4EBA739C998BCB60", "9D74E739331796C0", "3AE9CE72662F2D9B"])
+for K, n, want in TDES:
+    for hop in (False, True):
+        got = v2b(run64(K, TM[:n], hop).exec('C', klen=64), 8).hex().upper()
+        check(f"CMAC-TDES {len(K) // 8}-key, Mlen = {8 * n}{', export/import after every instruction' if hop else ''}",
+              True, got, want)
+cl = run64(TK3, TM[:32], to=None)
+cl.setst(VERIFY, 'B', 64)
+cl.exec('B', b2v(bytes.fromhex("99429BD0BF7904E5")), 64)
+cv = run64(TK3, TM[:32], to=None)
+cv.setst(VERIFY, 'B', 128)                        # tag_len <- min(Xs, b) = 64
+cv.exec('B', b2v(bytes.fromhex("99429BD0BF7904E4")), 64)
+check("CMAC-TDES _Hash_Verify_: tag_len = 64 = b matches -> Success; Xs = 128 clamped to b, last bit flipped -> Failure",
+      True, (cl.state, cv.tag_len, cv.state), (SUCCESS, 64, FAILURE))
+src, dst = run64(TK3, TM[:32]), Cmac(bytes(16))
+check("CMAC-TDES as a kl.derive source supplies b/8 = 8 bytes: into a 16-byte `key` (GR50 item 5) -> only the "
+      "destination Invalid", raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
+check("CMAC-TDES: Serialized Content holds a 64-bit `hash`", True,
+      [w for f, w in Cmac(TK3, cipher='tdea').lay() if f == 'hash'], [64])
 
 section("negative controls")
 control("K2 for a full final block", all(tag(K, M, k2full=True) != W for _, K, M, W in VEC

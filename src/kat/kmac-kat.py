@@ -413,24 +413,40 @@ class KeyDest:
     def invalidate(self): self.st, self.key = INVALID, None
 
 
+class FieldSrc(bytes):
+    """A shared-secret field (ECC _Output_ or ML-KEM `sharedkey`, GR54), which does not advance (GR49)."""
+    st = OUTPUT
+
+
+class CmacSrc:
+    """A CMAC in _Hash_Output_ (<<KLE-derive-endpoints>>, GR55): its b/8 bytes of `hash`, then _Success_."""
+    def __init__(self, mac): self.st, self.mac = OUTPUT, mac
+    def invalidate(self): self.st = INVALID
+
+
 def derive(hart, dst, src, length):
-    """kl.derive from the kl.exec output of `src` into the kl.exec input of `dst` (GR55, GR49), or into a
-    KeyDest (GR55, unrestricted)."""
-    if src.st not in ERROR_STATES and dst.st not in ERROR_STATES:
+    """kl.derive of a shared-secret field into the kl.exec input of `dst` (GR54, GR49), or of a shared-secret
+    field or a CMAC into a KeyDest; no KMAC output is a source (<<KLE-derive-endpoints>>). Uninterruptible
+    (GR71.a)."""
+    field, cmac = isinstance(src, FieldSrc), isinstance(src, CmacSrc)
+    if (field or src.st not in ERROR_STATES) and dst.st not in ERROR_STATES:
         key = isinstance(dst, KeyDest)
-        bad = [c for c, s in ((src, OUTPUT), (dst, READY if key else ABSORB)) if c.st != s]   # GR50 items 1-2
-        for c in bad:
-            c.invalidate()
-        if not bad and key:
-            if length < dst.n or not src.xof and src.L < 8 * dst.n:
-                dst.invalidate()                                         # GR50 item 5
-            else:
-                dst.key = bytearray(dst.n)
-                src.exec(out=dst.key)
-        elif not bad and length:
-            buf = bytearray(length)
-            src.exec(out=buf)
-            dst.exec(inp=bytes(buf))
+        n = len(src) if field else len(src.mac) if cmac else 0
+        if not (field or cmac and src.st == OUTPUT):
+            src.invalidate()                                             # GR50 item 1
+        elif dst.st != (READY if key else ABSORB):
+            dst.invalidate()                                             # GR50 item 2
+        elif not (key or field):
+            src.invalidate()                                             # GR50 item 3: a message input takes
+            dst.invalidate()                                             # only a shared secret
+        elif hart.klstart or (length < dst.n or n < dst.n if key else length != n):
+            dst.invalidate()                                             # GR50 item 5; 8-bit granularity
+        elif key:
+            dst.key = bytearray((bytes(src) if field else src.mac)[:dst.n])
+            if cmac:
+                src.st = SUCCESS
+        else:
+            dst.exec(inp=bytes(src))
     hart.klstart = 0
 
 
@@ -758,44 +774,69 @@ c2 = Kmac(Hart()).import_(*c.export())
 check('round trip, KMAC256 L = 4096 after 2 update()s (L counts down in the Serialized Content), then _Success_', True,
       (bytes(o1 + o2), st, c2.st), (ref_kmac(256, KEY, DATA200, 4096, TAG), 'success', SUCCESS))
 
-section('kl.derive between kl.exec endpoints (<<KLE-derive-endpoints>>, GR55)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR50, GR54)')
 h = Hart()
+SS = bytes(range(0x40, 0x60))
+stream = ref_kmac(128, KEY, DATA4, 0, TAG, True, 64)
+res = []
+for sec, xof, L in ((128, False, 256), (256, True, 0)):
+    dst = absorbing(sec, DATA4, xof=xof, hart=h)
+    derive(h, dst, FieldSrc(SS), 32)
+    dst.exec(inp=DATA4)
+    to_output(dst, L)
+    res.append((h.klstart, dst.st, bytes(squeeze(dst, 32)[0][1])))
+check('shared secret (32 B, length 32) -> open KMAC128 and KMACXOF256 _Hash_Absorb_ between two DATA4 (GR54)', True,
+      res, [(0, OUTPUT, ref_kmac(128, KEY, DATA4 + SS + DATA4, 256, TAG)),
+            (0, OUTPUT, ref_kmac(256, KEY, DATA4 + SS + DATA4, 0, TAG, True, 32))])
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
-stream = ref_kmac(128, KEY, DATA4, 0, TAG, True, 64)
 dst.exec(inp=DATA4)
 to_output(dst, 256)
-check('KMACXOF128 output (32 B) -> open KMAC128 _Hash_Absorb_, continued; source continues', True,
-      (h.klstart, bytes(squeeze(dst, 32)[0][1]), bytes(squeeze(src, 32)[0][1])),
-      (0, ref_kmac(128, KEY, DATA4 + stream[:32] + DATA4, 256, TAG), stream[32:]))
+check('KMACXOF128 output -> open KMAC128 _Hash_Absorb_: no KMAC output is a source (GR50 item 1): source '
+      '_Invalid_, destination unchanged', True, (src.st, h.klstart, bytes(squeeze(dst, 32)[0][1])),
+      (INVALID, 0, ref_kmac(128, KEY, DATA4 + DATA4, 256, TAG)))
 src, dst = squeezing(256, DATA4, 512, hart=h), absorbing(256, xof=True, S=b'', hart=h)
 derive(h, dst, src, 64)
-to_output(dst, 0)
-check('whole KMAC256 output (L = 512) -> KMACXOF256; source in _Success_', True,
-      (src.st, bytes(squeeze(dst, 64)[0][1])),
-      (SUCCESS, ref_kmac(256, KEY, WANT[3], 0, b'', True, 64)))
+check('whole KMAC256 output (L = 512) -> KMACXOF256 (GR50 item 1): source _Invalid_, destination in _Hash_Absorb_',
+      True, (src.st, dst.st), (INVALID, ABSORB))
+src = squeezing(256, DATA4, 512, hart=h)
+squeeze(src, 64)
 derive(h, absorbing(128, hart=h), src, 16)
 check('source in _Success_ (no endpoint, GR50 item 1) -> source _Invalid_', True, src.st, INVALID)
-src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), squeezing(128, DATA4, 256, hart=h)
-snap = (src.st, src.state, src.block_base)
+dst = squeezing(128, DATA4, 256, hart=h)
+derive(h, dst, FieldSrc(SS), 32)
+check('shared secret -> KMAC128 in _Hash_Output_ (GR50 item 2) -> destination _Invalid_', True, dst.st, INVALID)
+src, dst = CmacSrc(bytes(16)), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 16)
-check('destination in _Hash_Output_ -> destination _Invalid_, nothing taken from the source', True,
-      (dst.st, (src.st, src.state, src.block_base)), (INVALID, snap))
-src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
-snap = (src.state, src.block_base, dst.state, dst.block_base)
-derive(h, dst, src, 0)
-check('length = 0 changes no state (GR50 item 7)', True,
-      (src.state, src.block_base, dst.state, dst.block_base), snap)
+check('a CMAC -> KMAC128 _Hash_Absorb_: pair not admitted (GR50 item 3), both _Invalid_', True,
+      (src.st, dst.st), (INVALID, INVALID))
+res = []
+for n, length, ks in ((32, 0, 0), (32, 31, 0), (32, 33, 0), (32, 1 << 60, 0), (32, 32, 4)):
+    dst = absorbing(128, DATA4, hart=h)
+    h.klstart = ks
+    derive(h, dst, FieldSrc(SS[:n]), length)
+    res.append((dst.st, h.klstart))
+check('shared secret (32 B) into KMAC128 _Hash_Absorb_ with length 0, 31, 33 or 2^60 (8-bit granularity), or '
+      'klstart = 4 (uninterruptible, GR71.a) -> destination _Invalid_ (GR50 item 5), klstart = 0', True, res,
+      [(INVALID, 0)] * 5)
 
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)
 s2, d2 = squeezing(256, DATA4, 512, hart=h), KeyDest(32)
-s3, d3 = squeezing(128, DATA4, 128, hart=h), KeyDest(32)
-for d, s_ in ((dst, src), (d2, s2), (d3, s3)):
+for d, s_ in ((dst, src), (d2, s2)):
     derive(h, d, s_, 32)
-check('GR55: KMACXOF128 -> a 16-byte `key` (length 32: 16 B, source continues), KMAC256 (L = 512) '
-      '-> a 32-byte key; KMAC128 with L = 128 -> a 32-byte key (GR50 item 5): destination _Invalid_', True,
-      (bytes(dst.key), bytes(squeeze(src, 16)[0][1]), bytes(d2.key), s2.st, d3.st, s3.st),
-      (stream[:16], stream[16:32], WANT[3][:32], OUTPUT, INVALID, OUTPUT))
+check('KMACXOF128 -> a 16-byte `key`, KMAC256 (L = 512) -> a 32-byte key: not a source (GR50 item 1), source '
+      '_Invalid_, key unwritten', True, (src.st, dst.st, dst.key, s2.st, d2.st, d2.key),
+      (INVALID, READY, None, INVALID, READY, None))
+res = []
+for s_, d, length in ((FieldSrc(SS), KeyDest(16), 32), (FieldSrc(SS), KeyDest(32), 32),
+                      (CmacSrc(stream[:16]), KeyDest(16), 16), (FieldSrc(SS[:16]), KeyDest(32), 32),
+                      (FieldSrc(SS), KeyDest(32), 16), (CmacSrc(stream[:16]), KeyDest(32), 32)):
+    derive(h, d, s_, length)
+    res.append((d.st, d.key and bytes(d.key), s_.st))
+check('shared secret (32 B) -> a 16- and a 32-byte `key`, a 16-byte CMAC -> a 16-byte key (then _Success_); a '
+      '16-byte secret or CMAC, or length 16, into a 32-byte key (GR50 item 5): destination _Invalid_', True, res,
+      [(READY, SS[:16], OUTPUT), (READY, SS, OUTPUT), (READY, stream[:16], SUCCESS),
+       (INVALID, None, OUTPUT), (INVALID, None, OUTPUT), (INVALID, None, OUTPUT)])
 
 section('A message X of any bit length (_Hash_Absorb_Last_Block_, <<KLE-SHA-3>>)')
 

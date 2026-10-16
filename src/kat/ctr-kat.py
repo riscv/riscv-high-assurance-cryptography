@@ -5,14 +5,15 @@ PI/SCC layout and kl.derive.  (n, j) = (96, 32) in CTR, (b, 64) in XCTR."""
 import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
-                    KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
+                    KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_HASH_ABSORB, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
                     KL_STATE_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, info,
                     done)
 
-RESERVED_IMMED = (46, 47, 54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR26)
 
 B, ONES64 = 128, (1 << 64) - 1
 RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATE_INVALID
+HA = KL_STATE_HASH_ABSORB
 CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
 MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <<KLE-exec-encodings>>
            for m, mode in (('CTR', 1), ('XCTR', 2))}
@@ -93,7 +94,7 @@ class KsLocker:
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
         """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
-        if immed in RESERVED_IMMED:                # GR26, reserved Error States: first group, before any State check
+        if immed in RESERVED_IMMED:                # reserved Error States: first group, before any State check
             raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return
@@ -137,26 +138,32 @@ class KsLocker:
         return out, 0
 
     def derive_key(self, src, length):
-        """kl.derive into `key` (<<KLE-derive-endpoints>>); src is a KsLocker or DRBG output bytes
-        (GR56, unrestricted: no narrowing)."""
+        """kl.derive into `key` (<<KLE-derive-endpoints>>); src is a KsLocker, whose keystream in Operate is a
+        source (GR55), or DRBG output bytes (GR56); both unrestricted: no narrowing."""
         n = self.params()[0] // 8
-        if isinstance(src, KsLocker):         # GR55: keystream into a key, the source advancing as by kl.exec
-            if src.state != OP:
-                return src.invalidate()       # GR50 items 1-2
-            if self.state != RDY or self.keytype == 1 or length < n:
-                return self.invalidate()      # GR50 item 2 (GR53), item 5
+        if isinstance(src, KsLocker) and src.state != OP:
+            return src.invalidate()           # GR50 item 1
+        if self.state != RDY or self.keytype == 1:
+            return self.invalidate()          # GR50 item 2 (GR53)
+        if length < n or not isinstance(src, KsLocker) and len(src) < n:
+            return self.invalidate()          # GR50 item 5 (the keystream is unbounded)
+        if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, the unused bytes discarded
             src = keystream(src, n)
-        if self.state != RDY or self.keytype == 1 or length < n or len(src) < n:
-            return self.invalidate()          # GR50 item 2 (GR53), item 5
         self.key = b2v(src[:n])
         return True
 
 
+class HashLocker:
+    """A SHA-256 locker in Hash_Absorb: its kl.exec input is a destination of a shared secret only (GR54)."""
+    def __init__(self):
+        self.state, self.h = HA, hashlib.sha256()
+
 def derive_to_hash(cl, h, length):
-    """GR55: keystream (kl.exec-obtainable) into a hash in Hash_Absorb; the source advances by the blocks produced (GR49)."""
+    """Keystream into a hash in Hash_Absorb: both are endpoints, the pair is not admitted (GR55)."""
     if cl.state != OP:
-        return cl.invalidate()                # GR50 items 1-2
-    return h.update(keystream(cl, length)) or True
+        return cl.invalidate()                # GR50 item 1
+    cl.invalidate()                           # GR50 item 3: both
+    h.state = INV
 
 def keystream(cl, nbytes, per_block=False):
     nb = -(-nbytes // 16)
@@ -393,7 +400,7 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, C0), 64), PT).hex()
     return cl.state, cl.key
 
-eq("DRBG output (GR56), length 32, into the 16-byte key (GR50 item 5), then F.5.1", derived(32), (RDY, c))
+eq("DRBG output (GR56), length 32, into the 16-byte key (GR49, GR50 item 5), then F.5.1", derived(32), (RDY, c))
 for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR53, GR50 item 2)", (32, 1)),
                     ("destination in Operate (GR50 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
@@ -401,16 +408,31 @@ src, dst, ref = ctr_cl(key, T1, C0), ctr_cl(key), ctr_cl(key, T1, C0)
 dst.derive_key(src, 16)
 eq("CTR keystream into a CTR key (GR55, unusual but admitted): its first 16 bytes; the source advanced one block",
    (dst.state, v2b(dst.key, 16), keystream(src, 16)), (RDY, keystream(ref, 16), keystream(ref, 16)))
-cl, h = ctr_cl(key, T1, C0), hashlib.sha256()
-ok = derive_to_hash(cl, h, 40)
-eq("GR55: 40 keystream bytes into a SHA-256 absorb = SHA-256 of F.5.1 CT xor PT; source advanced 3 blocks",
-   (ok, h.hexdigest(), bxor(keystream(cl, 16), PT[48:]).hex()),
-   (True, hashlib.sha256(bxor(H(c), PT)[:40]).hexdigest(), c[96:]))
-cl = ctr_cl(key)
-derive_to_hash(cl, hashlib.sha256(), 40)
-eq("GR55 with the source in Ready (no source endpoint, GR50 items 1-2) -> only the source Invalid", cl.state, INV)
+src, dst, ks = ctr_cl(key, T1, C0), ctr_cl(bytes(24)), bxor(H(c), PT)
+dst.derive_key(src, 40)
+eq("keystream into an AES-192 key, length 40 (GR55): 24 bytes from 2 whole blocks, the unused 8 discarded; "
+   "ctr advanced by 2 as by Form C kl.exec; the source goes on with F.5.1 block 3",
+   (dst.state, v2b(dst.key, 24), src.state, src.ctr, keystream(src, 16)), (RDY, ks[:24], OP, C0 + 2, ks[32:48]))
+src, dst = ctr_cl(key, T1, C0), ctr_cl(bytes(24))
+dst.derive_key(src, 16)
+eq("keystream into an AES-192 key, length 16 < 24 (GR50 item 5) -> only the destination Invalid, ctr unchanged",
+   (dst.state, dst.key, src.state, src.ctr), (INV, None, OP, C0))
+src, dst = ctr_cl(key, T1, C0), ctr_cl(key, T1)
+dst.derive_key(src, 16)
+eq("keystream into a key in Operate (GR50 item 2) -> only the destination Invalid, ctr unchanged",
+   (dst.state, src.state, src.ctr), (INV, OP, C0))
+cl, h = ctr_cl(key, T1, C0), HashLocker()
+derive_to_hash(cl, h, 40)
+eq("keystream into a SHA-256 Hash_Absorb (no admitted pair, GR50 item 3) -> both Invalid, nothing absorbed",
+   (cl.state, h.state, h.h.digest()), (INV, INV, hashlib.sha256().digest()))
+cl, h = ctr_cl(key), HashLocker()
+derive_to_hash(cl, h, 40)
+eq("keystream with the source in Ready (no source endpoint, GR50 item 1) -> only the source Invalid",
+   (cl.state, h.state), (INV, HA))
 cl = ctr_cl(key)
 st = cl.state
-check("kl.setst with a reserved #immed7 (46, 47, 54, 55): illegal-instruction exception, the State kept", True,
-      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 4, st))
+check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
+      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR26, MR1)",
+   [(raises(c.setst, i), c.state) for i in (46, 47) for c in [ctr_cl(key)]], [(False, INV)] * 2)
 done()

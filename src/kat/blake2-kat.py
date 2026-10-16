@@ -120,17 +120,17 @@ class Blake2:
             self.F(final)
             self.block = bytearray(self.b // 8)
 
-    def gated(self):                                      # MR11: _Hash_Output_ needs bit 0 with a system key
-        return bool(self.syskey) and not self.policy & 1
+    def gated(self):                                      # MR11, GR29: with a system key the only operation (the MAC)
+        return bool(self.syskey) and not self.policy & 1  # needs bit 0; every useful State leads only to it
 
     def restrict(self, clear):                            # kl.restrictl: clears _MachinePolicy_ bits (GR29)
         if self.st not in (UNCONF, INVALID, UNSUP):
             if not self.syskey:                           # the field is unused: <<KLE-instruction-restrict>>
                 return self.invalid()
             self.policy &= ~clear
-            if self.st == OUTPUT and self.gated():
+            if not self.policy & 1:                       # GR29: a value the Machine forbids (bit 0 must be set)
                 return self.invalid()
-        return self
+        return self                                       # otherwise the restriction alone changes no State
 
     # -- kl.setst
     def setst(self, t, xs=None):
@@ -138,6 +138,8 @@ class Blake2:
             return self
         if t == READY:
             return self.ready()
+        if t in (ABSORB, LAST) and self.gated():          # GR29: a State that leads only to a disabled operation
+            return self.invalid()
         if t == SET_AUX:                                  # the operation: nn = Xs[7:0], kk = Xs[15:8]
             nn, kk = (xs or 0) & 0xFF, (xs or 0) >> 8 & 0xFF
             if (self.st != READY or xs is None or xs >> 16 or not 1 <= nn <= self.nnmax or kk > self.kkmax
@@ -189,6 +191,8 @@ class Blake2:
 
     # -- kl.exec
     def exec(self, data):
+        if self.st in (ABSORB, LAST, OUTPUT) and self.gated():
+            return self.invalid()                         # GR29: the first operation after the narrowing
         if self.st == ABSORB:
             limit, final = self.b, False
         elif self.st == LAST:
@@ -219,7 +223,7 @@ class Blake2:
         return self
 
     def output(self, nbytes):
-        if self.st != OUTPUT:
+        if self.st != OUTPUT or self.gated():             # GR29 in _Hash_Output_
             self.invalid()
             return bytes(nbytes)
         digest = b''.join(x.to_bytes(self.w // 8, 'little') for x in self.h)[:self.nn]
@@ -447,20 +451,12 @@ for v in VARIANTS:
                                                                      (SKID, 2), (SKID, 3))]
     check(f'{v}: provisioning with _MachinePolicy_ 0 / 1 unkeyed, 1 / 0 / 2 / 3 with a system key', None, states,
           [READY, UNSUP, READY, INVALID, UNSUP, UNSUP])
-    gate = []
-    for ops in ((ABSORB, 'exec'), (LAST, 'exec'), (ABSORB, 'xs0')):
-        c = Blake2(v, sks=sks).provision(1, SKID)
-        if ops[0] == LAST:
-            c.setst(LAST, 8).restrict(1).exec(b'x')     # the kl.exec would complete into _Hash_Output_
-        elif ops[1] == 'xs0':
-            c.setst(ABSORB).exec(b'ab').restrict(1).setst(LAST, 0)
-        else:
-            c.setst(ABSORB).exec(b'ab').restrict(1).setst(LAST, 8).exec(b'x')
-        gate.append(c.st)
-    c = Blake2(v, sks=sks).provision(1, SKID).setst(LAST, 8).exec(b'x').restrict(1)
-    gate.append(c.st)
-    check(f'{v}: system key, bit 0 cleared by kl.restrictl: the last-block kl.exec, the Xs = 0 kl.setst, and a '
-          'restriction in _Hash_Output_ (GR29) -> _Invalid_', None, gate, [INVALID] * 4)
+    gate = [Blake2(v, sks=sks).provision(1, SKID).setst(ABSORB).exec(b'ab').restrict(1).st,
+            Blake2(v, sks=sks).provision(1, SKID).setst(LAST, 8).exec(b'x').restrict(1).st,
+            Blake2(v, sks=sks).provision(1, SKID).restrict(2).st]
+    check(f'{v}: system key: a kl.restrictl clearing bit 0 leaves _MachinePolicy_ = 0, which the Machine forbids: '
+          '_Invalid_ at once, in _Hash_Absorb_ and in _Hash_Output_ (GR29); clearing the unset bit 1 changes nothing',
+          None, gate, [INVALID, INVALID, READY])
     check(f'{v}: without a system key nothing is gated, and a kl.restrictl of the unused _MachinePolicy_ -> _Invalid_',
           None, (run(v, b'abc')[0], Blake2(v).provision().restrict(1).st), (oracle(v, b'abc', nnmax), INVALID))
 

@@ -35,7 +35,7 @@ other groups of Machines may subdivide _Machine_ differently.
 | 0    | 9    | `AES128_OCB_NONCE`                                    | `Zklaes128pocbm`
 //
 | 1    | 0    | `AES192_ECB`                                          | `Zklaes192p`
-| 1    | 1--5, 7--9 2+| _Analogous to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
+| 1    | 1--2, 4--5, 7--9 2+| _Analogous to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 3: cite:[IEEE-1619-2018] defines XTS-AES only for 128-bit and 256-bit keys; and no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
 //
 | 2    | 0    | `AES256_ECB`                                          | `Zklaes256p`
 | 2    | 1--9 2+| _Analogous to Modes 1--9 for `AES128`, but with 256 replacing 128._
@@ -217,15 +217,16 @@ The following nomenclature is specific to the Machine specifications:
 Besides the General Rules (GR) of <<Zkl-ISA-unpriv.adoc#KLE-unpriv>>, in particular those governing the _State_ field and its transitions (<<Zkl-ISA-unpriv.adoc#KLE-State-management>>), the following Machine Rules (*MR*) apply to all Machines, unless stated otherwise.
 
 [horizontal]
-[[KLE-MGR-not-allowed-instructions,MR1]]MR1:: A usage instruction, or Form thereof, that may modify the state of a locker, and that
-the current State of the Machine in that locker does not explicitly allow,
-transitions the locker to Error State _Invalid_.
-`kl.clearads` is allowed in every Valid State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>>).
-A `kl.setst` naming _Unconfigured_ (`kl.clear`) or an Error State, and `kl.clearall`, are not usage instructions (<<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>>), so no State restricts them.
+[[KLE-MGR-not-allowed-instructions,MR1]]MR1:: A usage instruction, or a Form of it, that may modify the state of a locker and that the current State does
+not allow transitions the locker to Error State _Invalid_. It raises no illegal-instruction exception: only the grounds
+of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>> do, such as a reserved encoding or an unimplemented extension.
 +
-An instruction merely wrong for the State raises no illegal-instruction exception.
-Such an exception is raised only on a ground of <<Zkl-ISA-unpriv.adoc#KLE-illegal-instruction-grounds>>, such as a reserved encoding (including a `kl.setst` with `#immed7` 46, 47, 54 or 55, or 53 without `Zklexpire`) or an encoding of an unimplemented extension.
-A wrong Form is merely wrong for the State, including a substitution that the State does not admit or that is issued without `Zklio` (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-substitution-needs-zklio>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-form-mismatch>>).
+`kl.clearads` is allowed in every Valid State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>>); a `kl.setst` naming _Success_ or
+_Failure_ in none (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>>).
+A wrong Form, including a substitution that the State does not admit or that is issued without `Zklio`, is not allowed
+(Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-substitution-needs-zklio>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-form-mismatch>>).
+A `kl.setst` naming _Unconfigured_ (`kl.clear`) or an Error State, and `kl.clearall`, are not usage instructions
+(<<Zkl-ISA-unpriv.adoc#KLE-instruction-properties>>), so no State restricts them.
 
 [[KLE-MGR-granularity,MR2]]MR2:: If `KLLEN` violates the granularity constraints of the Machine in its current State, the instruction performs no operation and the locker transitions to Error State _Invalid_, with its output window zeroed
 (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>).
@@ -256,16 +257,16 @@ or when an explicit operation of the Machine regenerates a field it depends on.
 A Machine states only the derivation itself, and marks such a field “(derived)” in its *Internal State*.
 
 [[KLE-MGR-atomic-randomness,MR5]]MR5:: _Randomness:_
-A Machine operation that needs random bits from an RBG or DRBG, such as the generation of a nonce, an ephemeral scalar or a signature into the locker, is an instruction of its own.
-That instruction works only on the locker and on scalar GPR operands captured at issue, and transfers no data to or from memory, vector registers, the KLIOBUF or another locker.
-It may be long-running (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-no-data>>).
-If the RBG or DRBG cannot supply the bits, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> applies.
-An instruction that transfers data never waits or fails for lack of random bits, even when resumed, restored or restarted.
-Further randomness that its Machine needs comes from another instruction.
-Randomness that the implementation needs, such as masks, is supplied in advance, without weakening the required protection.
 +
-An internal algorithmic random value, such as a signing nonce or an ephemeral scalar, serves only the one instance of the scheme that requires it, and no other instance or purpose.
-It is never reused, not even when an interrupted operation restarts (Rule <<KLE-MGR-progress-discard>>).
+--
+* A Machine operation that needs random bits from an RBG or DRBG, such as the generation of a nonce, an ephemeral scalar or a signature into the locker, is an instruction of its own.
+  That instruction works only on the locker and on scalar GPR operands captured at issue, transfers no data to or from memory, vector registers, the KLIOBUF or another locker, and may be long-running (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-no-data>>).
+  If the RBG or DRBG cannot supply the bits, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>> applies.
+* An instruction that transfers data never waits or fails for lack of random bits, even when resumed, restored or restarted; further randomness that its Machine needs comes from another instruction.
+* Randomness that the implementation needs, such as masks, is supplied in advance, without weakening the required protection.
+* An internal algorithmic random value, such as a signing nonce or an ephemeral scalar, serves only the one instance of the scheme that requires it, and no other instance or purpose.
+  It is never reused, not even when an interrupted operation restarts (Rule <<KLE-MGR-progress-discard>>).
+--
 
 [[KLE-MGR-progress-discard,MR6]]MR6:: _Implementation-defined interruption of long-running operations._
 A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-preemption>> admits only that one instruction and Form, besides `kl.setst`, `kl.clearads` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-clearads>>) and configuration instructions.
@@ -293,12 +294,11 @@ operand it is defined over, the width need not be the block size `b`.
 If `KLLEN` exceeds that width, only that many least significant bits of `INPUT` are used, and the rest are ignored.
 A smaller `KLLEN` violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
 
-[[KLE-MGR-clear-output,MR8]]MR8:: A State writes `OUTPUT` only within its transfer window, bits [8 {times} `klstart`, `KLLEN`):
-a value wider than `KLLEN` that the State assigns to `OUTPUT` is written as its `KLLEN` least significant bits.
+[[KLE-MGR-clear-output,MR8]]MR8:: A State writes `OUTPUT` only within its transfer window, bits [8 {times} `klstart`, `KLLEN`).
+An output longer than `KLLEN` is truncated to its `KLLEN` least significant bits, unless it is meant to be emitted over
+several `kl.exec` (Rule <<KLE-MGR-load-long-field>>); a `KLLEN` below a minimum that the Machine sets violates the
+granularity of the State (Rule <<KLE-MGR-granularity>>).
 When a State writes fewer bits than the window holds, it clears the remaining bits of the window.
-A State whose output is longer than its input, such as a last block that emits more bits than it absorbs, takes the
-length of its output from an explicit parameter of the `kl.setst` that enters it, and requires `KLLEN` to cover that
-length (Rule <<KLE-MGR-granularity>>).
 This concerns the bits *within* the operand; the tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLE-KLV>>
 governs the elements beyond `VL`.
 
@@ -340,12 +340,23 @@ Each Machine states, for each of its States:
 
 * the bit of _MachinePolicy_, if any, that enables the operation of the State (<<Zkl-ISA-unpriv.adoc#KLE-Machine-field>>):
 ** _MachinePolicy_[0] where the Machine says “if encryption is allowed”, and for signature or MAC generation;
-** _MachinePolicy_[1] where it says “if decryption is allowed”, and for signature or MAC verification;
-** either bit where encryption and decryption are the same operation, as in <<KLE-keystream-modes>>; and
+** _MachinePolicy_[1] where it says “if decryption is allowed”, and for signature or MAC verification; and
 * its _entry conditions_: what the State requires, such as the `Has` flags, the mode, and the other configuration of the CC that the State uses.
 
-A transition into a State whose operation _MachinePolicy_ disables, or whose entry conditions do not hold, transitions the locker to Error State _Invalid_ instead, whether a `kl.setst` or the Machine makes it (Rule <<KLE-MGR-machine-transitions>>); a `kl.exec` or `kl.derive` that would complete into such a State performs no operation.
-The entry conditions are checked after the operations of leaving the current State, against the content that these produce.
+A `kl.setst`, `kl.exec` or `kl.derive` is checked at two moments:
+
+. *At issue, before it acts, against _MachinePolicy_.* The locker transitions to Error State _Invalid_, and the
+  instruction performs no operation, if:
+.. the instruction is issued in a State whose operation _MachinePolicy_ disables, or from which every operation that
+   the Machine can complete is disabled (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>); a State that
+   still leads to an enabled operation is not affected; or
+.. the instruction would transition the locker into a State whose operation _MachinePolicy_ disables, whether it names
+   that State (`kl.setst`) or the Machine makes the transition on its completion (Rule <<KLE-MGR-machine-transitions>>).
+. *After it acts, against the entry conditions of the State that it transitions into.* They are checked after the
+  operations of leaving the current State, against the content that these operations and the instruction itself
+  produce, such as the last part of the IV that the completing `kl.exec` of <<KLE-GCM-mode>> writes.
+  If they do not hold, the locker transitions to Error State _Invalid_ instead of entering that State.
+
 An instruction executed in the State checks a condition only if the condition can change while the locker is in the State, or if the check is one of Rule <<KLE-MGR-check-on-read>>.
 The Machine states such a check with the instruction.
 A failed check also transitions the locker to _Invalid_, unless it detects a data error (Rule <<KLE-MGR-config-data-error>>).
@@ -371,8 +382,6 @@ A corruption of the KLF is a KLE fatal error (<<Zkl-ISA-unpriv.adoc#KLE-error-ar
 A check that a Machine attaches to a field and that depends on that field alone is performed whenever the field is written: at the completion of its load (Rule <<KLE-MGR-load-long-field>>), of a `kl.derive` into it, of the provisioning that carries it, and of an import that restores it.
 Examples are the zero most significant bits of secp521r1, the well-formedness of an ML-DSA `privkey`, and the input checks of cite:[nist-fips-203] on an ML-KEM key.
 Rule <<KLE-MGR-config-data-error>> classifies a failure.
-A violated constraint of the representation is a configuration error in any field.
-Any other failure is a configuration error for a private key or another such field, and a data error for a public key, a ciphertext, a signature or a message representative.
 The validity of a curve point is not checked when the point is written, since it depends on the role that an operation gives the point: it is checked when the point is read (Rule <<KLE-MGR-check-on-read>>).
 
 [[KLE-MGR-tag-verify,MR15]]MR15:: _Verification of a tag._
@@ -394,13 +403,13 @@ Where the Machine enters _Hash_Verify_ by itself, for instance on completing its
 [[KLE-truncation-vs-length]]
 == Input and Output Padding, Truncation, Byte Granularity
 
-Unless the Machine specifies otherwise and pads internally, the caller must pad an input shorter than the operand to a `KLLEN` that the Machine admits, and pass its actual length to the Machine, typically through `kl.setst`.
+Unless the Machine specifies otherwise and pads internally, the caller must pad an input whose length the granularity of the State does not admit to a `KLLEN` that the Machine admits, and pass its actual length to the Machine, typically through `kl.setst`.
 
 Cryptographic inputs are normally supplied through vector registers or the KLIOBUF, in whole bytes. For a standard that permits arbitrary bit lengths, the caller specifies the bit length of the final input piece, usually as a `kl.setst` parameter, and the Machine truncates that input to it. The Machine clears the output bits beyond the final piece, also within its last byte (Rule <<KLE-MGR-clear-output>>).
 
-This occurs, for instance, with the `last_block_len` parameters in <<KLE-GCM-mode>>, <<KLE-GCM-SIV-mode>>, <<KLE-OCB-mode>>, <<KLE-Ascon-AEAD128>>, and <<KLE-hash-functions-MACs-XOFs>>. Such a parameter gives the length to which the Machine truncates the passed input, not the length `KLLEN` of that input; a `KLLEN` smaller than `last_block_len` violates the granularity of the State (Rule <<KLE-MGR-granularity>>). Macro `PROCESS_VLI` receives field lengths in bits, but `kl.exec` always transfers whole bytes, and the last input may be truncated internally.
+This occurs, for instance, with the `last_block_len` parameters in <<KLE-GCM-mode>>, <<KLE-GCM-SIV-mode>>, <<KLE-OCB-mode>>, <<KLE-Ascon-AEAD128>>, and <<KLE-hash-functions-MACs-XOFs>>. Such a parameter gives the length to which the Machine truncates the passed input, not the length `KLLEN` of that input. Macro `PROCESS_VLI` receives field lengths in bits, but `kl.exec` always transfers whole bytes, and the last input may be truncated internally.
 
-Where a standard's formula requires a bit count, it is obtained by multiplying the byte count by 8, as with the length block of GHASH in <<KLE-GCM-mode>>.
+Where a standard's formula requires the bit count of data that the Machine receives in whole bytes, it is the byte count multiplied by 8, as with the length block of GHASH in <<KLE-GCM-mode>>.
 
 [horizontal]
 [[KLE-MGR-last-blk-len,MR16]]MR16::
@@ -528,12 +537,12 @@ a nonce, IV, counter or tag mask, whether by re-importing an earlier SCC, by `kl
 A Machine with an IV or nonce set at provisioning does not prevent its reuse.
 
 [[KLE-MGR-machine-transitions,MR22]]MR22:: _Transitions that a Machine makes._
-A Machine may make a transition by itself, on completing a `kl.exec`, or the part of a `kl.derive` that acts at one of
-its endpoints as that `kl.exec` would (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), or within a
-`kl.setst` that names another State.
-Such a transition is made only that way. A `kl.setst` that names its destination while the locker is in its source
-State transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-instructions>>), unless the
-destination is _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>) or the Machine lists that `kl.setst`.
+A Machine may make a transition by itself: on completing a `kl.exec`, or the part of a `kl.derive` that acts at an
+endpoint as that `kl.exec` would (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), or within a `kl.setst`
+that names another State.
+Such a transition is made only that way: no source State allows a `kl.setst` naming its destination
+(Rule <<KLE-MGR-not-allowed-instructions>>), unless the destination is _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>)
+or the Machine lists that `kl.setst`.
 Rule <<KLE-MGR-policy-gate>> gates such a transition as it gates a `kl.setst`.
 
 // ////////////////////////////////////////////////////////////////////
@@ -595,10 +604,7 @@ State Machine::
 * *Behavior:*
  ** The `kl.setst` into _Encrypt_ or _Decrypt_ is of Form A: it takes no auxiliary operand.
  ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec OUTPUT, Kn, INPUT` instructions are expected.
-    For each block:
-
-  *** If the state is _Encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
-  *** If the state is _Decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
+    For each block, `OUTPUT <- enc_blk(key, INPUT)` in _Encrypt_, and `OUTPUT <- dec_blk(key, INPUT)` in _Decrypt_.
 
 //
 
@@ -611,7 +617,7 @@ encrypt a block of data.
 === Chaining/Feedback Modes
 
 KLE does not architect chaining modes, such as Cipher Block Chaining (CBC), Cipher Feedback (CFB) and Output Feedback (OFB) cite:[nist-SP-800-38A-1].
-Software builds them on ECB, and none of their intermediate values needs confidentiality.
+Software builds them on ECB: each intermediate value needs no more protection than the plaintext that software already holds.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -621,7 +627,7 @@ Software builds them on ECB, and none of their intermediate values needs confide
 In CTR mode, the IV and the counter are concatenated to form the input block of the underlying keyed PRP or PRF, so their lengths sum to its block size.
 (((KLE, Machine, keystream generation)))
 
-In XCTR mode, the IV and the counter each have the block size, and their XOR forms the input block.
+In XCTR mode, the IV has the block size, and its XOR with the counter, zero-extended to the block size, forms the input block.
 
 Parameters::
 * `b` = block size (8|`b`), with `b` {ge} 64.
@@ -669,22 +675,21 @@ State Machine::
   ** _Operate_: The CC produces a keystream.
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Operate_, if encryption or decryption is allowed (Rule <<KLE-MGR-policy-gate>>): the keystream serves both.
+ ** _Ready_ -> _Operate_, if encryption or decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Operate_ -> _Ready_.
 
 * *Behavior:*
- ** On entering _Ready_, `IV` is set to 0, and `ctr` to 0 in CTR mode and to 1 in XCTR mode
+ ** When entering _Ready_, `IV` {leftarrow} 0, and `ctr` {leftarrow} 0 in CTR mode and 1 in XCTR mode
     (as in the XCTR of HCTR2 cite:[cryptoeprint-2021-1441]).
-// (`ctr` is set to 1 if the Machine is LFSR-based).
 
- ** The ``kl.setst`` into _Operate_ is of Form C. It sets `IV` {leftarrow} `INPUT`,
-    and leaves `ctr` unchanged.
-  *** `INPUT` is truncated to its `n` least significant bits, the width of `IV`
-      (Rule <<KLE-MGR-fixed-width-input>>). In CTR mode `n` < `b`, and `ctr`
-      supplies the other `j` bits of the counter block; in XCTR mode `n` = `b`.
+ ** When entering _Operate_, the Form C ``kl.setst Kn, \#kl_state_operate, INPUT``
+    sets `IV` {leftarrow} `INPUT`, with `INPUT` truncated to its `n` least significant bits
+    (Rule <<KLE-MGR-fixed-width-input>>), and leaves `ctr` unchanged.
+    A same-State `kl.setst` into _Operate_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>)
+    does the same: it replaces `IV` and keeps `ctr`.
 
-  ** In State _Operate_, (multi-block) Form C ``kl.exec`` instructions are expected.
-     For each block, "``kl.exec OUTPUT, Kn``" performs:
+ ** In State _Operate_, (multi-block) Form C ``kl.exec`` instructions are expected.
+    For each block, "``kl.exec OUTPUT, Kn``" performs:
 +
 --
   . In CTR mode, `tmp <- keystream_block(bswap(ctr) @ IV)`;
@@ -692,6 +697,9 @@ State Machine::
   . `tick_ctr()`.
   . `OUTPUT <- tmp`.
 --
++
+As a `kl.derive` source (<<KLE-derive-endpoints>>), _Operate_ supplies the keystream as Form C `kl.exec` instructions of
+whole blocks would; the unused bytes of the last block are discarded.
 
  ** In States _Ready_ and _Operate_, the Form B
     ``kl.setst Kn, \#kl_state_set_aux_value, Xs`` sets the counter:
@@ -700,9 +708,6 @@ State Machine::
 
 NOTE: Setting the counter gives random access into a keystream, for example to resume an interrupted stream.
 No check detects `ctr` wrapping around (Rule <<KLE-nonce-reuse>>).
-
-A same-State `kl.setst` into _Operate_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) replaces `IV` and keeps `ctr`.
-A return to _Ready_ resets both, so that the CC can be reused with a new IV.
 
 Example pseudocode is given in <<Zkl-pseudocode.adoc#KLE-pseudocode-keystream-modes>> (for the case `b` = `KLLEN` = 128).
 
@@ -734,7 +739,7 @@ and a System Key Identifier must resolve to two independently generated keys in 
 
 Parameters::
 
-* `b` = block size (8|`b`), with `b` {ge} 64.
+* `b` = 128 = block size.
 * `k` = key size (8|`k`).
 * Granularity: `b`.
 
@@ -775,74 +780,44 @@ Machine-Specific Functions::
 * `enc_blk(K, p) -> c` encrypts block `p` using the key `K`, and returns the result `c`.
 * `dec_blk(K, c) -> p` decrypts block `c` using the key `K`, and returns the result `p`.
 * `update_mask(mask) -> mask` updates the mask by multiplication with a generator
-of GF(2^b^): multiplication by `x`, where `V[i]` is the coefficient of `x^i^`, modulo
-`x^128^ + x^7^ + x^2^ + x + 1` for `b` = 128, as in cite:[nist-SP-800-38E] and cite:[IEEE-1619-2018] {sect}5.2,
-and modulo `x^64^ + x^4^ + x^3^ + x + 1` for `b` = 64, the polynomial that cite:[nist-SP-800-38B] {sect}5.3 uses for CMAC
-with 64-bit block ciphers. That is,
+of GF(2^128^): multiplication by `x` modulo `x^128^ + x^7^ + x^2^ + x + 1`, where `V[i]` is the coefficient of `x^i^`,
+as in cite:[nist-SP-800-38E] and cite:[IEEE-1619-2018] {sect}5.2. That is,
 +
-`{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[b-1]` = `0`
+`{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[127]` = `0`
 +
 and
 +
-`{fournbsp}{fournbsp}` `update_mask(V)` = `(V << 1) xor (zeros(b-8) @ R~b~)`
-`{nbsp}{nbsp}` otherwise,
-+
-with `R~128~` = `0b10000111` and `R~64~` = `0b00011011`.
-An instantiation with another `b` must state its own reduction polynomial.
-
-//  For `b` = 128 the field is GF(2)[`x`] modulo
-//  `x^128^ + x^7^ + x^2^ + x + 1`.
-//
-//  A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`,
-//  as in cite:[nist-SP-800-38E] and IEEE 1619. `update_mask(V)` is multiplication by
-//
-//  A Machine instantiating XEX or XTS with a block size `b` other than 64 or 128 must state its own
-//  reduction polynomial.
+`{fournbsp}{fournbsp}` `update_mask(V)` = `(V << 1) xor (zeros(120) @ 0b10000111)`
+`{nbsp}{nbsp}` otherwise.
 
 State Machine::
 
 * *States:* _Ready_, _Encrypt_, and _Decrypt_ (defined as before, cf. <<KLE-ECB-mode>>).
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- ** _Ready_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
+ ** _Ready_ or _Decrypt_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
+ ** _Ready_ or _Encrypt_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Encrypt_, _Decrypt_ -> _Ready_.
 
 * *Behavior:*
- ** Upon entering State _Ready_, the `mask` field is set to zero.
- ** The ``kl.setst`` into _Encrypt_ or _Decrypt_ is of Form C. Its `INPUT` is the tweak,
-    from which it computes the initial mask:
-  *** `mask <- INPUT`, with `INPUT` truncated to its `b` least significant bits
-      (Rule <<KLE-MGR-fixed-width-input>>);
-  *** then `mask <- enc_blk(key2, mask)`.
+ ** When entering _Ready_, `mask` {leftarrow} 0.
+ ** When entering _Encrypt_ or _Decrypt_, the Form C ``kl.setst`` takes the tweak as `INPUT`
+    and computes the initial mask:
+  . `mask <- INPUT`, with `INPUT` truncated to its `b` least significant bits
+    (Rule <<KLE-MGR-fixed-width-input>>);
+  . `mask <- enc_blk(key2, mask)`;
+  . a same-State `kl.setst` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), or one from the other of the two States,
+    repeats these steps with a new tweak.
 
-// The tweak is always encrypted under `key2`, which the data path never evaluates, so the
-// raw value is safe to use as the initial mask.
-// The single-key XEX construction, whose initial mask is `{alpha}` {interpunct} `enc_blk(key1, T)`,
-// is *not* architected.
-// Equal keys would re-create it *without* the multiplication by `{alpha}`, which
-// cite:[DBLP-conf-asiacrypt-Rogaway04] shows to be vulnerable; hence `key2` = `key1` is a
-// configuration error.
-// The extra `update_mask` in the single-key case is required, not incidental. With one key
-// the raw value `enc_blk(key1, T)` is both a mask and a value the same key can be asked to
-// encrypt, which cite:[DBLP-conf-asiacrypt-Rogaway04] shows to be vulnerable; the
-// construction therefore starts from `{alpha}` {interpunct} `enc_blk(key1, T)`. With two
-// independent keys the data path never evaluates `key2`, so the raw value is safe to use and
-// no multiplication is needed. An implementation must not "simplify" the two branches into
-// one.
-
-  ** In States _Encrypt_ and _Decrypt_, (multi-block) Form A ``kl.exec`` instructions are expected.
+ ** In States _Encrypt_ and _Decrypt_, (multi-block) Form A ``kl.exec`` instructions are expected.
     For each block, "``kl.exec OUTPUT, Kn, INPUT``" performs:
 +
 --
-  . `OUTPUT` is computed as follows:
-  .. In State _Encrypt_, `OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)`.
-  .. In State _Decrypt_, `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`.
+  . In State _Encrypt_, `OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)`;
+    in State _Decrypt_, `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`.
   . `mask <- update_mask(mask)`.
 --
 //
-
-A same-State `kl.setst` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) sets a new tweak, as does a return to _Ready_ followed by a `kl.setst` into _Encrypt_ or _Decrypt_.
 
 Encryption pseudocode is provided in <<Zkl-pseudocode.adoc#KLE-pseudocode-basic-IV-mode>>;
 decryption is similar.
@@ -958,15 +933,16 @@ Setting the tweak is an operation, not a State (Rule <<KLE-operation-immediates>
  ** _Ready_ or _Decrypt_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Ready_ or _Encrypt_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Encrypt_, _Decrypt_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
- ** The set-tweak operation below is allowed in each of _Ready_, _Encrypt_ and _Decrypt_; it is not a transition.
 
- * *Behavior:*
-  ** Upon entering State _Ready_, the `tweak` field is cleared.
-  ** The `kl.setst` into _Encrypt_ or _Decrypt_ is of Form A.
-  ** In each of States _Ready_, _Encrypt_ and _Decrypt_, the Form C `kl.setst Kn, \#kl_state_set_aux_value, INPUT` performs `tweak <- INPUT` and leaves the _State_ field unchanged. `INPUT` is truncated to its `t` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
-  ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec` instructions are expected.
-     For each block, "``kl.exec OUTPUT, Kn, INPUT``" encrypts, resp. decrypts, `INPUT` into `OUTPUT` under `key` and `tweak`.
-  ** The Machine never updates `tweak` by itself: every block uses the same `tweak` until the next set-tweak operation.
+* *Behavior:*
+ ** When entering _Ready_, the `tweak` field is cleared.
+ ** The `kl.setst` into _Encrypt_ or _Decrypt_ is of Form A.
+ ** In States _Ready_, _Encrypt_ and _Decrypt_, the set-tweak operation, the Form C
+    `kl.setst Kn, \#kl_state_set_aux_value, INPUT`, performs `tweak <- INPUT`, with `INPUT` truncated
+    to its `t` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+ ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec` instructions are expected.
+    For each block, "``kl.exec OUTPUT, Kn, INPUT``" encrypts, resp. decrypts, `INPUT` into `OUTPUT` under `key` and `tweak`.
+    The Machine never updates `tweak` by itself: every block uses the same `tweak` until the next set-tweak operation.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1032,7 +1008,7 @@ that neither party chose.
 ====
 
 The macro does not initialize the persistent state variables `block_base` and `cumul_len`, so that several invocations of it can concatenate their results.
-The invoking Machine zeroes them where needed. `input_base` is set from `klstart` at the start of every instruction (step 2).
+The invoking Machine zeroes them where needed.
 A Machine that enters a state with `mode` = `assign`, and whose destination field must hold a
 defined value once loading completes, shall zero that field on entry to the state.
 
@@ -1090,8 +1066,7 @@ Besides the variables that the parameters name, the Machine may define variables
 . If `max_len` != 0, the locker transitions to Error State _Invalid_ if `cumul_len` {ge} `max_len`, or if
   `last_block_state` is not `None` and `cumul_len` + `KLLEN` − 8 {interpunct} `klstart` {ge} `max_len`.
 . `input_base <- 8` {interpunct} `klstart`: 0 when the instruction starts, the point of progress when it resumes.
-  `input_base` counts bits (see *Units* above) and `klstart` bytes
-  (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>), hence the factor 8. Nothing else distinguishes a start from a resumption.
+  Nothing else distinguishes a start from a resumption.
 . While `(input_base < KLLEN)` do
 .. If `max_len` != 0 then `amount <- min(KLLEN - input_base, b - block_base, max_len - cumul_len)`,
    else `amount <- min(KLLEN - input_base, b - block_base)`.
@@ -1302,21 +1277,20 @@ caller:
  ** _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Hash_Verify_ -> _Success_ or _Failure_.
 
 * *Behavior:*
- ** Upon entering State _Ready_:
-  *** The following initialization operations are performed:
-   . `auth_key <- enc_blk(key, zeros(b))`, and
-   . `tag <- zeros(b)`
+ ** When entering State _Ready_:
+  . `auth_key <- enc_blk(key, zeros(b))`;
+  . `tag <- zeros(b)`.
 
-  ** To transition to State _Set_Aux_Value_,
-     a Form B "```kl.setst Kn, #kl_state_set_aux_value, Xs```" is used, whose auxiliary argument sets the IV length in bits: `len <- Xs`.
-   . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `8192`; any other value, `0` included, transitions the locker to Error State _Invalid_.
-   . `tag`, `input_base`, `block_base` and `cumul_len` are set to zero.
-   . A same-State Form B `kl.setst` into _Set_Aux_Value_ repeats these operations, restarting the IV and discarding the part absorbed so far, as for every loading State (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> and <<KLE-MGR-load-long-field>>).
+ ** When entering State _Set_Aux_Value_:
+  . A Form B "```kl.setst Kn, #kl_state_set_aux_value, Xs```" sets the IV length in bits: `len <- Xs`.
+  . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `8192`.
+  . `tag`, `input_base`, `block_base` and `cumul_len` are set to zero.
+  . A same-State Form B `kl.setst` repeats these operations, restarting the IV and discarding the part absorbed so far
+    (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> and <<KLE-MGR-load-long-field>>).
 
-  ** While in State _Set_Aux_Value_, the IV is loaded under Rule <<KLE-MGR-load-long-field>>, with _W_ = `cumul_len`, and absorbed as it is
-     loaded by the macro `PROCESS_VLI` (<<KLE-process-VLI>>), called as +
+ ** While in State _Set_Aux_Value_, the IV is loaded under Rule <<KLE-MGR-load-long-field>>, with _W_ = `cumul_len`, and absorbed as it is
+    loaded by the macro `PROCESS_VLI` (<<KLE-process-VLI>>), called as +
   `PROCESS_VLI(len, block=tag, b, state=tag, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), mode=xor_accumulate, granularity=b)`, where:
-   *** `mode` is `xor_accumulate`, because `GHASH` absorbs each block by XORing it into the accumulator before multiplying;
    *** `process_block()` performs `tag <- Galoismul(tag, auth_key)` if `len != 96`, and nothing otherwise;
    *** `finalize()` is defined as follows:
     . If `len = 96`, then:
@@ -1331,20 +1305,18 @@ The value of `J0` is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sec
       .. `tag <- Galoismul(tag, auth_key)`
       .. `J0 <- tag`
     . `start_ctr <- int(bswap(J0[127:96]))`,
-    . `tag <- zeros(b)`, so that State _Hash_Absorb_ starts the Associated Data hash from the
-      value `GHASH` requires and does not inherit the hash of the IV.
+    . `tag <- zeros(b)`.
     . Transitions to state _Hash_Absorb_.
 
-  ** Issuing a `kl.setst` to leave _Set_Aux_Value_:
+ ** When leaving State _Set_Aux_Value_:
+  . the `kl.exec` that completes the IV performs `finalize()` (step 3.h of <<KLE-process-VLI>>), which transitions the
+    locker to _Hash_Absorb_;
+  . a `kl.setst` naming _Ready_ performs no `finalize()`: the partial IV is discarded, and `tag`, `J0`, `len`,
+    `block_base` and `cumul_len` are zeroed (Rule <<KLE-MGR-load-long-field>>).
 +
---
-   . naming _Hash_Absorb_ transitions the locker to Error State _Invalid_;
-
-   . naming _Ready_ performs no `finalize()`: the partial IV is discarded, and `tag`, `J0`, `len`, `block_base` and `cumul_len` are zeroed (Rule <<KLE-MGR-load-long-field>>).
---
-+
-The `kl.exec` that completes the IV performs `finalize()` (step 3.h of <<KLE-process-VLI>>), which transitions the locker to _Hash_Absorb_.
-This is the only way to reach _Hash_Absorb_, since entering it requires a complete IV (Rule <<KLE-MGR-policy-gate>>).
+Entering _Hash_Absorb_ requires a complete IV (Rule <<KLE-MGR-policy-gate>>).
+Any other `Xs` on entering _Set_Aux_Value_, `0` included, or a `kl.setst` naming _Hash_Absorb_ from _Set_Aux_Value_,
+transitions the locker to Error State _Invalid_.
 
 [NOTE]
 ====
@@ -1355,19 +1327,11 @@ active. Accumulating into `J0` would place the running hash and those counters i
 exported part-way through a non-96-bit IV could not resume.
 ====
 
-** A same-State `kl.setst` transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) in:
-   . _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_, where repeating the operations of entering the State would absorb the length block and the tag mask again;
-   . _Enc_Last_Block_ and _Dec_Last_Block_ once their `kl.exec` has processed the final block (`last_block_len` = 0), where it would admit a second final block (Rule <<KLE-MGR-single-last-block>>).
-
- ** In State _Hash_Absorb_, (multi-block) ``kl.exec`` instructions of Form B are expected, whereby ``kl.exec Kn, INPUT`` absorbs a data block into `tag`, i.e.:
-+
---
- . `absorb(INPUT)`.
---
-** The `kl.setst` from _Hash_Absorb_ into _Encrypt_ or _Decrypt_ is of Form A, since it takes no auxiliary operand.
-** In State _Encrypt_, (multi-block) ``kl.exec`` instructions are expected to be of Form A.
-   "``kl.exec OUTPUT, Kn, INPUT``" encrypts `INPUT` into `OUTPUT`, and
-   absorbs `OUTPUT` into the `tag`, namely:
+ ** In State _Hash_Absorb_, (multi-block) Form B "```kl.exec Kn, INPUT```" instructions absorb each data block into `tag`:
+    `absorb(INPUT)`.
+ ** The `kl.setst` from _Hash_Absorb_ into _Encrypt_ or _Decrypt_ is of Form A.
+** In State _Encrypt_, (multi-block) Form A "```kl.exec OUTPUT, Kn, INPUT```" instructions encrypt `INPUT` into
+   `OUTPUT` and absorb `OUTPUT` into `tag`:
 +
 --
   * `local ctr : int` - the running counter, as an integer.
@@ -1383,17 +1347,21 @@ exported part-way through a non-96-bit IV could not resume.
   .. `absorb(tmp)`.
   .. `OUTPUT <- tmp`.
 --
-** To transition to State _Enc_Last_Block_:
- . A Form B `kl.setst` is expected, whose auxiliary argument sets the bit length of the last block: `last_block_len <- Xs`.
-. `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`; any other value transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-last-blk-len>>).
+** When entering State _Enc_Last_Block_:
+ . A Form B "```kl.setst Kn, #kl_state_enc_last_block, Xs```" sets the bit length of the last block:
+   `last_block_len <- Xs`.
+ . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
  . The following Form A `kl.exec` ignores any input bits beyond `last_block_len`.
++
+Any other `Xs`, or a same-State `kl.setst` once the `kl.exec` of the State has processed the final block
+(`last_block_len` = 0; Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> and <<KLE-MGR-single-last-block>>), transitions
+the locker to Error State _Invalid_.
 +
 NOTE: cite:[nist-SP-800-38D] admits any bit length, but numbers the bits of a byte from the most significant.
 A truncation to the least significant bits does not map onto that order; hence the multiples of 8.
 
-** In State _Enc_Last_Block_, a single Form A ``kl.exec`` instruction can be issued.
-   "```kl.exec OUTPUT, Kn, INPUT```" encrypts `INPUT` into `OUTPUT`, and
-   absorbs `OUTPUT` into the `tag`, namely:
+** In State _Enc_Last_Block_, a single Form A "```kl.exec OUTPUT, Kn, INPUT```" encrypts `INPUT` into `OUTPUT` and
+   absorbs `OUTPUT` into `tag`:
 +
 --
   * local `ctr : int` – the running counter, as an integer.
@@ -1414,32 +1382,25 @@ A truncation to the least significant bits does not map onto that order; hence t
    .. `last_block_len <- 0`
 --
 
-** To transition to State _Enc_Tag_Finalize_, a Form C `kl.setst` instruction is issued with the following value, computed by the software itself:
+** When entering State _Enc_Tag_Finalize_:
+ . A Form C "```kl.setst Kn, #kl_state_enc_tag_finalize, INPUT```" supplies the length block, which software computes: +
+   `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64))`. +
+   `INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+ . The tag is computed and retained internally: `absorb(INPUT)`, then
+   `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
++
+A same-State `kl.setst` into _Enc_Tag_Finalize_ transitions the locker to Error State _Invalid_
+(Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
+
+** In State _Enc_Tag_Finalize_, a single Form C "```kl.exec OUTPUT, Kn```" writes `tag` to `OUTPUT`, and the locker
+   transitions to _Success_.
+   With a `KLLEN` smaller than 128, `OUTPUT` receives `tag[KLLEN-1:0]`, the truncated tag `MSB~KLLEN~(T)` of
+   cite:[nist-SP-800-38D] {sect}7.1.
+
+** In State _Decrypt_, (multi-block) Form A "```kl.exec OUTPUT, Kn, INPUT```" instructions absorb the ciphertext
+   `INPUT` into `tag`, then decrypt `INPUT` into `OUTPUT`:
 +
 --
-[none]
-* `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64))`.
-
-The authentication tag is then computed and retained internally, as follows:
-
-. `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
-
-`INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
---
-
-** {empty}
-In State _Enc_Tag_Finalize_, a single ``kl.exec`` instruction of Form C is expected.
-"``kl.exec OUTPUT, Kn``" writes the `tag` to `OUTPUT`, and the state transitions to _Success_.
-With a `KLLEN` smaller than 128, `OUTPUT` receives `tag[KLLEN-1:0]`, the truncated tag `MSB~KLLEN~(T)` of
-cite:[nist-SP-800-38D] {sect}7.1.
-
-** {empty}
-+
---
-In State _Decrypt_, (multi-block) ``kl.exec`` instructions are expected to be of Form A.
-``kl.exec OUTPUT, Kn, INPUT`` absorbs the ciphertext `INPUT` into `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
-
  * local `ctr : int` – the running counter, as an integer.
  * `local tmp : bits(b)`
 
@@ -1454,15 +1415,17 @@ In State _Decrypt_, (multi-block) ``kl.exec`` instructions are expected to be of
   .. `OUTPUT <- INPUT xor enc_blk(key, J0)`.
 --
 
-** To transition to State _Dec_Last_Block_, a Form B `kl.setst` is issued, whose auxiliary argument sets the bit
-length of the last block: `last_block_len <- Xs`.
-As for _Enc_Last_Block_, `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`; any other value transitions the
-locker to Error State _Invalid_ (Rule <<KLE-MGR-last-blk-len>>).
-// , as it does in the other modes that take a final-block length (<<KLE-OCB-mode>>, <<KLE-CMAC-mode>>, <<KLE-Ascon-AEAD128>>).
+** When entering State _Dec_Last_Block_:
+ . A Form B "```kl.setst Kn, #kl_state_dec_last_block, Xs```" sets the bit length of the last block:
+   `last_block_len <- Xs`.
+ . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
++
+Any other `Xs`, or a same-State `kl.setst` once the `kl.exec` of the State has processed the final block
+(`last_block_len` = 0; Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> and <<KLE-MGR-single-last-block>>), transitions
+the locker to Error State _Invalid_.
 
-** In State _Dec_Last_Block_, a single Form A ``kl.exec`` instruction can be issued.
-   "``kl.exec OUTPUT, Kn, INPUT``" absorbs the zero-padded final block of the
-   ciphertext into the `tag` and decrypts `INPUT` into `OUTPUT`, namely:
+** In State _Dec_Last_Block_, a single Form A "```kl.exec OUTPUT, Kn, INPUT```" absorbs the zero-padded final block
+   of the ciphertext into `tag` and decrypts `INPUT` into `OUTPUT`:
 +
 --
   * local `ctr : int` – the running counter, as an integer.
@@ -1482,27 +1445,23 @@ locker to Error State _Invalid_ (Rule <<KLE-MGR-last-blk-len>>).
   .. `last_block_len <- 0`
 --
 
-** To transition to State _Dec_Tag_Finalize_, a Form C ``kl.setst`` instruction is expected to provide the following value, which must be set by the software:
+** When entering State _Dec_Tag_Finalize_:
+ . A Form C "```kl.setst Kn, #kl_state_dec_tag_finalize, INPUT```" supplies the length block, which software computes: +
+   `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64))`. +
+   `INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+ . The tag is computed: `absorb(INPUT)`, then `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
 +
---
-[none]
-* `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64))`
+A same-State `kl.setst` into _Dec_Tag_Finalize_ transitions the locker to Error State _Invalid_
+(Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
 
-The authentication tag is computed as follows:
-
-. `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
---
-+
-`INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
-
-** To transition to State _Hash_Verify_, a Form C ``kl.setst`` instruction
-   is expected, to provide the value against which the internally computed tag
-   must be compared (Rule <<KLE-MGR-tag-verify>>):
+** When entering State _Hash_Verify_, a Form C "```kl.setst Kn, #kl_state_hash_verify, INPUT```" supplies the value
+   against which the internally computed tag is compared (Rule <<KLE-MGR-tag-verify>>):
  . The tag length is `t` = `min(KLLEN, 128)`, which must be one of 128, 120, 112, 104, 96 or 64
-   (cite:[nist-SP-800-38D] {sect}5.2.1.2); any other value transitions the locker to Error State _Invalid_.
- . `INPUT[t-1:0]` is compared with `tag[t-1:0]`. If they match, the state transitions to _Success_; otherwise, it
-   transitions to _Failure_.
+   (cite:[nist-SP-800-38D] {sect}5.2.1.2).
+ . `INPUT[t-1:0]` is compared with `tag[t-1:0]`. If they match, the locker transitions to _Success_; otherwise, to
+   _Failure_.
++
+Any other `t` transitions the locker to Error State _Invalid_.
 +
 NOTE: Truncated tags are prefixes of one another, and each verification chooses its own `t`.
 The floor of 64 bits excludes the 32 bits that cite:[nist-SP-800-38D] admits for some applications.
@@ -1514,8 +1473,6 @@ before the locker reaches _Success_, and must discard it on _Failure_.
 The same holds for the other AEAD Machines: <<KLE-GCM-with-IV-mode>>, <<KLE-GCM-SIV-mode>> (whose
 _Dec_Tag_Finalize_ verifies the tag), <<KLE-OCB-mode>>, <<KLE-OCB-with-nonce-mode>>, <<KLE-Ascon-AEAD128>>,
 <<KLE-Ascon-AEAD128-wsn>> and <<KLE-Ascon-AEAD128-N-masking>>.
-
-** `auth_key` is a derived field (Rule <<KLE-MGR-recomputed-fields>>): `auth_key <- enc_blk(key, zeros(128))`.
 
 //
 
@@ -1530,7 +1487,6 @@ pseudocode for GCM encryption and decryption.
 === GCM with Set IV
 
 The mode of operation “GCM with a Set IV” is a variant of GCM in which the initialization vector (IV) is provisioned with the key, rather than supplied by software for each message.
-An ECB CC _cannot_ emulate this variant: software would have to supply the counter blocks, and thus know `J0`.
 
 This Machine is the same as GCM (<<KLE-GCM-mode>>), except that it does not set the IV.
 A 96-bit IV is carried in the Provisioning Input, and provisioning forms `J0` from it as cite:[nist-SP-800-38D] {sect}7.1
@@ -1582,11 +1538,6 @@ The differences with respect to GCM are:
 
  ** The ``kl.setst`` into State _Hash_Absorb_ must be of Form A, i.e., _without any additional inputs_: the IV is already in the PI.
  ** Entering State _Ready_ also restores the provisioned `J0`, by `J0[127:96] <- bswap(bin(1,32))`: a later message repeats the provisioned GCM invocation. Software that needs another IV provisions another locker.
-// ** No transition back to State _Ready_ is allowed. This is one of the Machine-specific
-//    prohibitions contemplated by <<KLE-State-field>>.
-//    Allowing it would reinstall the same
-//    nonce and permit keystream reuse, which Ascon-AEAD128, unlike a misuse-resistant mode,
-//    does not survive.
 --
 
 This Machine is not a `kl.derive` destination (<<KLE-derive-endpoints>>): its `key` and IV are configured together, by provisioning or import.
@@ -1717,11 +1668,9 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
  ** _Set_Aux_Value_ -> _Set_Aux_Value_2_ or _Hash_Absorb_.
  ** _Set_Aux_Value_2_ -> _Hash_Absorb_.
  ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_ { -> _Enc_Last_Block_ }.
-  *** Transition to _Enc_Tag_Finalize_ possible only if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
-  *** The encryption path ends in _Encrypt_ or _Enc_Last_Block_, not in _Success_: the tag has already been output by the
-      _Enc_Tag_Finalize_ `kl.exec`. The next message starts with a return to _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
+    The path ends in _Encrypt_ or _Enc_Last_Block_, not in _Success_, since the _Enc_Tag_Finalize_ `kl.exec` outputs the tag;
+    the next message starts with a return to _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
-  *** Transition to _Decrypt_ possible only if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Enc_Tag_Finalize_, _Encrypt_ and _Enc_Last_Block_ are enabled by _MachinePolicy_[0]; _Decrypt_, _Dec_Last_Block_ and
     _Dec_Tag_Finalize_ by _MachinePolicy_[1]; the other States by neither (Rule <<KLE-MGR-policy-gate>>).
  ** A final plaintext or ciphertext block shorter than `b` goes through _Enc_Last_Block_, resp. _Dec_Last_Block_.
@@ -1731,66 +1680,38 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
   *** The following initialization operations are performed:
    . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
 
-** To enter state _Set_Aux_Value_, a Form C `kl.setst Kn, #kl_state_set_aux_value, INPUT` is expected.
-    Then, the following operations are performed:
-+
---
-   . `nonce` <- `INPUT[95:0]`
-   .  (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(k, key, nonce)`
---
-+
-Repeating the instruction is harmless: it overwrites `nonce` and recomputes `enc_key` and `auth_key` before any data is processed with them.
+** When entering State _Set_Aux_Value_:
+   . A Form C "``kl.setst Kn, #kl_state_set_aux_value, INPUT``" is expected.
+   . `nonce <- INPUT[95:0]`.
+   . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(k, key, nonce)`.
+   . A same-State `kl.setst` into _Set_Aux_Value_ repeats these operations (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
 
- ** To enter state _Set_Aux_Value_2_, a Form C `kl.setst Kn, #kl_state_set_aux_value_2, INPUT` is expected.
-    Then:
-+
---
-   . SIV <- `INPUT`
---
+** When entering State _Set_Aux_Value_2_:
+   . A Form C "``kl.setst Kn, #kl_state_set_aux_value_2, INPUT``" is expected.
+   . `SIV <- INPUT`.
 +
 [NOTE]
 ====
 This State serves decryption.
-Entering it during encryption is harmless: the encryption path reaches _Encrypt_ only through the _Enc_Tag_Finalize_ `kl.exec`, which overwrites `SIV` with the synthetic value.
-An externally set `SIV` is thus never used for the encryption keystream.
-Skipping it during decryption is also harmless: `SIV` then keeps the zero that entering _Ready_ set.
-Repeating it is harmless too: it only overwrites `SIV`, from which no other field is derived.
+Entering it during encryption is harmless: the encryption path reaches _Encrypt_ only through the _Enc_Tag_Finalize_ `kl.exec`, which overwrites `SIV` with the synthetic value, so an externally set `SIV` never feeds the encryption keystream.
+Skipping it during decryption leaves `SIV` at the zero that entering _Ready_ set, and repeating it only overwrites `SIV`, from which no other field is derived.
 ====
 
 ** The `kl.setst` into _Hash_Absorb_, _Enc_Tag_Finalize_, _Decrypt_ or _Dec_Tag_Finalize_ is of Form A.
-   No `kl.setst` enters _Encrypt_: only the _Enc_Tag_Finalize_ `kl.exec` described below reaches it, after synthesizing `SIV`.
-   A `kl.setst` naming _Encrypt_, in any State, _Encrypt_ included, transitions the locker to Error State _Invalid_
-   (Rule <<KLE-MGR-not-allowed-instructions>>).
-   An externally supplied `SIV` thus never feeds the encryption keystream.
+** Only the _Enc_Tag_Finalize_ `kl.exec` enters _Encrypt_, after synthesizing `SIV`: a `kl.setst` naming _Encrypt_, in any State,
+   _Encrypt_ included, transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-instructions>>).
 
-** {empty}
-+
---
-In State _Hash_Absorb_, (multi-block) Form B ``kl.exec`` instructions are expected.
+** In State _Hash_Absorb_, (multi-block) Form B "``kl.exec Kn, INPUT``" instructions are expected, each performing `absorb(INPUT)`.
+   The caller must zero-pad the AD and, on the encryption path, the plaintext, each separately to a multiple of 16 bytes,
+   as cite:[RFC8452] {sect}4 specifies: every bit of the final partial block of each, beyond the end of its data, is zero.
 
-Such an instruction absorbs its `INPUT` into the internal state variable `tmp`, i.e., it performs `absorb(INPUT)`.
-
-The caller must zero-pad the AD and, on the encryption path, the plaintext, each separately to a multiple of 16 bytes,
-as cite:[RFC8452] {sect}4 specifies: every bit of the final partial block of each, beyond the end of its data, is zero.
---
-
-** In State _Enc_Tag_Finalize_, a Form A ``kl.exec`` is expected, whose `INPUT` the caller sets to
-+
---
-[none]
-  *** `INPUT <- bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`.
---
-+
-The ``kl.exec`` finalizes the SIV by performing:
-+
---
-  . `absorb(INPUT)`.
-  . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
-  . `SIV <- tmp` and `OUTPUT <- SIV`.
-  . The state transitions to _Encrypt_.
---
-+
-`INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+** In State _Enc_Tag_Finalize_, a Form A "``kl.exec OUTPUT, Kn, INPUT``" is expected, whose `INPUT` the caller sets to
+   `bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`, truncated to its 128 least significant bits
+   (Rule <<KLE-MGR-fixed-width-input>>). It finalizes the SIV:
+   . `absorb(INPUT)`.
+   . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
+   . `SIV <- tmp` and `OUTPUT <- SIV`.
+   . The state transitions to _Encrypt_.
 
 ** In State _Encrypt_, (multi-block) Form A ``kl.exec`` instructions are expected.
       Issuing "``kl.exec OUTPUT, Kn, INPUT``" encrypts `INPUT` into `OUTPUT`
@@ -1801,9 +1722,11 @@ The ``kl.exec`` finalizes the SIV by performing:
   . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32)),``
   . `ctr <- ctr + 1`.
 --
-** To transition to State _Enc_Last_Block_, a Form B `kl.setst` is issued, which sets `last_block_len`, the bit length of the last block, to its auxiliary argument `Xs`.
-`Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`, since cite:[RFC8452] expresses this length in bytes (Rule <<KLE-MGR-last-blk-len>>);
-any other value transitions the locker to Error State _Invalid_.
+** When entering State _Enc_Last_Block_:
+   . A Form B "``kl.setst Kn, #kl_state_enc_last_block, Xs``" is expected, where `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
+   . `last_block_len <- Xs`, the bit length of the last block.
++
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
 ** In State _Enc_Last_Block_, a single Form A ``kl.exec`` instruction is expected.
       Issuing "``kl.exec OUTPUT, Kn, INPUT``" encrypts `INPUT` into `OUTPUT`
@@ -1826,8 +1749,11 @@ any other value transitions the locker to Error State _Invalid_.
 . `absorb(OUTPUT)`.
 . `ctr <- ctr + 1`.
 --
-** To transition to State _Dec_Last_Block_, a Form B `kl.setst` is issued, which sets `last_block_len` to its auxiliary argument `Xs`.
-`Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`, as for _Enc_Last_Block_; any other value transitions the locker to Error State _Invalid_.
+** When entering State _Dec_Last_Block_:
+   . A Form B "``kl.setst Kn, #kl_state_dec_last_block, Xs``" is expected, where `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
+   . `last_block_len <- Xs`.
++
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
 ** In State _Dec_Last_Block_, a single Form A ``kl.exec`` instruction is expected.
       Issuing “``kl.exec OUTPUT, Kn, INPUT``” decrypts `INPUT` into `OUTPUT` and
@@ -1842,24 +1768,13 @@ any other value transitions the locker to Error State _Invalid_.
     . `last_block_len <- 0`
 --
 
-** In State _Dec_Tag_Finalize_, a single Form B ``kl.exec``, "``kl.exec Kn, INPUT``", is expected.
-    Since the SIV was supplied first, this ``kl.exec`` performs the comparison itself (Rule <<KLE-MGR-tag-verify>>).
-    The caller sets
-+
---
-[none]
-  ***  `INPUT <- bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`.
---
-+
-``kl.exec`` then performs the following operations:
-+
---
-  . `absorb(INPUT)` (which modifies `tmp`).
-  . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
-    . If `tmp` = `SIV`, the state transitions to _Success_; otherwise, it transitions to _Failure_.
---
-+
-`INPUT` is truncated to its 128 least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+** In State _Dec_Tag_Finalize_, a single Form B "``kl.exec Kn, INPUT``" is expected, whose `INPUT` the caller sets to
+   `bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`, truncated to its 128 least significant bits
+   (Rule <<KLE-MGR-fixed-width-input>>).
+   Since the SIV was supplied first, this `kl.exec` performs the comparison itself (Rule <<KLE-MGR-tag-verify>>):
+   . `absorb(INPUT)`.
+   . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
+   . If `tmp` = `SIV`, the state transitions to _Success_; otherwise, it transitions to _Failure_.
 
 ** A same-State `kl.setst` into _Enc_Last_Block_ or _Dec_Last_Block_ once its `kl.exec` has processed the final block (`last_block_len` = 0) transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
    Repeating the operations of entering the State would admit a second final block (Rule <<KLE-MGR-single-last-block>>).
@@ -2006,16 +1921,7 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode ma
     _Hash_Verify_ by _MachinePolicy_[1]; the other States by neither (Rule <<KLE-MGR-policy-gate>>).
 
 * *Behavior:*
-** The Machine makes frequent use of the following values:
-+
---
-  . `L* = enc_blk(key, zeros(128))`
-  . `L$ = double(L*)`
-  . `L[0] = double(L$)`
-  . `L[i] = double(L[i-1])`, computed for all `i` with `0 < i` {le} `floor(log_2(MAX_BLOCKS))` (possibly lazily).
-
-`L*` is set on entering State _Hash_Absorb_ and serialized. `L$` and `L[i]` are derived from it (Rule <<KLE-MGR-recomputed-fields>>): they are recomputed from the imported `L*` when an import completes, and an implementation may also keep them in the ADS of an exported SCC.
---
+** `L*` is set on entering State _Hash_Absorb_ and serialized. `L$` and `L[i]` are derived from it (Rule <<KLE-MGR-recomputed-fields>>): they are recomputed from the imported `L*` when an import completes, and an implementation may also keep them in the ADS of an exported SCC.
 
 ** Upon entering State _Ready_:
   *** The following initialization operations are performed:
@@ -2027,10 +1933,12 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode ma
    . `index <- 0`
    . `tag_len <- 128`
 
-** To move to _Set_Aux_Value_, a Form B `kl.setst` is expected, whose auxiliary argument `Xs` sets the nonce length `N_len`.
-`N_len` must satisfy `6` {le} `N_len` {le} `120`; any other value transitions the locker to Error State _Invalid_.
-Every bit length in that range is admissible: the nonce is a bit string and need not fill whole bytes.
-The `kl.setst` also zeroes `N` and clears `HasN`.
+** When entering State _Set_Aux_Value_:
+   . A Form B "``kl.setst Kn, #kl_state_set_aux_value, Xs``" is expected, where `Xs` must satisfy `6` {le} `Xs` {le} `120`.
+     Every bit length in that range is admissible: the nonce is a bit string and need not fill whole bytes.
+   . `N_len <- Xs` and `N <- zeros(120)`, and `HasN` is cleared.
++
+Any other `Xs` transitions the locker to Error State _Invalid_.
 +
 [NOTE]
 ====
@@ -2041,28 +1949,26 @@ implementation of this specification is therefore not a general RFC{nbsp}7253 im
 nonces shorter than 6 bits.
 ====
 
-** In State _Set_Aux_Value_, a Form B "``kl.exec Kn, INPUT``" loads `N` from the
-   `q` = {lceil}``N_len``/8{rceil} least significant bytes of `INPUT`:
-   `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the `(8 - N_len) mod 8` least significant
-   bits of byte `q-1` cleared.
-   These bits pad the final, partial byte of the nonce string; they are not part of the nonce and are ignored.
-   `INPUT` is truncated to its `8q` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
-  *** The `kl.exec` sets `HasN`. If it is repeated, it rewrites `N`.
-  *** A `kl.derive` into `N` (<<KLE-derive-endpoints>>) loads it as the `kl.exec` does and sets `HasN`; one that
-      transfers fewer than `q` bytes transitions the destination to Error State _Invalid_
-      (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 4).
+** While in State _Set_Aux_Value_, a Form B "``kl.exec Kn, INPUT``" loads `N` from the `q` = {lceil}``N_len``/8{rceil}
+   least significant bytes of `INPUT`, which is truncated to its `8q` least significant bits (Rule <<KLE-MGR-fixed-width-input>>):
+   . `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared:
+     they pad the final, partial byte of the nonce string, are not part of the nonce, and are ignored.
+   . `HasN` is set.
++
+A repeated `kl.exec` rewrites `N`.
+// Not an admissible pair for now (<<KLE-derive-endpoints>>):
+// A `kl.derive` into `N` (<<KLE-derive-endpoints>>) loads it as the `kl.exec` does and sets `HasN`; one that
+// transfers fewer than `q` bytes transitions the destination to Error State _Invalid_
+// (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 4).
 
-** To move to _Hash_Absorb_, a Form B `kl.setst` is expected, whose auxiliary argument `Xs` sets the tag length `tag_len`.
-   `Xs` must be 64, 96 or 128; any other value transitions the locker to Error State _Invalid_.
-   Entering _Hash_Absorb_ requires `HasN` (Rule <<KLE-MGR-policy-gate>>).
-  *** The following operations are performed:
-  . `index <- 1`
-  . `tag_len <- Xs`.
-  . `offset <- zeros(b)` – this is `Offset~0~` in the RFC.
-  . `L* <- enc_blk(key, zeros(b))` – this is `L~*~` in the RFC.
-  . `L$ <- double(L*)`
-  . `L[0] <- double(L$)`
-  . `L[i] <- double(L[i-1])`, for all `i` with `0 < i` {le} 48, possibly lazily.
+** When entering State _Hash_Absorb_, which requires `HasN` (Rule <<KLE-MGR-policy-gate>>):
+   . A Form B "``kl.setst Kn, #kl_state_hash_absorb, Xs``" is expected, where `Xs` must be 64, 96 or 128.
+   . `index <- 1` and `tag_len <- Xs`.
+   . `offset <- zeros(b)` – this is `Offset~0~` in the RFC.
+   . `L* <- enc_blk(key, zeros(b))` – this is `L~*~` in the RFC.
+   . `L$ <- double(L*)`, `L[0] <- double(L$)`, and `L[i] <- double(L[i-1])` for all `i` with `0 < i` {le} 48, possibly lazily.
++
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
 ** In State _Hash_Absorb_, (multi-block) `kl.exec` instructions are expected to be of Form B, whereby "``kl.exec Kn, INPUT``" absorbs a data block into `hash_A`, i.e.:
 +
@@ -2185,22 +2091,18 @@ In both cases the state then transitions to _Enc_Tag_Finalize_.
    . `OUTPUT <- zeros(128-last_block_len) @ (INPUT[last_block_len-1:0] xor tmp[last_block_len-1:0])`
    . `tmp <- offset xor ocb_pad(OUTPUT, last_block_len)`
    . `checksum_P <- enc_blk(key, checksum_P xor tmp xor L$) xor hash_A` // tag
-   . The state transitions to _Hash_Verify_.
 
 If `last_block_len` is zero, a single Form D "``kl.exec Kn``" is expected instead,
 which performs:
 
 . `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`
-  . The state transitions to _Hash_Verify_.
+
+In both cases the state then transitions to _Hash_Verify_.
 --
 
-** To complete decryption, a same-State Form C ``kl.setst`` into _Hash_Verify_ (Rule <<KLE-MGR-tag-verify>>)
-   compares the `tag_len` least significant bits of `INPUT` with those of `checksum_P`;
-   `INPUT` is truncated to these `tag_len` bits (Rule <<KLE-MGR-fixed-width-input>>):
-+
---
-  . If the values match, the state transitions to _Success_; otherwise, it transitions to _Failure_.
---
+** To complete decryption, a same-State Form C "``kl.setst Kn, #kl_state_hash_verify, INPUT``" (Rule <<KLE-MGR-tag-verify>>)
+   compares the `tag_len` least significant bits of `INPUT`, to which `INPUT` is truncated (Rule <<KLE-MGR-fixed-width-input>>),
+   with those of `checksum_P`. If they match, the state transitions to _Success_; otherwise, it transitions to _Failure_.
 
 ** A same-State `kl.setst` into _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Encrypt_ or _Decrypt_ transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
    Repeating the operations of entering the State would restart `index` and `offset` over a partly computed `hash_A` or `checksum_P`, or admit a second final block of the AD (Rule <<KLE-MGR-single-last-block>>).
@@ -2262,7 +2164,7 @@ The differences with respect to OCB are:
 
  ** The Form B `kl.setst` that sets `tag_len` and transitions to State _Hash_Absorb_ is issued in State _Ready_.
  ** This Machine does not use `HasN`: bit 0 of _StateExtension_ stays 0, and entering State _Hash_Absorb_ requires no `HasN`, since provisioning and import check `N_len` (Rule <<KLE-MGR-check-on-write>>).
-    Entering State _Ready_ clears neither `N` nor `N_len`: a later message uses the same nonce. Software that needs another nonce provisions another locker.
+ ** Entering State _Ready_ clears neither `N` nor `N_len`: a later message uses the same nonce. Software that needs another nonce provisions another locker.
 --
 
 This Machine is not a `kl.derive` destination (<<KLE-derive-endpoints>>): its key and its nonce are configured together, by provisioning or import.
@@ -2330,9 +2232,10 @@ Data Structures::
 Machine-Specific Functions::
 
 * `enc_blk(key, p) -> c` encrypts block `p` using the key `key`, and returns the result `c`.
-* `double(S)` = `bswap(update_mask(bswap(S)))`, with the `update_mask` of <<KLE-XEX-XTS-modes>> for the block size `b`:
-  the doubling of cite:[nist-SP-800-38B] {sect}5.3, with `R~128~` for `b` = 128 and `R~64~` for `b` = 64.
-  For `b` = 128 it is the OCB3 doubling of <<KLE-OCB-mode>>.
+* `double(S)` = `bswap(dbl(bswap(S)))`, the doubling of cite:[nist-SP-800-38B] {sect}5.3, where `dbl(V)` = `V << 1` if
+  `V[b-1]` = 0, and `(V << 1) xor (zeros(b-8) @ R~b~)` otherwise, with `R~128~` = `0b10000111`
+  (`x^128^ + x^7^ + x^2^ + x + 1`) and `R~64~` = `0b00011011` (`x^64^ + x^4^ + x^3^ + x + 1`).
+  For `b` = 128, `dbl` is the `update_mask` of <<KLE-XEX-XTS-modes>>, and `double` the OCB3 doubling of <<KLE-OCB-mode>>.
 * `gen_subkeys(K) -> (K1,K2)` generates subkeys `K1` and `K2` from the master key `K` as follows:
 
  . `L <- enc_blk(K, zeros(b))`
@@ -2365,27 +2268,28 @@ State Machine::
   *** `absorbed_any <- false`
   *** `absorbed_all <- false`
 
- ** The `kl.setst` into _Hash_Absorb_ is of Form A.
+ ** When entering State _Hash_Absorb_, the `kl.setst` is of Form A.
 
- ** In State _Hash_Absorb_, ``kl.exec`` is of Form B and may span several blocks. +
- "``kl.exec Kn, INPUT``" absorbs each `b`-bit block `P` of `INPUT` in turn (Rule <<KLE-MGR-one-klexec-per-block>>):
+ ** In State _Hash_Absorb_, a Form B "`kl.exec Kn, INPUT`", which may span several blocks, absorbs each `b`-bit block `P` of `INPUT` in turn (Rule <<KLE-MGR-one-klexec-per-block>>):
 +
 --
    . `hash <- enc_blk(key, hash xor P)`.
    . `absorbed_any <- true`.
 --
- ** A Form B "``kl.setst Kn, #kl_state_hash_last_block, Xs``", where `Xs` is the bit length of the last block, enters _Hash_Absorb_Last_Block_ as follows:
-   . if `Xs > b`, or if `Xs` is not a multiple of 8, then the locker transitions to Error State _Invalid_ (Rule <<KLE-MGR-last-blk-len>>).
-   . `Xs` = 0 denotes the empty message: if `absorbed_any` = `true`, the locker transitions to Error State _Invalid_.
-   . `last_block_len <- Xs`.
-   . If `Xs` = 0, the empty final block is absorbed at once, without a `kl.exec` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>): `(K1, K2) <- gen_subkeys(key)`, `hash <- enc_blk(key, hash xor (zeros(b-8) @ 0b10000000) xor K2)`, and `absorbed_all <- true`.
+ ** When entering State _Hash_Absorb_Last_Block_:
++
+--
+. a Form B "`kl.setst Kn, #kl_state_hash_last_block, Xs`", where `Xs` is the bit length of the last block, sets `last_block_len <- Xs`;
+. `Xs` must be a multiple of 8 with `Xs` {le} `b` (Rule <<KLE-MGR-last-blk-len>>); `Xs` = 0 denotes the empty message, and requires `absorbed_any` = `false`;
+. if `Xs` = 0, the empty final block is absorbed at once, without a `kl.exec` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>): `(K1, K2) <- gen_subkeys(key)`, `hash <- enc_blk(key, hash xor (zeros(b-8) @ 0b10000000) xor K2)`, and `absorbed_all <- true`.
+
+Any other `Xs`, `Xs` = 0 with `absorbed_any` = `true`, or a same-State `kl.setst` into _Hash_Absorb_Last_Block_ with `absorbed_all` = `true` transitions the locker to Error State _Invalid_.
+--
 
  ** In State _Hash_Absorb_Last_Block_, a single Form B "`kl.exec Kn, INPUT`" absorbs the last block.
     It uses only the `last_block_len` least significant bits of `INPUT` and ignores the others.
-    A `KLLEN` smaller than `last_block_len` transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-granularity>>).
 +
 --
-  . if `absorbed_all` = `true`, the locker transitions to Error State _Invalid_.
   . `(K1, K2) <- gen_subkeys(key)`.
   . if `last_block_len` = `b`, then:
     .. `tmp <- hash xor INPUT[b-1:0] xor K1`
@@ -2395,29 +2299,34 @@ State Machine::
 `xor K2`
   . `hash <- enc_blk(key, tmp)`
   . `absorbed_all <- true`
+
+A `kl.exec` with `absorbed_all` = `true`, or a `KLLEN` smaller than `last_block_len` (Rule <<KLE-MGR-granularity>>), transitions the locker to Error State _Invalid_.
 --
 
-** From State _Hash_Absorb_Last_Block_, software outputs or verifies the CMAC. The locker transitions to Error State _Invalid_ on:
-   . a `kl.setst` into _Hash_Output_ or _Hash_Verify_ with `absorbed_all` = `false`;
-   . a same-State `kl.setst` into _Hash_Absorb_Last_Block_ with `absorbed_all` = `true`.
+** From State _Hash_Absorb_Last_Block_, software outputs or verifies the CMAC.
 
 ** To output the CMAC where _MachinePolicy_[0] is set (following Rule <<KLE-MGR-policy-gate>>):
-   . a Form A `kl.setst` with `#immed7` = `#kl_state_hash_output` enters State _Hash_Output_;
-   . a single Form C ``kl.exec`` with `KLLEN` {ge} 64 writes `hash` into `OUTPUT` and clears the bits beyond the `b`-th (Rule <<KLE-MGR-clear-output>>).
-     With `KLLEN` < `b`, it emits the first `KLLEN`/8 bytes: the truncated tag of cite:[nist-SP-800-38B] {sect}6.2.
-     A `KLLEN` smaller than 64 transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-granularity>>);
-   . the CC transitions to State _Success_.
++
+--
+. a Form A `kl.setst` with `#immed7` = `#kl_state_hash_output` enters State _Hash_Output_;
+. a single Form C ``kl.exec`` with `KLLEN` {ge} 64 writes `hash` into `OUTPUT` and clears the bits beyond the `b`-th (Rule <<KLE-MGR-clear-output>>).
+  With `KLLEN` < `b`, it emits the first `KLLEN`/8 bytes: the truncated tag of cite:[nist-SP-800-38B] {sect}6.2;
+  as a `kl.derive` source (<<KLE-derive-endpoints>>), _Hash_Output_ supplies the `b`/8 bytes of `hash`;
+. the CC transitions to State _Success_.
+
+That `kl.setst` with `absorbed_all` = `false`, or a `KLLEN` smaller than 64 (Rule <<KLE-MGR-granularity>>), transitions the locker to Error State _Invalid_.
+--
 
 ** To verify the CMAC where _MachinePolicy_[1] is set (following Rule <<KLE-MGR-policy-gate>>):
 +
 --
 . a Form B `kl.setst` with `#immed7` = `#kl_state_hash_verify` and auxiliary parameter `Xs`
-   enters State _Hash_Verify_ and sets `tag_len <- min(Xs, b)`; `Xs` must be a multiple of 8 with `64` {le} `Xs`;
-   . in State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `tag_len` compares `INPUT[tag_len-1:0]` with `hash[tag_len-1:0]` in constant time (Rule <<KLE-MGR-tag-verify>>).
-     `hash[tag_len-1:0]` is the first `tag_len`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2;
-   . the CC transitions to State _Success_ if they match, and to _Failure_ otherwise.
+  enters State _Hash_Verify_ and sets `tag_len <- min(Xs, b)`; `Xs` must be a multiple of 8 with `64` {le} `Xs`;
+. in State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `tag_len` compares `INPUT[tag_len-1:0]` with `hash[tag_len-1:0]` in constant time (Rule <<KLE-MGR-tag-verify>>).
+  `hash[tag_len-1:0]` is the first `tag_len`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2;
+. the CC transitions to State _Success_ if they match, and to _Failure_ otherwise.
 
-Any other `Xs`, a `KLLEN` smaller than `tag_len` (Rule <<KLE-MGR-granularity>>), or a same-State `kl.setst` into _Hash_Verify_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) transitions the locker to Error State _Invalid_.
+That `kl.setst` with `absorbed_all` = `false` or with any other `Xs`, a `KLLEN` smaller than `tag_len` (Rule <<KLE-MGR-granularity>>), or a same-State `kl.setst` into _Hash_Verify_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) transitions the locker to Error State _Invalid_.
 --
 
 //
@@ -2543,19 +2452,14 @@ where:
 *** `assign` for a construction that fills a separate `block` and then processes it into `state` through `process_block()`, and
 *** `xor_accumulate` for one that absorbs the input directly into `state`, as a sponge does; each instantiation states which it uses.
 --
-** A Form B "`kl.setst Kn, #kl_state_hash_last_block,
-    Xs`", where `Xs` is the bit length of the last block, performs:
+** When entering State _Hash_Absorb_Last_Block_:
 +
 --
- . if `block_base` != 0, then the locker transitions to Error State _Invalid_. (The previous block is not complete.)
- . if `Xs > b`, then the locker transitions to Error State _Invalid_.
- . if `Xs = 0`, then the locker transitions to Error State _Invalid_.
- . if `Xs` is not a multiple of 8, then the locker transitions to Error State _Invalid_ (Rule <<KLE-MGR-last-blk-len>>).
- . `last_block_len <- Xs`.
+ . a Form B "`kl.setst Kn, #kl_state_hash_last_block, Xs`", where `Xs` is the bit length of the last block, sets `last_block_len <- Xs`;
+ . `block_base` must be 0, and `Xs` a multiple of 8 (Rule <<KLE-MGR-last-blk-len>>) with `8` {le} `Xs` {le} `b`.
+
+A non-zero `block_base`, any other `Xs`, or a same-State `kl.setst` into _Hash_Absorb_Last_Block_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) transitions the locker to Error State _Invalid_.
 --
-+
-The state then transitions to _Hash_Absorb_Last_Block_.
-A same-State `kl.setst` into _Hash_Absorb_Last_Block_ transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
 
 ** State _Hash_Absorb_Last_Block_ follows _Hash_Absorb_, except that:
  *** `last_block_len` replaces `b` in steps 3.a and 3.g of <<KLE-process-VLI>>.
@@ -2570,8 +2474,8 @@ A same-State `kl.setst` into _Hash_Absorb_Last_Block_ transitions the locker to 
    <<KLE-process-VLI>> for that State in place of the two items above, and enters _Hash_Output_ from it by the
    `kl.setst` that enters _Hash_Output_ from _Hash_Absorb_.
 
-** Where _Hash_Absorb_Last_Block_ is not used, the `kl.setst` from _Hash_Absorb_ into _Hash_Output_ is of Form A,
-   unless the Machine states otherwise. A same-State `kl.setst` into _Hash_Output_ is not allowed (Rule <<KLE-MGR-no-hash-output-repeat>>).
+** In a Machine without _Hash_Absorb_Last_Block_, or one that passes it as `last_block_state`, the `kl.setst` from
+   _Hash_Absorb_ into _Hash_Output_ is of Form A, unless the Machine states otherwise. A same-State `kl.setst` into _Hash_Output_ is not allowed (Rule <<KLE-MGR-no-hash-output-repeat>>).
 
 ** In State _Hash_Output_, hash functions and XOFs behave differently.
  *** Upon entering the state, the following operations are first performed:
@@ -2584,8 +2488,8 @@ A same-State `kl.setst` into _Hash_Absorb_Last_Block_ transitions the locker to 
     * `amount : int`, `{nbsp}` amount of data to copy from `state` to `OUTPUT`
 
 []
-   . `output_base <- 8 {interpunct} klstart` // 0 when the instruction starts
-    . while (`output_base` < `KLLEN`) do: // as long as there is room in the OUTPUT
+   . `output_base <- 8 {interpunct} klstart`: 0 when the instruction starts.
+    . while (`output_base` < `KLLEN`) do:
      .. `amount <- min(KLLEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
            ``{fournbsp}state[tag_offset + block_base + amount - 1 : tag_offset + block_base]``
@@ -2746,8 +2650,8 @@ A caller with its own key absorbs it (see below).
 --
 
 * *MachinePolicy*: without a system key, as in <<KLE-hash-functions-MACs-XOFs>>.
-  With a system key, the Machine is a MAC that only generates tags: bit 0 enables _Hash_Output_, also as a `kl.derive`
-  source (Rule <<KLE-MGR-policy-gate>>), and must be set; a set bit 1 is unsupported Metadata
+  With a system key, the Machine is a MAC that only generates tags: bit 0 enables _Hash_Output_
+  (Rule <<KLE-MGR-policy-gate>>), and must be set; a set bit 1 is unsupported Metadata
   (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
 * *Internal State*:
@@ -2779,47 +2683,62 @@ State Machine::
  ** _Hash_Absorb_ -> _Hash_Output_, for a message that ends in `block`: a `kl.setst` into _Hash_Absorb_Last_Block_ with
     `Xs` = 0 enters _Hash_Output_ directly.
  ** _Ready_ -> _Hash_Output_, for the empty message: a `kl.setst` into _Hash_Absorb_Last_Block_ with `Xs` = 0 enters
-    _Hash_Output_ directly; no `kl.setst` into _Hash_Output_ is admitted from _Ready_.
+    _Hash_Output_ directly; a `kl.setst` naming _Hash_Output_ transitions the locker to Error State _Invalid_
+    (Rule <<KLE-MGR-machine-transitions>>).
  ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior*, where it differs from <<KLE-hash-functions-MACs-XOFs>>:
- ** Upon entering State _Ready_, also after provisioning:
-   `nn` {leftarrow} `nn~max~`, `kk` {leftarrow} 0 or the length of the system key, and `block` {leftarrow} `zeros(b)`.
-   `state` is the IV of cite:[RFC7693] {sect}2.6, with `h~0~` XORed with
-    `0x01010000` {oplus} `(kk << 8)` {oplus} `nn` ({sect}2.5, {sect}3.3).
- ** In State _Ready_, a Form B `kl.setst Kn, #kl_state_set_aux_value, Xs` sets
-    `nn` {leftarrow} `Xs[7:0]` and, without a system key, `kk` {leftarrow} `Xs[15:8]`, and recomputes `h~0~`.
-    The locker transitions to Error State _Invalid_ unless 1 {le} `nn` {le} `nn~max~`, `kk` {le} `kk~max~`,
-    the bits of `Xs` above bit 15 are 0, and, with a system key, `Xs[15:8]` = 0.
-    Setting the parameters is an operation, not a State (Rule <<KLE-operation-immediates>>).
- ** Keys:
-  . With a system key, a `kl.setst` from _Ready_ into _Hash_Absorb_, or into _Hash_Absorb_Last_Block_ with `Xs` > 0,
-    compresses the key block: `block` {leftarrow} `syskey`, `cumul_len` {leftarrow} `b`, `F(false)`, and
+ ** When entering State _Ready_, also after provisioning:
++
+--
+. `nn` {leftarrow} `nn~max~`, `kk` {leftarrow} 0 or the length of the system key, and `block` {leftarrow} `zeros(b)`;
+. `state` is the IV of cite:[RFC7693] {sect}2.6, with `h~0~` XORed with
+  `0x01010000` {oplus} `(kk << 8)` {oplus} `nn` ({sect}2.5, {sect}3.3).
+--
+ ** In State _Ready_, setting the parameters is an operation, not a State (Rule <<KLE-operation-immediates>>):
++
+--
+. a Form B `kl.setst Kn, #kl_state_set_aux_value, Xs` sets `nn` {leftarrow} `Xs[7:0]` and, without a system key,
+  `kk` {leftarrow} `Xs[15:8]`, and recomputes `h~0~`;
+. `Xs` must satisfy 1 {le} `Xs[7:0]` {le} `nn~max~` and `Xs[15:8]` {le} `kk~max~`, with `Xs[15:8]` = 0 with a
+  system key, and its bits above bit 15 must be 0.
+
+Any other `Xs` transitions the locker to Error State _Invalid_.
+--
+ ** When leaving State _Ready_ with a system key, for _Hash_Absorb_ or for _Hash_Absorb_Last_Block_ with `Xs` > 0,
+    the `kl.setst` compresses the key block: `block` {leftarrow} `syskey`, `cumul_len` {leftarrow} `b`, `F(false)`, and
     `block` {leftarrow} `zeros(b)`.
 +
 NOTE: `syskey` enters `block` only within that `kl.setst`, so that no Serialized Content holds it
 (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-SKID-no-export>>).
-  . A caller with its own key sets `kk` by the _Set_Aux_Value_ operation, and absorbs the key, zero-padded to `b` bits,
+ ** A caller with its own key sets `kk` by the _Set_Aux_Value_ operation, and absorbs the key, zero-padded to `b` bits,
     as the first block of the message.
     For an empty message, that block is the final block.
- ** _Hash_Absorb_ invokes `PROCESS_VLI` with `max_len` = 0, `state_offset` = 0 and `mode` = `assign`, except that
-    step 3.g is deferred: a `block` filled to `block_base` = `b` is kept, and is compressed by `F(false)`, with
-    `block_base` {leftarrow} 0, only before the next byte of the message is absorbed into it.
+ ** From _Ready_, a final-block length `Xs` = 0 denotes the empty message:
++
+--
+. with a system key, the `kl.setst` performs
+  `block` {leftarrow} `syskey`, `cumul_len` {leftarrow} `b`, `F(true)` and `block` {leftarrow} `zeros(b)`;
+. without a system key and with `kk` = 0, it applies `F(true)` to the zero `block`;
+. it then transitions to _Hash_Output_.
+
+Without a system key and with `kk` {ne} 0, it transitions the locker to Error State _Invalid_.
+--
+ ** In State _Hash_Absorb_, `PROCESS_VLI` is invoked with `max_len` = 0, `state_offset` = 0 and `mode` = `assign`,
+    except that step 3.g is deferred: a `block` filled to `block_base` = `b` is kept, and is compressed by `F(false)`,
+    with `block_base` {leftarrow} 0, only before the next byte of the message is absorbed into it.
     The interruption points of `kl.exec` in _Hash_Absorb_ are 0 and every byte offset at which `block_base` is `b`.
  ** From _Hash_Absorb_, a Form B `kl.setst Kn, #kl_state_hash_last_block, Xs`:
-  . with `Xs` = 0 and `block_base` > 0, ends the message held in `block`: `last_block_len` {leftarrow} `block_base`,
-    `process_last_block()`, `block_base` {leftarrow} 0 and `last_block_len` {leftarrow} 0, and the locker transitions to
-    _Hash_Output_;
-  . with `Xs` > 0 and `block_base` = `b`, first performs `F(false)` and `block_base` {leftarrow} 0, and then proceeds as in
-    <<KLE-hash-functions-MACs-XOFs>>.
 +
+--
+. with `Xs` = 0 and `block_base` > 0, ends the message held in `block`: `last_block_len` {leftarrow} `block_base`,
+  `process_last_block()`, `block_base` {leftarrow} 0 and `last_block_len` {leftarrow} 0, and the locker transitions to
+  _Hash_Output_;
+. with `Xs` > 0 and `block_base` = `b`, first performs `F(false)` and `block_base` {leftarrow} 0, and then proceeds as in
+  <<KLE-hash-functions-MACs-XOFs>>.
+
 With `Xs` = 0 and `block_base` = 0, the locker transitions to Error State _Invalid_.
- ** From _Ready_, a final-block length `Xs` = 0 denotes the empty message:
-  . With a system key, the `kl.setst` performs
-    `block` {leftarrow} `syskey`, `cumul_len` {leftarrow} `b`, `F(true)` and `block` {leftarrow} `zeros(b)`.
-  . Without a system key, it applies `F(true)` to the zero `block` if `kk` = 0, and transitions the locker to
-    Error State _Invalid_ otherwise.
-  . It then transitions to _Hash_Output_.
+--
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2918,41 +2837,43 @@ A loaded key is kept across a return to _Ready_, so that one load of `K0` serves
 --
 +
 * *Allowed State Transitions:*
- ** For the NIK variant: _Ready_ -> _Set_Key_ -> _Hash_Absorb_ -> and the rest as in the underlying hash function, and
-    _Ready_ -> _Hash_Absorb_ once `K0` is loaded (`HasKey`)
- ** For the KIP variant: _Ready_ -> _Hash_Absorb_ -> and the rest as in the underlying hash function
+ ** For the NIK variant: _Ready_ -> _Set_Key_ -> _Hash_Absorb_, and _Ready_ -> _Hash_Absorb_ once `K0` is loaded
+    (`HasKey`); then as in the underlying hash function.
+ ** For the KIP variant: _Ready_ -> _Hash_Absorb_; then as in the underlying hash function.
  ** _Hash_Absorb_, or _Hash_Absorb_Last_Block_ where `H` has it, -> _Hash_Verify_ -> _Success_ or _Failure_.
  ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
- ** _Hash_Output_, also as a `kl.derive` source, is enabled by _MachinePolicy_[0], and _Hash_Verify_ by
+ ** _Hash_Output_ is enabled by _MachinePolicy_[0], and _Hash_Verify_ by
     _MachinePolicy_[1]; the other States by neither (Rule <<KLE-MGR-policy-gate>>).
 
 * *Behavior:*
- ** Upon entering _Ready_, `tag_len` {leftarrow} 0.
+ ** When entering _Ready_: `tag_len` {leftarrow} 0.
 
- ** Upon entering State _Set_Key_, `K0` is zeroed, `HasKey` is cleared, and `input_base`, `block_base` and
-    `cumul_len` are set to zero. Re-entering _Set_Key_, also by a same-State `kl.setst`
-    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), thus restarts the load and replaces the key.
+ ** When entering State _Set_Key_:
+  . `K0` is zeroed, `HasKey` is cleared, and `input_base`, `block_base` and `cumul_len` are set to zero.
+  . Re-entering _Set_Key_, also by a same-State `kl.setst` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), restarts
+    the load and replaces the key.
 
- ** In State _Set_Key_, one or more Form B ``kl.exec`` instructions load the `b`-bit `K0`
-    through macro `PROCESS_VLI`
-    (<<KLE-process-VLI>>) entered as
+ ** While in State _Set_Key_:
+  . one or more Form B ``kl.exec`` instructions load the `b`-bit `K0` through macro `PROCESS_VLI`
+    (<<KLE-process-VLI>>), entered as
 +
 `{fournbsp}` `PROCESS_VLI(b, block=K0, b, state=K0, n=b,` +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base, state_offset=0, cumul_len,` +
-`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None, mode=assign)`,
-+
-where `mode` is `assign` because `K0` is *loaded* into its field, not absorbed into it.
-When `cumul_len` reaches `b` the load is complete and `HasKey` is set.
-A `kl.derive` into `K0` (<<KLE-derive-endpoints>>) transfers a whole key `K` of `eff_length` {le} `b`/8 bytes
-    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 5), zero-fills `K0` beyond it (cite:[nist-fips-198-1] {sect}4, Step 3),
-    and completes the load: `cumul_len` {leftarrow} `b`, and `HasKey` is set.
+`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None, mode=assign)`;
+  . when `cumul_len` reaches `b`, the load is complete and `HasKey` is set;
+  . a `kl.derive` into `K0` (<<KLE-derive-endpoints>>) transfers a whole key `K` of `eff_length` {le} `b`/8 bytes
+    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 5), never from the output of an XOF, and replaces all of `K0`, whatever a `kl.exec` loaded before
+    it: `K0` {leftarrow} `K` zero-filled to `b` bits (cite:[nist-fips-198-1] {sect}4, Step 3), `block_base` {leftarrow} 0,
+    `cumul_len` {leftarrow} `b`, and `HasKey` is set.
 
-** Upon entering _Hash_Absorb_:
+ ** When entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
-  . `block`, `block_base` and `cumul_len` are set to zero, discarding any value left by the loading of `K0` in _Set_Key_,
-    and, where `H` has State _Hash_Absorb_Last_Block_, `last_block_len` {leftarrow} `b`.
-  . `absorb(K0 xor ipad)`, not counted in `cumul_len`, where `absorb(x)` absorbs `x` as a `kl.exec` in _Hash_Absorb_ of `H` does.
-  . The message is then absorbed as in `H`.
+  . `block`, `block_base` and `cumul_len` are set to zero, and, where `H` has State _Hash_Absorb_Last_Block_,
+    `last_block_len` {leftarrow} `b`.
+  . `absorb(K0 xor ipad)`, not counted in `cumul_len`, where `absorb(x)` absorbs `x` as a `kl.exec` in
+    _Hash_Absorb_ of `H` does.
+
+ ** While in _Hash_Absorb_, the message is absorbed as in `H`.
 ** When entering State _Hash_Output_ or _Hash_Verify_, the following steps replace the operations of `H` on entering
    _Hash_Output_:
 +
@@ -3207,37 +3128,37 @@ State Machine::
 * *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_ and _Success_, and, for `KMAC128` and
   `KMAC256` only, _Hash_Verify_ and _Failure_.
 
-* *Allowed State Transitions:* as in <<KLE-SHA-3>>, and, for `KMAC128` and `KMAC256`, _Hash_Absorb_ or
-  _Hash_Absorb_Last_Block_ -> _Hash_Verify_ -> _Success_ or _Failure_.
- ** For `KMAC128` and `KMAC256`, _Hash_Output_, also as a `kl.derive` source, is enabled by _MachinePolicy_[0], and
+* *Allowed State Transitions:*
+ ** As in <<KLE-SHA-3>>.
+ ** For `KMAC128` and `KMAC256`: _Hash_Absorb_ or _Hash_Absorb_Last_Block_ -> _Hash_Verify_ -> _Success_ or
+    _Failure_.
+ ** For `KMAC128` and `KMAC256`, _Hash_Output_ is enabled by _MachinePolicy_[0], and
     _Hash_Verify_ by _MachinePolicy_[1]; the other States by neither. `KMACXOF128` and `KMACXOF256`, which serve as key
     derivation functions, gate no State (Rule <<KLE-MGR-policy-gate>>).
 
 * *Behavior:* as in <<KLE-SHA-3>>, with the following differences.
 
- ** Upon entering _Ready_, `L` {leftarrow} 0.
+ ** When entering _Ready_: `L` {leftarrow} 0.
 
- ** The `kl.setst` from _Ready_ into _Hash_Absorb_ first performs:
-  . XORs `cshake_block` into the rate and applies `P()`.
+ ** When leaving _Ready_ for _Hash_Absorb_, the `kl.setst` first:
+  . XORs `cshake_block` into the rate and applies `P()`;
   . XORs `key_block` into the rate and applies `P()`.
 +
 NOTE: The key enters `state` only within that `kl.setst`, so that the Serialized Content of a CC in _Ready_ is the same
 on every implementation and holds no key-dependent `state`.
 
- ** For `KMAC128` and `KMAC256`, the `kl.setst` into _Hash_Output_ is of Form B, and its auxiliary argument sets `L`,
-    the output length in bits.
-    A value outside 0 < `L` < 2^32^ transitions the locker to Error State _Invalid_.
+ ** When entering _Hash_Output_ or _Hash_Verify_ from _Hash_Absorb_ or _Hash_Absorb_Last_Block_, the `kl.setst`
+    first checks and sets `L`, then performs `finalize()`:
+  . for `KMAC128` and `KMAC256`, the `kl.setst` into _Hash_Output_ is of Form B, and sets `L` {leftarrow} `Xs`, the
+    output length in bits, with 0 < `Xs` < 2^32^;
+  . for `KMACXOF128` and `KMACXOF256`, the `kl.setst` into _Hash_Output_ is of Form A, and sets `L` {leftarrow} 0;
+  . for `KMAC128` and `KMAC256`, where _MachinePolicy_[1] is set, the `kl.setst` into _Hash_Verify_ is of Form B,
+    and sets `L` {leftarrow} `Xs`, the tag length in bits; `Xs` must be a multiple of 8 with `64` {le} `Xs` {le} `b`;
+  . `finalize()` absorbs `right_encode(L)`, continuing from the current `block_base`, then applies the padding of
+    <<KLE-SHA-3>>, with the cSHAKE domain-separation suffix `D` = `00` (`d` = `0x04`) in place of the `1111` of the
+    raw SHAKE functions.
 +
-For `KMACXOF128` and `KMACXOF256`, the `kl.setst` into _Hash_Output_ is of Form A, and sets `L` {leftarrow} 0.
-
- ** For `KMAC128` and `KMAC256`, where _MachinePolicy_[1] is set, the `kl.setst` into _Hash_Verify_ is of Form B, and its
-    auxiliary argument sets `L`, the tag length in bits, which must be a multiple of 8 with `64` {le} `L` {le} `b`;
-    any other value transitions the locker to Error State _Invalid_.
-
-  ** The `kl.setst` from _Hash_Absorb_ or _Hash_Absorb_Last_Block_ into _Hash_Output_ or _Hash_Verify_ first checks and sets `L`, then performs `finalize()`:
-  . `right_encode(L)` is absorbed, continuing from the current `block_base`.
-  . The padding is applied as in <<KLE-SHA-3>>, with the cSHAKE domain-separation suffix `D` = `00`
-    (`d` = `0x04`) in place of the `1111` of the raw SHAKE functions.
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
  ** In State _Hash_Output_, for `KMAC128` and `KMAC256`, `L` counts the bits still to be made
     available. The output loop of <<KLE-hash-functions-MACs-XOFs>> takes
@@ -3256,11 +3177,13 @@ the last of them holds the final `L` mod 8 bits, if any, in its least significan
 For `KMACXOF128` and `KMACXOF256`, arbitrarily many bits can be squeezed,
 following the semantics of <<KLE-hash-functions-MACs-XOFs>>, producing `KLLEN` bits for each `kl.exec`,
 and the Machine never transitions to _Success_.
+
+ ** In State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `L`:
+  . compares `INPUT[L-1:0]` with `state[L-1:0]` in constant time (Rule <<KLE-MGR-tag-verify>>);
+  . if they match, the state transitions to _Success_, otherwise to _Failure_.
 +
- ** In State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `L` compares `INPUT[L-1:0]` with `state[L-1:0]`
-    in constant time (Rule <<KLE-MGR-tag-verify>>); if they match, the state transitions to _Success_, otherwise to
-    _Failure_. A `KLLEN` smaller than `L` (Rule <<KLE-MGR-granularity>>), or a same-State `kl.setst` into _Hash_Verify_
-    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), transitions the locker to Error State _Invalid_.
+A `KLLEN` smaller than `L` (Rule <<KLE-MGR-granularity>>), or a same-State `kl.setst` into _Hash_Verify_
+(Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), transitions the locker to Error State _Invalid_.
 
 In every variant, the interruption points of `kl.exec` in _Hash_Output_ are those of an XOF (<<KLE-hash-functions-MACs-XOFs>>): 0 and every byte offset at which `block_base` is 0.
 The output of KMAC128 and KMAC256 may also span several blocks.
@@ -3342,18 +3265,21 @@ State Machine::
  ** _Failure_: The Machine has completed its operation with an authentication failure.
 
 * *Allowed State Transitions:*
- ** _Ready_ -> _Hash_Absorb_.
- **  _Hash_Absorb_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- **  _Hash_Absorb_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- ** _Encrypt_, _Enc_Last_Block_ and _Hash_Output_, also as a `kl.derive` source, are enabled by _MachinePolicy_[0], and
-    _Decrypt_, _Dec_Last_Block_ and _Hash_Verify_ by _MachinePolicy_[1]; the other States by neither
-    (Rule <<KLE-MGR-policy-gate>>). A `kl.restrict*` that clears the bit of the current State therefore transitions the
-    locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>), and the operation is not
-    completed.
- ** _Encrypt_ -> _Enc_Last_Block_ -> _Hash_Output_ -> _Success_. A `kl.setst` into _Enc_Last_Block_ with `Xs` = 0 pads the empty final block and enters _Hash_Output_ directly; no `kl.setst` naming _Hash_Output_ is admitted from _Encrypt_.
- ** _Decrypt_ -> _Dec_Last_Block_ -> _Hash_Verify_ -> _Success_ or _Failure_. A `kl.setst` into _Dec_Last_Block_ with `Xs` = 0 pads the empty final block and enters _Hash_Verify_ directly; no `kl.setst` naming _Hash_Verify_ is admitted from _Decrypt_.
- ** The `kl.exec` of _Enc_Last_Block_, resp. _Dec_Last_Block_, makes the transition to _Hash_Output_, resp. _Hash_Verify_,
-    and the `kl.exec` of _Hash_Output_ the transition to _Success_ (Rule <<KLE-MGR-machine-transitions>>).
+ ** _Ready_ -> _Hash_Absorb_ -> _Encrypt_ or _Decrypt_.
+ ** _Encrypt_ -> { _Enc_Last_Block_ -> } _Hash_Output_ -> _Success_.
+ ** _Decrypt_ -> { _Dec_Last_Block_ -> } _Hash_Verify_ -> _Success_ or _Failure_.
+ ** The Machine makes these transitions itself (Rule <<KLE-MGR-machine-transitions>>):
+  . a `kl.setst` into _Enc_Last_Block_, resp. _Dec_Last_Block_, with `Xs` = 0 pads the empty final block and enters
+    _Hash_Output_, resp. _Hash_Verify_, directly; no `kl.setst` naming _Hash_Output_ is admitted from _Encrypt_, nor
+    one naming _Hash_Verify_ from _Decrypt_;
+  . the `kl.exec` of _Enc_Last_Block_, resp. _Dec_Last_Block_, enters _Hash_Output_, resp. _Hash_Verify_;
+  . the `kl.exec` of _Hash_Output_ enters _Success_.
+ ** _MachinePolicy_[0] enables _Encrypt_, _Enc_Last_Block_ and _Hash_Output_, and
+    _MachinePolicy_[1] enables _Decrypt_, _Dec_Last_Block_ and _Hash_Verify_; neither bit gates the other States
+    (Rule <<KLE-MGR-policy-gate>>).
+    After a `kl.restrictl` or `kl.restrictv` that clears the bit of the current State, the next instruction in that State
+    transitions the locker to Error State _Invalid_ and performs no operation
+    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
 
 * *Behavior:*
 ** Upon entering State _Ready_, including on completing a provisioning (Rule <<KLE-MGR-management-no-state-operations>>):
@@ -3361,21 +3287,15 @@ State Machine::
    . `tag_len <- 128`
    . `last_block_len <- 0`
 
-** In State _Ready_, a Form B `kl.setst Kn, #kl_state_set_aux_value, Xs` sets
-`tag_len` {leftarrow} `Xs`. Admissible values satisfy 64 {le} `Xs` {le} 128; any other
-value transitions the locker to Error State _Invalid_.
-Setting the tag length is an operation, not a State (Rule <<KLE-operation-immediates>>).
+** In State _Ready_, a Form B `kl.setst Kn, #kl_state_set_aux_value, Xs` is an operation, not a State
+   (Rule <<KLE-operation-immediates>>): it sets `tag_len` {leftarrow} `Xs`, where 64 {le} `Xs` {le} 128.
+   Any other `Xs` transitions the locker to Error State _Invalid_.
 +
 NOTE: A truncated tag is a prefix of the 128-bit tag (cite:[nist-SP-800-232] {sect}4.2.1).
 Entering _Ready_ restores `tag_len` to 128, so the caller sets it again for each message. Re-running a decryption with
 `tag_len` raised one bit at a time would find the full tag in about 2^64^ verifications from the floor of 64 bits.
 Keeping one `tag_len` per key, and the bound on failed verifications, is the caller's (cite:[nist-SP-800-232] {sect}4.3
 R4-R5, Rule <<KLE-MGR-caller-limits>>).
-// +
-// The caller keeps the limits of cite:[nist-SP-800-232] {sect}4.3 on the use of a key
-// (Rule <<KLE-MGR-caller-limits>>): one tag length over its lifespan, which it sets again
-// after every return to _Ready_, since _Ready_ restores 128,
-// and bounds on failed verifications and on the data processed.
 
 ** [[KLE-Ascon-AEAD128-nonce-setup,nonce setup of Ascon-AEAD128]]The `kl.setst` into _Hash_Absorb_ is of Form C. It takes the nonce from `INPUT` and performs:
 +
@@ -3416,8 +3336,6 @@ No ``kl.exec`` is then needed in this State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-t
 ** A same-State `kl.setst` into _Hash_Absorb_, _Encrypt_, _Decrypt_, _Enc_Last_Block_ or _Dec_Last_Block_, in this
    Machine and in each of its variants, transitions the locker to Error State _Invalid_
    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
-   Repeating the nonce setup, the domain separation or the setting of the final block would create internal states that
-   cite:[nist-SP-800-232] does not define.
 
 ** In State _Encrypt_, (multi-block) ``kl.exec`` instructions are expected to be of Form A.
 "``kl.exec OUTPUT, Kn, INPUT``" encrypts `INPUT` into `OUTPUT`:
@@ -3428,20 +3346,16 @@ No ``kl.exec`` is then needed in this State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-t
  . `OUTPUT <- state[1] @ state[0]`
  . `ASCON(8)`
 --
-** The `kl.setst` into _Enc_Last_Block_ is of Form B. Its auxiliary argument `Xs` is the bit length of the final block.
-`Xs` need not be a multiple of 8 (Rule <<KLE-MGR-last-blk-len>>): cite:[nist-SP-800-232] is written in little-endian bit
-order, so `pad` places the terminating `1` at bit position `Xs` for any `Xs`. The `kl.setst` performs:
+** When entering State _Enc_Last_Block_:
+. a Form B "``kl.setst Kn, #kl_state_enc_last_block, Xs``" gives the bit length `Xs` of the final block, where
+  0 {le} `Xs` {le} 127.
+  `Xs` need not be a multiple of 8 (Rule <<KLE-MGR-last-blk-len>>): cite:[nist-SP-800-232] is written in little-endian
+  bit order, so `pad` places the terminating `1` at bit position `Xs` for any `Xs`;
+. if `Xs` = 0, the `kl.setst` pads the empty final block, `state[0] <- state[0] xor 1` (this is `pad(∅,128)` =
+  `zeros(127) @ 1`), and transitions the locker to _Hash_Output_ instead;
+. otherwise, it sets `last_block_len <- Xs`, and _Enc_Last_Block_ waits for a Form A `kl.exec`, as described next.
 +
---
-. If `Xs` > 127, then: the locker transitions to Error State _Invalid_.
-. If `Xs` is zero, then:
-.. `state[0] <- state[0] xor 1` (this is `pad(∅,128)` = `zeros(127) @ 1`)
-..  The state machine then transitions to State _Hash_Output_.
-. else:
-.. `last_block_len <- Xs`
---
-+
-Only a non-zero `Xs` enters _Enc_Last_Block_, which then waits for a Form A `kl.exec`, as described next.
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
 ** In State _Enc_Last_Block_, exactly one Form A `kl.exec` is expected, to encrypt the last block.
 It performs:
@@ -3476,8 +3390,9 @@ State _Enc_Last_Block_ processes a single block (Rule <<KLE-MGR-single-last-bloc
 +
 State _Hash_Output_ processes a single block (Rule <<KLE-MGR-one-klexec-per-block>>). `KLLEN` must be a multiple of 128,
 whatever `tag_len` is (Rule <<KLE-MGR-granularity>>).
-As a `kl.derive` source (<<KLE-derive-endpoints>>), _Hash_Output_ supplies {lceil}``tag_len``/8{rceil} bytes, the least
-significant bytes that the Form C `kl.exec` would write, and then transitions to _Success_.
+// Not a source for now (<<KLE-derive-endpoints>>):
+// As a `kl.derive` source (<<KLE-derive-endpoints>>), _Hash_Output_ supplies {lceil}``tag_len``/8{rceil} bytes, the least
+// significant bytes that the Form C `kl.exec` would write, and then transitions to _Success_.
 
 ** In State _Decrypt_, (multi-block) ``kl.exec`` instructions are expected to be of Form A.
 "``kl.exec OUTPUT, Kn, INPUT``" decrypts `INPUT` into `OUTPUT`:
@@ -3493,24 +3408,14 @@ significant bytes that the Form C `kl.exec` would write, and then transitions to
 . `OUTPUT <- tmp`
 --
 
-** The `kl.setst` into _Dec_Last_Block_ is of Form B. Its auxiliary argument `Xs` is the bit length of the final block,
-and need not be a multiple of 8, as for _Enc_Last_Block_ (Rule <<KLE-MGR-last-blk-len>>). The `kl.setst` performs:
+** When entering State _Dec_Last_Block_:
+. a Form B "``kl.setst Kn, #kl_state_dec_last_block, Xs``" gives the bit length `Xs` of the final block, where
+  0 {le} `Xs` {le} 127; `Xs` need not be a multiple of 8, as for _Enc_Last_Block_ (Rule <<KLE-MGR-last-blk-len>>);
+. if `Xs` = 0, the `kl.setst` pads the empty final block, `state[0] <- state[0] xor 1` (this is `pad(∅,128)` =
+  `zeros(127) @ 1`), and transitions the locker to _Hash_Verify_ instead;
+. otherwise, it sets `last_block_len <- Xs`, and _Dec_Last_Block_ waits for a Form A `kl.exec`, as described next.
 +
---
-. If `Xs` > 127, then: the locker transitions to Error State _Invalid_.
-//A partial final block of 127 bits is legal:
-//  `Xs` is a truncation of an already-transferred block, not a transfer length, so
-//  <<KLE-truncation-vs-length>> applies and it need not be a multiple of 8. Ascon's
-//  `pad` places the terminating `1` at bit position `Xs` for any `Xs`, because
-//  cite:[nist-SP-800-232] is written in little-endian bit order.
-. If `Xs` is zero, then:
-.. `state[0] <- state[0] xor 1` (this is `pad(∅,128)` = `zeros(127) @ 1`)
-..  The state machine then transitions to State _Hash_Verify_.
-. else:
-.. `last_block_len <- Xs`
---
-+
-Only a non-zero `Xs` enters _Dec_Last_Block_, which then waits for a Form A `kl.exec`, as described next.
+Any other `Xs` transitions the locker to Error State _Invalid_.
 
 ** In State _Dec_Last_Block_, exactly one Form A `kl.exec` is expected, to decrypt the last block.
 It performs:
@@ -3717,10 +3622,12 @@ State Machine::
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Output_ -> _Success_. The `kl.exec` that emits the last digest word makes the
     transition to _Success_ (Rule <<KLE-MGR-machine-transitions>>).
+ ** The Machine does not use _MachinePolicy_: no State is gated (Rule <<KLE-MGR-policy-gate>>), and a `kl.restrictl`
+    that requests a change of _MachinePolicy_ transitions the locker to Error State _Invalid_
+    (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>).
 
 * *Behavior:*
  ** Upon entering State _Ready_:
-  *** The following initialization operations are performed:
    . `state[0] <- 0x0000080100cc0002`
    . `state[1] <- zeros(64)`
    . `state[2] <- zeros(64)`
@@ -3729,19 +3636,18 @@ State Machine::
    . `ASCON(12)`
    . `countdown <- 0`
 
- ** The Machine does not use _MachinePolicy_: no State is gated (Rule <<KLE-MGR-policy-gate>>), and a `kl.restrictl`
-    that requests a change of _MachinePolicy_ transitions the locker to Error State _Invalid_
-    (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>).
+ ** The `kl.setst` into _Hash_Absorb_ is of Form A.
 
-  ** In State _Hash_Absorb_, only (multi-block) ``kl.exec`` instructions of Form B are expected to be issued.
- "``kl.exec Kn, INPUT``" absorbs a data block into the state, i.e.:
+ ** In State _Hash_Absorb_, only (multi-block) ``kl.exec`` instructions of Form B are expected to be issued.
+    "``kl.exec Kn, INPUT``" absorbs a data block into the state, i.e.:
 +
 --
  . `state[0] <- state[0] xor INPUT`
  . `ASCON(12)`
 --
-** The `kl.setst` into _Hash_Absorb_ and into _Hash_Output_ is of Form A. Upon entering _Hash_Output_, `countdown` is set to 3.
-   A same-State `kl.setst` into _Hash_Output_ is not allowed (Rule <<KLE-MGR-no-hash-output-repeat>>).
+
+ ** When entering State _Hash_Output_, by a Form A `kl.setst`: `countdown` {leftarrow} 3.
+    A same-State `kl.setst` into _Hash_Output_ is not allowed (Rule <<KLE-MGR-no-hash-output-repeat>>).
 
 ** In State _Hash_Output_, at most four ``kl.exec`` instructions of Form C
    are expected to be issued. To compute the digest, each "``kl.exec OUTPUT, Kn``" performs, for
@@ -3811,7 +3717,6 @@ The caller also ensures that `len_in_bits(Z)` {le} 2048; the Machine does not ch
 The Elliptic Curve Machines provide:
 
 . Scalar multiplication with known and unknown base point.
-//This can be used to implement Diffie-Hellman key exchange.
 . ECDSA/EdDSA signature generation and verification.
 
 The x25519 and x448 Machines (<<KLE-X25519-X448>>) provide only the former.
@@ -3957,10 +3862,10 @@ The *Provisioning Input* contains only the MDH.
 
 A `kl.restrictl` or `kl.restrictv` that clears both bits of _MachinePolicy_ (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>) erases
 `Signature` and `Hash` and clears `HasSignature` and `HasHash`, since these fields then no longer exist. `RndNum` is never
-held outside _Sign_Generate_, in which clearing _MachinePolicy_[0] transitions the locker to Error State _Invalid_
-(Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
-In State _Output_ with `OutputType` = 1, clearing both bits transitions the locker to Error State _Invalid_
-(Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>), and an SCC with that _State_, that `OutputType` and _MachinePolicy_ = 0 is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
+held outside _Sign_Generate_, in which, after _MachinePolicy_[0] is cleared, the next `kl.exec` transitions the locker to
+Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
+In State _Output_ with `OutputType` = 1, after both bits are cleared, the next `kl.exec` transitions the locker to Error
+State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>), and an SCC with that _State_, that `OutputType` and _MachinePolicy_ = 0 is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
 * *Serialized Content*:
 +
@@ -3985,7 +3890,6 @@ Fields iv to vii follow; Fields v to vii are present only for the values of _Mac
 |   vii   | If _MachinePolicy_[0] = 1: `j`, else: 0   | `RndNum`. Its width is `j`, the nonce length, both here and in the Internal State.
 |===
 
-// `SCC_content_size()` returns the length of the content from Position i to Position vii, that is excluding the MDH.
 Which fields are serialized depends only on _MachinePolicy_, never on _State_ or _StateExtension_ (<<Zkl-ISA-unpriv.adoc#KLE-length-rule>>):
 a field is serialized with whatever it holds, a partial load or an intermediate value included, and its `Has` flag governs only its use.
 
@@ -4060,8 +3964,7 @@ The _Set_ states are _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ a
 * `HasSecondPt`, `HasSignature` and `HasHash` follow Rule <<KLE-MGR-load-long-field>>, and are held in _StateExtension_
   (<<KLE-ECC-StateExtension>>). `HasRndNum`, also held there, is set only while a signature operation holds `RndNum`,
   which is drawn, never loaded (Rule <<KLE-MGR-progress-discard>>).
-* `Generator` and `Scalar` have no flag. `Generator` holds the default of the curve from provisioning until it is
-  replaced, and `Scalar` is zero until it is set. A load of either that is left incomplete zeroes the field
+* `Generator` and `Scalar` have no flag. A load of either that is left incomplete zeroes the field
   (Rule <<KLE-MGR-load-long-field>>): a zero `Generator` is not a valid point, and a zero `Scalar` not a configured
   private key.
 --
@@ -4079,9 +3982,9 @@ The _Set_ states are _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ a
   . by a Form B `kl.setst` whose GPR is non-zero, starts a load: Form B `kl.exec` instructions then load the `ub`/8 bytes of
     `Generator`.
 
- ** Entering _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ or _Set_Signature_ by a Form A `kl.setst` erases the field _X_ that the
-    State sets, `Scalar` becoming zero, and clears ``Has``_X_ where that flag exists. Form B `kl.exec` instructions then load
-    _X_, and ``Has``_X_ is set when the load completes.
+ ** Entering _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ or _Set_Signature_ by a Form A `kl.setst`:
+  . erases the field _X_ that the State sets, `Scalar` becoming zero, and clears ``Has``_X_ where that flag exists;
+  . Form B `kl.exec` instructions then load _X_, and ``Has``_X_ is set when the load completes.
 
  ** A Form B `kl.setst` into _Set_Scalar_:
   . whose GPR holds zero acts as a Form A `kl.setst`;
@@ -4112,9 +4015,10 @@ The bits of `Scalar` beyond the key are zero.
   . If `Generator` is not a valid point, the state transitions to _Failure_.
   . If `Progress` is zero, the per-signature secret `k`, uniformly distributed in [1, `n` − 1], is generated from the RBG
     (<<Zkl-ISA-unpriv.adoc#KLE-Prerequisites>>, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>) as
-    cite:[nist-fips-186-5] Appendix A.3.1 or A.3.2 prescribes, also for SM2. It is stored in `RndNum` as `bin(k, j)`, and
-    `HasRndNum` is set. If `Progress` is non-zero, the interrupted operation is resumed with the `RndNum` held, or
-    restarted (Rule <<KLE-MGR-progress-discard>>).
+    cite:[nist-fips-186-5] Appendix A.3.1 or A.3.2 prescribes, also for SM2; `RndNum` {leftarrow} `bin(k, j)`, and
+    `HasRndNum` is set.
+  . If `Progress` is non-zero, the interrupted operation is resumed with the `RndNum` held, or restarted
+    (Rule <<KLE-MGR-progress-discard>>).
   . The signature (`r`, `s`) is computed as cite:[nist-fips-186-5] {sect}6.4.1 specifies for the NIST and Brainpool curves,
     and as cite:[GMT-0003-2-2012] specifies for SM2, with the retry rules above.
   . `Signature` {leftarrow} (`r`, `s`), and `HasSignature` is set; `RndNum` is destroyed and `HasRndNum` cleared.
@@ -4144,15 +4048,16 @@ The bits of `Scalar` beyond the key are zero.
 
  ** In State _Output_, Form C `kl.exec` instructions emit the output (Rule <<KLE-MGR-load-long-field>>). Once the output is
     complete, the state machine transitions to _Success_, in which no `kl.derive` is admitted.
-  *** This State allows the export of a shared secret through `kl.exec`, so the shared secret defined above is also an
-      unrestricted `kl.derive` source as a field (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> and
-      <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>), any number of times while the locker is in _Output_.
+  *** This State allows the export of the shared secret through `kl.exec`. The shared secret is therefore also an
+      unrestricted `kl.derive` source, as a field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), any number of
+      times while the locker is in _Output_.
       Each transfer reads it from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>): a key
-      field receives its first `eff_length` bytes, and a message input `length` bytes, zero beyond the end of the field
-      (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
-  *** A point or a signature is instead a `kl.exec` output source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>).
-  *** A same-State `kl.setst` in _Output_ zeroes `block_base` and recomputes nothing (Rule <<KLE-MGR-load-long-field>>), so
-      that the output can be emitted, or moved by `kl.derive`, again.
+      field receives its first `eff_length` bytes, and a message input `length` bytes, at most the length of the field
+      rounded up to the granularity of the destination, zero beyond the end of the field
+      (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 5 and <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
+// Not a source for now (<<KLE-derive-endpoints>>):
+//  *** A point or a signature is instead a `kl.exec` output source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>).
+  *** A same-State `kl.setst` in _Output_ zeroes `block_base` and recomputes nothing (Rule <<KLE-MGR-load-long-field>>).
 
  ** Entering _Ready_ by a Form B `kl.setst`: bits 0 to 6 of `Xs` select the fields `Generator`, `Scalar`, `SecondPt`,
     `Hash` and `Signature` to reset, erase or keep; a non-zero bit 7 or above transitions the locker to Error State
@@ -4170,10 +4075,8 @@ The bits of `Scalar` beyond the key are zero.
   . Every field whose bit is clear is kept. A Form A `kl.setst` sets no bit, and so keeps all five fields.
 
  ** `Progress`, bits [13:2] of _MachineUse_, is the field _P_ of Rule <<KLE-MGR-progress-discard>> for _Point_Mul_,
-    _Sign_Generate_ and _Sign_Verify_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>). While an operation is
-    interrupted, every transition of _State_, a same-State `kl.setst` included, `kl.clearads`, and an import that
-    completes without `Content2` zero `Progress`, destroy `RndNum` and clear `HasRndNum`, so that the operation restarts
-    when next issued.
+    _Sign_Generate_ and _Sign_Verify_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>), and `RndNum` is its
+    material: each event of that Rule that zeroes `Progress` also destroys `RndNum` and clears `HasRndNum`.
 
  ** An importing implementation keeps the Auxiliary Data Section only if it trusts the random number generator of the
     originating implementation. Otherwise it discards that Section and `RndNum` (Position vii, if present), and restarts
@@ -4251,7 +4154,8 @@ _Sign_Generate_, _Sign_Verify_, _Set_Hash_ and _Set_Signature_ are not defined: 
 transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-instructions>>).
 
 * *Allowed State Transitions:* the _Set_ states are _Set_Generator_, _Set_Scalar_ and _Set_SecondPt_.
- ** _Ready_ or any _Set_ state -> any _Set_ state, itself included, or -> _Point_Mul_.
+ ** _Ready_ or any _Set_ state -> any _Set_ state, itself included, or -> _Point_Mul_, which requires `Scalar` to hold a
+    configured private key (Rule <<KLE-MGR-policy-gate>>).
  ** _Point_Mul_ -> _Output_ -> _Success_, as in <<KLE-ECC>>, or -> _Failure_ when the result is the all-zero string
     (Rule <<KLE-MGR-config-data-error>>).
 
@@ -4263,10 +4167,6 @@ transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-inst
 ** `Generator`, `SecondPt` and `Scalar` accept every `b`-bit string: no check is made when they are written
    (Rule <<KLE-MGR-check-on-write>>).
 
-** A Form B `kl.setst` to _Set_Scalar_ with a non-zero value in the GPR sets `Scalar` to `b` random bits,
-   as cite:[RFC7748] {sect}6 generates a private key.
-
-** Entering _Point_Mul_ requires `Scalar` to hold a configured private key (Rule <<KLE-MGR-policy-gate>>).
 ** In State _Point_Mul_, a single Form D ``kl.exec Kn`` performs a scalar
    multiplication, in the following steps, which replace those of <<KLE-ECC>>:
 
@@ -4279,8 +4179,7 @@ transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-not-allowed-inst
     `SecondPt`, and _point_ otherwise, and the state transitions to _Output_.
 
 
-** Upon returning to State _Ready_ with a Form B `kl.setst`, Bits 3 and 6 of `Xs` have no effect, since `Hash`
-   and `Signature` do not exist.
+** Entering _Ready_ by a Form B `kl.setst`, bits 3 and 6 of `Xs` have no effect: `Hash` and `Signature` do not exist.
 
 ** Rule <<KLE-MGR-progress-discard>> applies to _Point_Mul_, with no `RndNum` to destroy.
 
@@ -4430,13 +4329,15 @@ State Machine::
       itself; the re-entry is an explicitly allowed same-State transition, which marks a pass boundary;
   *** is left only for _Msg_Absorb_, _Sign_Generate_, _Sign_Verify_, _Ready_ or an Error State; a `kl.setst` naming any
       other State transitions the locker to Error State _Invalid_.
- ** In _Msg_Absorb_, a `kl.restrict*` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>) that clears _MachinePolicy_[0]
-    during signing pass 1 or 2, resp. _MachinePolicy_[1] during the verification pass, transitions the locker to Error
-    State _Invalid_.
+ ** In _Msg_Absorb_, after a `kl.restrictl` or `kl.restrictv` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>) that clears
+    _MachinePolicy_[0] during signing pass 1 or 2, resp. _MachinePolicy_[1] during the verification pass, the next
+    instruction of the pass transitions the locker to Error State _Invalid_
+    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
  ** _MachinePolicy_ = 0 is invalid for EdDSA (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>), at provisioning and as the
     result of a `kl.restrict*`.
  ** These entry conditions (Rule <<KLE-MGR-policy-gate>>) replace those of <<KLE-ECC>>, in addition to the gating by
     _MachinePolicy_:
+  *** _Point_Mul_: `Scalar` holds a configured seed.
   *** _Sign_Generate_: `Scalar` holds a configured seed, and either `msg_pass` = 2 (pure mode) or `msg_pass` = 0 and
       `HasHash` (pre-hash mode).
   *** _Sign_Verify_: `HasSecondPt` and `HasSignature`, and either `msg_pass` = 3 (pure mode) or `msg_pass` = 0 and
@@ -4444,17 +4345,17 @@ State Machine::
 
 * *Behavior:*
 
-** Entering _Point_Mul_ requires `Scalar` to hold a configured seed (Rule <<KLE-MGR-policy-gate>>). In State _Point_Mul_,
-   the Behavior of <<KLE-ECC>> applies, except that the multiplier is the secret scalar `s` derived from the seed
-   (cite:[RFC8032] {sect}5.1.5, resp. {sect}5.2.5, steps 1 to 3): `SecondPt` {leftarrow} `s` {interpunct} `P`.
+** In State _Point_Mul_, the Behavior of <<KLE-ECC>> applies, except that the multiplier is the secret scalar `s`
+   derived from the seed (cite:[RFC8032] {sect}5.1.5, resp. {sect}5.2.5, steps 1 to 3):
+   `SecondPt` {leftarrow} `s` {interpunct} `P`.
 
 ** Signature generation and verification use the base point `B` of cite:[RFC8032] {sect}5.1, resp. {sect}5.2, whatever
    `Generator` holds: `R` {leftarrow} `r` {interpunct} `B`, the public key `A` derived from the seed is
    `s` {interpunct} `B`, and verification checks its equation over `B`. The validity check of `Generator`
    (<<KLE-ECC>>) applies only to _Point_Mul_.
 
-** Signature generation takes two passes over the message, and verification one. `msg_pass` records the open or the
-   completed pass. Entering _Ready_ clears `msg_pass`, `r` and `k'`.
+** Signature generation takes two passes over the message, and verification one. Entering _Ready_ clears `msg_pass`,
+   `r` and `k'`.
 
 ** Entering _Set_Ctx_:
   . A Form B `kl.setst` is used, whose `Xs` sets `ctxlen`; a value greater than 255 transitions the locker to Error State
@@ -4463,9 +4364,9 @@ State Machine::
     _Set_ states of <<KLE-ECC>> do, with the progress recorded in `block_base`.
   . Leaving _Set_Ctx_ before `ctx` is complete zeroes `ctx` and `ctxlen` (Rule <<KLE-MGR-load-long-field>>).
 
-** Entering _Msg_Absorb_ (pure mode only): a Form B `kl.setst` is used, whose `Xs` selects the pass; `Xs` is not the
-   `max_len` of <<KLE-process-VLI>>, which is 0. Entering the State requires bit 0 of _AuxInfo_ to be 1, and each pass has
-   the entry conditions below (Rule <<KLE-MGR-policy-gate>>):
+** Entering _Msg_Absorb_ (pure mode only), by a Form B `kl.setst` whose `Xs` selects the pass, requires bit 0 of
+   _AuxInfo_ to be 1 (Rule <<KLE-MGR-policy-gate>>); `Xs` is not the `max_len` of <<KLE-process-VLI>>, which is 0.
+   Each pass has its own entry conditions (Rule <<KLE-MGR-policy-gate>>) and entry operations:
   . `Xs` = 0, *signing pass 1*: requires that signature generation be allowed and that `Scalar` hold a configured seed;
     `msg_pass` {leftarrow} 0, `k'` {leftarrow} 0, and `H` is initialized with `dom {vvert} prefix`.
   . `Xs` = 1, *signing pass 2*: requires `msg_pass` = 1; `H` is initialized with `dom {vvert} R {vvert} A`, with `R` from
@@ -4575,7 +4476,7 @@ The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized
 The granularity of the ML-KEM Machines is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
 
 In State _sharedkey_Output_, `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves the `sharedkey` that _Encapsulate_ or _Decapsulate_ produced into a second, already provisioned locker.
-The destination is a key field of a symmetric Machine, or the `kl.exec` input of a hash function, MAC or XOF that <<KLE-derive-endpoints>> lists for it (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
+The destination is a key field of a symmetric Machine, or the `kl.exec` input of a hash function, MAC or XOF, that <<KLE-derive-endpoints>> lists as a destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 
 [NOTE]
 ====
@@ -4671,6 +4572,7 @@ ML-KEM Machines define the following States:
     _GenerateKeyPair_, _Encapsulate_, _Decapsulate_, _encapsk_Input_, _decapsk_Input_, _ciphertext_Input_,
     _encapsk_Output_ or _ciphertext_Output_; from _Failure_, only as Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>> allows.
  ** On completion of its `kl.exec`: _GenerateKeyPair_ -> _encapsk_Output_; _Encapsulate_ -> _ciphertext_Output_; _Decapsulate_ -> _sharedkey_Output_.
+ ** When a `SampleNTT` limit is reached (see above): _GenerateKeyPair_, _Encapsulate_ or _Decapsulate_ -> _Failure_.
  ** Once its field has been completely emitted: _encapsk_Output_ -> _Ready_; _ciphertext_Output_ -> _sharedkey_Output_ if `HasSharedKey` is set, as after _Encapsulate_, and -> _Ready_ otherwise.
  ** Once its field has been completely loaded: _ciphertext_Input_ -> _Ready_; _encapsk_Input_ -> _Failure_ if the encapsulation key check fails.
  ** _sharedkey_Output_ is entered only by these transitions (Rule <<KLE-MGR-machine-transitions>>), and by a same-State `kl.setst` (see below).
@@ -4694,34 +4596,29 @@ ML-KEM Machines define the following States:
   . _ciphertext_Input_ zeroes `ciphertext` and `sharedkey`, and clears `HasCiphertext`;
   . _Encapsulate_ or _Decapsulate_ zeroes `sharedkey`.
 
-** A completed load that passes its check (see below) sets:
-  . `HasEncapsk`, for an `encapsk`;
-  . `HasDecapsk`, for a `decapsk`, and also `HasEncapsk` if the embedded `encapsk` passes the encapsulation key check;
-  . `HasCiphertext`, for a `ciphertext`.
-
 ** No `kl.setst` of this Machine takes an auxiliary parameter.
 
 ** The input checks of cite:[nist-fips-203] {sect}7.2 and {sect}7.3 are performed when a field is written
    (Rule <<KLE-MGR-check-on-write>>): when its load completes, and when an import restores a key that `HasEncapsk` or
-   `HasDecapsk` marks as configured. The outcome of a failure depends on the check:
-+
- . When the load of `encapsk` completes, the *encapsulation key check* of cite:[nist-fips-203] {sect}7.2 is performed:
-   the type check (`encapsk` has the length required by the parameter set) and the modulus check (`encapsk` re-encodes
-   to itself, i.e. every coefficient is reduced modulo `q`).
- . When the load of `decapsk` completes, the *decapsulation key check* of cite:[nist-fips-203] {sect}7.3 is performed:
-   the type check and the hash check (the copy of `H(encapsk)` embedded in `decapsk` matches the embedded `encapsk`).
-   The encapsulation key check is also performed on the embedded `encapsk`; its failure only leaves `HasEncapsk`
-   clear.
- . A `kl.setst` that leaves _encapsk_Input_, _decapsk_Input_ or _ciphertext_Input_ before the field is complete zeroes
+   `HasDecapsk` marks as configured.
+   A `kl.setst` that leaves _encapsk_Input_, _decapsk_Input_ or _ciphertext_Input_ before the field is complete zeroes
    the field (Rule <<KLE-MGR-load-long-field>>): `HasEncapsk` and `HasDecapsk`, resp. `HasCiphertext`, stay clear.
- . A failure of the decapsulation key check is a *configuration* error: the locker transitions to Error State
-   _Invalid_.
- . A failure of the encapsulation key check of a loaded `encapsk`, or of an imported one that `HasEncapsk` marks, is a
-   *data* error (Rule <<KLE-MGR-config-data-error>>): the whole `decapsk` field is zeroed, `HasEncapsk` and `HasDecapsk`
-   stay clear, and the state machine transitions to _Failure_.
- . When the load of `ciphertext` completes, the *ciphertext type check* of cite:[nist-fips-203] {sect}7.3 is
-   performed, which a completely loaded `ciphertext` always passes. `HasCiphertext` is then set, and the state machine
-   transitions to _Ready_.
+   The checks and their outcomes are, for each field:
+  . `encapsk`: the *encapsulation key check* of cite:[nist-fips-203] {sect}7.2, that is, the type check (`encapsk` has
+    the length required by the parameter set) and the modulus check (`encapsk` re-encodes to itself, i.e. every
+    coefficient is reduced modulo `q`).
+    A completed load that passes it sets `HasEncapsk`.
+    A failure, of a loaded `encapsk` or of an imported one that `HasEncapsk` marks, is a *data* error
+    (Rule <<KLE-MGR-config-data-error>>): the whole `decapsk` field is zeroed, `HasEncapsk` and `HasDecapsk` stay
+    clear, and the state machine transitions to _Failure_.
+  . `decapsk`: the *decapsulation key check* of cite:[nist-fips-203] {sect}7.3, that is, the type check and the hash
+    check (the copy of `H(encapsk)` embedded in `decapsk` matches the embedded `encapsk`).
+    A failure is a *configuration* error: the locker transitions to Error State _Invalid_.
+    When the load completes, the encapsulation key check is also performed on the embedded `encapsk`.
+    A completed load that passes the decapsulation key check sets `HasDecapsk`, and also `HasEncapsk` if the embedded
+    `encapsk` passes the encapsulation key check; a failure of that check only leaves `HasEncapsk` clear.
+  . `ciphertext`: when the load completes, the *ciphertext type check* of cite:[nist-fips-203] {sect}7.3, which a
+    completely loaded `ciphertext` always passes: `HasCiphertext` is set, and the state machine transitions to _Ready_.
 +
 NOTE: These checks do not affect the implicit rejection of `ML-KEM.Decaps`: a ciphertext that passes the type check but
 does not decapsulate correctly still yields the `z`-derived shared key, and the state machine still transitions to
@@ -4731,6 +4628,9 @@ _sharedkey_Output_.
    _P_ of Rule <<KLE-MGR-progress-discard>>, and, when it is non-zero, the interrupted operation is resumed or restarted as
    per that Rule. Its random values and intermediate values are kept in the ADS
    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>).
+   On completion, the operation destroys the values drawn for it and its intermediate values, except those that its
+   result holds, such as `z` in `decapsk`; values computed from the key alone may be kept as the key is
+   (Rule <<KLE-MGR-recomputed-fields>>) (cite:[nist-fips-203] {sect}3.3).
 
 ** In State _GenerateKeyPair_, a Form D ``kl.exec Kn`` generates a new key pair with `ML-KEM.KeyGen` of
    cite:[nist-fips-203] (Algorithm 19):
@@ -4738,14 +4638,14 @@ _sharedkey_Output_.
     _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
   . Otherwise `decapsk` (and with it `encapsk`) receives the new key pair, `HasEncapsk` and `HasDecapsk` are set, and
     the state machine transitions to _encapsk_Output_, to emit the public key.
-  . Leaving _encapsk_Output_, for _Ready_ or for a State that uses the key pair, keeps the key pair.
+  . Leaving _encapsk_Output_ keeps the key pair, whatever State follows; only entering _encapsk_Input_ or _decapsk_Input_
+    discards it (see below).
 
 ** Entering _Encapsulate_ requires `HasEncapsk` (Rule <<KLE-MGR-policy-gate>>). In it, a Form D ``kl.exec Kn`` applies
    `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20) to `encapsk`:
   . it draws one random value and derives from it both the shared key and the ciphertext, which it stores in
     `sharedkey` and `ciphertext`; `HasCiphertext` is set;
-  . besides a `SampleNTT` limit, it fails only if the RBG fails, since `encapsk` was generated by `ML-KEM.KeyGen` or
-    checked when it was written; the locker then transitions to Error State _Invalid_
+  . besides a `SampleNTT` limit, it fails only if the RBG fails; the locker then transitions to Error State _Invalid_
     (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>);
   . otherwise the state machine transitions to _ciphertext_Output_.
 
@@ -4763,13 +4663,14 @@ _sharedkey_Output_.
    following Rule <<KLE-MGR-load-long-field>>, with the progress recorded in _MachineUse_. Entering _encapsk_Output_
    requires `HasEncapsk`, and entering _ciphertext_Output_ requires `HasCiphertext` (Rule <<KLE-MGR-policy-gate>>).
 
-** No `kl.exec` emits `sharedkey`. Besides an export of the CC, only `kl.derive`
+** No `kl.exec` emits `sharedkey`. Besides the instructions that move or copy the whole CC, an export and import,
+   `kl.clone`, `kl.rename` and `kl.swap`, only `kl.derive`
    (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves it, as a field source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>),
    and only in State _sharedkey_Output_ (<<KLE-derive-endpoints>>):
   . that State admits no `kl.exec`, and any number of `kl.derive` until the caller leaves it;
   . each `kl.derive` reads the field from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>):
     a key field receives its first `eff_length` bytes, and a message input `length` bytes, at least the 32 of the field
-    and zero beyond its end (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>,
+    and at most 32 rounded up to the granularity of the destination, zero beyond the field (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>,
     <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 5 and <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 --
 
@@ -4815,11 +4716,6 @@ For FIPS conformance, cite:[nist-fips-204] ({sect}5.4 and {sect}5.4.1) requires 
 That module may be the KLE unit itself, if the unit is FIPS-140-validated.
 * *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)`. It is embedded in `privkey` (cite:[nist-fips-204] Algorithm 24), where `ML-DSA.KeyGen` places it; the caller computes it from the public key.
 
-// `{fournbsp}{fournbsp}` μ = `SHAKE256(tr {vvert} M', 64)`, where `tr` = `SHAKE256(pk, 64)` and
-//
-// * for pure ML-DSA, `M'` = `0x00 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} M`;
-// * for HashML-DSA, `M'` = `0x01 {vvert} bin(|ctx|, 8) {vvert} ctx {vvert} OID(PH) {vvert} PH(M)`, with `PH` the function that _AuxInfo_ records.
-
 [NOTE]
 ====
 *The caller's duties in forming μ.*
@@ -4839,7 +4735,6 @@ The caller is expected to:
 The Machine cannot check any of these steps: a μ formed with a wrong `tr`, `ctx` or mode yields a signature that the
 intended verifier rejects, or a verification that fails, but it never discloses or weakens the private key.
 ====
-
 
 Data Structures::
 +
@@ -4881,6 +4776,7 @@ which need not implement `PH`. The caller always computes μ with SHAKE256, what
 * Besides `rnd`, the internal state may contain several additional variables, for instance intermediate values of the computation of the NTT.
 Their definition and their size are implementation-dependent.
 An SCC must save them in the ADS, so that an interrupted operation can resume on the same implementation, as Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>> prescribes.
+When an operation completes, it destroys the values drawn for it, `xi` and `rnd` included, and its intermediate values; values computed from the key alone may be kept as the key is (Rule <<KLE-MGR-recomputed-fields>>) (cite:[nist-fips-204] {sect}3.6.3).
 --
 +
 * *Serialized Content*:
@@ -4904,8 +4800,10 @@ Only `HasPrivKey`, `HasPubKey`, `Hedged` and `HasMu`, in _StateExtension_, recor
 A `privkey` with a coefficient of `s1` or `s2` outside [−η, η] (cite:[nist-fips-204] Algorithm 25) is a configuration error:
 the locker transitions to Error State _Invalid_ when `privkey` is written, by a completed load or by an import with `HasPrivKey` set
 (Rule <<KLE-MGR-check-on-write>>).
-Every `pubkey` of the correct length is well formed (cite:[nist-fips-204] Algorithm 23); a `signature` that is malformed (cite:[nist-fips-204] Algorithm 27)
-or does not verify against `mu` is a data error, and the state machine transitions to _Failure_.
+Every `pubkey` of the correct length is well formed (cite:[nist-fips-204] Algorithm 23).
+A `signature` is not checked when it is loaded: as in cite:[nist-fips-204] Algorithm 8, `ML-DSA.Verify_internal` decodes it
+(Algorithm 27), and a malformed `signature`, for which the decoding returns ⊥, is, like one that does not verify
+against `mu`, a data error on which _Sign_Verify_ transitions to _Failure_ (Rule <<KLE-MGR-config-data-error>>).
 --
 
 //
@@ -4920,12 +4818,23 @@ The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204
 * `ML-DSA.Verify_internal(pubkey, mu, signature)` verifies signature `signature` against public key `pubkey` and message representative `mu` (cite:[nist-fips-204] Algorithm 8).
 
 Four loops of these procedures, in `ML-DSA.Sign_internal`, `RejBoundedPoly`, `RejNTTPoly` and `SampleInBall`, iterate an indeterminate number of times (cite:[nist-fips-204] Appendix C).
-Like cite:[nist-fips-204], KLE requires neither a bound on their iterations nor an execution time independent of their number (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
-An implementation that bounds them uses at least the limits of cite:[nist-fips-204] Appendix C.
+An implementation bounds the iterations of each of them by an implementation-defined limit of at least the value of
+cite:[nist-fips-204] Appendix C, Table 3: 814 for `ML-DSA.Sign_internal`, 481 for `RejBoundedPoly`, 298 for `RejNTTPoly`
+and 121 for `SampleInBall`, which a correct execution reaches with probability at most 2^-256^.
+Like cite:[nist-fips-204], KLE requires no execution time independent of the number of iterations
+(<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
 When a limit is reached, the operation ends without output: it destroys its intermediate values and any value drawn for it, and zeroes _MachineUse_.
 The state machine then transitions to _Failure_.
 
 NOTE: With deterministic signing, the execution time may reveal information about μ, but not about the private key (cite:[nist-fips-204] {sect}3.6.1, footnote 3); hedged signing does not.
+
+NOTE: An implementation must not let the values of a rejected iteration of `ML-DSA.Sign_internal`, the challenge `c` and
+the response `z`, or which check rejected it, become observable, through _MachineUse_, side channels or otherwise:
+from the challenges and responses of rejected iterations, the private key can be recovered
+(cite:[DBLP-journals-tches-ZhouWSY25]; see also cite:[DBLP-conf-host-KarabulutAA21] and
+cite:[DBLP-conf-sacrypt-UlitzschMTS22]).
+This is why the progress of _Sign_Generate_ reveals at most the number of completed iterations, which the execution time
+reveals anyway.
 --
 
 State Machine:: {empty}
@@ -4950,7 +4859,7 @@ ML-DSA Machines define:
 
 * *Allowed State Transitions:*
 
-** By `kl.setst`, between any two States listed above, subject to Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>> and to the entry conditions below; _Sign_Output_ is entered only on completion of _Sign_Generate_.
+** By `kl.setst`, between any two States listed above, subject to Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-setst-in-success-failure>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>> and to the entry conditions below; _Sign_Output_ is entered only on completion of _Sign_Generate_ (Rule <<KLE-MGR-machine-transitions>>), and by a same-State `kl.setst`.
 ** On completion of its `kl.exec`: _GenerateKeyPair_ -> _pubkey_Output_; _compute_pubKey_ -> _Ready_; _Sign_Generate_ -> _Sign_Output_; _Sign_Verify_ -> _Success_ or _Failure_.
 ** Once its field has been completely emitted: _pubkey_Output_ -> _Success_; _Sign_Output_ -> _Success_.
 ** When an implementation-defined loop limit is reached (see above): -> _Failure_.
@@ -4971,11 +4880,8 @@ ML-DSA Machines define:
   . the key pair replaces `privkey` (which embeds `tr`) and `pubkey`, and `HasPrivKey` and `HasPubKey` are set;
   . the state machine transitions to _pubkey_Output_, with _MachineUse_ zeroed; leaving it keeps the key pair.
 
-** Entering _privkey_Input_ clears `HasPrivKey` and `HasPubKey` and erases `pubkey`.
-// CC must be a matching pair, and the incoming private key is in general unrelated to
-// the public key that was there before; keeping the latter would leave the CC able to
-// verify under one key while signing under another.
-   When the load completes and `privkey` passes its check (see Serialized Content), `HasPrivKey` is set.
+** Entering _privkey_Input_ clears `HasPrivKey` and `HasPubKey` and erases `pubkey`. When the load completes and
+   `privkey` passes its check (see Serialized Content), `HasPrivKey` is set.
 
 ** Entering _pubkey_Input_ requires `HasPrivKey` to be clear (Rule <<KLE-MGR-policy-gate>>), and clears `HasPubKey`; when
    the load completes, `HasPubKey` is set.
@@ -4992,19 +4898,20 @@ ML-DSA Machines define:
   . writes the derived public key into `pubkey` and sets `HasPubKey`;
   . transitions to _Ready_, which keeps the key pair.
 
-** Entering _Sign_Generate_: a Form B `kl.setst` is used, whose `Xs` selects the signing mode of cite:[nist-fips-204]
-   {sect}3.4:
+** When entering _Sign_Generate_, by a Form B `kl.setst` whose `Xs` selects the signing mode of
+   cite:[nist-fips-204] {sect}3.4:
   . the State requires `HasPrivKey` and `HasMu` (Rule <<KLE-MGR-policy-gate>>);
-  . if the value of `Xs` is zero (for instance, if `Xs` is `X0`), _hedged_ signing is selected and `Hedged` is set;
-  . otherwise *deterministic* signing is selected and `Hedged` is cleared.
+  . `Xs` = 0, for instance with `Xs` = `X0`, selects _hedged_ signing and sets `Hedged`;
+  . any other `Xs` selects *deterministic* signing and clears `Hedged`.
 
 ** In State _Sign_Generate_, a Form D ``kl.exec Kn`` signs with `ML-DSA.Sign_internal` of cite:[nist-fips-204]
-   (Algorithm 7). The operation is long-running, and _MachineUse_ is its field _P_ (Rule <<KLE-MGR-progress-discard>>):
+   (Algorithm 7). The operation is long-running, and _MachineUse_ is its field _P_ (Rule <<KLE-MGR-progress-discard>>),
+   which reveals at most the number of completed iterations of the signing loop:
   . if _MachineUse_ is zero, the operation starts, with `rnd` drawn from an approved RBG
     (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>) if `Hedged` is set, and `rnd` = `zeros(256)` otherwise;
   . if _MachineUse_ is non-zero, the interrupted operation is resumed with the `rnd` held, or restarted
     (Rule <<KLE-MGR-progress-discard>>);
-  . on completion, the output of `ML-DSA.Sign_internal` is written in `signature`, `rnd` is destroyed, and the locker
+  . on completion, the output of `ML-DSA.Sign_internal` is written in `signature`, and the locker
     transitions to _Sign_Output_.
 
 ** Entering _Sign_Verify_ requires `HasPubKey` and `HasMu` (Rule <<KLE-MGR-policy-gate>>). In it, a Form D ``kl.exec Kn``
@@ -5040,40 +4947,52 @@ The following table lists the architected `kl.derive` endpoints of the Machines 
 
 | <<KLE-Ascon-AEAD128-N-masking,Ascon-AEAD128 with Nonce Masking>> | `K1 {vvert} K2` | destination | _Ready_
 
-| <<KLE-GCM-mode,GCM mode>>       | `kl.exec` input (the IV: at most the `len`/8 − `cumul_len`/8 bytes still to absorb, with the granularity of _Set_Aux_Value_), except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Aux_Value_
-
-| <<KLE-OCB-mode,OCB mode>>       | `N` ({lceil}``N_len``/8{rceil} bytes), except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Aux_Value_
+// Not admissible pairs for now:
+// | <<KLE-GCM-mode,GCM mode>>       | `kl.exec` input (the IV: at most the `len`/8 − `cumul_len`/8 bytes still to absorb, with the granularity of _Set_Aux_Value_), except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Aux_Value_
+//
+// | <<KLE-OCB-mode,OCB mode>>       | `N` ({lceil}``N_len``/8{rceil} bytes), except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Aux_Value_
 
 | <<KLE-HMAC,HMAC>>, NIK variant  | `K0`                   | destination | _Set_Key_
 
 | Exactly these hash functions, MACs and XOFs: <<KLE-SHA-2,SHA-2>>, <<KLE-SM3,SM3>>, <<KLE-BLAKE2,BLAKE2>>, <<KLE-SHA-3,SHA-3 and SHAKE>>, <<KLE-HMAC,HMAC>> on SHA-2, SHA-3 and SM3, <<KLE-KMAC,KMAC and KMACXOF>>,
 <<KLE-Ascon-Hash256,Ascon-Hash256>>, <<KLE-Ascon-XOF128,Ascon-XOF128>> and <<KLE-Ascon-CXOF128,Ascon-CXOF128>>
-| `kl.exec` input, also of a shared secret (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>) | destination | _Hash_Absorb_
+| `kl.exec` input, of a shared secret only (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>) | destination | _Hash_Absorb_
 
-| <<KLE-CMAC-mode,CMAC>>, with any 64- or 128-bit block cipher | `kl.exec` input, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts (a derived value cannot end the message: the last block is supplied by `kl.exec` in _Hash_Absorb_Last_Block_) | destination | _Hash_Absorb_
+// Not an admissible pair for now:
+// | <<KLE-CMAC-mode,CMAC>>, with any 64- or 128-bit block cipher | `kl.exec` input, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts (a derived value cannot end the message: the last block is supplied by `kl.exec` in _Hash_Absorb_Last_Block_) | destination | _Hash_Absorb_
 
-.2+| <<KLE-ECC,Elliptic Curve>>
+| <<KLE-ECC,Elliptic Curve>>
 | the shared secret as _Output_ emits it, formed from `SecondPt` (big-endian `Z` for the Weierstrass curves) | source      | _Output_ with `OutputType` = _shared secret_
-| `Scalar`, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Scalar_
+// Not an admissible pair for now:
+// | `Scalar`, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Scalar_
 
 | <<KLE-PQC-ML-KEM,ML-KEM>>       | `sharedkey`            | source      | _sharedkey_Output_
 
-| Any Machine | `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | any State in which Form C `kl.exec` emits output, except ECC _Output_ with `OutputType` = _shared secret_, whose source is the field
+| <<KLE-keystream-modes,Keystream generation>> | the keystream (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Operate_
+
+| <<KLE-CMAC-mode,CMAC>> | the CMAC (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Hash_Output_
+// Before the simplification of the admissible pairs:
+// | Any Machine | `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | any State in which Form C `kl.exec` emits output, except ECC _Output_ with `OutputType` = _shared secret_, whose source is the field
 |===
 
 [NOTE]
 ====
 CMAC cannot receive a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts, for the following reason.
-// A shared secret enters the `kl.exec` input of the hash functions, HMAC, KMAC and the XOFs, but not that of CMAC, whatever its block cipher (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 The caller may know the key of the destination and choose the data around the secret, so the destination must be one-way under a known key.
 CMAC does not satisfy this requirement, being based on a block cipher, which is designed to be pseudorandom only under a secret key. Under a known key `K`, every step `C_i = E_K(C_(i-1) xor M_i)`, the final subkey included, can be inverted.
 The caller thus runs back from the tag to the chaining value after the secret, and knows `C_0`, the one before it.
 A one-block secret is then `E_K^-1^(C_1) xor C_0`; a two-block one `S1 {vvert} S2` leaves `E_K(C_0 xor S1) xor S2` for a key and a `C_0` of the caller's choice.
 ====
 
-A source and a destination form a pair only as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-DRBG-implies-unrestricted>> admit, or as a Machine of this Chapter defines within those Rules.
-An integrated encryption scheme can thus move a shared secret from an ECC or ML-KEM Machine into a cipher key, directly or through a hash function, HMAC, KMAC or XOF that also absorbs auxiliary information.
-Likewise, the `kl.exec` output of another Machine, such as an XOF, can set the IV of GCM or the nonce of OCB unseen by software.
+A source and a destination form a pair only as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-DRBG-implies-unrestricted>> admit.
+For now, the admissible pairs move a shared secret of an ECC or ML-KEM Machine into a key of a symmetric Machine or the
+input of a hash function, HMAC, KMAC or XOF, and the keystream of a keystream Machine or a CMAC into a key of a
+symmetric Machine.
+Every `kl.derive` is uninterruptible (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-uninterruptible-class>>).
+// Before the simplification of the admissible pairs:
+// A source and a destination form a pair only as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-DRBG-implies-unrestricted>> admit, or as a Machine of this Chapter defines within those Rules.
+// An integrated encryption scheme can thus move a shared secret from an ECC or ML-KEM Machine into a cipher key, directly or through a hash function, HMAC, KMAC or XOF that also absorbs auxiliary information.
+// Likewise, the `kl.exec` output of another Machine, such as an XOF, can set the IV of GCM or the nonce of OCB unseen by software.
 
 _Msg_Absorb_ of EdDSA (<<KLE-EdDSA>>) is not an endpoint: feeding it by `kl.derive` would add no flexibility to the protocols that use EdDSA, only software complexity and locker pressure.
 

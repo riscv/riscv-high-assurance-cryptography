@@ -252,8 +252,6 @@ class Sha3:
         s.block_base, s.st = 0, KL_STATE_HASH_OUTPUT  # block[t-1:0] <- finalize() is the identity
 
     def setst(s, immed, form='A', xs=None):
-        if immed in (KL_STATE_SUCCESS, KL_STATE_FAILURE):
-            raise IllegalInstruction  # GR26
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED or not immed:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
@@ -367,42 +365,39 @@ class KeyDest:
     def __init__(s, n): s.st, s.n, s.key = KL_STATE_READY, n, None
     def reset(s): s.st, s.key = KL_STATE_INVALID, None
 
-def kl_derive(dst, src, length, interrupt_at=None):
-    """_Hash_Output_ kl.exec output -> _Hash_Absorb_ kl.exec input (<<KLE-derive-endpoints>>, GR55, GR49)
-    or a KeyDest (GR55, unrestricted)."""
+class Source:
+    """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
+    ML-KEM `sharedkey`, GR54) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR55).  A SHA-3 or
+    SHAKE _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
+    def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
+    def reset(s): s.st = KL_STATE_INVALID
+
+def kl_derive(dst, src, length):
+    """A Source -> the _Hash_Absorb_ kl.exec input (GR54: a shared secret only) or a KeyDest (GR54, GR55);
+    uninterruptible (GR71): it never halts, and retires with klstart = 0."""
     if inert(src.st) or inert(dst.st):  # GR20: an inert endpoint makes it a no-op
         HART.klstart = 0
         return 'noop'
     key = isinstance(dst, KeyDest)
-    bad = [c for c, ok in ((src, src.st == KL_STATE_HASH_OUTPUT),
+    bad = [c for c, ok in ((src, isinstance(src, Source)),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
         c.reset()  # GR50 items 1-2 (no endpoint in _Success_)
     pos, HART.klstart = HART.klstart, 0
-    if not bad and key:
-        if length < dst.n or not src.xof and (src.t - src.block_base) // 8 < dst.n:
-            dst.reset()  # GR50 item 5
-            return 'invalid'
-        dst.key = squeeze(src, dst.n)[1]
-        return 'done'
-    if bad or not length:
-        return 'invalid' if bad else 'done'
-    assert src.xof or 8 * length <= src.t - src.block_base
-    assert pos == 0 or (pos < length and src.block_base == dst.block_base == 0)
-    while pos < length:
-        amount = min(length - pos, (src.t - src.block_base) // 8, (dst.b - dst.block_base) // 8)
-        dst.state ^= sl(src.state, src.block_base + 8 * amount - 1, src.block_base) << dst.block_base
-        src.block_base, dst.block_base, pos = src.block_base + 8 * amount, dst.block_base + 8 * amount, pos + amount
-        points = 0
-        if dst.block_base == dst.b:
-            dst.state, dst.block_base, points = keccak(dst.state), 0, points + 1
-        if src.block_base == src.t and not src.xof:
-            src.st = KL_STATE_SUCCESS
-        elif src.block_base == src.t:
-            src.state, src.block_base, points = keccak(src.state), 0, points + 1
-        if interrupt_at is not None and interrupt_at <= pos < length and points == 2:  # both endpoints
-            HART.klstart = pos
-            return 'interrupted'
+    if bad:
+        return 'invalid'
+    if not (key or src.secret):
+        src.reset()  # GR50 item 3: both
+        dst.reset()
+        return 'invalid'
+    n = len(src.data)  # granularity 8 bits: a hash input receives exactly the secret
+    if pos or (min(length, n) < dst.n if key else length != n):
+        dst.reset()  # GR50 item 5
+        return 'invalid'
+    if key:
+        dst.key = src.data[:dst.n]
+    else:
+        assert dst.exec('B', inp=src.data) == 'done'  # GR49: as kl.exec; the field does not advance
     return 'done'
 
 # ---------------------------------------------------------------- drivers
@@ -633,13 +628,15 @@ for label, name, prep, act in [
     act(cl)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID)
 cl = squeezing('SHA3-224', MSG_ABC)
-check('kl.setst #kl_state_success raises, State kept (GR26)',
-      raises(cl.setst, KL_STATE_SUCCESS) and cl.st == KL_STATE_HASH_OUTPUT)
+check('kl.setst #kl_state_success -> Invalid (GR26, MR1)',
+      (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATE_INVALID))
 cl.setst(KL_STATE_UNCONFIGURED)
 out = bytearray(b'\xaa' * 8)
 check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR19.a, GR34)',
       (cl.exec('C', out=out, sew=8), bytes(out), cl.setst(KL_STATE_READY))
       == ('noop', bytes(8), KL_STATE_UNCONFIGURED))
+check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26, GR19.a)',
+      (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
 for mid in ('_Hash_Absorb_', '_Hash_Output_'):
     cl = absorbing('SHAKE128', MSG_A3[:50])
     if mid == '_Hash_Output_':
@@ -682,45 +679,54 @@ for label, name, n_abs, n_out, want in [
     check(f'export/import round trip, {label}', None, head + squeeze(cl, len(want) - len(head))[1], want)
 
 section('kl.derive')
-src, dst = squeezing('SHAKE128', MSG_ABC), absorbing('SHA3-256', MSG_A3[:10])
-r = kl_derive(dst, src, 336)
-xof = oracle('SHAKE128', MSG_ABC, 400)
-check('SHAKE128 -> SHA3-256 (336 B) completes, klstart = 0', (r, HART.klstart) == ('done', 0))
+SEC, SEC66 = bytes(range(0x40, 0x60)), bytes(range(0x80, 0xc2))  # shared secrets: ML-KEM, P-521 sizes
+src, dst = Source(SEC), absorbing('SHA3-256', MSG_A3[:10])
+r = kl_derive(dst, src, 32)
+check('shared secret (32 B) -> SHA3-256 completes, klstart = 0', (r, HART.klstart) == ('done', 0))
 dst.exec('B', inp=MSG_ABC)
 dst.setst(KL_STATE_HASH_OUTPUT)
-check('[oracle] SHA3-256(a3[:10] || SHAKE128(abc)[:336] || abc) through the open destination', None,
-      squeeze(dst, 32)[1], oracle('SHA3-256', MSG_A3[:10] + xof[:336] + MSG_ABC))
-check('[oracle] the SHAKE128 source continues at byte 336', None, squeeze(src, 64)[1], xof[336:])
-src, dst = squeezing('SHA3-512', MSG_A3), absorbing('SHAKE256')
-r = kl_derive(dst, src, 64)
+check('[oracle] SHA3-256(a3[:10] || secret || abc) through the open destination', None,
+      squeeze(dst, 32)[1], oracle('SHA3-256', MSG_A3[:10] + SEC + MSG_ABC))
+src, dst = Source(SEC66), absorbing('SHAKE256')
+r = kl_derive(dst, src, 66)
 dst.setst(KL_STATE_HASH_OUTPUT)
-check('whole SHA3-512 digest -> SHAKE256: source _Success_', (r, src.st) == ('done', KL_STATE_SUCCESS))
-check('[oracle] SHAKE256(SHA3-512(a3_200))', None, squeeze(dst, 64)[1], oracle('SHAKE256', V('SHA3-512', 'a3_200'), 64))
-src, dst = squeezing('SHAKE128', MSG_A3), absorbing('SHA3-512')
-r1 = kl_derive(dst, src, 600, interrupt_at=1)
-k1 = HART.klstart
-r2 = kl_derive(dst, src, 600)
-dst.setst(KL_STATE_HASH_OUTPUT)
-check('SHAKE128 (t = 168 B) -> SHA3-512 (b = 72 B): halt at the first common point 504, resumed',
-      (r1, k1, r2, HART.klstart) == ('interrupted', 504, 'done', 0))
-check('[oracle] SHA3-512(SHAKE128(a3_200)[:600]) after the interrupted derive', None, squeeze(dst, 64)[1],
-      oracle('SHA3-512', oracle('SHAKE128', MSG_A3, 600)))
-src, dst = squeezing('SHAKE256', MSG_ABC), absorbing('SHA3-224', MSG_ABC)
-snap = (src.state, src.block_base, dst.state, dst.block_base)
-check('length 0: nothing transferred, no state change (GR50 item 7)',
-      kl_derive(dst, src, 0) == 'done' and snap == (src.state, src.block_base, dst.state, dst.block_base))
-dst = squeezing('SHA3-224', MSG_ABC)
+check('[oracle] 66-byte shared secret -> SHAKE256: SHAKE256(secret), the field source unchanged', None,
+      (r, src.st, squeeze(dst, 64)[1]), ('done', KL_STATE_HASH_OUTPUT, oracle('SHAKE256', SEC66, 64)))
+src, dst = squeezing('SHAKE128', MSG_ABC), absorbing('SHA3-256', MSG_A3[:10])
+snap = (dst.state, dst.block_base)
+r = kl_derive(dst, src, 336)
+check('SHAKE128 output in _Hash_Output_ as a source (GR50 item 1): source _Invalid_, destination untouched',
+      (r, src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_ABSORB)
+      and snap == (dst.state, dst.block_base))
+src, dst = Source(bytes(range(16)), secret=False), absorbing('SHA3-256')
+check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR50 item 3), both _Invalid_',
+      (kl_derive(dst, src, 16), src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_INVALID))
+src, dst = Source(SEC), absorbing('SHA3-512')
+HART.klstart = 8
+r = kl_derive(dst, src, 32)
+check('uninterruptible: klstart = 8 at issue (no resumption, GR50 item 5): destination _Invalid_, klstart = 0',
+      (r, dst.st, src.st, HART.klstart) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0))
+res = []
+for length in (0, 31, 33):
+    dst = absorbing('SHA3-224', MSG_ABC)
+    res.append((kl_derive(dst, Source(SEC), length), dst.st))
+check('a 32-byte shared secret with length 0, 31 or 33 (GR50 item 5: exactly the secret, granularity 8 bits): '
+      'destination _Invalid_', None, res, [('invalid', KL_STATE_INVALID)] * 3)
+src, dst = Source(SEC), squeezing('SHA3-224', MSG_ABC)
 squeeze(dst, 28)
-snap = (src.st, src.state, src.block_base)
-r = kl_derive(dst, src, 16)
-check('destination in _Success_ (GR50 item 2): _Invalid_, nothing taken from the source',
-      (r, dst.st) == ('invalid', KL_STATE_INVALID) and snap == (src.st, src.state, src.block_base))
+r = kl_derive(dst, src, 32)
+check('destination in _Success_ (GR50 item 2): _Invalid_, the source untouched',
+      (r, dst.st, src.st) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
 
-src, dst, s224, d224 = squeezing('SHAKE128', MSG_ABC), KeyDest(16), squeezing('SHA3-224', MSG_ABC), KeyDest(32)
-check('GR55: SHAKE128(abc) -> a 16-byte `key` in _Ready_ (length 32: 16 B), the XOF continues at '
-      'byte 16; SHA3-224 (28 B) -> a 32-byte key (GR50 item 5): destination _Invalid_, source untouched', None,
-      (kl_derive(dst, src, 32), dst.key, squeeze(src, 16)[1], kl_derive(d224, s224, 32), d224.st, s224.st),
-      ('done', xof[:16], xof[16:32], 'invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
+src, dst, s28, d28 = Source(SEC), KeyDest(16), Source(SEC[:28]), KeyDest(32)
+h, dh, cm, dc = squeezing('SHAKE128', MSG_ABC), KeyDest(16), Source(SEC[16:], secret=False), KeyDest(16)
+check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte secret -> a 32-byte key (GR50 item 5): '
+      'destination _Invalid_, source untouched; SHAKE128(abc) -> a key (GR50 item 1): source _Invalid_, key '
+      'untouched; a CMAC -> a key (GR55): the CMAC', None,
+      (kl_derive(dst, src, 32), dst.key, kl_derive(d28, s28, 32), d28.st, s28.st, kl_derive(dh, h, 16), h.st, dh.st,
+       kl_derive(dc, cm, 16), dc.key),
+      ('done', SEC[:16], 'invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 'invalid', KL_STATE_INVALID,
+       KL_STATE_READY, 'done', SEC[16:]))
 
 section('Final piece of any bit length: _Hash_Absorb_Last_Block_ (NIST CAVP bit-oriented vectors)')
 

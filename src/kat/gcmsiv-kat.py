@@ -237,14 +237,17 @@ class Siv:
         s.klstart = 0
         return out
 
-    def derive(s, src, length):
-        """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready."""
+    def derive(s, src, length, klstart=0):
+        """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready, from the bytes of a listed source
+        (a shared secret, a keystream or a CMAC); uninterruptible (GR71.a)."""
         if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
             return                                       # Gate Order Rule
-        if isinstance(src, Siv):                         # GR50 item 1: no State emits Form C output (the tag
-            return src._invalid()                        # comes from a Form A kl.exec)
-        if s.key_type or s.state != READY or length < s.k // 8:
-            return s._invalid()                          # GR53 (GR50 item 2); GR50 items 2, 5
+        if isinstance(src, Siv):                         # GR50 item 1: GCM-SIV is no source, its tag included
+            return src._invalid()
+        if s.key_type or s.state != READY:
+            return s._invalid()                          # GR53 (GR50 item 2); GR50 item 2
+        if klstart or length < s.k // 8 or len(src) < s.k // 8:
+            return s._invalid()                          # GR50 item 5: the key loaded in full
         s.key = src[:s.k // 8]
         s._derive()                                      # MR4
 
@@ -700,25 +703,29 @@ for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
 section('kl.derive (<<KLE-derive-endpoints>>, GR50, GR53; MR4)')
-src = bytes.fromhex(VECTORS[11]['key'])
+src = bytes.fromhex(VECTORS[11]['key'])                 # the bytes of a listed source (shared secret, keystream, CMAC)
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
     m = Siv.provisioned(bytes(len(kx)))
     m.derive(kx + src[len(kx):], n)
     check(f'{n} bytes into `key` (k = {8 * len(kx)}) in Ready: {VECTORS[i]["src"]}', kl_encrypt(None, nx, ax, px, m=m)[0] == wx)
-for name, m, n in (('in Hash_Absorb (GR50 items 1-2)', at('ha'), 16),
-                   ('in Set_Aux_Value (nonce is no endpoint, GR50 items 1-2)', at('sav'), 12),
-                   ('in Success (GR50 items 1-2)', at('success'), 16),
-                   ('into a key configured by a SKID (GR53, GR50 item 2)', Siv.provisioned(skid=SKID), 16),
-                   ('of 8 bytes into a 128-bit key (GR50 item 5)', Siv.provisioned(K), 8),
-                   ('of 16 bytes into a 256-bit key (GR50 item 5)', Siv.provisioned(K256), 16),
-                   ('of 0 bytes into a key (GR50 item 5)', Siv.provisioned(K), 0)):
-    m.derive(src, n)
+P = Siv.provisioned
+for name, m, s_, n, ks in (('in Hash_Absorb (GR50 item 2)', at('ha'), src, 16, 0),
+                           ('in Set_Aux_Value (nonce is no endpoint, GR50 item 2)', at('sav'), src, 12, 0),
+                           ('in Success (GR50 item 2)', at('success'), src, 16, 0),
+                           ('into a key configured by a SKID (GR53, GR50 item 2)', P(skid=SKID), src, 16, 0),
+                           ('of 8 bytes into a 128-bit key (GR50 item 5)', P(K), src, 8, 0),
+                           ('of 16 bytes into a 256-bit key (GR50 item 5)', P(K256), src, 16, 0),
+                           ('of 0 bytes into a key (GR50 item 5)', P(K), src, 0, 0),
+                           ('from a 12-byte source into a 128-bit key (GR50 item 5)', P(K), src[:12], 16, 0),
+                           ('with klstart = 8 (uninterruptible, GR71.a; GR50 item 5)', P(K), src, 16, 8)):
+    m.derive(s_, n, ks)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
-s_, m = at('etf'), Siv.provisioned(K)
-m.derive(s_, 16)
-check('Enc_Tag_Finalize as a kl.derive source (no Form C output: the tag comes from a Form A kl.exec; GR50 item 1) '
-      '-> only the source Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
+for where in ('etf', 'success'):
+    s_, m = at(where), Siv.provisioned(K)
+    m.derive(s_, 16)
+    check(f'GCM-SIV in {"Enc_Tag_Finalize" if where == "etf" else "Success"} as a kl.derive source (its tag is no '
+          'source; GR50 item 1) -> only the source Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
 section('negative controls, spec notes')
 k2, n2, a2, p2, w2 = vec(1)
