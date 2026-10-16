@@ -2702,7 +2702,7 @@ the MDH followed by `SIV` and, when present, `IMPQUAL` and `SIV2`, as _ContentOf
 Finally, the last format is used for CCs in an Error State.
 
 Definition: _Error-State image_.::
-The MDH alone: its export reads the MDH, without `kl.mgmt`, and its import is a single `kl.mgmt` (<<KLE-error-state-transfer>>).
+The exported image of an Error-State locker is the MDH alone: its export consists in reading the MDH from the locker, without `kl.mgmt`, and writing it to memory; its import is a single `kl.mgmt` (<<KLE-error-state-transfer>>).
 
 Before opening an export, software saves the locker's MDH as `ml`; an import takes `ml` from the image.
 The export- or import-completing `kl.mgmt` receives `ml` and restores its _State_, so software keeps an implicit stack of _State_ values, one per nesting level; completing a base operation leaves the locker in a Complete State (Rule <<KLE-GR-completion-state>>).
@@ -2733,7 +2733,7 @@ The transferred part of `S` ends at `image_end` = _ContentOffset_ + min(`content
 === Length of External Formats and KLF Capacity Usage of a Locker
 
 [horizontal]
-[[KLE-GR-image-length,GR81]]GR81:: _Image length:_ The length of an external image depends only on fields in bits [63:0] of its MDH:
+[[KLE-GR-image-length,GR81]]GR81:: _Image length:_ The length of an external image depends only on fields in bits [63:0] of its MDH, as follows:
 +
 * a PI: _Machine_, _MachinePolicy_ and _KeyType_;
 * an SCC: _Machine_, _MachinePolicy_, _KeyType_, _StateExtension_, _AuxDataLen_ and _ADSDropped_ (<<KLE-Auxiliary-Data-Section>>), not _State_ or _SCProtection_ (Rule <<KLE-GR-single-share>>);
@@ -2753,7 +2753,7 @@ The transferred part of `S` ends at `image_end` = _ContentOffset_ + min(`content
 (((KLE, Machine, side-channel protection variants)))Architecturally every value is a single share: a side-channel-protected Machine is an implementation variant of the unprotected one, distinguished only by the _SCProtection_ field of the MDH.
 The reconstruction may be only conceptual, and is protected as <<KLE-KLF>> recommends.
 
-NOTE: Reconstructing or re-randomizing a key is usually cheap, for instance when a block cipher in counter mode generates the masks; an implementation with a slower mask generator may keep shares or masks in the ADS.
+NOTE: Reconstructing or re-randomizing a key is usually an inexpensive operation, for instance when a block cipher in counter mode generates the masks; an implementation with a slower mask generator may keep shares or masks in the ADS.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2831,8 +2831,8 @@ This does not apply to configuring a locker directly into an Error State from `m
 
 [NOTE]
 ====
-The locker is zeroized and its Content deallocated before any check that can cause the operation to fail. Zeroizing first gives every way the instruction can end, success, Error State or exception, the same outcome: the old content is destroyed and `klnamedlocker` names the locker (Rules <<KLE-GR-klnamedlocker-updates>> and <<KLE-exception-state-change>>).
-It also lets the capacity check count the locker's own allocation as free, so that a CC can be reconfigured in place, and lets a handler that emulates an unsupported Machine (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>) find its target zeroized and named, even for `KLNL`.
+Clearing the locker before any check that can fail guarantees that any failure has the same effect: the old content is destroyed and `klnamedlocker` names the locker (Rules <<KLE-GR-klnamedlocker-updates>> and <<KLE-exception-state-change>>).
+The capacity check then counts the locker's own allocation as free.
 ====
 
 ==== Export-Opening kl.mgmt
@@ -2869,14 +2869,14 @@ When completing an import or an export, it consumes only the _State_ field of th
 On completing an SCC import or a locker export, authentication is checked only if setting locker.MDH._State_ to `ml`._State_ restores a Complete State; the probability of accepting an incorrect _State_ is negligible.
 A nested completion checks only the base type, without authentication.
 
-If locker.MDH._State_ is `kl_cfg_importing` or `kl_cfg_exporting`, `ml`._State_ must be a Complete State or a Configuration State of base type `scc`, i.e., `kl_cfg_importing` or `kl_cfg_exporting`; if it is `kl_cfg_ppi_importing` or `kl_cfg_ppi_exporting`, `ml`._State_ must be a Configuration State of base type `pi`, i.e., `kl_cfg_provisioning`, `kl_cfg_ppi_importing` or `kl_cfg_ppi_exporting` (<<KLE-management-formats-and-states>>).
-For a locker whose MDH has _Version_ = 3, `ml`._State_ must instead be _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`.
-Any other `ml`._State_, including a Complete State for a locker of base type `pi` and the values 61–63, raises an illegal-instruction exception.
-A Complete `ml`._State_ is accepted only for a locker of base type `scc`, so the clear `Content` of a partially provisioned locker becomes usable only by completing its provisioning.
+The completing `kl.mgmt` admits these values of `ml`._State_ (<<KLE-management-formats-and-states>>); any other, 61–63 included, raises an illegal-instruction exception:
 
-* *Provisioning-Completing kl.mgmt.*
-+
---
+* a locker whose MDH has _Version_ = 3: _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`;
+* otherwise, a locker of base type `scc` (`kl_cfg_importing` or `kl_cfg_exporting`): a Complete State, `kl_cfg_importing` or `kl_cfg_exporting`;
+* a locker of base type `pi` (`kl_cfg_ppi_importing` or `kl_cfg_ppi_exporting`): `kl_cfg_provisioning`, `kl_cfg_ppi_importing` or `kl_cfg_ppi_exporting`, never a Complete State, so the clear `Content` of a partially provisioned locker becomes usable only by completing its provisioning.
+
+===== Provisioning-Completing kl.mgmt
+
 No MDH saved at provisioning start is needed: Forms C and D of `kl.mgmt` ignore their auxiliary input.
 
 Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if locker.MDH._State_ is `kl_cfg_provisioning` and either field is non-zero, the locker transitions to Error State _Invalid_, and the instruction terminates.
@@ -2890,11 +2890,9 @@ The operation makes the provisioned locker available to software by:
 
 If a process is preempted during provisioning, `kl.store` or `kl.mvout` exports only the original PI information, unencrypted.
 Only the provisioning-completing `kl.mgmt` may therefore generate secret random material needed to configure the locker, retrieve key material from the SKS, or derive, expand or re-share that material, so that no such material is exposed in an unencrypted export of a partially provisioned locker.
---
 
-* *Import-Completing kl.mgmt.*
-+
---
+===== Import-Completing kl.mgmt
+
 Software uses Form A, C or D of `kl.mgmt` to supply the value `ml` saved when the import started.
 The image authenticated as ``AD[0]`` is the MDH held in the target locker, i.e., the one carried in the SCC and loaded when the import started, with its _State_ restored from `ml` and _ADSDropped_ cleared only in the copy used for authentication (<<KLE-SCC-import>>).
 
@@ -2907,10 +2905,9 @@ The image authenticated as ``AD[0]`` is the MDH held in the target locker, i.e.,
 .... The KLE unit performs the checks that the Machine attaches to the fields that the import restores (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>); a failed check transitions the locker as when completing a provisioning (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>).
 This makes the locker available to software.
 ... Otherwise (the import of the export of a partially configured locker, or of a nested export), locker.MDH._State_ is set to `ml`._State_.
---
 
 [[KLE-mgmt-completes-export]]
-==== Export-Completing kl.mgmt
+===== Export-Completing kl.mgmt
 
 Software uses Form A, C or D of `kl.mgmt` to supply the MDH value `ml` saved when the export began. Then:
 
