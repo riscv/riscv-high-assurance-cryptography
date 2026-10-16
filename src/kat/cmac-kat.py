@@ -80,8 +80,8 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L, s.b)
         return L, K1, s.nc['dbl'](K1, s.b)
-    # (immed, Form) -> States it is allowed from (none for _Hash_Output_: MR17)
-    SETST = {(ABSORB, 'A'): (READY, ABSORB), (LAST, 'B'): (ABSORB, LAST),
+    # (immed, Form) -> States it is allowed from; no same-State kl.setst (GR23): no State loads a field (MR9)
+    SETST = {(ABSORB, 'A'): (READY,), (LAST, 'B'): (ABSORB,),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
         if s.state in ERROR_STATES:               # GR19.a
@@ -92,8 +92,6 @@ class Cmac:
         if s.state not in s.SETST.get((immed, form), ()):
             s._invalid('transition')              # MR1, GR27
         if immed == LAST:
-            if s.absorbed_all:
-                s._invalid('a second last block')  # GR23: the same-State kl.setst is forbidden
             if aux > s.b or aux % 8:
                 s._invalid('Xs')
             s.last_block_len = aux
@@ -340,6 +338,9 @@ INVALID_CASES = [
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=1)), lambda c: c.setst(VERIFY, 'B', B)),
     ("same-State kl.setst #hash_last_block after the last block (GR23)", lambda: run(K128, MSG[:40], to=None),
      lambda c: c.setst(LAST, 'B', 0)),
+    ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR23)", last_set,
+     lambda c: c.setst(LAST, 'B', 64)),
+    ("same-State kl.setst #hash_absorb (GR23)", at_absorb, lambda c: c.setst(ABSORB)),
     ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR2)",
      lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)), lambda c: c.exec('B', 0, 64)),
     ("kl.exec Form C in Hash_Verify", lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)),
@@ -354,7 +355,7 @@ INVALID_CASES = [
     ("second tag kl.exec, in Success (GR28)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (GR27)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (GR27)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
-    ("MR17: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("GR23: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
 ]
 for name, mk, act in INVALID_CASES:
     cl = mk()

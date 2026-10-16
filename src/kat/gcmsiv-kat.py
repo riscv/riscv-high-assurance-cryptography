@@ -96,11 +96,10 @@ def SCC_KeyDeriv(key, nonce):
     A = [sl(enc_blk(key, cat((nonce, 96), (bin_(i, 32), 32))), 63, 0) for i in range(6)]
     return cat(*((A[i], 64) for i in (5, 4, 3, 2))), cat((A[1], 64), (A[0], 64))
 
-# kl.setst Forms of the listed transitions; none enters Encrypt (reached by the ETF kl.exec)
-FORMS = {(READY, SAV): 'C', (SAV, SAV): 'C', (SAV, SAV2): 'C', (SAV2, SAV2): 'C', (SAV, HA): 'A',
-         (SAV2, HA): 'A', (HA, HA): 'A', (HA, ETF): 'A', (ETF, ETF): 'A', (HA, DEC): 'A',
-         (DEC, DEC): 'A', (ENC, ELB): 'B', (ELB, ELB): 'B', (DEC, DLB): 'B', (DLB, DLB): 'B',
-         (DEC, DTF): 'A', (DLB, DTF): 'A', (DTF, DTF): 'A'}
+# kl.setst Forms of the listed transitions; none enters Encrypt (reached by the ETF kl.exec). No State loads a
+# field by kl.exec (MR9), so no same-State kl.setst is admitted (GR23, GR26)
+FORMS = {(READY, SAV): 'C', (SAV, SAV2): 'C', (SAV, HA): 'A', (SAV2, HA): 'A', (HA, ETF): 'A', (HA, DEC): 'A',
+         (ENC, ELB): 'B', (DEC, DLB): 'B', (DEC, DTF): 'A', (DLB, DTF): 'A'}
 
 class Siv:
     """A GCM-SIV locker; MDH reduced to State, MachinePolicy (bit 0 encrypt, bit 1 decrypt),
@@ -164,8 +163,6 @@ class Siv:
             return s._ready()
         if st in (SUCC, FAIL) or FORMS.get((st, immed)) != form:
             return s._invalid()                          # GR28/GR27, MR1
-        if st == immed and st in (ELB, DLB) and not s.last_block_len:
-            return s._invalid()                          # GR23: no second final block (MR10)
         if immed in (ETF, DEC) and not s.policy & (1 if immed == ETF else 2):
             return s._invalid()
         if immed == SAV:
@@ -511,7 +508,13 @@ for i, v in enumerate(VECTORS):
 section('Set_Aux_Value, Set_Aux_Value_2, Encrypt only via Enc_Tag_Finalize')
 m = Siv.provisioned(k5)
 m.setst(SAV, 'C', b2v(bytes(range(12))))
-check('Set_Aux_Value repeated: nonce overwritten, keys re-derived (C.1 #15)', kl_encrypt(k5, n5, a5, p5, m=m)[0] == w5)
+m.setst(SAV, 'C', b2v(n5))
+inv = m.state == INV
+m = Siv.provisioned(k5)
+m.setst(SAV, 'C', b2v(bytes(range(12))))
+m.setst(READY)
+check('GR23: same-State kl.setst into Set_Aux_Value -> _Invalid_ (the nonce is set by kl.setst, not loaded under '
+      'MR9); after Ready, a new nonce re-derives the keys (C.1 #15)', inv and kl_encrypt(k5, n5, a5, p5, m=m)[0] == w5)
 m = opened(k5, b2v(n5) | 0xDEADBEEF << 96, a5)
 absorb(m, p5)
 m.setst(ETF)
@@ -519,11 +522,15 @@ check('nonce <- INPUT[95:0]: higher INPUT bits ignored', v2b(m.exec('A', len_blo
 m = Siv.provisioned(k5)
 m.setst(SAV, 'C', b2v(n5))
 m.setst(SAV2, 'C', 0x1234)
+m.setst(SAV2, 'C', b2v(w5[-16:]))
+inv = m.state == INV
+m = Siv.provisioned(k5)
+m.setst(SAV, 'C', b2v(n5))
 m.setst(SAV2, 'C', b2v(w5[-16:]) | 0x77 << 200)
 siv = m.SIV
 m.setst(READY)
-check('Set_Aux_Value_2 repeated overwrites SIV; a 256-bit INPUT keeps its 128 LSBs (MR7)',
-      siv == b2v(w5[-16:]) and kl_decrypt(k5, n5, a5, w5, m=m) == (SUCC, p5))
+check('GR23: same-State kl.setst into Set_Aux_Value_2 -> _Invalid_; a 256-bit INPUT keeps its 128 LSBs (MR7)',
+      inv and siv == b2v(w5[-16:]) and kl_decrypt(k5, n5, a5, w5, m=m) == (SUCC, p5))
 s0, s1 = kl_decrypt(k5, n5, a5, w5[:-16] + bytes(16)), kl_decrypt(k5, n5, a5, w5, set_siv=False)
 check('skipping Set_Aux_Value_2 equals setting SIV to zero', s0 == s1 and s0[0] == FAIL)
 m = opened(K, b2v(N), siv=bytes.fromhex(VECTORS[1]['ct_tag'])[-16:])
@@ -584,13 +591,14 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_block_len clear (MR8); '
           'a second kl.exec -> _Invalid_, output zeroed (MR10)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
-    m = at(where)
+    m, m2 = at(where), at(where)
     m.setst(last, 'B', 64)
     m.setst(last, 'B', 32)
-    ok = m.last_block_len == 32 and m.exec('A', b2v(bytes(range(1, 17))), 128)
-    m.setst(last, 'B', 32)
-    check(f'GR23: same-State kl.setst into {nm}_Last_Block replaces last_block_len before its kl.exec, '
-          'and is _Invalid_ after it (MR10)', ok and m.state == INV)
+    m2.setst(last, 'B', 32)
+    ok = m2.exec('A', b2v(bytes(range(1, 17))), 128)
+    m2.setst(last, 'B', 32)
+    check(f'GR23: same-State kl.setst into {nm}_Last_Block -> _Invalid_, before its kl.exec and after it (MR10)',
+          ok and (m.state, m2.state) == (INV, INV))
 k10, n10, a10, p10, w10 = vec(9)
 m = opened(k10, b2v(n10))
 m.exec('B', b2v(p10), 384, None, 2)
@@ -649,12 +657,12 @@ m.setst(EXPIRED)
 out = m.exec('A', 0x1234, 128)
 m.setst(READY)
 check('GR32/GR19.a: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
-m = at('ha')
+m, m2 = at('ha'), at('ha')
 m.setst(HA)
-absorb(m, a5)
-m.setst(DEC)
-m.setst(DEC)
-check('GR23: same-State kl.setst in Hash_Absorb and Decrypt', m.state == DEC)
+absorb(m2, a5)
+m2.setst(DEC)
+m2.setst(DEC)
+check('GR23: same-State kl.setst in Hash_Absorb and Decrypt -> _Invalid_', (m.state, m2.state) == (INV, INV))
 check('Enc_Tag_Finalize: 128 LSBs of a 256-bit INPUT; OUTPUT[255:128] clear',
       v2b(at('etf').exec('A', LB0 | 0xFF << 140, 256), 32) == W1 + bytes(16))
 check('Dec_Tag_Finalize: 128 LSBs of a longer INPUT', kl_decrypt(K, N, b'', W1, lb=LB0 | 0xFF << 140)[0] == SUCC)

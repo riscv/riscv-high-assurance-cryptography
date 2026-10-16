@@ -5,7 +5,7 @@ record), including the external-mu interface the unit exposes, and a model of an
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips204 as D  # noqa: E402
-from common import (ERROR_STATES, MDH_FIELD, IllegalInstruction, LoopBound, check, control, done, info,  # noqa: E402
+from common import (ERROR_STATES, MDH_FIELD, LoopBound, check, control, done, info,  # noqa: E402
                     mdh_pack, raises, section, sl, spec_note, KL_STATE_READY as READY,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID)
 
@@ -62,6 +62,7 @@ class MLDSALocker:
         self.put('State', INVALID)
         self.privkey = self.pubkey = b''
         self.clear()
+        self.use = 0                               # MR6: P zeroed on a transition to an Error State
 
     def setst(self, st, aux=None):
         """Form A (aux None) or Form B (aux = Xs)."""
@@ -73,9 +74,11 @@ class MLDSALocker:
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
                 or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR11
+                or st == SIGN_IN and not pol & 2                                   # MR11: _Sign_Input_ gated by [1]
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
                 or st == PK_IN and self.flag('HasPrivKey')                       # pubkey from compute_pubKey
-                or st == SIGN_OUT and self.state != SIGN_OUT):          # entered only from _Sign_Generate_
+                or st == SIGN_OUT                                       # entered only from _Sign_Generate_
+                or st == self.state != READY and st not in IN_F):       # GR23: only a load restarts (MR9)
             return self.invalid()
         name = IN_F.get(self.state)
         if name and st != self.state and self.use < self.size(name):     # MR9: a load left incomplete
@@ -98,8 +101,17 @@ class MLDSALocker:
         elif st == PK_IN:
             self.set_flag('HasPubKey', 0)
 
+    GATE = {SIGN_GEN: 1, SIGN_OUT: 1, SIGN_IN: 2, SIGN_VERIFY: 2}   # MR11: the States that follow uniquely
+
+    def gated(self):                               # GR29: a narrowing takes effect at the next instruction
+        bit = self.GATE.get(self.state)
+        if bit and not self.get('MachinePolicy') & bit:
+            self.invalid()
+            return True
+        return False
+
     def exec_B(self, data):                        # Form B in a loading State (MR9, W in bytes)
-        if self.state in ERROR_STATES:
+        if self.state in ERROR_STATES or self.gated():
             return 0
         name, w = IN_F.get(self.state), self.use
         if name is None or w >= self.size(name):
@@ -119,6 +131,8 @@ class MLDSALocker:
         return n
 
     def exec_C(self, n):                           # Form C in an emitting State (MR9)
+        if self.state not in ERROR_STATES and self.gated():
+            return bytes(n)                        # GR34: the output window is zeroed
         name, w = OUT_F.get(self.state), self.use
         if self.state in ERROR_STATES or name is None or w + n > self.size(name):
             if self.state not in ERROR_STATES:
@@ -134,6 +148,8 @@ class MLDSALocker:
     def exec_D(self, xi=None, halt_after=None):
         """Form D; halt_after=n halts _Sign_Generate_ after n loop iterations.  Returns 'halted' or None.
         A loop limit reached ends the operation without output in _Failure_ (<<KLE-PQC-ML-DSA>>)."""
+        if self.state not in ERROR_STATES and self.gated():
+            return None
         try:
             return self._exec_D(xi, halt_after)
         except LoopBound:
@@ -327,6 +343,16 @@ def t_mdh():
         cc = generated(policy=pol)
         cc.setst(st, 1 if st == SIGN_GEN else None)
         check(f'{name} clear: _Invalid_', cc.state == INVALID)
+    cc = generated(policy=0b01)
+    cc.setst(SIGN_IN)
+    so = generated()
+    so.setst(MU_IN); so.exec_B(bytes(64)); so.setst(SIGN_GEN, 1); so.exec_D()
+    so.restrictl_policy(0b01)
+    kept = so.state
+    so.exec_C(16)
+    check('MR11: _Sign_Input_ gated by MachinePolicy[1] (sign-only -> _Invalid_); _Sign_Output_ by MachinePolicy[0]: '
+          'cleared there, the State is kept and the next kl.exec -> _Invalid_ (GR29)', (cc.state, kept, so.state)
+          == (INVALID, SIGN_OUT, INVALID))
     for imm in (SUCCESS, FAILURE):
         cc = MLDSALocker(44)
         check(f'kl.setst #{imm} -> Invalid (GR26, MR1)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
@@ -387,10 +413,18 @@ def t_state_machine():
     c5.setst(READY)
     c5.exec_D()
     check('Form D kl.exec in _Ready_: _Invalid_ (GR24)', c5.state == INVALID)
-    cc.setst(PK_OUT)
-    check('entering _pubkey_Output_ zeroes MachineUse', cc.use == 0)
-    check('_pubkey_Output_ emits the ACVP pubkey, then _Success_ (MR9)',
+    c3 = generated()
+    c3.exec_C(512)
+    c3.setst(PK_OUT)
+    check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR23, GR26)', c3.state == INVALID)
+    check('_pubkey_Output_, entered by the Machine, emits the ACVP pubkey, then _Success_ (MR9)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
+    cc = generated()
+    cc.setst(MU_IN)
+    cc.exec_B(bytes(32))
+    cc.setst(PK_OUT)
+    check('entering _pubkey_Output_ by kl.setst zeroes MachineUse; the pubkey is emitted again', cc.use == 0
+          and b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
     check('kl.exec after the field is complete (now in _Success_): _Invalid_, OUTPUT zeroed (GR28)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
@@ -562,9 +596,16 @@ def t_progress():
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
     cc.setst(SIGN_GEN, 0)
+    check('same-State kl.setst in a halted _Sign_Generate_: _Invalid_, P zeroed, rnd destroyed (GR23, GR26, GR30)',
+          cc.state == INVALID and cc.use == 0 and cc.rnd == bytes(32))
+    cc, rbg = armed()
+    cc.exec_D(halt_after=0)
+    cc.setst(MU_IN)
+    cc.exec_B(h(hed['mu']))
+    cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('same-State kl.setst discards the held rnd: a fresh draw follows', rbg.draws == 2 and cc.signature
-          == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(range(32)), 44))
+    check('re-entered through _mu_Input_: the held rnd discarded, a fresh draw follows', rbg.draws == 2
+          and cc.signature == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(range(32)), 44))
     cc, rbg = armed(1)
     cc.exec_D(halt_after=0)
     check('halted deterministic signing: rnd zero, P != 0, nothing drawn', cc.rnd == bytes(32) and cc.use != 0
@@ -572,6 +613,10 @@ def t_progress():
     cc.exec_D()
     check('it resumes to the deterministic signature', cc.state == SIGN_OUT and cc.signature
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
+    cc.exec_C(64)
+    cc.setst(SIGN_OUT)
+    check('same-State kl.setst in _Sign_Output_ part-way: _Invalid_, no re-emission (GR23, GR26)',
+          cc.state == INVALID and cc.signature == b'')
 
 def t_loop_bounds():
     section('Loop limits (FIPS 204 Appendix C): the operation ends without output in _Failure_ (<<KLE-PQC-ML-DSA>>)')

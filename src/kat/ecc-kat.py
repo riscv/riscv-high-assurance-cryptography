@@ -5,7 +5,7 @@ The RBG draw of k is injected (RFC 6979's deterministic k)."""
 import copy, hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, section, check, control, info, raises, done,  # noqa: E402
-                    IllegalInstruction, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
+                    KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
                     KL_STATE_FAILURE as FAILURE, KL_STATE_HASH_ABSORB as HASH_ABSORB,
                     KL_STATE_SET_KEY as SET_KEY)
 import ecc_curves as EC                                                                # noqa: E402
@@ -36,12 +36,14 @@ class PrivViolation(Invalid):
     """Transition to Error State _Privilege Violation_ (GR51: a destination at a weaker level)."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
-    """kl.setst targets: <<KLE-ECC>> transitions, <<KLE-EdDSA>> changes, GR23, GR22."""
+    """kl.setst targets: <<KLE-ECC>> transitions, <<KLE-EdDSA>> changes, GR23, GR22. A same-State kl.setst is
+    admitted only in _Ready_, in a Set State, which loads a field (MR9), and in the _Msg_Absorb_ of EdDSA, where it
+    marks a pass boundary; in _Point_Mul_, _Sign_Generate_, _Sign_Verify_ and _Output_ it is not (GR23, GR26)."""
     if xdh:                                  # <<KLE-X25519-X448>>: the States without a signature scheme
         sets = {SET_GEN, SET_SCALAR, SET_SECONDPT}
         t = {READY: sets | {POINT_MUL}, POINT_MUL: {READY}, OUTPUT: {READY}, SUCCESS: {READY},   # MR22
              FAILURE: {READY}}.get(state, sets | {POINT_MUL, READY} if state in sets else set())
-        return t | ({state} if state not in (SUCCESS, FAILURE) else set())
+        return t | ({state} if state in sets | {READY} else set())
     entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
     free = entry - (set() if sig_exit else {SET_SIG})
     ops, absorb = {POINT_MUL, SIGN_GEN, SIGN_VER}, {MSG_ABSORB} if eddsa else set()
@@ -55,7 +57,7 @@ def targets(state, eddsa, sig_exit=True, xdh=False):
         t = {READY}
     else:
         t = {READY} if state in (OUTPUT, SIGN_VER, SUCCESS, FAILURE) else set()
-    return t | ({state} if state not in (SUCCESS, FAILURE) else set())
+    return t | ({state} if state in entry | absorb | {READY} else set())
 
 def retry_required(mode, r, s, k, n): return r == 0 or s == 0 or (mode == 'sm2' and (r + k) % n == 0)
 
@@ -131,8 +133,10 @@ class Locker:
         """kl.setst #t; Form A is modelled as xs = 0."""
         if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit, self.mode == 'xdh'):
             raise Invalid('transition not allowed')                   # MR1; #46, #47: GR26
-        if t in (SET_HASH, SET_SIG) and not any(self.policy):
-            raise Invalid('Hash and Signature exist only if signing or verification is allowed')   # MR11
+        if t == SET_HASH and not any(self.policy):
+            raise Invalid('Hash exists only if signing or verification is allowed')   # MR11
+        if t == SET_SIG and not self.policy[1]:
+            raise Invalid('_Sign_Input_ is gated by _MachinePolicy_[1]')            # MR11
         if self.state == MSG_ABSORB:                # MR11: leave first, then check the destination's entry conditions
             self._abandon_pass() if t == READY else self._finalize_pass()
         f = self.loading
@@ -220,11 +224,11 @@ class Locker:
     def _policy_gate(self):
         """GR29, MR11: an instruction in a State whose operation a narrowing disabled, or that leads only to disabled
         operations, transitions to _Invalid_ and performs no operation."""
-        signing = self.state == SIGN_GEN or self.state == MSG_ABSORB and self.pass_xs in (0, 1)
-        verifying = self.state == SIGN_VER or self.state == MSG_ABSORB and self.pass_xs == 2
-        none = not any(self.policy)
+        signing = (self.state == SIGN_GEN or self.state == MSG_ABSORB and self.pass_xs in (0, 1)
+                   or self.state == OUTPUT and self.out_type == OUT_SIG)            # MR11: follows uniquely
+        verifying = self.state in (SIGN_VER, SET_SIG) or self.state == MSG_ABSORB and self.pass_xs == 2
         if (signing and not self.policy[0] or verifying and not self.policy[1]
-                or none and (self.state in (SET_HASH, SET_SIG) or self.state == OUTPUT and self.out_type == OUT_SIG)):
+                or self.state == SET_HASH and not any(self.policy)):
             raise Invalid('GR29: the operation of the State is disabled')
 
     def exec_in(self, data):
@@ -835,11 +839,12 @@ check('halt: Progress non-zero in MachineUse[13:2], RndNum kept, State unchanged
       (cr.machine_use, b2v(cr.rnd), 'rnd' in cr.has, cr.state) == (0x234 << 2, K0, True, SIGN_GEN))
 check('resume uses the held RndNum, draws nothing', None, cr.exec_run([])[:3], (R0, S0, 0))
 check('completion zeroes Progress, destroys RndNum', cleared(cr))
-for t in (READY, SIGN_GEN):
-    cr = armed()
-    cr.halt(7, K0)
-    cr.setst(t)
-    check(f'kl.setst #{t} from a halted Sign_Generate discards Progress and RndNum', cleared(cr))
+cr = armed()
+cr.halt(7, K0)
+cr.setst(READY)
+check(f'kl.setst #{READY} from a halted Sign_Generate discards Progress and RndNum', cleared(cr))
+check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR23, GR26)',
+      invalid((lambda c: (c.halt(7, K0), c)[1])(armed()).setst, SIGN_GEN))
 check('MR22: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
       bool(invalid(locker(P256, (SET_SCALAR, D256), to=POINT_MUL).setst, OUTPUT)) and bool(invalid(armed().setst, OUTPUT)))
 for how in ('kl.clearads', 'an import without Content2'):
@@ -881,8 +886,8 @@ for label, kw, loads, t in (
         ('no HasSecondPt: Sign_Verify', {}, [H1, (SET_SIG, SIG0)], SIGN_VER),
         ('no HasHash: Sign_Verify', {}, [(SET_SECONDPT, PUB256), (SET_SIG, SIG0)], SIGN_VER),
         ('no HasSignature: Sign_Verify', {}, [(SET_SECONDPT, PUB256), H1], SIGN_VER),
-        ('MachinePolicy[1] clear: Sign_Verify', dict(verify=False), [(SET_SECONDPT, PUB256), H1, (SET_SIG, SIG0)],
-         SIGN_VER),
+        ('MachinePolicy[1] clear: Sign_Input (MR11)', dict(verify=False), [(SET_SECONDPT, PUB256), H1], SET_SIG),
+        ('MachinePolicy[1] clear: Sign_Verify', dict(verify=False), [(SET_SECONDPT, PUB256), H1], SIGN_VER),
         ('Ready -> Output (MR1)', {}, [], OUTPUT)):
     check(f'{label} -> Invalid', invalid(locker(P256, *loads, **kw).setst, t))
 cr = locker(P256, sc(2), to=POINT_MUL, sign=False, verify=False)
@@ -895,6 +900,14 @@ cr.exec_in(cr.default_gen[20:] + b'\xaa' * 9)
 check('block_base tracks a partial load; excess of the last kl.exec ignored',
       part == (20, False) and cr.sec == cr.default_gen and 'sec' in cr.has)
 check('kl.exec after the field completes -> Invalid', invalid(cr.exec_in, b'\0' * 4))
+cr = locker(P256, to=SET_SECONDPT)
+cr.exec_in(cr.default_gen[:20])
+cr.setst(SET_SECONDPT)
+part = (cr.state, cr.bb, cr.sec, 'sec' in cr.has)
+cr.exec_in(cr.default_gen)
+check('same-State kl.setst in a Set State part-way restarts the load (GR23, MR9): block_base 0, field unconfigured; '
+      'a full reload completes it', part == (SET_SECONDPT, 0, None, False) and cr.sec == cr.default_gen
+      and 'sec' in cr.has)
 cr = Locker(P256)
 cr.setst(SET_SCALAR, xs=1, rand=V256['x'])
 check('Form B Set_Scalar: random private key set, no kl.exec expected',
@@ -920,8 +933,7 @@ for t in (SUCCESS, FAILURE):
     check(f'kl.setst #{t} -> Invalid (GR26, MR1)', invalid(cr.setst, t))
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.halt(3)
-cr.setst(POINT_MUL)
-check('same-State kl.setst admitted (GR23), zeroes Progress (MR6)', (cr.state, cr.progress) == (POINT_MUL, 0))
+check('same-State kl.setst in a halted Point_Mul -> Invalid (GR23, GR26)', invalid(cr.setst, POINT_MUL))
 
 def reach(eddsa, sig_exit=True):
     """Whether Sign_Verify is reachable by kl.setst from every Set state."""
@@ -971,16 +983,19 @@ check('bit 4 sets HasSecondPt, so the copy is serialized and used by _Point_Mul_
       (cr.sec, 'sec' in cr.has), (G2, True))
 
 res = [invalid(Locker(P256, sign=False, verify=False).setst, t) for t in (SET_HASH, SET_SIG)]
-res += [Locker(P256, sign=sg, verify=vf).setst(t) is None for sg, vf in ((True, False), (False, True))
-        for t in (SET_HASH, SET_SIG)]
-check('_MachinePolicy_ = 0: entering _Set_Hash_ or _Set_Signature_ -> Invalid; admitted with either bit set', None,
-      res, [True] * 6)
+res += [Locker(P256, sign=sg, verify=vf).setst(SET_HASH) is None for sg, vf in ((True, False), (False, True))]
+res += [invalid(Locker(P256, sign=True, verify=False).setst, SET_SIG), Locker(P256, sign=False, verify=True).setst(SET_SIG) is None]
+check('_Set_Hash_ needs _MachinePolicy_ != 0 (either bit); _Sign_Input_ is gated by _MachinePolicy_[1] (MR11): '
+      'sign-only -> Invalid, verify-only admitted', None, res, [True] * 6)
 
 cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, True)
 check('kl.restrictl clearing both _MachinePolicy_ bits erases Hash and Signature and clears their flags', None,
       (cr.hash, cr.sig, {'hash', 'sig'} & cr.has, cr.policy), (None, None, set(), (False, False)))
 cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, False)
 check('... clearing only _MachinePolicy_[0] keeps them', None, ({'hash', 'sig'} <= cr.has), True)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, True)
+check('... clearing _MachinePolicy_[1] in _Sign_Input_ keeps the State; the next kl.exec there -> Invalid (GR29, MR11)',
+      None, (cr.state, invalid(cr.exec_in, bytes(8))), (SET_SIG, True))
 sg = locker(P256, sc(7), hs(E0), to=SIGN_GEN).restrictl_policy(True, False)
 check('... a set bit of a disabled function changes nothing; clearing _MachinePolicy_[0] in _Sign_Generate_ keeps the '
       'State, and the next kl.exec there -> _Invalid_ (GR29)', None,
@@ -1345,12 +1360,9 @@ check('kl.exec emits the shared secret Z (32 B, big-endian X), then _Success_', 
       (ZBE, SUCCESS))
 check('_Success_ is no kl.derive source (GR50 item 1): source _Invalid_', None, derive_who(Dest('hash'), cr, 32), 'source')
 cr = ecdh()[0]
-first = cr.exec_out(16)
-sec, out = cr.sec, cr.out_type
-cr.setst(OUTPUT)
-check('same-State kl.setst in _Output_ (MR9, GR23): block_base zeroed, nothing recomputed, OutputType kept; the '
-      'shared secret is emitted again from its beginning', None,
-      (cr.bb, cr.sec == sec, cr.out_type, cr.exec_out(16), cr.state), (0, True, out, first, OUTPUT))
+cr.exec_out(16)
+check('same-State kl.setst in _Output_ part-way -> Invalid: no re-emission (GR23, GR26)', invalid(cr.setst, OUTPUT))
+check('same-State kl.setst in _Output_ before any kl.exec -> Invalid (GR23, GR26)', invalid(ecdh()[0].setst, OUTPUT))
 pk = locker(P256, sc(2), to=POINT_MUL)
 pk.exec_run()
 h = Dest('hash')
@@ -1582,8 +1594,9 @@ for name, c in EC.MONTGOMERY_CURVES.items():
 check('x25519: bit 255 of the u-coordinate is ignored', True,
       xdh(X25, bytes.fromhex(RFC7748['x25519']['dh'][0]), v2b(9 | 1 << 255, 32))[0].hex(), RFC7748['x25519']['dh'][1])
 XST = {READY, SET_GEN, SET_SCALAR, SET_SECONDPT, POINT_MUL, OUTPUT}
-check('x25519 / x448: kl.setst reaches only _Ready_, the three _Set_ states, _Point_Mul_ and _Output_', True,
-      {t for s in XST | {SUCCESS, FAILURE} for t in targets(s, False, xdh=True)}, XST)
+check('x25519 / x448: kl.setst reaches only _Ready_, the three _Set_ states and _Point_Mul_; _Output_, entered by '
+      'the kl.exec of _Point_Mul_, is named by no kl.setst, not even a same-State one (GR23)', True,
+      {t for s in XST | {SUCCESS, FAILURE} for t in targets(s, False, xdh=True)}, XST - {OUTPUT})
 
 section('Negative controls')
 k, u, out = map(bytes.fromhex, RFC7748['x25519']['vec'][0])

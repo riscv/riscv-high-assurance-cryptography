@@ -124,6 +124,8 @@ class Gcm:
         s.tag, s.start_ctr, s.last_block_len = (
             sl(v, kb + 255, kb + 128), sl(v, kb + 287, kb + 256), sl(v, kb + 303, kb + 288))
         s.state = state
+        if s.set_iv and s.start_ctr != 1:
+            return s._invalid() or s                     # MR14: start_ctr is 1 in every Set IV CC
         if not s.stale:
             s.auth_key = s._enc(0)                       # MR4
         return s
@@ -173,8 +175,8 @@ class Gcm:
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
             return s._invalid()                          # GR28/GR27, MR1
-        if st == immed and st in (ELB, DLB) and not s.last_block_len:
-            return s._invalid()                          # GR23: no second final block (MR10)
+        if st == immed and st != SAV:
+            return s._invalid()                          # GR23, GR26: only the IV load restarts (MR9)
         if immed in (ENC, DEC) and not s.policy & (1 if immed == ENC else 2):
             return s._invalid()
         if immed == SAV:
@@ -220,15 +222,16 @@ class Gcm:
         if want != form:
             return s._invalid()                          # GR24, GR28, MR1; a wrong Form (GR79, GR80)
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
-                KLLEN < s.last_block_len if s.state in (ELB, DLB) else s.state != ETF and KLLEN % 128):
+                KLLEN < s.last_block_len if s.state in (ELB, DLB) else
+                KLLEN < 128 and KLLEN not in TAG_LENS if s.state == ETF else KLLEN % 128):
             return s._invalid()                          # MR2, <<KLE-truncation-vs-length>>: length first
         if start is not None:
             s.klstart = start
             if 8 * start >= KLLEN:
                 s.klstart = 0                            # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
                 return 0
-            if start % 16 or start and s.state in (ELB, DLB, ETF):
-                return s._invalid()                      # not an interruption point
+            if start % 16 or start and (s.state in (ELB, DLB, ETF) or s.state == SAV and s.block_base):
+                return s._invalid()                      # not an interruption point (<<KLE-process-VLI>>)
         if s.state == SAV:
             return s._exec_vli(INPUT, KLLEN, start is not None, stop)
         if s.state in (ELB, DLB):
@@ -652,13 +655,14 @@ cl.setst(DLB, 'B', 96)
 check('second kl.exec in Dec_Last_Block (MR10): _Invalid_, output zeroed',
       cl.exec('A', b2v(P[:12]), 96) and cl.exec('A', b2v(P[:12]), 96) == 0 and cl.state == INV)
 for where, last in (('enc', ELB), ('dec', DLB)):
-    cl = at(where)
+    cl, c2 = at(where), at(where)
     cl.setst(last, 'B', 64)
     cl.setst(last, 'B', 96)
-    ok = cl.last_block_len == 96 and cl.exec('A', b2v(P[:12]), 96)
-    cl.setst(last, 'B', 96)
-    check(f'GR23: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block replaces last_block_len '
-          'before its kl.exec, and is _Invalid_ after it (MR10)', ok and cl.state == INV)
+    c2.setst(last, 'B', 96)
+    ok = c2.exec('A', b2v(P[:12]), 96)
+    c2.setst(last, 'B', 96)
+    check(f'GR23: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block -> _Invalid_, '
+          'before its kl.exec and after it (MR10)', ok and (cl.state, c2.state) == (INV, INV))
 for fin in (ETF, DTF):
     cl = at('enc' if fin == ETF else 'dec')
     lb = len_block(0, 8 * len(A))
@@ -676,6 +680,15 @@ crypt(cl, P, 3)
 cl.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)) | 0x5A << 128)
 check('Enc_Tag_Finalize: 128 LSBs of a 256-bit INPUT; tag emitted with KLLEN = 256',
       (cl.exec('C', 0, 256), cl.state) == (b2v(RT), SUCC))
+res = []
+for kl in (8, 32, 40, 72, 100, 64, 96, 120):
+    c = at('enc')
+    crypt(c, P, 3)
+    c.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))
+    res.append((c.exec('C', 0, kl), c.state))
+check('Enc_Tag_Finalize: a KLLEN below 128 other than 120, 112, 104, 96, 64 -> Invalid, nothing emitted (MR2); '
+      '64, 96 and 120 emit MSB_t(T)', True, res,
+      [(0, INV)] * 5 + [(b2v(RT) & ((1 << kl) - 1), SUCC) for kl in (64, 96, 120)])
 
 section('counter: Invalid when ctr reaches (start_ctr - 1) mod 2^32')
 
@@ -799,6 +812,14 @@ for name, where, ops, *kw in [
     cl = at(where, **(kw[0] if kw else {}))
     outs = [getattr(cl, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', cl.state == INV and not any(outs))
+cl = at('ready')
+cl.setst(SAV, 'B', 400)
+cl.exec('B', 0, 128)
+cl.exec('B', 0, 392, 16)                                 # admitted: 128 + 392 >= 400, leaves block_base = 8
+bb = cl.block_base
+cl.exec('B', 0, 256, 16)
+check('Set_Aux_Value with block_base != 0: klstart = 16 is no interruption point (<<KLE-process-VLI>>) -> Invalid',
+      True, (bb, cl.state), (8, INV))
 cls = [at(w) for w in ('enc', 'dec', 'enc', 'dec')]
 check('a Form B or C kl.exec where Form A is native (Encrypt, Decrypt): a wrong Form, _Invalid_ (GR80, MR1)',
       True, ([c.exec(f, B16, 128) for c, f in zip(cls, 'BBCC')], [c.state for c in cls]), ([0] * 4, [INV] * 4))
@@ -821,11 +842,10 @@ cl.exec('A', B16, 128)
 cl.setst(READY)
 check('GR22: Encrypt -> Ready mid-message; next message unaffected',
       kl_encrypt(K, IV, A, P, cl=cl)[:2] == (RC, RT))
-cl = at('ha')
+cl, c2 = at('ha'), at('enc')
 cl.setst(HA)
-cl.setst(ENC)
-cl.setst(ENC)
-check('GR23: same-State kl.setst in Hash_Absorb and Encrypt change nothing', crypt(cl, P, 4) == RC)
+c2.setst(ENC)
+check('GR23: same-State kl.setst in Hash_Absorb and Encrypt -> _Invalid_', (cl.state, c2.state) == (INV, INV))
 check('MachinePolicy decrypt-only: decryption works', kl_decrypt(K, IV, A, RC, RT, policy=2)[1] == SUCC)
 cl = at('enc')
 cl.setst(PRIV)
@@ -847,6 +867,9 @@ v = cl.export()[0]
 check('layout: key, J0, tag, bin(start_ctr,32), last_block_len',
       (sl(v, 127, 0), sl(v, 255, 128), sl(v, 383, 256), sl(v, 415, 384), sl(v, 431, 416), v >> 432)
       == (b2v(K), cl.J0, cl.tag, 1, 0, 0))
+bad = v & ~(((1 << 32) - 1) << 384)              # start_ctr (bits 384-415) = 0 in the Content
+check('Set IV: an import whose start_ctr is not 1 -> Invalid (MR14); with 1, Encrypt', True,
+      (Gcm.imported(ENC, bad, 128, set_iv=True).state, Gcm.imported(ENC, v, 128, set_iv=True).state), (INV, ENC))
 c2 = Gcm.imported(ENC, v, 128)
 ct = crypt(c2, P[16:], 2)
 c2.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))

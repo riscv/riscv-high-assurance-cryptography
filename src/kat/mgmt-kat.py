@@ -276,6 +276,7 @@ class ToyCipher(Machine):
     def verify_tag(self, u, cl):
         return b2v(prf(b'verify', u.key_of(cl))[:8])
     def setst(self, u, cl, imm, aux):
+        # a same-State kl.setst into ENCRYPT or DECRYPT, which this Machine allows, sets a new IV (GR23)
         if imm in (2, 3) and cl.mdh['MachinePolicy'] & self.op_states[imm]:
             cl.mdh['State'] = imm
             self.put_state(cl, v2b(aux or 0, 16))
@@ -296,7 +297,7 @@ class ToyXof(Machine):
     def exec_form(self, m):
         return {READY: 'B', self.ABSORB: 'B', self.FINAL: 'C'}.get(m['State'])
     def setst(self, u, cl, imm, aux):
-        if imm == self.ABSORB and cl.mdh['State'] in (READY, self.ABSORB):
+        if imm == self.ABSORB and cl.mdh['State'] == READY:    # GR23: no same-State kl.setst into ABSORB
             cl.mdh['State'] = self.ABSORB
             self.put_state(cl, self.get_state(cl))
             return True
@@ -1726,7 +1727,7 @@ def t_lengths():
     provision(a, 0, base)
     a.setst(0, EXPIRED)
     a.mgmt(1, PROV, cipher(KeyType=3))
-    eq('Error-State locker: kl.avail Form A uses its fields; kl.size 16 (GR31)',
+    eq('Error-State locker: kl.avail Form A uses its fields; kl.size 16 (GR33)',
        (a.avail(k=0), a.avail(k=1), a.size(k=0), a.size(k=1)), (1, 0, 16, 16))
 
 def t_usage():
@@ -2440,6 +2441,10 @@ def t_sgr():
         [pv(fresh(), 0, cipher()).setst(0, imm) for imm in (5, 45, 66, 127)],
         pv(fresh(), 0, cipher(MachinePolicy=2)).setst(0, ToyCipher.ENCRYPT)),
        ('ok', ToyCipher.ENCRYPT, 'ok', READY, 0, ['invalid'] * 4, 'invalid'))
+    x = pv(fresh(), 0, xof())
+    eq('GR23: same-State kl.setst in Ready admitted; in a State where the Machine does not allow it -> Invalid',
+       (x.setst(0, READY), x.getst(0), x.setst(0, ToyXof.ABSORB), x.setst(0, ToyXof.ABSORB), x.getst(0)),
+       ('ok', READY, 'ok', 'invalid', INVALID))
     for final in (SUCCESS, FAILURE):
         w = [final_cipher(final, SCProtection=1) for _ in range(7)]
         eq(f'GR28/GR27 in State {final}: allowed exits, Invalid otherwise, permitted instructions',

@@ -3,7 +3,7 @@
 The core is from scratch; hashlib 'sm3', where present, is only a labeled reference oracle."""
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, bswap, bin_, IllegalInstruction, ERROR_STATES, inert,
+from common import (b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
                     KL_STATE_FAILURE, KL_STATE_INVALID, section, check, control, info,
@@ -102,7 +102,7 @@ class Sm3:
         elif immed == KL_STATE_READY:
             s.reset(KL_STATE_READY)
         # Form A: max_len = 0 is set by the Machine; no same-State _Hash_Absorb_ (<<KLE-process-VLI>>)
-        # or _Hash_Output_ (MR17);
+        # or _Hash_Output_ (GR23);
         # stand-alone hashing enters _Hash_Output_ with whole blocks only
         elif form != 'A' or (s.st, immed) not in ((KL_STATE_READY, KL_STATE_HASH_ABSORB),
                                                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT)) \
@@ -275,7 +275,7 @@ for label, ops in [
         ('kl.exec in _Ready_ (GR24)', (B(PAD_ABC),)),
         ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (MR17)', (A, B(PAD_ABC), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (GR23)', (A, B(PAD_ABC), O, O)),
         ('kl.setst #kl_state_hash_last_block', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', (A, C(16))),

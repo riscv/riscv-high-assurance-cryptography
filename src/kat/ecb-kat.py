@@ -127,7 +127,9 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return                            # <<KLE-GR-usage-locker-error-state>>
         pol = fld(self.mdh, 'MachinePolicy')
-        if (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
+        if immed == self.state != KL_STATE_READY:
+            self.invalidate()                 # GR23, GR26: no same-State kl.setst into _Encrypt_ or _Decrypt_
+        elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
             self.mdh = put(self.mdh, 'State', immed)
         else:
@@ -290,10 +292,13 @@ cl.setst(ENC)
 out = run(cl, pt)[0]
 cl.setst(DEC)
 eq("Encrypt -> Decrypt directly (from any valid state)", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
-cl.setst(DEC)
-eq("same-State kl.setst (GR23)", (cl.state, run(cl, ct)[0].hex()), (DEC, SP38A_PT))
 cl.setst(RDY)
 eq("back to Ready (GR22)", cl.state, RDY)
+cl.setst(RDY)
+eq("same-State kl.setst into Ready admitted (GR23)", cl.state, RDY)
+c2 = new_cl(ci, k, state=DEC)
+c2.setst(DEC)
+eq("same-State kl.setst into Decrypt: Invalid, Content cleared (GR23, GR26)", (c2.state, c2.key), (INV, None))
 eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR24, GR30, GR34)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)

@@ -3,7 +3,7 @@
 Keccak-f[1600] and a bit-level FIPS 202 reference sponge from scratch; hashlib is only a labeled oracle."""
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, IllegalInstruction, ERROR_STATES, inert,
+from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
                     KL_STATE_FAILURE, KL_STATE_INVALID, KL_CFG_PROVISIONING, section, check,
@@ -270,7 +270,7 @@ class Sha3:
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
             s.enter_output()
         else:
-            s.reset()  # MR1, GR28, MR17, <<KLE-process-VLI>> same-State rule
+            s.reset()  # MR1, GR28, GR23, <<KLE-process-VLI>> same-State rule
         return s.st
 
     def fail(s, out, status='invalid'):
@@ -620,7 +620,7 @@ for label, name, prep, act in [
         ('Form A kl.exec in _Hash_Absorb_ (MR1)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
         ('Form B kl.exec in _Hash_Output_ (MR1)', 'SHAKE256', out_, lambda c: c.exec('B', inp=MSG_ABC)),
-        ('same-State kl.setst to _Hash_Output_ (MR17)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
+        ('same-State kl.setst to _Hash_Output_ (GR23)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('_Hash_Output_ -> _Hash_Absorb_', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
         ('_Success_ -> _Hash_Absorb_ (GR28, GR27)', 'SHA3-224', out_,
          lambda c: (squeeze(c, 28), c.setst(KL_STATE_HASH_ABSORB)))]:

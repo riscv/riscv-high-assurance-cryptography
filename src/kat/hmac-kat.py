@@ -4,7 +4,7 @@ SHA-2, SM3 and Keccak-f from scratch; hashlib SHA-3 is the reference H of the HM
 Python hmac/hashlib are otherwise only labeled reference oracles."""
 import hashlib, hmac, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, bswap, bin_, bxor, IllegalInstruction, ERROR_STATES, inert, KL_STATE_UNCONFIGURED,
+from common import (b2v, v2b, sl, bswap, bin_, bxor, ERROR_STATES, inert, KL_STATE_UNCONFIGURED,
                     KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SET_KEY,
                     KL_STATE_HASH_VERIFY,
                     KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, section, check, control, info, raises, done)
@@ -253,7 +253,7 @@ class Hmac:
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
                    (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR23: restarts the load
                    (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MR11: K0 loaded
-                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): s.policy & 1}  # MR11; none from _Hash_Output_ (MR17)
+                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): s.policy & 1}  # MR11; none from _Hash_Output_ (GR23)
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
                 s.reset(KL_STATE_INVALID if immed > 53 else immed)
@@ -547,7 +547,7 @@ for label, variant, ops in [
         ('kl.exec in _Ready_ (GR24)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (MR17)', 'KIP', (A, B(data7), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (GR23)', 'KIP', (A, B(data7), O, O)),
         ('kl.exec in _Success_ (GR28), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
