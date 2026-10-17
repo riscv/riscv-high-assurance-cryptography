@@ -1766,7 +1766,7 @@ A `kl.setst` into _Dec_Tag_Finalize_ before this `kl.exec` omits the final block
    . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
    . If `tmp` = `SIV`, the state transitions to _Success_; otherwise, it transitions to _Failure_.
 
-   Repeating the operations of entering the State would admit a second final block (Rule <<KLE-MGR-single-last-block>>).
+//   Repeating the operations of entering the State would admit a second final block (Rule <<KLE-MGR-single-last-block>>).
 
 ** `enc_key` and `auth_key` are derived fields (Rule <<KLE-MGR-recomputed-fields>>):
 (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(k, key, nonce)`.
@@ -4469,12 +4469,7 @@ The granularity of the ML-KEM Machines is 8 bits: a field can be transferred wit
 In State _sharedkey_Output_, `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves the `sharedkey` that _Encapsulate_ or _Decapsulate_ produced into a second, already provisioned locker.
 The destination is a key field of a symmetric Machine, or the `kl.exec` input of a hash function, MAC or XOF, that <<KLE-derive-endpoints>> lists as a destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 
-[NOTE]
-====
-In KLE, the ML-KEM shared key is not a `kl.exec` output.
-ML-KEM produces key material for a symmetric Machine or a key derivation function, and `kl.derive` moves it directly into a second locker.
-The shared key thus stays inside the KLE unit and never appears in the memory of the process using it.
-====
+The shared key is not a `kl.exec` output: `kl.derive` moves it into another locker, so it never leaves the KLE unit.
 
 Data Structures::
 
@@ -4731,8 +4726,8 @@ The caller is expected to:
 . use, when verifying, the same `ctx` and mode as the signer; and
 . compute `PH(M)` for HashML-DSA within a cryptographic module of the required validation level (see above).
 
-The Machine cannot check any of these steps: a μ formed with a wrong `tr`, `ctx` or mode yields a signature that the
-intended verifier rejects, or a verification that fails, but it never discloses or weakens the private key.
+The Machine cannot check these steps: a μ formed with a wrong `tr`, `ctx` or mode yields a signature that the
+verifier rejects, but it never discloses or weakens the private key.
 ====
 
 Data Structures::
@@ -4817,24 +4812,20 @@ The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204
 * `ML-DSA.Sign_internal(privkey, mu, rnd)` generates digital signature `signature` from private key `privkey`, message representative `mu`, and randomness `rnd` (cite:[nist-fips-204] Algorithm 7).
 * `ML-DSA.Verify_internal(pubkey, mu, signature)` verifies signature `signature` against public key `pubkey` and message representative `mu` (cite:[nist-fips-204] Algorithm 8).
 
-Four loops of these procedures, in `ML-DSA.Sign_internal`, `RejBoundedPoly`, `RejNTTPoly` and `SampleInBall`, iterate an indeterminate number of times (cite:[nist-fips-204] Appendix C).
-An implementation bounds the iterations of each of them by an implementation-defined limit of at least the value of
-cite:[nist-fips-204] Appendix C, Table 3: 814 for `ML-DSA.Sign_internal`, 481 for `RejBoundedPoly`, 298 for `RejNTTPoly`
-and 121 for `SampleInBall`, which a correct execution reaches with probability at most 2^-256^.
-Like cite:[nist-fips-204], KLE requires no execution time independent of the number of iterations
+The loops of `ML-DSA.Sign_internal`, `RejBoundedPoly`, `RejNTTPoly` and `SampleInBall` iterate an indeterminate number
+of times (cite:[nist-fips-204] Appendix C). An implementation bounds each by an implementation-defined limit of at least
+814, 481, 298, resp. 121 iterations (cite:[nist-fips-204] Table 3), which a correct execution reaches with probability
+at most 2^-256^. As in cite:[nist-fips-204], the execution time need not be independent of the number of iterations
 (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
-When a limit is reached, the operation ends without output: it destroys its intermediate values and any value drawn for it, and zeroes _MachineUse_.
-The state machine then transitions to _Failure_.
+A limit reached ends the operation in _Failure_, without output: its intermediate and drawn values are destroyed, and
+_MachineUse_ is zeroed.
 
 NOTE: With deterministic signing, the execution time may reveal information about μ, but not about the private key (cite:[nist-fips-204] {sect}3.6.1, footnote 3); hedged signing does not.
 
-NOTE: An implementation must not let the values of a rejected iteration of `ML-DSA.Sign_internal`, the challenge `c` and
-the response `z`, or which check rejected it, become observable, through _MachineUse_, side channels or otherwise:
-from the challenges and responses of rejected iterations, the private key can be recovered
-(cite:[DBLP-journals-tches-ZhouWSY25]; see also cite:[DBLP-conf-host-KarabulutAA21] and
-cite:[DBLP-conf-sacrypt-UlitzschMTS22]).
-This is why the progress of _Sign_Generate_ reveals at most the number of completed iterations, which the execution time
-reveals anyway.
+NOTE: The challenge `c` and response `z` of a rejected iteration of `ML-DSA.Sign_internal`, and which check rejected it,
+must not become observable, through _MachineUse_ or otherwise, since they reveal the private key
+(cite:[DBLP-journals-tches-ZhouWSY25], cite:[DBLP-conf-host-KarabulutAA21], cite:[DBLP-conf-sacrypt-UlitzschMTS22]).
+The progress of _Sign_Generate_ therefore reveals at most the number of completed iterations, as the execution time does.
 --
 
 State Machine:: {empty}
