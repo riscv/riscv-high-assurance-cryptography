@@ -8,7 +8,7 @@ from common import (install_key, aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, md
                     KL_STATE_DECRYPT, KL_STATE_INVALID, KL_STATE_PRIV_VIOLATION, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, info, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR26)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR20)
 
 # ---------------------------------------------------------------- SM4 (GB/T 32907-2016)
 # S-box: OpenSSL crypto/sm4/sm4.c SM4_S[256]; anchored below on the GB/T vectors.
@@ -128,7 +128,7 @@ class EcbLocker:
             return                            # <<KLE-GR-usage-locker-error-state>>
         pol = fld(self.mdh, 'MachinePolicy')
         if immed == self.state != KL_STATE_READY:
-            self.invalidate()                 # GR23, GR26: no same-State kl.setst into _Encrypt_ or _Decrypt_
+            self.invalidate()                 # GR19, GR20: no same-State kl.setst into _Encrypt_ or _Decrypt_
         elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
             self.mdh = put(self.mdh, 'State', immed)
@@ -142,7 +142,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR24; MR2 (<<KLE-GR-transfer-window-checks>>: length first)
+            self.invalidate()                 # GR19; MR2 (<<KLE-GR-transfer-window-checks>>: length first)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
@@ -160,24 +160,24 @@ class EcbLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLE-derive-endpoints>>, <<KLE-instruction-derive>>);
-        `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (GR54), 'keystream' (CTR/XCTR in
-        Operate, or a CMAC in Hash_Output: GR55) or 'drbg' (GR56)."""
-        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR50 item 1
+        `src` is an EcbLocker or (kind, bytes, MDH) with kind 'shared' (GR38), 'keystream' (CTR/XCTR in
+        Operate, or a CMAC in Hash_Output: GR39) or 'drbg' (GR39)."""
+        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR36 item 1
             return src.invalidate()
         kind, data, src_mdh = src
         n = self.cipher[2] // 8
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # GR50 item 2 (GR53), item 5
-        if kind == 'shared':                  # restricted: GR51; GR55 and DRBG sources are unrestricted: GR52
+            return self.invalidate()          # GR36 item 2 (GR69), item 5
+        if kind == 'shared':                  # restricted: GR37; GR39 and DRBG sources are unrestricted: GR37
             if fld(self.mdh, 'SCProtection') < fld(src_mdh, 'SCProtection'):
-                return self.invalidate(KL_STATE_PRIV_VIOLATION)      # GR51: never to a weaker level
+                return self.invalidate(KL_STATE_PRIV_VIOLATION)      # GR37: never to a weaker level
             m = narrow(self.mdh, src_mdh)
             if m is None:
                 return self.invalidate(KL_STATE_PRIV_VIOLATION)      # a failed narrowing (<<KLE-Metadata-narrowing>>)
             self.mdh = m
-        self.key = b2v(data[:n])              # exactly dest_length bytes (GR50 item 5, GR49)
+        self.key = b2v(data[:n])              # exactly dest_length bytes (GR36 item 5, GR35)
         return True
 
 def blocks_value(data):                       # cat() lists the most significant block first
@@ -293,16 +293,16 @@ out = run(cl, pt)[0]
 cl.setst(DEC)
 eq("Encrypt -> Decrypt directly (from any valid state)", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
 cl.setst(RDY)
-eq("back to Ready (GR22)", cl.state, RDY)
+eq("back to Ready (GR18)", cl.state, RDY)
 cl.setst(RDY)
-eq("same-State kl.setst into Ready admitted (GR23)", cl.state, RDY)
+eq("same-State kl.setst into Ready admitted (GR19)", cl.state, RDY)
 c2 = new_cl(ci, k, state=DEC)
 c2.setst(DEC)
-eq("same-State kl.setst into Decrypt: Invalid, Content cleared (GR23, GR26)", (c2.state, c2.key), (INV, None))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR24, GR30, GR34)",
+eq("same-State kl.setst into Decrypt: Invalid, Content cleared (GR19, GR20)", (c2.state, c2.key), (INV, None))
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR19, GR27, GR26)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)
-eq("Invalid locker: kl.setst and kl.exec perform no operation (GR19.a)", (cl.state, cl.exec(v, 512)[0]),
+eq("Invalid locker: kl.setst and kl.exec perform no operation (GR24)", (cl.state, cl.exec(v, 512)[0]),
    (INV, 0))
 for pol, immed, want in ((POL_DEC, DEC, DEC), (POL_DEC, ENC, INV), (POL_ENC, DEC, INV),
                          (POL_BOTH, KL_STATE_OPERATE, INV)):
@@ -366,7 +366,7 @@ eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, N
 cl.import_scc(put(put(put(m192, 'KeyType', 0), 'State', ENC), 'StateExtension', 1), H(SP38A_F1[1][2]))
 eq("SCC in Encrypt with a StateExtension ECB does not use -> Invalid", (cl.state, cl.key), (INV, None))
 
-section("kl.derive into `key` (destination in Ready; GR49-GR56)")
+section("kl.derive into `key` (destination in Ready; GR35-GR39)")
 _, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 secret = H(k) + H("a5" * 8)
 SRC = mdh_pack(UsagePolicy=0b00010, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
@@ -385,28 +385,28 @@ def derived(kind='shared', length=32, data=secret, state=None, keytype=0, src=SR
 for kind, length in (('shared', 32), ('shared', 24), ('drbg', 32)):
     eq(f"{kind}, length {length} >= 24: exactly 24 bytes become the key, F.1.3",
        derived(kind, length)[:3], (True, ENC, c))
-eq("shared secret (restricted, GR51): UsagePolicy, Locality, ExpirationDate narrowed",
+eq("shared secret (restricted, GR37): UsagePolicy, Locality, ExpirationDate narrowed",
    narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
-eq("DRBG output (unrestricted, GR52): destination MDH not narrowed",
+eq("DRBG output (unrestricted, GR37): destination MDH not narrowed",
    narrowed(derived('drbg')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
 ks = b''.join(aes_encrypt(H(SP38A_F1[0][2]), bytes(15) + bytes([i])) for i in range(2))   # two whole blocks
 r = derived('keystream', 32, data=ks, src=put(SRC, 'SCProtection', 2))
-eq("keystream (GR55, unrestricted) of 2 whole blocks, length 32: its first 24 bytes become the key; MDH not narrowed, "
+eq("keystream (GR39, unrestricted) of 2 whole blocks, length 32: its first 24 bytes become the key; MDH not narrowed, "
    "no SCProtection comparison", (r[:3], narrowed(r[3])),
    ((True, ENC, ref(aes_encrypt, ks[:24], pt).hex()), (DST['UsagePolicy'], DST['Locality'], 0)))
-eq("CMAC in Hash_Output (GR55) supplies b/8 = 16 bytes < 24 (GR50 item 5) -> destination Invalid, no key",
+eq("CMAC in Hash_Output (GR39) supplies b/8 = 16 bytes < 24 (GR36 item 5) -> destination Invalid, no key",
    derived('keystream', 32, data=ks[:16])[1:3], (INV, None))
-eq("source SCProtection above destination: Privilege Violation, no key (GR51); below it: key received, level kept",
+eq("source SCProtection above destination: Privilege Violation, no key (GR37); below it: key received, level kept",
    (derived(src=put(SRC, 'SCProtection', 2))[1:3], derived(src=put(SRC, 'SCProtection', 0))[:3],
     fld(derived(src=put(SRC, 'SCProtection', 0))[3], 'SCProtection')),
    ((KL_STATE_PRIV_VIOLATION, None), (True, ENC, c), DST['SCProtection']))
-for label, kw in (("length 16 < 24 (GR50 item 5, no zero-fill)", dict(length=16)),
-                  ("length 0 (GR50 item 5)", dict(length=0)),
-                  ("source field of 16 bytes < 24 (GR50 item 5)", dict(data=secret[:16])),
-                  ("destination in Encrypt (GR50 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (GR53, GR50 item 2)", dict(keytype=1))):
+for label, kw in (("length 16 < 24 (GR36 item 5, no zero-fill)", dict(length=16)),
+                  ("length 0 (GR36 item 5)", dict(length=0)),
+                  ("source field of 16 bytes < 24 (GR36 item 5)", dict(data=secret[:16])),
+                  ("destination in Encrypt (GR36 item 2)", dict(state=ENC)),
+                  ("KeyType 1 destination (GR69, GR36 item 2)", dict(keytype=1))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
-eq("differing Boot Session entries (GR51, a failed narrowing) -> destination Privilege Violation, no key",
+eq("differing Boot Session entries (GR37, a failed narrowing) -> destination Privilege Violation, no key",
    derived(src=put(SRC, 'Locality', 0b0_10_00_00))[1:3], (KL_STATE_PRIV_VIOLATION, None))
 src_cl, dst_cl = new_cl(ci, k), new_cl(ci, "00" * 24)
 dst_cl.derive_key(src_cl, 24)
@@ -417,7 +417,7 @@ info("kl.derive into `key`: byte t of the transfer is byte t of the key.")
 cl = new_cl(ci, k, state=ENC)
 check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
       ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, ENC))
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR26, MR1)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR20, MR1)",
    [(raises(c.setst, i), c.state) for i in (46, 47) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 2)
 
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test")

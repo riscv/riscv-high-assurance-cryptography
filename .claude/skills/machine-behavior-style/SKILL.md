@@ -12,7 +12,7 @@ The model is the State Machine Behavior of the `process_VLI` procedure (`<<KLE-p
 Split a paragraph by what happens when, one `**` bullet per moment, with numbered steps (`.`) under it:
 
 - `** When entering State _X_:`
-  1. the expected `kl.setst`, written in full: Form B "``kl.setst Kn, #kl_state_x, Xs``", and what `Xs` sets (`len <- Xs`);
+  1. the expected `kl.setst`, written in full: Form B "```kl.setst Kn, #kl_state_x, Xs```", and what `Xs` sets (`len <- Xs`);
   2. the admissible values, stated positively: "`Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`". Don't list exclusions such as "zero, larger than 127, or not a multiple of 8";
   3. the entry operations (fields set or zeroed), in one step;
   4. same-State `kl.setst`: "repeats these operations…", or "is forbidden" (Rule GR23).
@@ -38,6 +38,7 @@ Split a paragraph by what happens when, one `**` bullet per moment, with numbere
 
 ## AsciiDoc mechanics
 
+- Quote an instruction as `"```kl.setst Kn, …```"` (three backticks): `"``…``"` renders stray backticks, and `"`…`"` drops the monospace.
 - Use `{le}`, `{ge}`, `{times}` and `<-` (inline). In listings use `←` and keep lines ≤ 80 characters.
 - A NOTE, paragraph or open block placed after a step list *inside a list item* needs a `+` continuation line before it. Otherwise the list ends, and the next `**` bullet starts a new list.
 - After editing, render and check: build `src/Zkl.adoc` with `--require=../scripts/cross-page-xrefs.rb` (no warnings), run `pypy3.10 scripts/check-cross-page-refs.py`, and, for a moved block, check in the HTML that it renders as `admonitionblock` and that no list closes early.

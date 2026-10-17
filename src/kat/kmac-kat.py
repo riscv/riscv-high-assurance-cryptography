@@ -186,7 +186,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None, keytype=None, policy=0b11):
-    """PI; with a SKID (_KeyType_ = 1, GR84) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
+    """PI; with a SKID (_KeyType_ = 1, GR69) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
     _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
     kt = int(skid is not None) if keytype is None else keytype
     cb, kb = provision_blocks(sec, b'' if kt == 1 else K, S)
@@ -216,7 +216,7 @@ class Kmac:
         self.b = self.t = 8 * RATE[self.sec]                             # t = b
         self.D = (1, 1, 1, 1) if 'suffix' in self.bad else (0, 0)       # cSHAKE suffix
 
-    def _clear(self):                                                    # GR30
+    def _clear(self):                                                    # GR27
         self.state = self.block_base = self.last_block_len = self.cb = self.kb = self.L = 0
 
     def invalidate(self):
@@ -272,7 +272,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, self.last_block_len, _, self.cb, key, self.L = vals
         if self.keytype:
-            self._resolve(key)                                           # GR84: SKID resolved after import
+            self._resolve(key)                                           # GR69: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -285,9 +285,9 @@ class Kmac:
     def setst(self, immed, form='A', aux=None):
         if immed == UNCONF:
             return self.__init__(self.hart, self.bad)
-        if self.st in ERROR_STATES:                                      # GR19.a
+        if self.st in ERROR_STATES:                                      # GR24
             return
-        if immed == READY:                                               # GR22
+        if immed == READY:                                               # GR18
             return self.ready()
         if immed == ABSORB and self.st == READY and form == 'A':         # no same-State (PROCESS_VLI)
             self.state = keccak(keccak(self.state ^ self.cb) ^ self.kb)  # the key enters `state` only here
@@ -325,7 +325,7 @@ class Kmac:
             self.L = 8 * -(-self.L // 8)
 
     def _end(self, status, out=None):
-        if out is not None and status in ('invalid', 'noop'):             # GR34
+        if out is not None and status in ('invalid', 'noop'):             # GR26
             k = min(self.hart.klstart, len(out))
             out[k:] = bytes(len(out) - k)
         self.hart.klstart = 0
@@ -361,7 +361,7 @@ class Kmac:
             L = self.L                                                   # MR15: constant-time compare of L bits
             self.st = SUCCESS if sl(b2v(inp), L - 1, 0) == sl(self.state, L - 1, 0) else FAILURE
             return self._end('done')
-        self.invalidate()                                                # MR1, GR24, GR28
+        self.invalidate()                                                # MR1, GR19, GR22
         return self._end('invalid', out)
 
     def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLE-process-VLI>>
@@ -414,33 +414,33 @@ class KeyDest:
 
 
 class FieldSrc(bytes):
-    """A shared-secret field (ECC _Output_ or ML-KEM `sharedkey`, GR54), which does not advance (GR49)."""
+    """A shared-secret field (ECC _Output_ or ML-KEM `sharedkey`, GR38), which does not advance (GR35)."""
     st = OUTPUT
 
 
 class CmacSrc:
-    """A CMAC in _Hash_Output_ (<<KLE-derive-endpoints>>, GR55): its b/8 bytes of `hash`, then _Success_."""
+    """A CMAC in _Hash_Output_ (<<KLE-derive-endpoints>>, GR39): its b/8 bytes of `hash`, then _Success_."""
     def __init__(self, mac): self.st, self.mac = OUTPUT, mac
     def invalidate(self): self.st = INVALID
 
 
 def derive(hart, dst, src, length):
-    """kl.derive of a shared-secret field into the kl.exec input of `dst` (GR54, GR49), or of a shared-secret
+    """kl.derive of a shared-secret field into the kl.exec input of `dst` (GR38, GR35), or of a shared-secret
     field or a CMAC into a KeyDest; no KMAC output is a source (<<KLE-derive-endpoints>>). Uninterruptible
-    (GR71.a)."""
+    (GR42)."""
     field, cmac = isinstance(src, FieldSrc), isinstance(src, CmacSrc)
     if (field or src.st not in ERROR_STATES) and dst.st not in ERROR_STATES:
         key = isinstance(dst, KeyDest)
         n = len(src) if field else len(src.mac) if cmac else 0
         if not (field or cmac and src.st == OUTPUT):
-            src.invalidate()                                             # GR50 item 1
+            src.invalidate()                                             # GR36 item 1
         elif dst.st != (READY if key else ABSORB):
-            dst.invalidate()                                             # GR50 item 2
+            dst.invalidate()                                             # GR36 item 2
         elif not (key or field):
-            src.invalidate()                                             # GR50 item 3: a message input takes
+            src.invalidate()                                             # GR36 item 3: a message input takes
             dst.invalidate()                                             # only a shared secret
         elif hart.klstart or (length < dst.n or n < dst.n if key else length != n):
-            dst.invalidate()                                             # GR50 item 5; 8-bit granularity
+            dst.invalidate()                                             # GR36 item 5; 8-bit granularity
         elif key:
             dst.key = bytearray((bytes(src) if field else src.mac)[:dst.n])
             if cmac:
@@ -576,6 +576,16 @@ for sec in (128, 256):
     check(f'KMACXOF{sec} absorbs right_encode(0) (L = {c.L})', True, got,
           ref_kmac(sec, KEY, DATA4, 0, TAG, True, 32))
 
+res = []
+for sec, rate in ((128, 168), (256, 136)):
+    for L in (256, 70000):                         # right_encode(L) of 3, resp. 4 bytes
+        for m in (rate - 1, rate - 2):
+            X = bytes(range(256))[:m] * 1
+            got, _ = kl_kmac(sec, X, L, TAG, n=32)
+            res.append(got == ref_kmac(sec, KEY, X, L, TAG)[:32])
+check('right_encode(L) crossing the rate boundary (messages of b/8 - 1 and b/8 - 2 bytes, L = 256 and 70000): '
+      'absorbed as by kl.exec, with P() at the boundary (SP 800-185 4.3)', True, res, [True] * 8)
+
 section('Output length: exactly L bits, the last byte zero-padded')
 a, b_ = ref_kmac(128, KEY, DATA4, 256, TAG), ref_kmac(128, KEY, DATA4, 512, TAG)
 got, c = kl_kmac(128, DATA4, 512, TAG)
@@ -652,22 +662,22 @@ for label, c, act in (
         ('KMAC128 Form A kl.setst to _Hash_Output_', absorbing(128, DATA4), lambda c: c.setst(OUTPUT)),
         ('KMACXOF256 Form B kl.setst to _Hash_Output_', absorbing(256, DATA4, True),
          lambda c: c.setst(OUTPUT, 'B', 512)),
-        ('kl.exec in _Ready_ (GR24)', locker(128), lambda c: c.exec(inp=DATA4)),
+        ('kl.exec in _Ready_ (GR19)', locker(128), lambda c: c.exec(inp=DATA4)),
         ('Form B kl.setst into _Hash_Absorb_', locker(128), lambda c: c.setst(ABSORB, 'B', 32)),
         ('same-State kl.setst in _Hash_Absorb_ (<<KLE-process-VLI>>)', absorbing(128, DATA4),
          lambda c: c.setst(ABSORB)),
         ('Form B kl.exec in _Hash_Output_ (MR1)', squeezing(128, DATA4, 256),
          lambda c: c.exec(inp=DATA4)),
-        ('KMAC128 same-State kl.setst to _Hash_Output_ (GR23)', squeezing(128, DATA4, 256),
+        ('KMAC128 same-State kl.setst to _Hash_Output_ (GR19)', squeezing(128, DATA4, 256),
          lambda c: c.setst(OUTPUT, 'B', 256)),
-        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (GR23)', squeezing(256, DATA4, 0, True),
+        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (GR19)', squeezing(256, DATA4, 0, True),
          lambda c: c.setst(OUTPUT))):
     act(c)
     check(f'{label} -> _Invalid_', True, c.st, INVALID)
 c = squeezing(128, DATA4, 256)
 squeeze(c, 32)
 (st, o), = squeeze(c, 32, fill=0xEE)
-check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR28, GR34)', True,
+check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR22, GR26)', True,
       (st, c.st, bytes(o)), ('invalid', INVALID, bytes(32)))
 c = squeezing(128, DATA200, 256)
 squeeze(c, 32)
@@ -774,7 +784,7 @@ c2 = Kmac(Hart()).import_(*c.export())
 check('round trip, KMAC256 L = 4096 after 2 update()s (L counts down in the Serialized Content), then _Success_', True,
       (bytes(o1 + o2), st, c2.st), (ref_kmac(256, KEY, DATA200, 4096, TAG), 'success', SUCCESS))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR50, GR54)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR36, GR38)')
 h = Hart()
 SS = bytes(range(0x40, 0x60))
 stream = ref_kmac(128, KEY, DATA4, 0, TAG, True, 64)
@@ -785,30 +795,30 @@ for sec, xof, L in ((128, False, 256), (256, True, 0)):
     dst.exec(inp=DATA4)
     to_output(dst, L)
     res.append((h.klstart, dst.st, bytes(squeeze(dst, 32)[0][1])))
-check('shared secret (32 B, length 32) -> open KMAC128 and KMACXOF256 _Hash_Absorb_ between two DATA4 (GR54)', True,
+check('shared secret (32 B, length 32) -> open KMAC128 and KMACXOF256 _Hash_Absorb_ between two DATA4 (GR38)', True,
       res, [(0, OUTPUT, ref_kmac(128, KEY, DATA4 + SS + DATA4, 256, TAG)),
             (0, OUTPUT, ref_kmac(256, KEY, DATA4 + SS + DATA4, 0, TAG, True, 32))])
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
 dst.exec(inp=DATA4)
 to_output(dst, 256)
-check('KMACXOF128 output -> open KMAC128 _Hash_Absorb_: no KMAC output is a source (GR50 item 1): source '
+check('KMACXOF128 output -> open KMAC128 _Hash_Absorb_: no KMAC output is a source (GR36 item 1): source '
       '_Invalid_, destination unchanged', True, (src.st, h.klstart, bytes(squeeze(dst, 32)[0][1])),
       (INVALID, 0, ref_kmac(128, KEY, DATA4 + DATA4, 256, TAG)))
 src, dst = squeezing(256, DATA4, 512, hart=h), absorbing(256, xof=True, S=b'', hart=h)
 derive(h, dst, src, 64)
-check('whole KMAC256 output (L = 512) -> KMACXOF256 (GR50 item 1): source _Invalid_, destination in _Hash_Absorb_',
+check('whole KMAC256 output (L = 512) -> KMACXOF256 (GR36 item 1): source _Invalid_, destination in _Hash_Absorb_',
       True, (src.st, dst.st), (INVALID, ABSORB))
 src = squeezing(256, DATA4, 512, hart=h)
 squeeze(src, 64)
 derive(h, absorbing(128, hart=h), src, 16)
-check('source in _Success_ (no endpoint, GR50 item 1) -> source _Invalid_', True, src.st, INVALID)
+check('source in _Success_ (no endpoint, GR36 item 1) -> source _Invalid_', True, src.st, INVALID)
 dst = squeezing(128, DATA4, 256, hart=h)
 derive(h, dst, FieldSrc(SS), 32)
-check('shared secret -> KMAC128 in _Hash_Output_ (GR50 item 2) -> destination _Invalid_', True, dst.st, INVALID)
+check('shared secret -> KMAC128 in _Hash_Output_ (GR36 item 2) -> destination _Invalid_', True, dst.st, INVALID)
 src, dst = CmacSrc(bytes(16)), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 16)
-check('a CMAC -> KMAC128 _Hash_Absorb_: pair not admitted (GR50 item 3), both _Invalid_', True,
+check('a CMAC -> KMAC128 _Hash_Absorb_: pair not admitted (GR36 item 3), both _Invalid_', True,
       (src.st, dst.st), (INVALID, INVALID))
 res = []
 for n, length, ks in ((32, 0, 0), (32, 31, 0), (32, 33, 0), (32, 1 << 60, 0), (32, 32, 4)):
@@ -817,14 +827,14 @@ for n, length, ks in ((32, 0, 0), (32, 31, 0), (32, 33, 0), (32, 1 << 60, 0), (3
     derive(h, dst, FieldSrc(SS[:n]), length)
     res.append((dst.st, h.klstart))
 check('shared secret (32 B) into KMAC128 _Hash_Absorb_ with length 0, 31, 33 or 2^60 (8-bit granularity), or '
-      'klstart = 4 (uninterruptible, GR71.a) -> destination _Invalid_ (GR50 item 5), klstart = 0', True, res,
+      'klstart = 4 (uninterruptible, GR42) -> destination _Invalid_ (GR36 item 5), klstart = 0', True, res,
       [(INVALID, 0)] * 5)
 
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)
 s2, d2 = squeezing(256, DATA4, 512, hart=h), KeyDest(32)
 for d, s_ in ((dst, src), (d2, s2)):
     derive(h, d, s_, 32)
-check('KMACXOF128 -> a 16-byte `key`, KMAC256 (L = 512) -> a 32-byte key: not a source (GR50 item 1), source '
+check('KMACXOF128 -> a 16-byte `key`, KMAC256 (L = 512) -> a 32-byte key: not a source (GR36 item 1), source '
       '_Invalid_, key unwritten', True, (src.st, dst.st, dst.key, s2.st, d2.st, d2.key),
       (INVALID, READY, None, INVALID, READY, None))
 res = []
@@ -834,7 +844,7 @@ for s_, d, length in ((FieldSrc(SS), KeyDest(16), 32), (FieldSrc(SS), KeyDest(32
     derive(h, d, s_, length)
     res.append((d.st, d.key and bytes(d.key), s_.st))
 check('shared secret (32 B) -> a 16- and a 32-byte `key`, a 16-byte CMAC -> a 16-byte key (then _Success_); a '
-      '16-byte secret or CMAC, or length 16, into a 32-byte key (GR50 item 5): destination _Invalid_', True, res,
+      '16-byte secret or CMAC, or length 16, into a 32-byte key (GR36 item 5): destination _Invalid_', True, res,
       [(READY, SS[:16], OUTPUT), (READY, SS, OUTPUT), (READY, stream[:16], SUCCESS),
        (INVALID, None, OUTPUT), (INVALID, None, OUTPUT), (INVALID, None, OUTPUT)])
 

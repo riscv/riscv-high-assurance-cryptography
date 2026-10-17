@@ -10,7 +10,7 @@ from common import (install_key, aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat,
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, info, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR26)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR20)
 
 B = 128
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
@@ -30,7 +30,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR85)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR70)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -74,10 +74,10 @@ class XexLocker:
     keytype = property(lambda s: fget(s.mdh, 'KeyType'))
     k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
     widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
-    def invalidate(s):                            # GR30
+    def invalidate(s):                            # GR27
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
-    def _install(s, field, key2, importing):     # one SKID, two keys (GR85); KeyType 2: both random
+    def _install(s, field, key2, importing):     # one SKID, two keys (GR70); KeyType 2: both random
         r = install_key(s.keytype, field, importing, s.sks, lambda: (s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)),
                         (field, key2))
         if r is None:
@@ -108,14 +108,14 @@ class XexLocker:
         """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
         if immed in RESERVED_IMMED:                # reserved Error States: first group, before any State check
             raise IllegalInstruction(immed)
-        if s.state in ERROR_STATES:               # GR19.a
+        if s.state in ERROR_STATES:               # GR24
             return
         pol = fget(s.mdh, 'MachinePolicy')
         if immed == READY and form == 'A':
             s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
         elif (immed in (ENCRYPT, DECRYPT) and form in ('C', 'A/iobuf')
               and (s.state in (READY, ENCRYPT, DECRYPT) and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)
-                   or s.state == immed)):         # Encrypt <-> Decrypt and GR23 same State: a new tweak
+                   or s.state == immed)):         # Encrypt <-> Decrypt and GR19 same State: a new tweak
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
             s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MR7)
             s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
@@ -129,8 +129,8 @@ class XexLocker:
         lo = 8 * klstart
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
-            return out & ~window, 0               # GR34
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR24, MR1; MR2 (<<KLE-GR-transfer-window-checks>>: length first)
+            return out & ~window, 0               # GR26
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR19, MR1; MR2 (<<KLE-GR-transfer-window-checks>>: length first)
             s.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -161,10 +161,10 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1:   # GR50 item 2; GR53
+        if s.state != READY or s.keytype == 1:   # GR36 item 2; GR69
             s.invalidate()
             return False
-        if length < n or not isinstance(src, Keystream) and len(src) < n:   # GR50 item 5 (a keystream is unbounded)
+        if length < n or not isinstance(src, Keystream) and len(src) < n:   # GR36 item 5 (a keystream is unbounded)
             s.invalidate()
             return False
         src = src.take(n) if isinstance(src, Keystream) else src
@@ -175,7 +175,7 @@ class XexLocker:
         return True
 
 class Keystream:
-    """A CTR locker (<<KLE-keystream-modes>>) as a kl.derive source (GR55): in _Operate_ it supplies the blocks
+    """A CTR locker (<<KLE-keystream-modes>>) as a kl.derive source (GR39): in _Operate_ it supplies the blocks
     E(key, nonce || bin(ctr, 32)) of Form C kl.exec, whole blocks, ctr advancing by each."""
     def __init__(s, key, nonce, ctr, state=OPERATE):
         s.key, s.nonce, s.ctr, s.state = key, nonce, ctr, state
@@ -186,11 +186,11 @@ class Keystream:
         return out[:n]                            # the unused bytes of the last block discarded
 
 def derive(src, dst, length):
-    """kl.derive into an XEX locker; XEX defines no source endpoint (GR50 item 1)."""
+    """kl.derive into an XEX locker; XEX defines no source endpoint (GR36 item 1)."""
     if isinstance(src, XexLocker):
         return src.invalidate() or False
     if isinstance(src, Keystream) and src.state != OPERATE:
-        src.state = INVALID                       # GR50 item 1: a CTR locker outside _Operate_
+        src.state = INVALID                       # GR36 item 1: a CTR locker outside _Operate_
         return False
     return dst.derive_dest(src, length)
 
@@ -443,7 +443,7 @@ check("Encrypt -> Ready zeroes the mask; the CC is reusable with a new tweak", T
       (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
 cl = tw(new_xex(k1, k2), t=0xdead)
 cl_run(cl, data)
-check("same-State kl.setst (GR23) re-tweaks: mask index back to 0", True,
+check("same-State kl.setst (GR19) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 info("a same-State kl.setst is read as the Form C transition into that State: it sets the tweak afresh.")
 cl = new_xex(k1, k2)
@@ -513,11 +513,11 @@ for length in (32, 48):
     ok = derive(src, cl, length)
     check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
           (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR50 item 5)", None, src, 16),
-                        ("length 0 (GR50 item 5)", None, src, 0),
-                        ("24-byte source (GR50 item 5)", None, src[:24], 32),
-                        ("destination in Encrypt (GR50 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (GR53, GR50 item 2)", 'skid', src, 32)):
+for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR36 item 5)", None, src, 16),
+                        ("length 0 (GR36 item 5)", None, src, 0),
+                        ("24-byte source (GR36 item 5)", None, src[:24], 32),
+                        ("destination in Encrypt (GR36 item 2)", tw, src, 32),
+                        ("KeyType 1 destination (GR69, GR36 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
@@ -526,7 +526,7 @@ for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR50 item 5)", None, src
         mk and mk(cl)
     check(f"{what} -> Invalid", True, (derive(s_, cl, n), cl.state, cl.key1), (False, INVALID, None))
 src_l, dst = new_xex(k1, k2), new_xex(bytes(16), b'\x01' * 16)
-check("an XEX locker as a kl.derive source (no source endpoint, GR50 item 1) -> only the source Invalid", True,
+check("an XEX locker as a kl.derive source (no source endpoint, GR36 item 1) -> only the source Invalid", True,
       (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, READY))
 NONCE, C0 = bytes(range(0xF0, 0xFC)), 0xFFFFFFFF  # ctr wraps within the transfer
 ctr_blk = lambda k, q: aes_encrypt(k, NONCE + ((C0 + q) % (1 << 32)).to_bytes(4, 'big'))
@@ -535,20 +535,20 @@ for kk in (k1, k41 + k42[:16]):
     ks = b''.join(ctr_blk(kk, q) for q in range(n // 16))
     src_ks, cl = Keystream(kk, NONCE, C0), new_xex(bytes(n // 2), b'\x01' * (n // 2))
     ok = derive(src_ks, cl, n + 8)
-    check(f"CTR keystream (GR55) into AES-{4 * n} `key1 || key2`, length {n + 8}: {n // 16} whole blocks, ctr "
+    check(f"CTR keystream (GR39) into AES-{4 * n} `key1 || key2`, length {n + 8}: {n // 16} whole blocks, ctr "
           f"advanced by {n // 16} (mod 2^32), then vector 2 under those keys", True,
           (ok, src_ks.ctr, src_ks.take(16), cl_run(tw(cl), data)[0]),
           (True, (C0 + n // 16) % (1 << 32), ctr_blk(kk, n // 16), ref_xts(ks[:n // 2], ks[n // 2:], i, data)))
-for what, mk, n in (("length 16 < 32 (GR50 item 5)", None, 16), ("destination in Encrypt (GR50 item 2)", tw, 32)):
+for what, mk, n in (("length 16 < 32 (GR36 item 5)", None, 16), ("destination in Encrypt (GR36 item 2)", tw, 32)):
     src_ks, cl = Keystream(k1, NONCE, C0), new_xex(bytes(16), b'\x01' * 16)
     mk and mk(cl)
     check(f"CTR keystream, {what} -> only the destination Invalid, ctr unchanged", True,
           (derive(src_ks, cl, n), cl.state, src_ks.state, src_ks.ctr), (False, INVALID, OPERATE, C0))
 src_ks, cl = Keystream(k1, NONCE, C0, state=READY), new_xex(bytes(16), b'\x01' * 16)
-check("CTR locker in Ready as a source (no source endpoint, GR50 item 1) -> only the source Invalid", True,
+check("CTR locker in Ready as a source (no source endpoint, GR36 item 1) -> only the source Invalid", True,
       (derive(src_ks, cl, 32), src_ks.state, cl.state), (False, INVALID, READY))
 cl = new_xex(bytes(16), b'\x01' * 16)
-check("a CMAC in Hash_Output (GR55) supplies b/8 = 16 bytes < 32 (GR50 item 5) -> destination Invalid", True,
+check("a CMAC in Hash_Output (GR39) supplies b/8 = 16 bytes < 32 (GR36 item 5) -> destination Invalid", True,
       (derive(ctr_blk(k1, 0), cl, 32), cl.state, cl.key1), (False, INVALID, None))
 
 section("round trip over many lengths")
@@ -565,7 +565,7 @@ cl = new_xex(k1, k2)
 st = cl.state
 check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
       ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
-check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR26, MR1)", True,
+check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR20, MR1)", True,
       [(raises(c.setst, i), c.state) for i in (46, 47) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
 
 section("negative controls")
