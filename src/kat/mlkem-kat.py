@@ -160,7 +160,7 @@ class MLKEMLocker(Locker):
         if (st in (EK_OUT, ENC) and not self.se & 1 or st == DEC and self.se & 6 != 6       # MR11 entry conditions
                 or st == CT_OUT and not self.se & 4):
             return self.enter_error(INVALID)
-        if self.state == SK_OUT and st != SK_OUT or self.state == CT_OUT and st not in (SK_OUT, CT_OUT):
+        if self.state == SK_OUT and st != SK_OUT or self.state == CT_OUT and st != SK_OUT:
             self.zero('sharedkey')                 # leaving _sharedkey_Output_, or _ciphertext_Output_ elsewhere
         self.put('State', st)
         self.discard()
@@ -312,7 +312,7 @@ def kl_derive(dest, src, length):
     if dest is src:
         raise IllegalInstruction                   # equal lockers (<<KLE-illegal-instruction-grounds>>)
     if any(inert(lk.state) for lk in ends):
-        return 'noop'                              # GR17: an inert endpoint makes it a no-op
+        return 'noop'                              # GR24: an inert endpoint makes it a no-op
     if any(lk.barred() for lk in ends):
         raise PrivilegeViolation
     for lk in ends:
@@ -960,7 +960,7 @@ def t_derive():
     check('equal lockers: illegal instruction', raises(kl_derive, src, src, 32))
     blank = Dest(AES128_ECB)
     blank.mdh = 0
-    check('Unconfigured endpoint: no operation (GR17)', kl_derive(blank, src, 16) == 'noop' and blank.state == UNCONF)
+    check('Unconfigured endpoint: no operation (GR24)', kl_derive(blank, src, 16) == 'noop' and blank.state == UNCONF)
     dest, s3 = Dest(AES128_ECB), shared()
     dest.enter_error(PRIV_VIOLATION)
     check('Error State on the destination: no-op', kl_derive(dest, s3, 16) == 'noop'

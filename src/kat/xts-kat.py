@@ -3,7 +3,8 @@
 against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (install_key, aes_decrypt, aes_encrypt, b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
+from common import (install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decrypt,
+                    b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
                     MASK128, MDH_FIELD, mdh_pack,
                     KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT, KL_STATE_OPERATE as OPERATE,
@@ -14,8 +15,9 @@ RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexp
 
 B = 128
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
-CIPHERS = {'AES-128': 128, 'AES-256': 256}          # XTS-AES exists only for 128- and 256-bit keys (IEEE 1619)
-XEX_MACHINES = {0x03: 'AES-128', 0x23: 'AES-256'}   # <<KLE-exec-encodings>> Mode 3; Type 1 has no Mode 3
+CIPHERS = {'AES-128': 128, 'AES-256': 256, 'SM4': 128}   # XTS-AES: 128- and 256-bit keys (IEEE 1619); SM4: GB/T 17964
+XEX_MACHINES = {0x03: 'AES-128', 0x23: 'AES-256', 0x33: 'SM4'}   # <<KLE-exec-encodings>> Mode 3; Type 1 has none
+BLOCK = {'AES-128': (aes_encrypt, aes_decrypt), 'AES-256': (aes_encrypt, aes_decrypt), 'SM4': (sm4_encrypt, sm4_decrypt)}
 XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
 fget = lambda v, f: sl(v, *MDH_FIELD[f])
 padded = lambda bits: -(-bits // 128) * 16
@@ -34,6 +36,14 @@ def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
+
+def kl_update_mask_gb(V):
+    """<<KLE-XEX-XTS-modes>> update_mask of SM4_XEX (GB/T 17964-2021), transcribed: byte j = V[8j+7:8j]."""
+    B_ = [(V >> 8 * j) & 0xFF for j in range(16)]
+    out = [(B_[j] >> 1) | ((B_[j - 1] & 1) << 7 if j else 0) for j in range(16)]
+    if B_[15] & 1:
+        out[0] ^= 0xE1
+    return sum(b << 8 * j for j, b in enumerate(out))
 
 def kl_update_mask(V):
     """<<KLE-XEX-XTS-modes>> update_mask, b = 128, transcribed."""
@@ -73,6 +83,7 @@ class XexLocker:
     state = property(lambda s: fget(s.mdh, 'State'))
     keytype = property(lambda s: fget(s.mdh, 'KeyType'))
     k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
+    cname = property(lambda s: XEX_MACHINES[fget(s.mdh, 'Machine')])
     widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
     def invalidate(s):                            # GR27
         s.mdh = fset(s.mdh, 'State', INVALID)
@@ -118,7 +129,7 @@ class XexLocker:
                    or s.state == immed)):         # Encrypt <-> Decrypt and GR19 same State: a new tweak
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
             s.mask = sl(value, B - 1, 0)          # mask <- INPUT (MR7)
-            s.mask = b2v(aes_encrypt(v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
+            s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(s.mask, 16)))
             s.mdh = fset(s.mdh, 'State', immed)
         else:
             s.invalidate()                        # MR1
@@ -138,13 +149,14 @@ class XexLocker:
         if lo % B:                                # not an interruption point
             s.invalidate()
             return out & ~window, 0
-        f, key1 = aes_encrypt if s.state == ENCRYPT else aes_decrypt, v2b(s.key1, s.k // 8)
+        f, key1 = BLOCK[s.cname][0 if s.state == ENCRYPT else 1], v2b(s.key1, s.k // 8)
+        dbl = kl_update_mask_gb if s.cname == 'SM4' and s.doubling is kl_update_mask else s.doubling
         pos = list(range(lo, KLLEN, B))           # MR3
         for q, i in enumerate(reversed(pos) if s.msb_first else pos):
             if q == halt_after:
                 return out, i // 8                # precise halt
             res = s.mask ^ b2v(f(key1, v2b(sl(inp, i + B - 1, i) ^ s.mask, 16)))
-            s.mask = s.doubling(s.mask)
+            s.mask = dbl(s.mask)
             out = (out & ~(MASK128 << i)) | (res << i)
         return out, 0
     def exec1(s, value):
@@ -194,9 +206,9 @@ def derive(src, dst, length):
         return False
     return dst.derive_dest(src, length)
 
-def new_xex(key1, key2, policy=POL_ENC | POL_DEC, **kw):
+def new_xex(key1, key2, policy=POL_ENC | POL_DEC, cipher=None, **kw):
     cl = XexLocker(**kw)
-    cl.provision(build_pi(XEX_OF[f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2), policy))
+    cl.provision(build_pi(XEX_OF[cipher or f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2), policy))
     return cl
 
 def XexLocker_ready(cipher='AES-128'):
@@ -573,4 +585,25 @@ control("OCB3 big-endian `double` for update_mask",
         all(kl_xts(*v[1:5], doubling=double_ocb) != v[5] for v in FULL[:4] + CTS[:4]))
 control("multi-block kl.exec, most significant block first (2-block units)",
         all(kl_xts(*v[1:5], msb_first=True) != v[5] for v in FULL[:4]))
+section('SM4_XEX (<<KLE-XEX-XTS-modes>>): the XTS mode of GB/T 17964-2021')
+# OpenSSL 3.2.0 test/recipes/30-test_evp_data/evpciph_sm4.txt: one key, IV and plaintext, two standards
+SM4K = bytes.fromhex('2B7E151628AED2A6ABF7158809CF4F3C000102030405060708090A0B0C0D0E0F')
+SM4IV = bytes.fromhex('F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF')
+SM4P = bytes.fromhex('6BC1BEE22E409F96E93D7E117393172AAE2D8A571E03AC9C9EB76FAC45AF8E5130C81C46A35CE411E5FBC1191A0A52EF'
+                     'F69F2445DF4F9B17')
+SM4C_GB = bytes.fromhex('E9538251C71D7B80BBE4483FEF497BD12C5C581BD6242FC51E08964FB4F60FDB0BA42F63499279213D318D2C11F6886E'
+                        '903BE7F93A1B3479')
+SM4C_IEEE = bytes.fromhex('E9538251C71D7B80BBE4483FEF497BD1B3DB1A3E60408C575D63FF7DB39F83260869F9E2585FEC9F0B863BF8FD784B86'
+                          '27D16C0DB6D2CFC7')
+seq_iv = int.from_bytes(SM4IV, 'little')              # INPUT holds the tweak bytes in order (byte j = V[8j+7:8j])
+c = kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4P, cipher='SM4')
+check('SM4_XEX, 3.5 blocks with ciphertext stealing: the GB/T 17964-2021 vector (XTSStandard = GB)', True, c.hex(),
+      SM4C_GB.hex())
+check('SM4_XEX decrypts it back', True, kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4C_GB, encrypt=False, cipher='SM4'),
+      SM4P)
+control('SM4_XEX is not the IEEE 1619 construction with SM4 (XTSStandard = IEEE differs from block 1 on)',
+        c != SM4C_IEEE and c[:16] == SM4C_IEEE[:16])
+control('the AES update_mask applied to SM4 gives the IEEE vector instead',
+        kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4P, cipher='SM4', doubling=lambda v: update_mask(v)) == SM4C_IEEE)
+
 done()

@@ -57,6 +57,8 @@ SKS = {SKID: bytes.fromhex('feffe9928665731c6d6a8f9467308308')}
 
 TAG_LENS = (128, 120, 112, 104, 96, 64)            # SP 800-38D 5.2.1.2; 32 excluded (floor 64)
 
+GATED = {ENC: 1, ELB: 1, ETF: 1, DEC: 2, DLB: 2, DTF: 2, HV: 2}   # MR11: the Gated States and their bit
+
 class Gcm:
     """A GCM (set_iv False) or GCM with Set IV locker; MDH reduced to State, MachinePolicy
     (bit 0 encrypt, bit 1 decrypt), KeyType.  le_counter, iv_into_J0, stale_auth_key, ready_keeps_ctr:
@@ -76,6 +78,10 @@ class Gcm:
         return 0
 
     def _invalid(s): return s._error(INV)
+    def restrictl(s, v):                             # a set bit removes a function (<<KLE-instruction-restrict>>)
+        s.policy &= ~v                               # GR23: no transition by itself, unless the value is forbidden
+        if s.state not in ERROR_STATES and s.policy == 0:
+            s._invalid()                             # GCM requires a set bit
 
     def _load_key(s, v, k, key_type):                    # key or SKID (GR69)
         s.k, s.key_type = k, key_type
@@ -177,8 +183,8 @@ class Gcm:
             return s._invalid()                          # GR22, MR1
         if st == immed and st != SAV:
             return s._invalid()                          # GR19, GR20: only the IV load restarts (MR9)
-        if immed in (ENC, DEC) and not s.policy & (1 if immed == ENC else 2):
-            return s._invalid()
+        if immed in GATED and not s.policy & GATED[immed]:
+            return s._invalid()                          # MR11: entering a Gated State
         if immed == SAV:
             if not (8 <= aux <= 8192 and aux % 8 == 0):
                 return s._invalid()
@@ -216,6 +222,9 @@ class Gcm:
         s.halted = False
         if s.state in ERROR_STATES:
             return 0                                     # GR24, GR26
+        if s.state in GATED and not s.policy & GATED[s.state]:
+            s._invalid()                                 # MR11, GR23: a narrowing takes effect here
+            return 0
         want = {SAV: 'B', HA: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C'}.get(s.state)
         if form == 'D' and want is not None and s.zklio:
             form = want                                  # the substitution of the native Form
@@ -959,5 +968,27 @@ cl = at('setiv', ready_keeps_ctr=True)
 kl_encrypt(None, None, A, P, cl=cl)
 cl.setst(READY)
 control('Set IV: Ready keeps the running counter', kl_encrypt(None, None, A, P, cl=cl)[:2] != (RC, RT))
+
+section('MachinePolicy narrowing (GR23, MR11): the Gated States')
+def to_etf(cl):
+    cl.setst(SAV, 'B', 8 * len(IV)); feed(cl, IV); feed(cl, pad16(A), 4096); cl.setst(ENC); crypt(cl, P)
+    cl.setst(ETF, 'C', len_block(8 * len(P), 8 * len(A)))
+    return cl
+cl = to_etf(Gcm.provisioned(K))
+cl.restrictl(1)
+st0 = cl.state
+cl.exec('C', 0, 128)
+cl2 = Gcm.provisioned(K)
+cl2.setst(SAV, 'B', 8 * len(IV)); feed(cl2, IV); feed(cl2, pad16(A), 4096); cl2.setst(DEC); crypt(cl2, RC, last=DLB)
+cl2.setst(DTF, 'C', len_block(8 * len(RC), 8 * len(A)))
+cl2.restrictl(2)
+cl2.setst(HV, 'C', b2v(RT))
+cl3 = Gcm.provisioned(K)
+cl3.setst(SAV, 'B', 8 * len(IV)); feed(cl3, IV)
+cl3.restrictl(2)
+ct, tag, _ = finish(cl3, A, P)
+check('a narrowing to encrypt-off in _Enc_Tag_Finalize_ keeps the State, and the next kl.exec -> _Invalid_; '
+      'decrypt-off in _Dec_Tag_Finalize_: the kl.setst into _Hash_Verify_ -> _Invalid_; decrypt-off in _Hash_Absorb_: '
+      'encryption still completes with the reference tag', (st0, cl.state, cl2.state, ct, tag) == (ETF, INV, INV, RC, RT))
 
 done()

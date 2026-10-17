@@ -257,6 +257,42 @@ def mulx_polyval(v: int) -> int:
         v ^= (1 << 127) | (1 << 126) | (1 << 121) | 1
     return v
 
+# ---------------------------------------------------------------- SM4 (GB/T 32907-2016)
+# S-box: OpenSSL crypto/sm4/sm4.c SM4_S[256]; anchored below on the GB/T vectors.
+SM4_SBOX = bytes.fromhex(
+    "d690e9fecce13db716b614c228fb2c052b679a762abe04c3aa44132649860699"
+    "9c4250f491ef987a33540b43edcfac62e4b31ca9c908e89580df94fa758f3fa6"
+    "4707a7fcf37317ba83593c19e6854fa8686b81b27164da8bf8eb0f4b70569d35"
+    "1e240e5e6358d1a225227c3b01217887d40046579fd327524c3602e7a0c4c89e"
+    "eabf8ad240c738b5a3f7f2cef96115a1e0ae5da49b341a55ad933230f58cb1e3"
+    "1df6e22e8266ca60c02923ab0d534e6fd5db3745defd8e2f03ff6a726d6c5b51"
+    "8d1baf92bbddbc7f11d95c411f105ad80ac13188a5cd7bbd2d74d012b8e5b4b0"
+    "8969974a0c96777e65b9f109c56ec68418f07dec3adc4d2079ee5f3ed7cb3948")
+SM4_FK = (0xA3B1BAC6, 0x56AA3350, 0x677D9197, 0xB27022DC)
+_S4 = SM4_SBOX
+
+_rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+_tau = lambda a: (_S4[a >> 24] << 24) | (_S4[(a >> 16) & 255] << 16) | (_S4[(a >> 8) & 255] << 8) | _S4[a & 255]
+_words = lambda b: [int.from_bytes(b[i:i + 4], 'big') for i in range(0, 16, 4)]
+
+def sm4_rks(key):
+    k = [w ^ f for w, f in zip(_words(key), SM4_FK)]
+    for i in range(32):
+        ck = int.from_bytes(bytes((28 * i + 7 * j) & 255 for j in range(4)), 'big')
+        t = _tau(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ ck)
+        k.append(k[i] ^ t ^ _rotl(t, 13) ^ _rotl(t, 23))
+    return k[4:]
+
+def sm4_block(rks, blk):
+    x = _words(blk)
+    for rk in rks:
+        t = _tau(x[-3] ^ x[-2] ^ x[-1] ^ rk)
+        x.append(x[-4] ^ t ^ _rotl(t, 2) ^ _rotl(t, 10) ^ _rotl(t, 18) ^ _rotl(t, 24))
+    return b''.join(w.to_bytes(4, 'big') for w in reversed(x[-4:]))
+
+sm4_encrypt = lambda key, blk: sm4_block(sm4_rks(key), blk)
+sm4_decrypt = lambda key, blk: sm4_block(sm4_rks(key)[::-1], blk)   # round keys reversed
+
 # ---------------------------------------------------------------- XTS / OCB doublings
 
 def update_mask(v: int, b: int = 128) -> int:

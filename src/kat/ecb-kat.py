@@ -3,48 +3,14 @@
 and GB/T 32907-2016 (SM4); also the general rules, the PI/SCC layout and kl.derive into `key`."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (install_key, aes_encrypt, aes_decrypt, b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
+from common import (install_key, aes_encrypt, aes_decrypt, sm4_encrypt, sm4_decrypt, sm4_rks, sm4_block, SM4_SBOX,
+                    b2v, v2b, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_ENCRYPT,
                     KL_STATE_DECRYPT, KL_STATE_INVALID, KL_STATE_PRIV_VIOLATION, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, info, done)
 
 RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (53 too, without Zklexpire); 46, 47: Invalid (GR20)
 
-# ---------------------------------------------------------------- SM4 (GB/T 32907-2016)
-# S-box: OpenSSL crypto/sm4/sm4.c SM4_S[256]; anchored below on the GB/T vectors.
-SM4_SBOX = bytes.fromhex(
-    "d690e9fecce13db716b614c228fb2c052b679a762abe04c3aa44132649860699"
-    "9c4250f491ef987a33540b43edcfac62e4b31ca9c908e89580df94fa758f3fa6"
-    "4707a7fcf37317ba83593c19e6854fa8686b81b27164da8bf8eb0f4b70569d35"
-    "1e240e5e6358d1a225227c3b01217887d40046579fd327524c3602e7a0c4c89e"
-    "eabf8ad240c738b5a3f7f2cef96115a1e0ae5da49b341a55ad933230f58cb1e3"
-    "1df6e22e8266ca60c02923ab0d534e6fd5db3745defd8e2f03ff6a726d6c5b51"
-    "8d1baf92bbddbc7f11d95c411f105ad80ac13188a5cd7bbd2d74d012b8e5b4b0"
-    "8969974a0c96777e65b9f109c56ec68418f07dec3adc4d2079ee5f3ed7cb3948")
-SM4_FK = (0xA3B1BAC6, 0x56AA3350, 0x677D9197, 0xB27022DC)
-S = SM4_SBOX
-
-rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
-tau = lambda a: (S[a >> 24] << 24) | (S[(a >> 16) & 255] << 16) | (S[(a >> 8) & 255] << 8) | S[a & 255]
-words = lambda b: [int.from_bytes(b[i:i + 4], 'big') for i in range(0, 16, 4)]
-
-def sm4_rks(key):
-    k = [w ^ f for w, f in zip(words(key), SM4_FK)]
-    for i in range(32):
-        ck = int.from_bytes(bytes((28 * i + 7 * j) & 255 for j in range(4)), 'big')
-        t = tau(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ ck)
-        k.append(k[i] ^ t ^ rotl(t, 13) ^ rotl(t, 23))
-    return k[4:]
-
-def sm4_block(rks, blk):
-    x = words(blk)
-    for rk in rks:
-        t = tau(x[-3] ^ x[-2] ^ x[-1] ^ rk)
-        x.append(x[-4] ^ t ^ rotl(t, 2) ^ rotl(t, 10) ^ rotl(t, 18) ^ rotl(t, 24))
-    return b''.join(w.to_bytes(4, 'big') for w in reversed(x[-4:]))
-
-sm4_encrypt = lambda key, blk: sm4_block(sm4_rks(key), blk)
-sm4_decrypt = lambda key, blk: sm4_block(sm4_rks(key)[::-1], blk)   # round keys reversed
 
 # ---------------------------------------------------------------- the model
 B = 128
@@ -121,13 +87,15 @@ class EcbLocker:
             return self.invalidate()          # <<KLE-Metadata-validity>>: ECB uses no StateExtension
         self._install(sl(b2v(c1), self.key_width - 1, 0), True)
 
-    def setst(self, immed):
+    def setst(self, immed, form='A'):
         if immed in RESERVED_IMMED:                # reserved Error States: first group, before any State check
             raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return                            # <<KLE-GR-usage-locker-error-state>>
         pol = fld(self.mdh, 'MachinePolicy')
-        if immed == self.state != KL_STATE_READY:
+        if immed in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) and form != 'A':
+            self.invalidate()                 # MR1, GR65: only Form A is native
+        elif immed == self.state != KL_STATE_READY:
             self.invalidate()                 # GR19, GR20: no same-State kl.setst into _Encrypt_ or _Decrypt_
         elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
@@ -423,4 +391,15 @@ eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR20, MR1)",
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test")
 eq("'48 <= X1 <= 55' passes every Valid State and catches every Error State",
    [s for s in range(1, 56) if 48 <= s <= 55], list(ERROR_STATES))
+res = []
+for form in ('B', 'C'):
+    for st in (ENC, DEC):
+        cl = new_cl('AES-128', '000102030405060708090a0b0c0d0e0f')
+        cl.setst(st, form)
+        res.append(cl.state)
+cl = new_cl('AES-128', '000102030405060708090a0b0c0d0e0f')
+cl.setst(ENC, 'A')
+eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (MR1, GR65)",
+   (res, cl.state), ([KL_STATE_INVALID] * 4, ENC))
+
 done()

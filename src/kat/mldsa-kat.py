@@ -120,6 +120,11 @@ class MLDSALocker:
         f = getattr(self, name)[:w].ljust(w, b'\0')
         setattr(self, name, f[:w] + data[:n])
         self.use = w + n
+        if len(data) > n and name in ('pubkey', 'signature'):    # G9-01: excess data is a data error (FIPS 204 3.6.2)
+            setattr(self, name, b'')
+            self.use = 0
+            self.put('State', FAILURE)
+            return n
         if self.use == self.size(name) and name == 'privkey':
             if not D.sk_well_formed(self.privkey, self.ps):
                 return self.invalid()              # malformed privkey: configuration error
@@ -550,6 +555,22 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])), (SIGN_IN, h(det['sig'])))
     run(cc, SIGN_VERIFY)
     check('_Sign_Verify_ with HasPubKey false: _Invalid_', cc.state == INVALID)
+    v = next(v for v in VECTORS['sigVerMu'] if v['pass'])
+    pk, mu, sig = h(v['pk']), h(v['mu']), h(v['sig'])
+    a = loaded(44, (PK_IN, pk + b'\x00'))
+    b = loaded(44, (PK_IN, pk), (MU_IN, mu), (SIGN_IN, sig + b'\x00'))
+    check('G9-01: a pubkey or signature with excess data in the final transfer: data error, _Failure_, field zeroed, '
+          'HasPubKey clear for the pubkey (FIPS 204 3.6.2)', (a.state, a.pubkey, a.flag('HasPubKey'), b.state, b.signature)
+          == (FAILURE, b'', False, FAILURE, b''))
+    for cc in (a, b):
+        cc.setst(READY)
+        if cc is a:
+            cc.setst(PK_IN); cc.exec_B(pk)
+        for st, data in ((MU_IN, mu), (SIGN_IN, sig)):
+            cc.setst(st); cc.exec_B(data)
+        run(cc, SIGN_VERIFY)
+    check('G9-01: from that _Failure_, _Ready_ and exact-length loads reach _Sign_Verify_ again: _Success_',
+          (a.state, b.state) == (SUCCESS, SUCCESS))
     cc = generated()
     mu = D.mu_external(D.H(cc.pubkey, 64), D.format_Mp(b'KLE', b'round trip'))   # caller: tr, ctx 'KLE'
     cc.setst(MU_IN)

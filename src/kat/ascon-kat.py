@@ -291,7 +291,7 @@ class AEAD(Locker):
         self.s[0], self.s[1], self.st = sl(S_r, 63, 0), sl(S_r, 127, 64), VERIFY
         return P
     def _x_verify(self, INPUT, KLLEN, out, halt):
-        if KLLEN < self.tag_len: return self.invalidate()         # MR2; INPUT[127:0] (MR7)
+        if KLLEN < self.tag_len: return self.invalidate()         # MR2: KLLEN >= tag_len; INPUT[tag_len-1:0]
         self.st = SUCCESS if sl(INPUT, self.tag_len - 1, 0) == self._tag() else FAILURE
         return out
     def derive_dest(self, data): self.key = b2v(data); self._enter_ready()
