@@ -120,15 +120,15 @@ class Blake2:
             self.F(final)
             self.block = bytearray(self.b // 8)
 
-    def gated(self):                                      # MR11, GR22: with a system key the only operation (the MAC)
+    def gated(self):                                      # MR11, GR20: with a system key the only operation (the MAC)
         return bool(self.syskey) and not self.policy & 1  # needs bit 0; every useful State leads only to it
 
-    def restrict(self, clear):                            # kl.restrictl: clears _MachinePolicy_ bits (GR22)
+    def restrict(self, clear):                            # kl.restrictl: clears _MachinePolicy_ bits (GR20)
         if self.st not in (UNCONF, INVALID, UNSUP):
             if not self.syskey:                           # the field is unused: <<KLE-instruction-restrict>>
                 return self.invalid()
             self.policy &= ~clear
-            if not self.policy & 1:                       # GR22: a value the Machine forbids (bit 0 must be set)
+            if not self.policy & 1:                       # GR20: a value the Machine forbids (bit 0 must be set)
                 return self.invalid()
         return self                                       # otherwise the restriction alone changes no State
 
@@ -138,7 +138,7 @@ class Blake2:
             return self
         if t == READY:
             return self.ready()
-        if t in (ABSORB, LAST) and self.gated():          # GR22: a State that leads only to a disabled operation
+        if t in (ABSORB, LAST) and self.gated():          # GR20: a State that leads only to a disabled operation
             return self.invalid()
         if t == SET_AUX:                                  # the operation: nn = Xs[7:0], kk = Xs[15:8]
             nn, kk = (xs or 0) & 0xFF, (xs or 0) >> 8 & 0xFF
@@ -192,7 +192,7 @@ class Blake2:
     # -- kl.exec
     def exec(self, data):
         if self.st in (ABSORB, LAST, OUTPUT) and self.gated():
-            return self.invalid()                         # GR22: the first operation after the narrowing
+            return self.invalid()                         # GR20: the first operation after the narrowing
         if self.st == ABSORB:
             limit, final = self.b, False
         elif self.st == LAST:
@@ -202,7 +202,7 @@ class Blake2:
             if 8 * len(data) < limit:
                 return self.invalid()                     # the whole last block in one kl.exec (MR2, MR10)
         else:
-            return self.invalid()                         # GR18 in _Ready_, MR1 elsewhere
+            return self.invalid()                         # GR17 in _Ready_, MR1 elsewhere
         bits, ib = 8 * len(data), 0
         while ib < bits:
             if not final and self.block_base == limit:    # a full block is compressed before the next byte
@@ -223,7 +223,7 @@ class Blake2:
         return self
 
     def output(self, nbytes):
-        if self.st != OUTPUT or self.gated():             # GR22 in _Hash_Output_
+        if self.st != OUTPUT or self.gated():             # GR20 in _Hash_Output_
             self.invalid()
             return bytes(nbytes)
         digest = b''.join(x.to_bytes(self.w // 8, 'little') for x in self.h)[:self.nn]
@@ -433,7 +433,7 @@ for v in VARIANTS:
         'Xs > b': fresh().setst(LAST, b + 8),
         'Xs not a multiple of 8': fresh().setst(LAST, 12),
         '_Hash_Output_ named': fresh().setst(ABSORB).setst(OUTPUT),
-        'MR22: _Hash_Output_ named in _Hash_Absorb_Last_Block_ (system key)': system().setst(LAST, 8).setst(OUTPUT),
+        'MR19: _Hash_Output_ named in _Hash_Absorb_Last_Block_ (system key)': system().setst(LAST, 8).setst(OUTPUT),
         'a last block of 16 bits in a KLLEN of 8 (one kl.exec, MR2)': fresh().setst(LAST, 16).exec(b'a'),
         'a same-State kl.setst into _Hash_Absorb_': fresh().setst(ABSORB).setst(ABSORB),
         'kl.exec in _Ready_': fresh().exec(b'x'),
@@ -455,7 +455,7 @@ for v in VARIANTS:
             Blake2(v, sks=sks).provision(1, SKID).setst(LAST, 8).exec(b'x').restrict(1).st,
             Blake2(v, sks=sks).provision(1, SKID).restrict(2).st]
     check(f'{v}: system key: a kl.restrictl clearing bit 0 leaves _MachinePolicy_ = 0, which the Machine forbids: '
-          '_Invalid_ at once, in _Hash_Absorb_ and in _Hash_Output_ (GR22); clearing the unset bit 1 changes nothing',
+          '_Invalid_ at once, in _Hash_Absorb_ and in _Hash_Output_ (GR20); clearing the unset bit 1 changes nothing',
           None, gate, [INVALID, INVALID, READY])
     check(f'{v}: without a system key nothing is gated, and a kl.restrictl of the unused _MachinePolicy_ -> _Invalid_',
           None, (run(v, b'abc')[0], Blake2(v).provision().restrict(1).st), (oracle(v, b'abc', nnmax), INVALID))
@@ -471,9 +471,15 @@ for v in VARIANTS:
           sizes == [-(-(n + 128 + b) // 128) * 16, -(-(64 + n + 128 + b) // 128) * 16]
           and img[:8] == v2b(SKID, 8) and img[8 + n // 8 + 4:8 + n // 8 + 8] == v2b(nnmax, 2) + v2b(9, 2))
     part = Blake2(v, sks=sks).provision(1, SKID).setst(ABSORB).exec(b'ab').export()[1]
-    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR71)',
+    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR67)',
           img[8 + n // 8 + 16:][:b // 8] == bytes(b // 8)
           and part[8 + n // 8 + 16:][:b // 8] == b'ab' + bytes(b // 8 - 2))
+
+for v in VARIANTS:
+    img = Blake2(v, sks={SKID: b'k' * 9}).provision(1, SKID).export()
+    check(f'{v}: an import whose SKID resolves to a key of a length other than the restored kk (10 B for kk = 9) '
+          '-> _Invalid_; the same length -> the restored State', None,
+          [Blake2.imported(v, *img, sks={SKID: k}).st for k in (b'k' * 10, b'j' * 9)], [INVALID, READY])
 
 section('Negative controls')
 for v in VARIANTS:

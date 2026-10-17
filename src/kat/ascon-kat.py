@@ -138,24 +138,24 @@ class Locker:
         self.st, self.policy, self.machine_use, self.key_type, self.klstart, self.halted = UNCONF, 0, 0, 0, 0, False
         self._clear()
     def in_error(self): return self.st in ERROR_STATES
-    def invalidate(self, **_): self.st = INVALID; self._clear()  # GR32
+    def invalidate(self, **_): self.st = INVALID; self._clear()  # GR29
     def _resolve_key(self, sks): pass
     def setst(self, immed, form='A', Xs=None, INPUT=0, KLLEN=0):
-        if self.in_error(): pass                                  # GR29
-        elif immed == READY and form == 'A': self._enter_ready()  # GR17
+        if self.in_error(): pass                                  # GR26
+        elif immed == READY and form == 'A': self._enter_ready()  # GR16
         else: self._setst().get((self.st, immed, form), self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # MR1
         return self
     def exec(self, form, INPUT=0, KLLEN=0, out=0, halt_after=None):
         """One kl.exec; `out` is the prior content of the output operand, the result its content after.
         `halt_after` = n halts precisely after n blocks; re-issuing resumes at klstart."""
         has_out, done, self.halted = form in 'AC', out & mask(8 * self.klstart), False
-        zeroed = done if has_out else out                        # GR31
+        zeroed = done if has_out else out                        # GR28
         if self.in_error(): return zeroed
-        if self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:   # GR22: disabled by a narrowing
+        if self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:   # GR20: disabled by a narrowing
             self.invalidate(); self.klstart = 0; return zeroed
         ks = 8 * self.klstart                                    # <<KLE-GR-transfer-window-checks>>: interruption point?
         clause = self._exec().get((self.st, form))
-        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # GR18, GR21, MR1; MR2
+        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # GR17, GR16, MR1; MR2
             self.invalidate(); self.klstart = 0; return zeroed
         if ks >= KLLEN:                                          # empty window: only klstart = 0
             self.klstart = 0; return out
@@ -174,7 +174,7 @@ class Locker:
         if n[0] == 's' and n[1:].isdigit(): self.s[int(n[1])] = v
         else: setattr(self, n, v)
     def export(self):
-        """(MDH, Content1); GR32: a locker in an Error State is its MDH alone."""
+        """(MDH, Content1); GR29: a locker in an Error State is its MDH alone."""
         mdh = mdh_pack(Machine=0x80 | self.MODE, MachinePolicy=self.policy, State=self.st,
                        KeyType=self.key_type, MachineUse=self.machine_use)
         return mdh, b'' if self.in_error() else pack([(self._get(n), w) for n, w in self._layout()])
@@ -196,13 +196,13 @@ class AEAD(Locker):
     MODE, GRAN, USES_POLICY = 0, 128, True
     GATE = {ENCRYPT: 1, ENC_LAST: 1, OUTPUT: 1, DECRYPT: 2, DEC_LAST: 2, VERIFY: 2}
     MULTI, LAST = (ABSORB, ENCRYPT, DECRYPT), (ENC_LAST, DEC_LAST, VERIFY)   # VERIFY: KLLEN >= tag_len (MR2)
-    DST = ((READY,), 16)                                         # `key`; the tag is not a source (GR38)
+    DST = ((READY,), 16)                                         # `key`; the tag is not a source (GR35)
     dsep_wrong_word = False
     def __init__(self, key, policy=0b11, skid=None, **flags):
         Locker.__init__(self)
         self.__dict__.update(flags)
         self.policy, self.key = policy, key & M128
-        if skid is not None: self.key_type, self.skid = 1, skid  # GR71
+        if skid is not None: self.key_type, self.skid = 1, skid  # GR67
         self._enter_ready()
     def _clear(self): self.key, self.skid, self.s, self.tag_len, self.last_block_len = 0, None, [0] * 5, 0, 0
     def _layout(self):
@@ -228,14 +228,14 @@ class AEAD(Locker):
                 (ABSORB, ENCRYPT, 'A'): lambda **_: self._c_enter(ENCRYPT, 0b01),
                 (ABSORB, DECRYPT, 'A'): lambda **_: self._c_enter(DECRYPT, 0b10),
                 (ENCRYPT, ENC_LAST, 'B'): el, (DECRYPT, DEC_LAST, 'B'): dl,
-                # no same-State kl.setst (GR18): no State loads a field by kl.exec (MR9), and the Machine allows
+                # no same-State kl.setst (GR17): no State loads a field by kl.exec (MR9), and the Machine allows
                 # none; no kl.setst names _Hash_Output_ or _Hash_Verify_, which the Machine enters by itself
                 }
     def _exec(self):
         return {(ABSORB, 'B'): self._x_absorb, (ENCRYPT, 'A'): self._x_encrypt,
                 (ENC_LAST, 'A'): self._x_enc_last, (OUTPUT, 'C'): self._x_tag,
                 (DECRYPT, 'A'): self._x_decrypt, (DEC_LAST, 'A'): self._x_dec_last,
-                (VERIFY, 'B'): self._x_verify}                   # MR15: the tag comes with the kl.exec
+                (VERIFY, 'B'): self._x_verify}                   # MR14: the tag comes with the kl.exec
     def _c_tag_len(self, Xs, **_):                               # the State is unchanged
         if not 64 <= Xs <= 128: return self.invalidate()
         self.tag_len = Xs
@@ -316,7 +316,7 @@ class AEADMask(AEAD):
     def __init__(self, K1, K2, policy=0b11, skid=None): super().__init__(K1, policy, skid, K2=K2 & M128)
     def _clear(self): super()._clear(); self.K2 = 0
     def _nonce(self, N): return N ^ self.K2
-    def _system_keys(self, ent): self.key, self.K2 = ent          # GR72
+    def _system_keys(self, ent): self.key, self.K2 = ent          # GR67
     def derive_dest(self, data): self.key, self.K2 = b2v(data[:16]), b2v(data[16:]); self._enter_ready()
     def _layout(self):
         f = [('skid', 64), ('K2', 0)] if self.key_type else [('key', 128), ('K2', 128)]
@@ -327,12 +327,12 @@ class Hash256(Locker):
     """<<KLE-Ascon-Hash256>>; countdown in _MachineUse_[1:0]."""
     MODE, IV, GRAN, COUNTDOWN = 3, IV_HASH, 64, 3
     MULTI = (ABSORB, OUTPUT)
-    DST = ((ABSORB,), None)                                      # kl.exec input, of a shared secret only (GR37)
+    DST = ((ABSORB,), None)                                      # kl.exec input, of a shared secret only (GR34)
     def __init__(self): Locker.__init__(self); self._enter_ready()
     def _clear(self): self.s = [0] * 5
     def _layout(self): return [(f's{i}', 64) for i in range(5)]
     def _enter_ready(self): self.s[:] = ascon_p([self.IV, 0, 0, 0, 0], 12); self.st = READY; self.countdown = 0
-    def _setst(self): return {(READY, ABSORB, 'A'): self._c_absorb,              # no same-State kl.setst (GR18)
+    def _setst(self): return {(READY, ABSORB, 'A'): self._c_absorb,              # no same-State kl.setst (GR17)
                               (ABSORB, OUTPUT, 'A'): self._c_to_output}
     def _exec(self): return {(ABSORB, 'B'): self._x_absorb, (OUTPUT, 'C'): self._x_squeeze}
     def _c_absorb(self, **_): self.st = ABSORB
@@ -369,35 +369,35 @@ class CXOF(XOF):
     MODE, IV = 5, IV_CXOF
 
 class Secret:
-    """A shared secret field in a source State: an ML-KEM `sharedkey` (restricted, GR37; no MDH policies modelled)
-    or the shared secret of an ECC Machine in _Output_ (unrestricted); into a key or a hash input (GR37)."""
+    """A shared secret field in a source State: an ML-KEM `sharedkey` (restricted, GR34; no MDH policies modelled)
+    or the shared secret of an ECC Machine in _Output_ (unrestricted); into a key or a hash input (GR34)."""
     SRC, st, SECRET = (SUCCESS,), SUCCESS, True
     def __init__(self, data, restricted=True): self.data, self.restricted = data, restricted
     def in_error(self): return False
     def invalidate(self): self.st = INVALID
     def avail(self): return len(self.data)
-    def derive_source(self, n): return self.data[:n].ljust(n, b'\0')    # GR34
+    def derive_source(self, n): return self.data[:n].ljust(n, b'\0')    # GR31
 
 class CmacOut(Secret):
-    """A GR38 source: the b/8 bytes of `hash` of a CMAC in _Hash_Output_ (unrestricted); into a key only."""
+    """A GR35 source: the b/8 bytes of `hash` of a CMAC in _Hash_Output_ (unrestricted); into a key only."""
     SECRET = False
     def __init__(self, data): super().__init__(data, restricted=False)
 
 def kl_derive(dst, src, length):
-    """kl.derive between the endpoints of <<KLE-derive-endpoints>> under GR34-GR38; uninterruptible (GR41)."""
-    if src.in_error() or dst.in_error(): return                   # Gate Order Rule
+    """kl.derive between the endpoints of <<KLE-derive-endpoints>> under GR31-GR35; uninterruptible (GR38)."""
+    if src.in_error() or dst.in_error(): return                   # GR26: an inert endpoint
     states, n = dst.DST or ((), None)                             # no endpoint: offending locker only
     bad = [c for c, ok in ((src, src.st in (src.SRC or ())), (dst, dst.st in states and not (n and dst.key_type)))
            if not ok]
-    for c in bad: c.invalidate()                                  # GR35 items 1-2, GR71
+    for c in bad: c.invalidate()                                  # GR32 items 1-2, GR67
     if bad: return
     if not n and not src.SECRET or src.restricted and getattr(dst, 'NO_RESTRICTED', False):
-        src.invalidate(); return dst.invalidate()                 # GR35 item 3: pair not admitted (endpoint table)
+        src.invalidate(); return dst.invalidate()                 # GR32 item 3: pair not admitted (endpoint table)
     g = dst.GRAN // 8
     if (n and (length < n or src.avail() < n)) or (not n and length % g) \
             or (not n and not src.avail() <= length <= -(-src.avail() // g) * g):
-        return dst.invalidate()                                   # GR35 items 4, 5 (GR37: the whole secret)
-    eff = n or length                                             # GR34
+        return dst.invalidate()                                   # GR32 items 4, 5 (GR34: the whole secret)
+    eff = n or length                                             # GR31
     if eff: dst.derive_dest(src.derive_source(eff))
 
 def kl_restrictl(cc, machine_policy, machine_use=0):               # _MachineUse_: not changeable
@@ -406,7 +406,7 @@ def kl_restrictl(cc, machine_policy, machine_use=0):               # _MachineUse
     new = cc.policy & ~machine_policy                                # a set bit removes a function
     if not cc.USES_POLICY or not new:                                # unused field; zero, which the Machine forbids
         return cc.invalidate()
-    cc.policy = new                                                  # GR22: the next operation in a disabled State fails
+    cc.policy = new                                                  # GR20: the next operation in a disabled State fails
 
 def kl_restricth(cc, aux_info):                                   # not a field kl.restricth may change
     if aux_info: cc.invalidate()
@@ -420,7 +420,7 @@ def provision(pi, sks=None):
     assert f['Machine'] >> 4 == 8 and f['State'] == UNCONF
     mode, pol, kt = f['Machine'] & 0xF, f['MachinePolicy'], f['KeyType']
     if mode >= 3: return (Hash256, XOF, CXOF)[mode - 3]()           # the PI is the MDH alone
-    kw = 64 if kt else 128                                        # GR71
+    kw = 64 if kt else 128                                        # GR67
     k = sl(v, 127 + kw, 128)
     skid, ent = (k, (sks or {}).get(k)) if kt else (None, None)
     if mode == 0: cc = AEAD((ent or 0) if kt else k, pol, skid)
@@ -687,9 +687,9 @@ check('KLLEN = 32 < last_block_len = 40 -> _Invalid_, output window zeroed', Tru
 info('_Encrypt_ -> _Hash_Output_ is taken only through the Xs = 0 clause; a direct kl.setst is MR1')
 check('kl.setst #kl_state_hash_output from _Encrypt_ -> _Invalid_', True, aead_to(ENCRYPT).setst(OUTPUT, 'A').st,
       INVALID)
-check('GR18: a same-State kl.setst into _Hash_Output_ -> _Invalid_', True, aead_to(OUTPUT).setst(OUTPUT, 'A').st,
+check('GR17: a same-State kl.setst into _Hash_Output_ -> _Invalid_', True, aead_to(OUTPUT).setst(OUTPUT, 'A').st,
       INVALID)
-check('MR22: kl.setst #kl_state_hash_output in _Enc_Last_Block_, #kl_state_hash_verify in _Dec_Last_Block_ '
+check('MR19: kl.setst #kl_state_hash_output in _Enc_Last_Block_, #kl_state_hash_verify in _Dec_Last_Block_ '
       '-> _Invalid_', True, [aead_to(ENC_LAST).setst(OUTPUT, 'A').st,
                              aead_to(DEC_LAST).setst(VERIFY, 'C', INPUT=0, KLLEN=128).st], [INVALID] * 2)
 check('same-State kl.setst into _Hash_Absorb_ (Form C, and Form A with a set nonce), _Encrypt_, _Decrypt_ '
@@ -701,13 +701,13 @@ check('same-State kl.setst into _Hash_Absorb_ (Form C, and Form A with a set non
 check('same-State kl.setst into _Enc_Last_Block_ and _Dec_Last_Block_ -> _Invalid_ (as for every last-block State)',
       True, [AEAD(K).setst(ABSORB, 'C', INPUT=NN, KLLEN=128).setst(st0, 'A').setst(st1, 'B', Xs=16)
              .setst(st1, 'B', Xs=40).st for st0, st1 in ((ENCRYPT, ENC_LAST), (DECRYPT, DEC_LAST))], [INVALID] * 2)
-check('MR15: in _Hash_Verify_, which the Machine enters by itself, a Form B kl.exec carries the tag (Count=166: '
+check('MR14: in _Hash_Verify_, which the Machine enters by itself, a Form B kl.exec carries the tag (Count=166: '
       '_Success_, bit 0 flipped: _Failure_); KLLEN = 64 suffices for tag_len = 64', True,
       [after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166), 128)).st,
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166) ^ 1, 128)).st,
        after(drive(AEAD(K).setst(SET_AUX, 'B', Xs=64), VERIFY, True), lambda c: c.exec('B', b2v(T166[:8]), 64)).st],
       [SUCCESS, FAILURE, SUCCESS])
-check('GR18: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form C with the right tag, -> _Invalid_; '
+check('GR17: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form C with the right tag, -> _Invalid_; '
       'MR2: a kl.exec with KLLEN < tag_len (120 < 128; 64 < 65) -> _Invalid_', True,
       [aead_to(VERIFY).setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128).st,
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166), 120)).st,
@@ -719,8 +719,8 @@ ca, cc = AEAD(K), AEAD(K)
 res = [(ca.exec('A', 0, 128, out=M128), ca.st), (cc.exec('B', 0, 128), cc.st)]
 o = cc.exec('A', 1, 128, out=M128)
 cc.setst(READY)
-check('GR18: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR32/11: Content cleared, export is '
-      'the MDH only; GR29: kl.exec and kl.setst are no-ops', True,
+check('GR17: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR29/30: Content cleared, export is '
+      'the MDH only; GR26: kl.exec and kl.setst are no-ops', True,
       (res, cc.key, cc.s, cc.tag_len, cc.export()[1], o, cc.st),
       ([(0, INVALID)] * 2, 0, [0] * 5, 0, b'', 0, INVALID))
 res = [after(aead_to(start), act).st for start, act in (
@@ -733,8 +733,8 @@ res = [after(aead_to(start), act).st for start, act in (
 cc = aead_to(SUCCESS)
 res.append((cc.exec('C', 0, 128, out=M128), cc.st))
 check('MR1: tag_len in _Hash_Absorb_, wrong Forms and transitions, including _Encrypt_ -> _Hash_Output_ and '
-      '_Decrypt_ -> _Hash_Verify_ without the padded last block, and a kl.setst in _Hash_Verify_ (MR15) -> _Invalid_; '
-      'GR21: kl.exec in _Success_ (not a XOF) -> _Invalid_, output zeroed', True, res, [INVALID] * 11 + [(0, INVALID)])
+      '_Decrypt_ -> _Hash_Verify_ without the padded last block, and a kl.setst in _Hash_Verify_ (MR14) -> _Invalid_; '
+      'GR16: kl.exec in _Success_ (not a XOF) -> _Invalid_, output zeroed', True, res, [INVALID] * 11 + [(0, INVALID)])
 res = []
 for start, form, n in ((ABSORB, 'B', 120), (ENCRYPT, 'A', 136), (DECRYPT, 'A', 64)):
     cc = aead_to(start)
@@ -763,7 +763,7 @@ st3 = (ok, c2.st)
 c2, rec, ok = aead_run(c2.setst(READY), True, KAT_NONCE, ad579, ct579, tag=b2v(tag579))
 c3 = aead_to(ENCRYPT)
 c3.exec('A', 0, 256)
-check('GR17: _Success_ (64-bit tag) -> _Ready_ re-initializes (state zeroed, tag_len <- 128); _Failure_ -> _Ready_ -> genuine '
+check('GR16: _Success_ (64-bit tag) -> _Ready_ re-initializes (state zeroed, tag_len <- 128); _Failure_ -> _Ready_ -> genuine '
       'tag; _Encrypt_ -> _Ready_ -> Count=579', True, (st1, st2, ct2, st3, (rec, ok, c2.st), seal(c3.setst(READY))),
       ((blob579[:-8], SUCCESS), (READY, [0] * 5, 128), blob579,
        (False, FAILURE), (pt579, True, SUCCESS), blob579))
@@ -780,7 +780,7 @@ res = [(rec, ok)] + [(c.st, c.policy) for c in (after(aead_to(start, policy=pol)
     (0b11, READY, lambda c: kl_restricth(c, 0x0001))))]
 check('decryption-only locker decrypts but cannot _Encrypt_ (and vice versa); kl.restrictl removes functions, a set bit '
       'of a disabled one changing nothing; a narrowing that disables the current operation keeps the State, and the next '
-      'kl.exec in it -> _Invalid_ (GR22); clearing both bits leaves 0, which the Machine forbids -> _Invalid_ at once; '
+      'kl.exec in it -> _Invalid_ (GR20); clearing both bits leaves 0, which the Machine forbids -> _Invalid_ at once; '
       'kl.restricth on _AuxInfo_ -> _Invalid_', True, res,
       [(pt579, True), (INVALID, 0b10), (INVALID, 0b01), (INVALID, 0b10), (ENCRYPT, 0b10), (INVALID, 0b10),
        (OUTPUT, 0b10), (INVALID, 0b10), (READY, 0b01), (ABSORB, 0b01), (INVALID, 0b11), (INVALID, 0b11)])
@@ -794,11 +794,11 @@ for st, bit, op in ((ENC_LAST, 0b01, ('A', b2v(LAST5), 40)), (DEC_LAST, 0b10, ('
     c.exec(*op)
     res.append((kept, c.st))
 check('G7-01: kl.restrictl clearing the bit of _Enc_Last_Block_ (bit 0), _Dec_Last_Block_ or _Hash_Verify_ (bit 1) '
-      'keeps the State; the next kl.exec there -> _Invalid_, the operation not completed (GR22); clearing the other '
+      'keeps the State; the next kl.exec there -> _Invalid_, the operation not completed (GR20); clearing the other '
       'bit in _Dec_Last_Block_ lets the last block complete', True, res,
       [(ENC_LAST, INVALID), (DEC_LAST, INVALID), (VERIFY, INVALID), (DEC_LAST, VERIFY)])
 
-section('Resumption (<<KLE-GR-block-iterated-instructions>>, <<KLE-CSR-klstart>>)')
+section('Resumption (<<KLE-MGR-one-klexec-per-block>>, <<KLE-CSR-klstart>>)')
 pt3 = b2v(bytes(range(48)))
 whole = aead_to(ENCRYPT).exec('A', pt3, 384)
 for halt in (1, 2):
@@ -811,7 +811,7 @@ cc, ref_c = aead_to(ABSORB), aead_to(ABSORB)
 cc.exec('B', a, 256, halt_after=1); cc.exec('B', a, 256); ref_c.exec('B', a, 256)
 check('Form B over 2 AD blocks halted and resumed == uninterrupted', True, cc.s, ref_c.s)
 
-section('Serialized Content and provisioning (GR71 and GR72)')
+section('Serialized Content and provisioning (GR67)')
 pi = build_pi(0, [(K, 128)], policy=0b11)
 res = [(ct + tag, cc.st) for cc, ct, tag in (aead_run(provision(pi), False, KAT_NONCE, h(ad), h(pt),
                                                       after=migrate(AEAD)) for _, ad, pt, _, _ in AEAD_KAT)]
@@ -824,7 +824,7 @@ check('Content1: key, state[0..4], last_block_len, tag_len; 480 bits padded to 6
 pi_s = build_pi(0, [(SKID_A, 64)], policy=0b11, key_type=1)
 img = provision(pi_s, SKS).export(); c1 = b2v(img[1])
 check('SKID: PI = MDH, SKID (256 bits); Content1 SKID in 64 bits, then a zero state in _Ready_: no system key in the '
-      'SCC (GR71) (416 bits, 64 bytes); migrated: Count=579', True, (len(pi_s), len(img[1]), sl(c1, 63, 0), sl(c1, 383, 64),
+      'SCC (GR67) (416 bits, 64 bytes); migrated: Count=579', True, (len(pi_s), len(img[1]), sl(c1, 63, 0), sl(c1, 383, 64),
                                     seal(provision(pi_s, SKS), after=migrate(AEAD, SKS))),
       (32, 64, SKID_A, 0, blob579))
 check('an unresolved SKID -> _Invalid_ on import and on provisioning (<<KLE-MVR-open>>)', True,
@@ -846,7 +846,7 @@ check('Form C kl.setst into _Hash_Absorb_ -> _Invalid_; no block budget (40 bloc
       (INVALID, ref_aead_encrypt(KAT_KEY, KAT_NONCE, ad579, long_pt), SUCCESS))
 cc, ct, tag = aead_run(provision(pi), False, None, ad579, pt579)
 st_r = cc.setst(READY).st
-check('GR17: _Success_ -> _Ready_ reuses the PI nonce; migrated after every instruction == Count=579', True,
+check('GR16: _Success_ -> _Ready_ reuses the PI nonce; migrated after every instruction == Count=579', True,
       (st_r, seal(cc, None), seal(provision(pi), None, after=migrate(AEADNonce))), (READY, ct + tag, blob579))
 cc = AEADNonce.import_(cc.export()).setst(READY)
 check('nonce serialized (Pos. ix): an imported locker in _Success_ re-enters _Ready_ and reuses it', True,
@@ -870,12 +870,12 @@ check('Content1: K1, K2, state[0..4], last_block_len, tag_len; 608 bits padded t
 pi_s = build_pi(2, [(SKID_M, 64)], policy=0b11, key_type=1)
 cc = provision(pi_s, SKS)
 img = cc.export()[1]; c1 = b2v(img)
-check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR72: '
+check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR67: '
       'one SKID yields K1 and K2, migrated', True,
       (len(pi_s), len(img), sl(c1, 63, 0), sl(c1, 127, 64), seal(cc, after=migrate(AEADMask, SKS))),
       (32, 64, SKID_M, provision(pi_s, SKS).s[0], ref579(K1, Nm)))
 cc, ct, tag = aead_run(provision(pi), False, KAT_NONCE, h("3031"), LAST5)
-check('set-nonce Machine with K1 and nonce N xor K2 == masking Machine given N; GR17 restart agrees', True,
+check('set-nonce Machine with K1 and nonce N xor K2 == masking Machine given N; GR16 restart agrees', True,
       (seal(provision(build_pi(1, [(K1v, 128), (b2v(Nm), 128)], policy=0b11)), None, h("3031"), LAST5),
        seal(cc.setst(READY), ad=h("3031"), pt=LAST5)), (ct + tag, ct + tag))
 cc = provision(pi)
@@ -900,7 +900,7 @@ cc = at_finalize(Hash256)
 trace = [cc.countdown]
 while cc.st == OUTPUT: cc.exec('C', 0, 64); trace.append(cc.countdown)
 check('countdown: 3 on entering _Hash_Output_, then 2, 1, 0 and _Success_ on the fourth word; a fifth '
-      'kl.exec -> _Invalid_ (GR21), output zeroed', True,
+      'kl.exec -> _Invalid_ (GR16), output zeroed', True,
       (trace, cc.st, cc.exec('C', 0, 64, out=M64), cc.st), ([3, 2, 1, 0, 0], SUCCESS, 0, INVALID))
 cc, c2 = at_finalize(Hash256), at_finalize(Hash256)
 o1, o2 = cc.exec('C', 0, 192, out=mask(192)), cc.exec('C', 0, 192, out=mask(192))
@@ -921,12 +921,12 @@ for KLLEN, form, fin in ((64, 'B', None), (56, 'B', False), (104, 'C', True), (6
     res.append(cc.st)
 cc, c2 = at_finalize(Hash256), Hash256()
 kl_restrictl(cc, 0, machine_use=0x0003); kl_restrictl(c2, 0b01)
-check('GR18; MR2 (KLLEN 56, 104); MR1 (Form B in _Hash_Output_, Form A in _Hash_Absorb_); kl.restrictl on '
+check('GR17; MR2 (KLLEN 56, 104); MR1 (Form B in _Hash_Output_, Form A in _Hash_Absorb_); kl.restrictl on '
       'the countdown; kl.restrictl on an unused _MachinePolicy_ -> _Invalid_', True, res + [cc.st, c2.st],
       [INVALID] * 7)
-check('GR18: a same-State kl.setst into _Hash_Output_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
+check('GR17: a same-State kl.setst into _Hash_Output_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
       [at_finalize(c).setst(OUTPUT, 'A').st for c in (Hash256, XOF, CXOF)], [INVALID] * 3)
-check('GR18: a same-State kl.setst into _Hash_Absorb_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
+check('GR17: a same-State kl.setst into _Hash_Absorb_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
       [c().setst(ABSORB, 'A').setst(ABSORB, 'A').st for c in (Hash256, XOF, CXOF)], [INVALID] * 3)
 
 section('<<KLE-Ascon-XOF128>>')
@@ -985,11 +985,11 @@ control('prefix pad(Z, 64) without Z0 (literal reading) on every non-empty Z',
         all(sponge_run(CXOF(), h(m), 64, prefix=pad_bytes(h(z), 8))[0].hex() != md for _, m, z, md in CXOF_KAT if z))
 
 section('kl.derive (<<KLE-derive-endpoints>>, <<KLE-instruction-derive>>)')
-msg, sec = b"KLE derive source", bytes(range(0x40, 0x60))   # sec: a 32-byte GR37 shared secret
+msg, sec = b"KLE derive source", bytes(range(0x40, 0x60))   # sec: a 32-byte GR34 shared secret
 for length in (16, 24):
     dst = AEAD(0)
     kl_derive(dst, Secret(sec), length)
-    check(f'shared secret, length {length} -> Ascon-AEAD128 `key` in _Ready_: the first 16 bytes (GR35 item 5), '
+    check(f'shared secret, length {length} -> Ascon-AEAD128 `key` in _Ready_: the first 16 bytes (GR32 item 5), '
           '_Ready_ re-initialized, then encrypts as SP 800-232 under that key', True,
           ((dst.st, v2b(dst.key, 16), list(dst.s)), seal(dst)),
           ((READY, sec[:16], [0] * 5), ref579(sec[:16])))
@@ -1009,8 +1009,8 @@ for dst, src, length in ((aead_to(ABSORB), sec, 16), (AEAD(K, skid=SKID_A), sec,
                          (provision(build_pi(2, [(SKID_M, 64)], policy=0b11, key_type=1), SKS), sec, 32)):
     kl_derive(dst, Secret(src, restricted=not isinstance(dst, AEADMask)), length)
     res.append((dst.st, dst.key, dst.s))
-check('key destination not in _Ready_ (GR35 item 2), _KeyType_ = 1 (GR71), length 8, 15, 0 < 16, 12-byte source, '
-      '16 B into the 32-byte `K1 || K2` (GR35 item 5): destination _Invalid_, no key', True, res,
+check('key destination not in _Ready_ (GR32 item 2), _KeyType_ = 1 (GR67), length 8, 15, 0 < 16, 12-byte source, '
+      '16 B into the 32-byte `K1 || K2` (GR32 item 5): destination _Invalid_, no key', True, res,
       [(INVALID, 0, [0] * 5)] * 10)
 res = []
 for src, mk in ((at_finalize(XOF, msg), lambda: XOF().setst(ABSORB, 'A')), (at_finalize(XOF, msg), lambda: AEAD(K)),
@@ -1022,7 +1022,7 @@ for src, mk in ((at_finalize(XOF, msg), lambda: XOF().setst(ABSORB, 'A')), (at_f
     kl_derive(dst, src, 32 if isinstance(dst, AEADMask) else 16)
     res.append((src.st, (dst.st, getattr(dst, 'key', None), dst.s) == (ref.st, getattr(ref, 'key', None), ref.s)))
 check('XOF128 and Ascon-Hash256 output (also with 8 B left), the Ascon-AEAD128 tag in _Hash_Output_, an AEAD128 in '
-      '_Ready_ -> XOF128 _Hash_Absorb_, an AEAD128 `key`, `K1 || K2`: not a source (GR35 item 1, GR38): only the '
+      '_Ready_ -> XOF128 _Hash_Absorb_, an AEAD128 `key`, `K1 || K2`: not a source (GR32 item 1, GR35): only the '
       'source _Invalid_, the destination untouched', True, res, [(INVALID, True)] * 7)
 src, dst = Secret(sec), AEADMask(K1v, K2v)
 kl_derive(dst, src, 32)
@@ -1035,8 +1035,8 @@ res = (src.st, dst.st)
 src, dst, dst2 = CmacOut(cm), AEAD(K), AEADMask(K1v, K2v)
 kl_derive(dst, src, 16)
 kl_derive(dst2, src, 32)
-check('a CMAC (16 B) -> XOF128 _Hash_Absorb_: pair not admitted (GR35 item 3), both _Invalid_; -> AEAD128 `key` '
-      '(GR38): the key is the CMAC, encrypts as SP 800-232; -> the 32-byte `K1 || K2` (GR35 item 5): destination '
+check('a CMAC (16 B) -> XOF128 _Hash_Absorb_: pair not admitted (GR32 item 3), both _Invalid_; -> AEAD128 `key` '
+      '(GR35): the key is the CMAC, encrypts as SP 800-232; -> the 32-byte `K1 || K2` (GR32 item 5): destination '
       '_Invalid_', True, (res, dst.st, seal(dst), dst2.st), ((INVALID, INVALID), READY, ref579(cm), INVALID))
 res = []
 for s, n in ((sec, 32), (sec[:12], 16)):
@@ -1044,7 +1044,7 @@ for s, n in ((sec, 32), (sec[:12], 16)):
     kl_derive(dst, src, n)
     dst.exec('B', b2v(pad_bytes(b'', 8)), 64)
     res.append((src.st, v2b(dst.setst(OUTPUT, 'A').exec('C', 0, 128), 16)))
-check('a shared secret (GR37) of 32 B (length 32) and of 12 B (length 16, zero beyond it) -> XOF128 _Hash_Absorb_, '
+check('a shared secret (GR34) of 32 B (length 32) and of 12 B (length 16, zero beyond it) -> XOF128 _Hash_Absorb_, '
       'continued with kl.exec', True, res,
       [(SUCCESS, ref_xof128(sec, 16)), (SUCCESS, ref_xof128(sec[:12] + bytes(4), 16))])
 res = []
@@ -1052,15 +1052,15 @@ for s, n in ((sec, 16), (sec, 40), (sec, 0), (sec[:12], 12), (sec[:12], 24)):
     dst = XOF().setst(ABSORB, 'A')
     kl_derive(dst, Secret(s), n)
     res.append(dst.st)
-check('a shared secret into XOF128 _Hash_Absorb_: 32 B with length 16, 40 or 0 (GR35 item 5: from the secret length '
-      'to it rounded up to 8 B), 12 B with length 12 (GR35 item 4: not a multiple of 8 B) or 24 (GR35 item 5): '
+check('a shared secret into XOF128 _Hash_Absorb_: 32 B with length 16, 40 or 0 (GR32 item 5: from the secret length '
+      'to it rounded up to 8 B), 12 B with length 12 (GR32 item 4: not a multiple of 8 B) or 24 (GR32 item 5): '
       'destination _Invalid_', True, res, [INVALID] * 5)
 
-section('The tag as a kl.derive source; countdown on entering _Ready_')
+section('The tag is not a kl.derive source; countdown on entering _Ready_')
 cc, dst = AEAD(K), AEAD(K1v)
 cc.setst(SET_AUX, 'B', Xs=100); drive(cc, OUTPUT)
 kl_derive(dst, cc, 13)
-check('tag_len = 100: the tag in _Hash_Output_ is not a source (GR35 item 1, GR38): source _Invalid_, destination '
+check('tag_len = 100: the tag in _Hash_Output_ is not a source (GR32 item 1, GR35): source _Invalid_, destination '
       '`key` untouched', None, (cc.st, dst.st, dst.key), (INVALID, READY, K1v))
 hl = Hash256(); hl.setst(ABSORB, 'A'); hl.exec('B', 1, 64); hl.setst(OUTPUT, 'A'); hl.exec('C', 0, 64)
 before = hl.countdown

@@ -348,8 +348,8 @@ KL_STATE_SUCCESS, KL_STATE_FAILURE = 46, 47
 ERROR_STATES = range(48, 56)
 
 def inert(state) -> bool:
-    """GR29: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
-    performs no operation and raises no exception, its unwritten output zeroed (GR31)."""
+    """GR26: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
+    performs no operation and raises no exception, its unwritten output zeroed (GR28)."""
     return state == KL_STATE_UNCONFIGURED or state in ERROR_STATES
 (KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
  KL_CFG_PPI_IMPORTING) = range(56, 61)
