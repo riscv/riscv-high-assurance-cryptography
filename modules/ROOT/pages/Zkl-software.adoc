@@ -52,11 +52,11 @@ It includes every trap handler, for an exception or an interrupt, in any mode, e
 === Requirements on `klstart`
 
 `klstart` exists once per hart, and nothing resets it before other software uses it: an instruction that honors `klstart` starts at the value it finds, and `kl.mgmt`, `kl.clearall` and every instruction that honors `klstart` write it.
+Without Rule <<KLE-SR-klstart-save>>, an instruction of interposed software would start where the interrupted instruction halted, skipping a prefix of its own operand, and the interrupted instruction would resume at another position, or restart.
 
 [horizontal]
 [[KLE-SR-klstart-save,SR5]]SR5:: <<KLE-interposed-software,Interposed software>> must save `klstart` before its first KLE instruction, write 0 to it before its first instruction that honors it, and restore the saved value before control returns to the interrupted software.
-Otherwise its own instruction would skip the prefix of its own operand that the interrupted software has processed, and the interrupted software would resume from another point, or restart.
-A handler that skips the instruction retires it instead (Rule <<KLE-SR-handler-duty>>).
+A handler that skips the trapping instruction applies its retirement effects to `klstart` instead (Rule <<KLE-SR-handler-duty>>).
 
 [[KLE-SR-klstart-no-reset,SR6]]SR6:: Software should not write 0 to `klstart` to force a full restart of `kl.exec` or `kl.derive` once per-block state effects have been committed.
 
@@ -65,12 +65,13 @@ A handler that skips the instruction retires it instead (Rule <<KLE-SR-handler-d
 [[KLE-SR-management]]
 === Requirements on Management Operations
 
-Rules <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>> bind <<KLE-interposed-software,interposed software>>, and Rule <<KLE-SR-klnamedlocker-write>> all software; an instruction issued in violation of these three Rules acts on whatever locker `klnamedlocker` names (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
+Rule <<KLE-SR-nested-export-first>> binds <<KLE-interposed-software,interposed software>>.
+An instruction issued in violation of Rule <<KLE-SR-klnamedlocker-write>> or <<KLE-SR-nested-export-first>> acts on whatever locker `klnamedlocker` names (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
 
 [horizontal]
-[[KLE-SR-klnamedlocker-write,SR7]]SR7:: Before `kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`, an instruction naming `KLNL` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>), or a `kl.mgmt` that names its locker explicitly, software must read `klnamedlocker`; if it does not hold the intended value, software must save it, write the intended value, and restore the saved one before control returns to the code that set it.
+[[KLE-SR-klnamedlocker-write,SR7]]SR7:: Before `kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`, an instruction naming `KLNL` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>), or a `kl.mgmt` that names its locker explicitly, interposed software must read `klnamedlocker` and, if `klnamedlocker` does not hold the intended value, save it, write the intended value, and restore the saved one before control returns to the code that set it.
 The intended value is the number of the target locker, 32 for a transfer to or from the KLIOBUF, and 32 or the number of the target locker for a `kl.mgmt` that names its locker explicitly.
-Software that completes or abandons a management operation must then write 32 to `klnamedlocker`, or restore the value it saved.
+Any software that completes or abandons a management operation must then write 32 to `klnamedlocker`, or restore the value it saved.
 
 [[KLE-SR-nested-export-first,SR8]]SR8:: Before opening, on another locker, an export from a Valid State or an import other than the short import of an Error-State image (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>), while the locker that `klnamedlocker` names is in State `kl_cfg_exporting` or `kl_cfg_importing`, software must save that locker by a nested export and restore it before returning to the code that opened its operation, or terminate that code.
 While that locker is in such a State, software must not write another value to `klnamedlocker` before saving it this way, so that `klnamedlocker` names the owner of the authentication registers at every trap.
@@ -80,8 +81,10 @@ Software may instead clear a locker in State `kl_cfg_importing`, whose import th
 Code that must interleave them, for instance in several threads of one process, needs coordination, such as lightweight threads with KLE context-switching support, or a mutex.
 Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance to transfer data through the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), must have no other import or export open that a nested export has not saved.
 
-[[KLE-SR-no-unconditional-clear,SR10]]SR10:: System software may clear a locker under a provisioning or an import at a context switch instead of saving it, which forces the operation to restart, but must not do so unconditionally at every context switch, since repeated restarts may prevent completion: it must be able to save such a locker.
-Unless it terminates the owner, no software may clear a locker under an export, base or nested, before completing the export, since a clear destroys the CC.
+[[KLE-SR-no-unconditional-clear,SR10]]SR10:: At a context switch, system software may clear a locker under a provisioning or an import instead of saving it, which forces the operation to restart, but it must be able to save such a locker and must not clear it unconditionally at every context switch.
+Unless it terminates the owner, software must not clear a locker under an export, base or nested, before completing that export.
++
+NOTE: Repeated restarts may prevent a provisioning or an import from completing, and a clear destroys the CC of a locker under an export.
 
 // ////////////////////////////////////////////////////////////////////
 
