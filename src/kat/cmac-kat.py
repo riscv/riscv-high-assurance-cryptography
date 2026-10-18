@@ -86,7 +86,7 @@ class Cmac:
     def setst(s, immed, form='A', aux=0):
         if s.state in ERROR_STATES:               # GR26
             return
-        if immed == READY:                        # GR16
+        if immed == READY and form == 'A':        # GR16: Form A
             s.state = READY
             return s._ready()
         if s.state not in s.SETST.get((immed, form), ()):
@@ -142,11 +142,13 @@ class Cmac:
                 s._invalid('KLLEN < tag_len')     # MR2
             s.state = SUCCESS if sl(INPUT, n - 1, 0) == sl(s.hash, n - 1, 0) else FAILURE
             return 0
-        if s.absorbed_all:
-            s._invalid('second last block')
         n = s.last_block_len
         if klen < n:
-            s._invalid('KLLEN < last_block_len')
+            s._invalid('KLLEN < last_block_len')  # MR2, GR44 item 1
+        if klen == 0:
+            return 0                              # GR44 item 2: an empty window does not reach the Machine
+        if s.absorbed_all:
+            s._invalid('second last block')
         INPUT = sl(INPUT, s.b - 1, 0)               # MR7
         _, K1, K2 = s.gen_subkeys()
         if n == s.b:
@@ -200,13 +202,14 @@ def run(K, M, per_exec=1, junk=False, hop=False, lay=None, subst=False, cl=None,
     fB = 'D' if subst else 'B'
     cl = cl or Cmac(K, skid, **nc)
     nxt = (lambda c: c.imported(c.export(lay), lay)) if hop else (lambda c: c)
+    bs = cl.b // 8
     cl.setst(ABSORB); cl = nxt(cl)
-    nfull = (len(M) - 1) // 16 if M else 0
+    nfull = (len(M) - 1) // bs if M else 0
     step = per_exec or max(nfull, 1)
     for a in range(0, nfull, step):
         e = min(nfull, a + step)
-        cl.exec(fB, b2v(M[16 * a:16 * e]), 128 * (e - a)); cl = nxt(cl)
-    tail = M[16 * nfull:]
+        cl.exec(fB, b2v(M[bs * a:bs * e]), cl.b * (e - a)); cl = nxt(cl)
+    tail = M[bs * nfull:]
     cl.setst(LAST, 'B', 8 * len(tail)); cl = nxt(cl)
     if tail and junk:
         cl.exec(fB, b2v(tail) | junk_above(8 * len(tail)), 2 * B)
@@ -288,6 +291,17 @@ for lab, K, M, W in (v for v in VEC if not v[2]):
     check(f"{lab}: Xs = 0 absorbs the empty block without a kl.exec, stays in _Hash_Absorb_Last_Block_; then "
           "output and verification both work", True, (st, ab, v2b(cl.exec('C'), 16), cv.state),
           (LAST, True, W, SUCCESS))
+    ce = Cmac(K)
+    ce.setst(ABSORB)
+    ce.setst(LAST, 'B', 0)
+    try:
+        ce.exec('B', 0, 0)
+    except Invalid:
+        pass
+    st = ce.state
+    check(f"{lab}: after Xs = 0, a kl.exec with KLLEN = 0 is an empty window that does not reach the Machine "
+          "(GR44 item 2): _Hash_Absorb_Last_Block_ kept, the tag unchanged", True,
+          (st, st == LAST and (ce.setst(OUTPUT) or v2b(ce.exec('C'), 16))), (LAST, W))
 
 section("Form B kl.setst #hash_last_block: Xs")
 def at_absorb(K=K128, **kw):
@@ -326,46 +340,43 @@ def last_set():
     cl = at_absorb()
     cl.setst(LAST, 'B', 64)
     return cl
+at_last = lambda: run(K128, MSG[:40], to=None)
+at_verify = lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(at_last())
 INVALID_CASES = [
     ("kl.exec in Ready (GR17)", lambda: Cmac(K128), lambda c: c.exec('B')),
     ("kl.setst #hash_last_block from Ready", lambda: Cmac(K128), lambda c: c.setst(LAST, 'B', 0)),
     ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'B', B)),
     ("kl.setst #hash_output before the last block is absorbed", last_set, lambda c: c.setst(OUTPUT)),
     ("kl.setst #hash_verify before the last block is absorbed", last_set, lambda c: c.setst(VERIFY, 'B', B)),
-    ("kl.setst #hash_verify with Xs = 0: a 0-bit compare would accept any tag", lambda: run(K128, MSG[:40], to=None),
-     lambda c: c.setst(VERIFY, 'B', 0)),
-    ("kl.setst #hash_verify with Xs = 56 < 64", lambda: run(K128, MSG[:40], to=None), lambda c: c.setst(VERIFY, 'B', 56)),
-    ("kl.setst #hash_verify with Xs = 100, not a multiple of 8", lambda: run(K128, MSG[:40], to=None),
-     lambda c: c.setst(VERIFY, 'B', 100)),
-    ("kl.setst #hash_verify of Form C", lambda: run(K128, MSG[:40], to=None), lambda c: c.setst(VERIFY, 'C', B)),
+    ("kl.setst #hash_verify with Xs = 0: a 0-bit compare would accept any tag", at_last, lambda c: c.setst(VERIFY, 'B', 0)),
+    ("kl.setst #hash_verify with Xs = 56 < 64", at_last, lambda c: c.setst(VERIFY, 'B', 56)),
+    ("kl.setst #hash_verify with Xs = 100, not a multiple of 8", at_last, lambda c: c.setst(VERIFY, 'B', 100)),
+    ("kl.setst #hash_verify of Form C", at_last, lambda c: c.setst(VERIFY, 'C', B)),
     ("Xs = 0 after a block was absorbed: not a CMAC of any message", lambda: (lambda c: (c.exec('B', 0), c)[1])(at_absorb()),
      lambda c: c.setst(LAST, 'B', 0)),
-    ("same-State kl.setst #hash_verify (GR17)",
-     lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)), lambda c: c.setst(VERIFY, 'B', 64)),
+    ("same-State kl.setst #hash_verify (GR17)", at_verify, lambda c: c.setst(VERIFY, 'B', 64)),
     ("kl.setst #hash_output with MachinePolicy = 2 (verify only, MR11)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=2)), lambda c: c.setst(OUTPUT)),
     ("kl.setst #hash_verify with MachinePolicy = 1 (generate only, MR11)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=1)), lambda c: c.setst(VERIFY, 'B', B)),
-    ("same-State kl.setst #hash_last_block after the last block (GR17)", lambda: run(K128, MSG[:40], to=None),
-     lambda c: c.setst(LAST, 'B', 0)),
+    ("same-State kl.setst #hash_last_block after the last block (GR17)", at_last, lambda c: c.setst(LAST, 'B', 0)),
     ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR17)", last_set,
      lambda c: c.setst(LAST, 'B', 64)),
     ("same-State kl.setst #hash_absorb (GR17)", at_absorb, lambda c: c.setst(ABSORB)),
-    ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR2)",
-     lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)), lambda c: c.exec('B', 0, 64)),
-    ("kl.exec Form C in Hash_Verify", lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(run(K128, MSG[:40], to=None)),
-     lambda c: c.exec('C')),
+    ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR2)", at_verify, lambda c: c.exec('B', 0, 64)),
+    ("kl.exec Form C in Hash_Verify", at_verify, lambda c: c.exec('C')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.exec Form C in Hash_Absorb", at_absorb, lambda c: c.exec('C')),
     ("KLLEN = 64 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 64)),
     ("KLLEN = 136 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
     ("KLLEN = 56 < last_block_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
-    ("second kl.exec after the last block", lambda: run(K128, MSG[:40], to=None), lambda c: c.exec('B', 0, 64)),
+    ("second kl.exec after the last block", at_last, lambda c: c.exec('B', 0, 64)),
     ("second tag kl.exec, in Success (GR16)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (GR16)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (GR16)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
-    ("GR17: a same-State kl.setst into _Hash_Output_", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("same-State kl.setst #hash_output (GR17)", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("Form B kl.setst naming Ready (GR16, GR61)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
 ]
 for name, mk, act in INVALID_CASES:
     cl = mk()
@@ -467,20 +478,7 @@ TM = bytes.fromhex("6BC1BEE22E409F96E93D7E117393172AAE2D8A571E03AC9C9EB76FAC45AF
 TDES = [(TK3, 0, "7DB0D37DF936C550"), (TK3, 16, "30239CF1F52E6609"), (TK3, 20, "6C9F3EE4923F6BE2"),
         (TK3, 32, "99429BD0BF7904E5"), (TK2, 0, "79CE52A7F786A960"), (TK2, 16, "CC18A0B79AF2413B")]
 
-def run64(K, M, hop=False, to=OUTPUT):
-    cl = Cmac(K, cipher='tdea')
-    nxt = (lambda c: c.imported(c.export())) if hop else (lambda c: c)
-    cl.setst(ABSORB); cl = nxt(cl)
-    nfull = (len(M) - 1) // 8 if M else 0
-    for a in range(nfull):
-        cl.exec('B', b2v(M[8 * a:8 * a + 8]), 64); cl = nxt(cl)
-    tail = M[8 * nfull:]
-    cl.setst(LAST, 'B', 8 * len(tail)); cl = nxt(cl)
-    if tail:
-        cl.exec('B', b2v(tail), 8 * len(tail)); cl = nxt(cl)
-    if to == OUTPUT:
-        cl.setst(OUTPUT)
-    return nxt(cl)
+run64 = lambda K, M, hop=False, to=OUTPUT: run(K, M, hop=hop, to=to, cipher='tdea')
 
 check("CMAC-TDES subkeys (3-key): L, K1 = double(L), K2 = double(K1) with R_64 = 0x1B", True,
       [v2b(x, 8).hex().upper() for x in Cmac(TK3, cipher='tdea').gen_subkeys()],

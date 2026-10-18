@@ -636,24 +636,26 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 ----
 // Acquire payload, initialize
 - Info: plaintext = *PT
-- Process gets a Keystream Generation CC from an API. X5 = pointer to the CC.
+- Process gets a Keystream Generation SCC from an API. X5 = pointer to it.
+- Info: X6 = initial counter value.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
   vsetivli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
   IMPORT K0, (X5)
 
-  // The next operations set the nonce
+  // The next operations set the nonce and the initial counter
   V1 ← nonce
   kl.setst K0, #kl_state_operate, V1
+  kl.setst K0, #kl_state_set_aux_value, X6  // ctr ← bin(X6, j)
 
   // Compute keystream, use it to encrypt plaintext.  A final partial block
   // still takes a whole keystream block; the caller discards the bytes past
   // the end of PT.
   foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) do:
-    V0 ← PT[16*i .. 16*i+15]
+    V0 ← PT[16*i .. min(16*i+15, len_in_bytes(PT)-1)]
     kl.exec V1, K0
     V1 ← V1 xor V0
-    CT[16*i .. 16*i+15] ← V1
+    CT[16*i .. min(16*i+15, len_in_bytes(PT)-1)] ← V1
 ----
 
 === XEX/XTS Modes
@@ -1066,7 +1068,7 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag, as shown belo
 [[KLE-pseudocode-CMAC]]
 .CMAC Computation
 ----
-- Info: CMAC input = *M with bit length M_len
+- Info: CMAC input = *M with bit length M_len, a multiple of 8
 - Process gets a CMAC CC from an API. Assume X5 is the pointer to the CC.
 
   vsetivli zero, 4, e32, m1, ta, ma      // Use 128-bit vectors
@@ -1106,4 +1108,101 @@ To verify a CMAC `T` of `T_len` bits instead, the last two instructions are repl
   kl.exec K0, V0                         // compares the first T_len bits
   kl.getst X2, K0                        // _Success_ if T matches,
                                          // _Failure_ otherwise
+----
+
+[[KLE-hash-example]]
+=== Hash Functions, MACs and XOFs
+
+The following sequence hashes a message with any Machine of
+<<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>: only the SCC, and the number
+`out_bytes` of output bytes, differ.
+The caller passes the message unpadded; the `kl.setst` into _Hash_Output_ pads it.
+The final piece of `M_bits` mod 64 bits fits every Machine, whose `b` is at least 64; it
+must be a whole number of bytes for BLAKE2. For SHA-2 and SM3 its partial last byte holds
+the final bits in its most significant positions, for SHA-3, KMAC and Ascon in its least
+significant ones, and for HMAC as for its `H`, each as its standard orders bits.
+`X1` = 8 {times} `out_bytes` makes the Machine emit exactly `out_bytes` bytes and then enter
+_Success_; for KMAC128 and KMAC256 it is also the output length `L` that the MAC encodes,
+while KMACXOF128 and KMACXOF256 encode `L` = 0 and only stop after `out_bytes` bytes.
+`out_bytes` is at least 1, at most the digest length of a fixed-output Machine, and at least
+8 for HMAC; `X1` = 0 would ask instead for the full digest, or an unbounded XOF, and is
+invalid for KMAC128 and KMAC256.
+`out_bytes` only truncates the output of the Machine: a BLAKE2 digest of `nn` bytes other
+than `nn~max~`, such as BLAKE2b-256, comes from an SCC whose `nn` the _Set_Aux_Value_
+operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> set, since `nn` enters the IV.
+An SCC whose `kk` that operation set is keyed by the caller: `M` then starts with the key,
+zero-padded to `b` bits (cite:[RFC7693] {sect}3.3), which alone forms the message for an
+empty `M`; a system key needs no such block.
+An SCC of the NIK variant of <<Zkl-ISA-machines.adoc#KLE-HMAC>> must already hold its key,
+and the SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key, must enable
+_Hash_Output_ (_MachinePolicy_[0]), or _Hash_Verify_ (_MachinePolicy_[1]) for the listing
+below.
+The SCC is in _Ready_; an SCC exported in _Hash_Absorb_ after a prefix of the message, as
+in the NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>, takes no first `kl.setst`, and
+`M` is then the rest of the message.
+
+[[KLE-pseudocode-hash]]
+.Hashing a Message
+----
+- Info: message = *M of M_bits bits; out_bytes bytes of output wanted.
+- Process gets the SCC of any hash, MAC or XOF from an API. X5 = pointer.
+
+  IMPORT K0, (X5)
+  kl.setst K0, #kl_state_hash_absorb
+
+  r ← M_bits mod 64                      // the final piece, 0 to 63 bits
+  h ← (M_bits - r)/8                     // the bytes before it
+  foreach(i from 0 to ceil(h/16)-1) do:
+    n ← min(16, h - 16*i)                // the last chunk may be shorter
+    vsetvli zero, n, e8, m1, ta, ma      // KLLEN = 8n
+    V0 ← M[16*i .. 16*i+n-1]
+    kl.exec K0, V0                       // absorbs n bytes, unpadded
+
+  X1 ← r
+  kl.setst K0, #kl_state_hash_last_block, X1  // r = 0: does nothing
+  if r != 0 then:
+    n ← ceil(r/8)
+    vsetvli zero, n, e8, m1, ta, ma
+    V0 ← M[h .. h+n-1]
+    kl.exec K0, V0                       // absorbs the final r bits
+
+  X1 ← 8*out_bytes
+  kl.setst K0, #kl_state_hash_output, X1 // ends the message: Machine pads
+
+  foreach(j from 0 to ceil(out_bytes/16)-1) do:
+    n ← min(16, out_bytes - 16*j)
+    vsetvli zero, n, e8, m1, ta, ma
+    kl.exec V0, K0                       // emits the next n bytes
+    OUT[16*j .. 16*j+n-1] ← V0
+  kl.getst X2, K0                        // _Success_
+----
+
+To verify a MAC `T` of `T_len` bits with HMAC, KMAC128 or KMAC256 instead, the
+instructions from the
+`kl.setst` into _Hash_Output_ on are replaced by the listing below.
+With 128-bit vectors, LMUL = 8 holds a tag of up to 1024 bits: every HMAC tag, and a KMAC
+tag up to that length.
+
+[[KLE-pseudocode-hash-verify]]
+.MAC Verification
+----
+  X1 ← T_len                             // a multiple of 8, at least 64
+  kl.setst K0, #kl_state_hash_verify, X1
+  vsetvli zero, T_len/8, e8, m8, ta, ma  // KLLEN = T_len
+  V0 ← T
+  kl.exec K0, V0                         // compares the first T_len bits
+  kl.getst X2, K0                        // _Success_ if T matches,
+                                         // _Failure_ otherwise
+----
+
+With Ascon-CXOF128 and a customization string `Z` of `Z_bits` bits, the first `kl.setst`
+is replaced by:
+
+[[KLE-pseudocode-cxof-customization]]
+.Ascon-CXOF128 Customization
+----
+  X1 ← Z_bits                            // 0 to 2048
+  kl.setst K0, #kl_state_set_aux_value, X1  // absorbs bin(Z_bits, 64)
+  // the ceil(Z_bits/8) bytes of Z by kl.exec, as M above
+  kl.setst K0, #kl_state_hash_absorb     // pads Z; M follows as above
 ----

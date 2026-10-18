@@ -32,7 +32,7 @@ def POLYVAL(auth_key, blocks):                # <<KLE-SCC-POLYVAL>>
 def tag_block(S, sep):                        # 0 @ sep @ S[125:0]
     return cat((0, 1), (sep & 1, 1), (sl(S, 125, 0), 126))
 
-def ctr_block(SIV, sep, i):                   # 1 @ sep @ SIV[125:32] @ bin\((int(SIV[31:0]) + i) mod 2^32, 32)
+def ctr_block(SIV, sep, i):                   # 1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2^32, 32)
     return cat((1, 1), (sep & 1, 1), (sl(SIV, 125, 32), 94), ((sl(SIV, 31, 0) + i) & M32, 32))
 
 def _tag(AD, N, sep, P, K, length_block, clear_ads):
@@ -89,7 +89,7 @@ def locality_field(indices):
         f |= val << lo
     return f
 
-def localities_of(mdh):                        # in index order, as <<KLE-SCC-export>> step 1.c appends them
+def localities_of(mdh):                        # in index order, as <<KLE-SCC-export>> step 3.d appends them
     return [j for j, ((hi, lo), val) in LOCALITY_ENC.items() if sl(fld(mdh, 'Locality'), hi, lo) == val]
 
 def make_mdh(localities=(), **f):
@@ -162,7 +162,7 @@ class Unit:
     def _set_managed(self, cl):                # common step 2
         self.klnamedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR22
+    def _check_transfer(self, cl):             # GR4
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klnamedlocker:
             raise IllegalInstruction
 
@@ -220,7 +220,7 @@ class Unit:
             return (64 + content2_size(mdh) if fld(mdh, 'AuxDataLen') else 32) + self.content1_size(mdh)
         return 16 + self.content1_size(mdh)    # PI: same key field
 
-    # kl.mgmt #kl_cfg_importing: <<KLE-SCC-import>> steps 1-5, or the short import
+    # kl.mgmt #kl_cfg_importing: <<KLE-SCC-import>> steps 2-8, or the short import
     def mgmt_open_import(self, cl, ml):
         self._check_managed(cl)
         try:
@@ -229,7 +229,7 @@ class Unit:
             self._set_managed(cl)
 
     def _open_import(self, cl, ml):
-        cl.__init__(idx=cl.idx)                # step 1: clear
+        cl.__init__(idx=cl.idx)                # step 2: clear
         st = fld(ml, 'State')
         if st in ERROR_STATES:                 # <<KLE-error-state-transfer>>; Expired without Zklexpire: read
             st = INVALID if st in (54, 55) or st == EXPIRED and not self.zklexpire else st
@@ -242,11 +242,11 @@ class Unit:
             cl.mdh = put(0, 'State', INVALID)  # every other MDH field stays zero
             return
         assert base_type(st) != 'pi', 'PI-shaped images are not modelled'
-        aux = fld(ml, 'AuxDataLen')           # step 5: working ADSDropped
+        aux = fld(ml, 'AuxDataLen')           # steps 6-7: working ADSDropped
         dropped = int(aux >= 2 and (fld(ml, 'ADSDropped') == 1 or aux > self.max_aux))
         cl.mdh = put(put(ml, 'ADSDropped', dropped), 'State', IMPORTING)
 
-    def load(self, cl, mem, at=16):            # kl.load: step 6
+    def load(self, cl, mem, at=16):            # kl.load: step 9
         if cl.state == UNCONF or cl.state in ERROR_STATES:
             return                             # GR26: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
@@ -269,10 +269,10 @@ class Unit:
             self.klnamedlocker = 32
             return
         if is_valid(st):
-            AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]      # 1.a-1.c
+            AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]      # 3.a-3.d
             self.reg_SIV, cl.content1 = SCC_Encrypt(AD, 0, 0, cl.content1, self.CSK)
             aux = fld(cl.mdh, 'AuxDataLen')
-            if aux >= 2:                       # 2: an ADS producer has klmimpid != 0
+            if aux >= 2:                       # 4: an ADS producer has klmimpid != 0
                 assert self.ids[2] and len(cl.content2) == aux - 2
                 self.reg_IMPQUAL = self.impqual()
                 self.reg_SIV2, cl.content2 = SCC_Encrypt([self.reg_IMPQUAL, self.reg_SIV], 0, 1,
@@ -295,7 +295,7 @@ class Unit:
         return S
 
     def mgmt_complete(self, cl, ml, regen=None, clear_ads=True):
-        """kl_cfg_management_end for base type scc: <<KLE-SCC-import>> steps 7-15. regen = (AuxDataLen,
+        """kl_cfg_management_end for base type scc: <<KLE-SCC-import>> steps 10-18. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
         if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR26: common steps only
@@ -310,12 +310,12 @@ class Unit:
         self._set_managed(cl)
 
     def _authenticate(self, cl, regen, clear_ads):
-        AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]          # steps 7-9
+        AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]          # steps 10-12
         self.decrypts.append(0)
         ok, cl.content1 = SCC_Decrypt(AD, 0, 0, self.reg_SIV, cl.content1, self.CSK, clear_ads=clear_ads)
-        if not ok:                             # step 12
+        if not ok:                             # step 15
             return enter_error_state(cl, AUTH)
-        if fld(cl.mdh, 'AuxDataLen') >= 2 and not fld(cl.mdh, 'ADSDropped'):      # steps 13-14
+        if fld(cl.mdh, 'AuxDataLen') >= 2 and not fld(cl.mdh, 'ADSDropped'):      # steps 16-17
             ok = self.reg_IMPQUAL == self.impqual()
             if ok:
                 self.decrypts.append(1)
@@ -323,14 +323,15 @@ class Unit:
                                               cl.content2, self.CSK)
             if not ok:
                 cl.content2, cl.mdh = None, put(cl.mdh, 'ADSDropped', 1)
-        if fld(cl.mdh, 'AuxDataLen') == 0 or fld(cl.mdh, 'ADSDropped'):          # step 15
+        if fld(cl.mdh, 'AuxDataLen') == 0 or fld(cl.mdh, 'ADSDropped'):          # step 18
             aux, cl.content2 = regen or (0, None)
             cl.mdh = put(cl.mdh, 'AuxDataLen', aux)
         cl.mdh = put(cl.mdh, 'ADSDropped', 0)
 
 # ---------------------------------------------------------------- software sequences
 def export_cl(unit, cl):
-    """kl.size, kl.getmd and, unless the image is the 16-byte Error-State MDH, kl.mgmt, kl.store, kl.mgmt."""
+    """kl.size, kl.getmd and, unless the image is the 16-byte Error-State MDH, kl.mgmt, kl.store, kl.mgmt;
+    on a locker in kl_cfg_importing, a nested export: the saved MDH, then the SCC-shaped image verbatim."""
     size, ml = unit.kl_size(cl.mdh, 'A'), cl.mdh
     if size == 16:
         return v2b(ml, 16)
@@ -356,13 +357,6 @@ def open_and_load(unit, image):               # an import preempted before its c
     unit.mgmt_open_import(cl, b2v(mem.read(0, 16)))
     unit.load(cl, mem)
     return cl
-
-def export_pccc(unit, cl):                     # nested export: saved MDH, then the SCC-shaped image verbatim
-    ml = cl.mdh
-    unit.mgmt_open_export(cl)
-    image = v2b(ml, 16) + unit.store(cl)
-    unit.mgmt_complete(cl, ml)
-    return image
 
 def reimport_pccc(unit, image):
     cl = open_and_load(unit, image)
@@ -638,7 +632,7 @@ eq("every sampled bit change in SIV or Content1 fails authentication",
 eq("SCC_Decrypt zeroes P[] when authentication fails",
    SCC_Decrypt([mdh] + [LST[j] for j in LOC_SETS[2]], 0, 0, b2v(scc[16:32]) ^ 1, deser(scc[32:]), CSK),
    (False, [0] * n1))
-eq("changed selected Locality Secret / unselected one / other CSK / substituted Locality set",
+eq("other value of a selected Locality Secret / of an unselected one / other CSK / substituted Locality set",
    (imp(new_unit(LST_ALT), scc), imp(new_unit(LST_ALT_UNSEL), scc), imp(new_unit(csk=CSK ^ 1), scc),
     imp(unit, v2b(make_mdh((2,)), 16) + scc[16:])), (AUTH_F, 'ok', AUTH_F, AUTH_F))
 cl, res = import_image(unit, Mem(scc), ml=put(put(mdh, 'Locality', 0), 'UsagePolicy', 0b11111))
@@ -691,14 +685,14 @@ check("sep = 1: AD2[0][47] (klmarchid bit 15) is authenticated, not cleared",
       SCC_Encrypt([unit.impqual() ^ 1 << 47, s1], 0, 1, CONTENT2, CSK)[0] != s2)
 small, mem = new_unit(max_aux=AUX_LEN - 1), Mem(scc_i)
 cl, res = import_image(small, mem)
-eq("ADS above the importer's maximum: step 5 drops it; Content2 not read; Content1 imports",
+eq("ADS above the importer's maximum: steps 6-7 drop it; Content2 not read; Content1 imports",
    (res, cl.snapshot(), small.decrypts, mem.hi), ('ok', no_ads, [0], off2))
 cl = open_and_load(small, scc_i)
 eq("during that import the locker MDH has the working ADSDropped = 1 and the original AuxDataLen",
    (fld(cl.mdh, 'ADSDropped'), fld(cl.mdh, 'AuxDataLen'), cl.state), (1, AUX_LEN, IMPORTING))
 cl, res = import_image(other, Mem(scc_i), regen=(3, [0x5EED]))
 scc_r = export_cl(other, cl)
-eq("step 15: a replacement ADS sets AuxDataLen (>= 2); a later export emits it with the importer's IMPQUAL",
+eq("step 18: a replacement ADS sets AuxDataLen (>= 2); a later export emits it with the importer's IMPQUAL",
    (res, fld(cl.mdh, 'AuxDataLen'), fld(cl.mdh, 'ADSDropped'), scc_r[32:48],
     import_image(other, Mem(scc_r))[0].content2),
    ('ok', 3, 0, v2b(other.impqual(), 16), [0x5EED]))
@@ -749,7 +743,7 @@ for label, img, dec in (("junk IMPQUAL: segment 2 fails at the qualifier", padde
     cl, res = import_image(unit, Mem(tampered(img, 47)))
     eq(f"clearing it over {label}; Content1 kept", (res, cl.snapshot(), unit.decrypts), ('ok', no_ads, dec))
 cl = open_and_load(small, scc_i)
-pccc = export_pccc(small, cl)
+pccc = export_cl(small, cl)
 eq("SCC-shaped PCCC of a dropped import: saved MDH (importing, ADSDropped 1), SIV..Content1 verbatim, "
    "length kl.size; the nested completion restores kl_cfg_importing",
    (b2v(pccc[:16]), len(pccc), small.kl_size(b2v(pccc[:16])), pccc[16:], cl.state, fld(cl.mdh, 'ADSDropped')),
@@ -767,7 +761,7 @@ for label, u, tail, want in (("an importer too small for the ADS drops it again"
     cl = reimport_pccc(u, pccc_clr + tail)
     u.mgmt_complete(cl, mdh_i)
     eq(f"clearing it in the PCCC, {label}", cl.snapshot(), want)
-pccc_full = export_pccc(unit, open_and_load(unit, scc_i))
+pccc_full = export_cl(unit, open_and_load(unit, scc_i))
 for label, img, want in (("a PCCC of an import that kept its ADS completes with it", pccc_full, ref_snap),
                          ("setting bit 47 in that PCCC only drops the ADS", tampered(pccc_full, 47), no_ads)):
     cl = reimport_pccc(unit, img)

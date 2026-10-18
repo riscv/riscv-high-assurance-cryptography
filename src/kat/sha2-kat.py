@@ -3,11 +3,10 @@
 FIPS 180-4 cores from scratch; hashlib is only a labeled reference oracle."""
 import hashlib, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
-                    KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
-                    KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
-                    KL_STATE_FAILURE, KL_STATE_INVALID, section, check, control, info,
-                    spec_note, raises, done)
+from common import (KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK,
+                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, section, check,
+                    control, raises, done, md_pad, hash_run, hash_msgs, check_hash)
+from sha2_sm3_common import HART, MdHash, MdPort, KeyDest, Source, kl_derive, A, O, R, B, C, run
 
 # ---------------------------------------------------------------- FIPS 180-4
 
@@ -43,13 +42,9 @@ def compress(H, W, w):
         a, b, c, d, e, f, g, h = (T1 + T2) & M, a, b, c, (d + T1) & M, e, f, g
     return [(x + y) & M for x, y in zip(H, (a, b, c, d, e, f, g, h))]
 
-def fips_pad(nbytes, w):
-    """The caller's padding, FIPS 180-4 sect. 5.1."""
-    return b'\x80' + bytes(-(nbytes + 1 + w // 4) % (2 * w)) + (8 * nbytes).to_bytes(w // 4, 'big')
-
 for t in (224, 256):  # sect. 5.3.6
     m = f'SHA-512/{t}'.encode()
-    m += fips_pad(len(m), 64)
+    m += md_pad(8 * len(m), 64)
     IV[f'SHA-512/{t}'] = compress([h ^ 0xa5a5a5a5a5a5a5a5 for h in IV['SHA-512']],
                                   [int.from_bytes(m[j:j + 8], 'big') for j in range(0, 128, 8)], 64)
 assert K[32][0] == 0x428a2f98 and K[32][63] == 0xc67178f2 and K[64][79] == 0x6c44198c4a475817
@@ -64,161 +59,33 @@ PARAMS = {'SHA-224': (32, 512, 256, 224), 'SHA-256': (32, 512, 256, 256),
 
 # ---------------------------------------------------------------- KLE model
 
-class Hart:
-    klstart = 0  # bytes, <<KLE-CSR-klstart>>
-
-HART = Hart()
-
-def setsl(v, hi, lo, x):
-    m = ((1 << (hi - lo + 1)) - 1) << lo
-    return (v & ~m) | ((x << lo) & m)
-
-def pack(*fields):
-    """Serialized fields in table order from bit 0, zero-padded to 128 bits."""
-    v = pos = 0
-    for x, w in fields:
-        v, pos = v | bin_(x, w) << pos, pos + w
-    return v2b(v, -(-pos // 128) * 16)
-
-class Sha2:
-    def __init__(s, name='SHA-256', bswap_words=True, klstart_bits=False):
-        s.name, (s.w, s.b, s.n, s.t) = name, PARAMS[name]
-        s.bswap_words, s.klstart_bits = bswap_words, klstart_bits
-        s.reset(KL_STATE_UNCONFIGURED)
-
-    def reset(s, st=KL_STATE_INVALID):  # GR29 for an Error State
-        s.st, s.state, s.block, s.block_base = st, 0, 0, 0
-        if st == KL_STATE_READY:
-            s.state = sum(bswap(bin_(h, s.w), s.w // 8) << (i * s.w) for i, h in enumerate(IV[s.name]))
-        return s
-
-    def provision(s):  # PI = MDH only
-        return s.reset(KL_STATE_READY)
-
-    def process_block(s):
-        wd = lambda v, j: sl(v, (j + 1) * s.w - 1, j * s.w)
-        H = [bswap(wd(s.state, i), s.w // 8) for i in range(8)]
-        W = [bswap(wd(s.block, j), s.w // 8) if s.bswap_words else wd(s.block, j) for j in range(16)]
-        s.state = sum(bswap(h, s.w // 8) << (i * s.w) for i, h in enumerate(compress(H, W, s.w)))
-
-    def export(s):  # <<KLE-hash-functions-MACs-XOFs>> Serialized Content, cumul_len absent
-        return pack((s.state, s.n), (0, 16), (s.block_base, 16), (0, 16), (0, 16), (s.block, s.b))
+class Sha2(MdHash):
+    """<<KLE-SHA-2>> with the PARAMS of name, granularity 8 bits."""
+    def __init__(s, name='SHA-256', **kw):
+        w, b, n, t = PARAMS[name]
+        super().__init__(name, w, b, n, t, IV[name], lambda H, W: compress(H, W, w), **kw)
 
     @classmethod
-    def load(cls, name, st, c1):
-        cl, v = cls(name), b2v(c1)
-        cl.st, cl.state, cl.block_base, cl.block = st, sl(v, cl.n - 1, 0), sl(v, cl.n + 31, cl.n + 16), v >> (cl.n + 64)
-        return cl
+    def load(cls, name, st, c1): return cls(name).restore(st, c1)
 
-    def setst(s, immed, form='A'):  # <<KLE-instruction-setst>>
-        if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
-            if s.st != KL_STATE_UNCONFIGURED:
-                s.reset(KL_STATE_INVALID if immed > 53 else immed)
-        elif inert(s.st):
-            pass  # GR26
-        elif immed == KL_STATE_READY:
-            s.reset(KL_STATE_READY)
-        # Form A: max_len = 0 is set by the Machine; no same-State _Hash_Absorb_ (<<KLE-process-VLI>>)
-        # or _Hash_Output_ (GR17);
-        # stand-alone hashing enters _Hash_Output_ with whole blocks only
-        elif form != 'A' or (s.st, immed) not in ((KL_STATE_READY, KL_STATE_HASH_ABSORB),
-                                                  (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT)) \
-                or (immed == KL_STATE_HASH_OUTPUT and s.block_base):
-            s.reset()
-        else:
-            s.st = immed
+class Port(MdPort):
+    """<<Zkl-software.adoc#KLE-pseudocode-hash>> on a Sha2 locker."""
+    def __init__(p, name='SHA-256', cl=None):
+        p.name = name
+        super().__init__(cl or Sha2(name).provision())
+    def imported(p, img): return Port(p.name, Sha2.load(p.name, *img))
 
-    def exec(s, form, data=b'', nbytes=0, halt=False, resume=False, prior=None):
-        """kl.exec Form B (data) or C (nbytes); returns (status, output)."""
-        if inert(s.st):
-            return 'noop', bytes(nbytes)  # GR26, GR28
-        if s.st == KL_STATE_HASH_OUTPUT and form == 'C':
-            p, prior = HART.klstart, prior or bytes(nbytes)
-            if p >= nbytes:
-                HART.klstart = 0
-                return 'empty', prior  # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
-            if p:  # not an interruption point: a hash reaches _Success_ before any
-                s.reset()
-                HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR28
-            return 'retired', s.output(nbytes, prior)
-        if resume and (HART.klstart % GRAN or HART.klstart and s.block_base):
-            r, HART.klstart = 'invalid', 0  # not an interruption point (<<KLE-process-VLI>>)
-        else:
-            r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
-                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR17, GR16, MR1
-        if r == 'invalid':
-            s.reset()
-        return r, bytes(nbytes)
-
-    def process_vli(s, INPUT, KLLEN, halt, resume):
-        """PROCESS_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, None, P, None, assign)."""
-        ib = 8 * HART.klstart if resume else 0
-        while ib < KLLEN:
-            amount = min(KLLEN - ib, s.b - s.block_base)
-            s.block = setsl(s.block, s.block_base + amount - 1, s.block_base, sl(INPUT, ib + amount - 1, ib))
-            ib, s.block_base = ib + amount, s.block_base + amount
-            if s.block_base == s.b:
-                s.process_block()
-                s.block_base = 0
-            if halt and ib < KLLEN and ib % 32 == 0:  # 3.i: at a multiple of the granularity only
-                HART.klstart = ib if s.klstart_bits else ib // 8
-                return 'interrupted'
-        HART.klstart = 0
-        return 'retired'
-
-    def output(s, nbytes, prior):  # _Hash_Output_ loop reading `state`
-        OUT, KLLEN, ob = b2v(prior or bytes(nbytes)), 8 * nbytes, 0
-        while ob < KLLEN:
-            amount = min(KLLEN - ob, s.t - s.block_base)
-            OUT = setsl(OUT, ob + amount - 1, ob, sl(s.state, s.block_base + amount - 1, s.block_base))
-            ob, s.block_base = ob + amount, s.block_base + amount
-            if s.block_base == s.t:
-                OUT, s.st = sl(OUT, ob - 1, 0), KL_STATE_SUCCESS
-                break
-        HART.klstart = 0
-        return v2b(OUT, nbytes)
-
-class KeyDest:
-    """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLE-derive-endpoints>>); only the key is modelled."""
-    def __init__(s, n): s.st, s.n, s.key = KL_STATE_READY, n, None
-    def reset(s): s.st, s.key = KL_STATE_INVALID, None
-
-class Source:
-    """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
-    ML-KEM `sharedkey`, GR34) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR35).  A hash in
-    _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
-    def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
-    def reset(s): s.st = KL_STATE_INVALID
-
-GRAN = 4  # bytes: the SHA-2 input granularity, 32 bits
-
-def kl_derive(dst, src, length):
-    """A Source -> the _Hash_Absorb_ kl.exec input (GR34: a shared secret only) or a KeyDest (GR34, GR35);
-    uninterruptible (GR38)."""
-    if src.st in ERROR_STATES or dst.st in ERROR_STATES:
-        return 'noop'  # GR26: an inert endpoint
-    key = isinstance(dst, KeyDest)
-    bad = [c for c, ok in ((src, isinstance(src, Source)),
-                           (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
-    for c in bad:
-        c.reset()  # GR32 items 1-2
-    pos, HART.klstart = HART.klstart, 0  # uninterruptible (GR38): no resumption
-    if bad:
-        return 'refused'
-    if not (key or src.secret):
-        src.reset()  # GR32 item 3: both
-        dst.reset()
-        return 'refused'
-    n = len(src.data)
-    if pos or (min(length, n) < dst.n if key else not n <= length <= -(-n // GRAN) * GRAN):
-        dst.reset()  # GR32 item 5
-        return 'refused'
-    if key:
-        dst.key = src.data[:dst.n]
-    else:
-        dst.exec('B', src.data.ljust(length, b'\0'))  # GR31: zero beyond the field, which does not advance
-    return 'done'
+def ref_bits(name, msg, nbits, nout=None):
+    """FIPS 180-4 on a bit string (sect. 5.1.1, 5.1.2), independent of md_pad: the first nbits bits of msg,
+    MSB-first."""
+    w, b, n, t = PARAMS[name]
+    bits = ''.join(format(x, '08b') for x in msg)[:nbits]
+    bits += '1' + '0' * (-(nbits + 1 + 2 * w) % b) + format(nbits, f'0{2 * w}b')
+    H = IV[name]
+    for o in range(0, len(bits), b):
+        blk = bits[o:o + b]
+        H = compress(H, [int(blk[j:j + w], 2) for j in range(0, b, w)], w)
+    return b''.join(h.to_bytes(w // 8, 'big') for h in H)[:t // 8][:nout]
 
 # ---------------------------------------------------------------- vectors
 
@@ -272,36 +139,24 @@ MNAME = {M_EMPTY: 'empty', M_ABC: '"abc"', M2_32: '448-bit', M2_64: '896-bit'}
 
 # ---------------------------------------------------------------- drivers
 
-A = lambda c: c.setst(KL_STATE_HASH_ABSORB)
-O = lambda c: c.setst(KL_STATE_HASH_OUTPUT)
-R = lambda c: c.setst(KL_STATE_READY)
-B = lambda d: lambda c: c.exec('B', d)
-C = lambda n: lambda c: c.exec('C', nbytes=n, prior=b'\xa5' * n)
-
-def run(c, *ops):
-    """Apply ops to locker c; return the last result."""
-    return [op(c) for op in ops][-1]
-
 def digest(name, msg, plan, **kw):
     """Plans: multi (3 transfers, 2 reads), interrupt (halt at each 3.i, resume), export (mid-block),
     odd (transfers of 1 and 3 bytes, then a 1-byte read)."""
     cl = Sha2(name, **kw).provision()
-    mp = msg + fips_pad(len(msg), cl.w)
     A(cl)
     if plan == 'multi':
-        c = len(mp) // 2 - 4
-        run(cl, B(mp[:4]), B(mp[4:c]), B(mp[c:]))
+        c = max(4, len(msg) // 2 - 4)
+        run(cl, B(msg[:4]), B(msg[4:c]), B(msg[c:]))
     elif plan == 'odd':
-        run(cl, B(mp[:1]), B(mp[1:4]), B(mp[4:]))
+        run(cl, B(msg[:1]), B(msg[1:4]), B(msg[4:]))
     elif plan == 'interrupt':
-        r = run(cl, B(mp[:4]), lambda c: c.exec('B', mp[4:], halt=True))[0]
+        r = run(cl, B(msg[:4]), lambda c: c.exec('B', msg[4:], halt=True))[0]
         while r == 'interrupted':
-            r = cl.exec('B', mp[4:], halt=True, resume=True)[0]
+            r = cl.exec('B', msg[4:], halt=True, resume=True)[0]
     else:
-        B(mp[:-28])(cl)
-        assert cl.block_base
+        B(msg[:len(msg) // 2])(cl)
         cl = Sha2.load(name, cl.st, cl.export())
-        B(mp[-28:])(cl)
+        B(msg[len(msg) // 2:])(cl)
     O(cl)
     reads = {'multi': (cl.t // 8 - 8, 8), 'odd': (1, cl.t // 8 - 1)}.get(plan, (cl.t // 8,))
     out = b''.join(run(cl, C(n))[1] for n in reads)
@@ -313,7 +168,7 @@ def absorbing(name='SHA-256', data=b'', **kw):
     return cl
 
 def outputting(name='SHA-256', msg=M_ABC):
-    cl = absorbing(name, msg + fips_pad(len(msg), PARAMS[name][0]))
+    cl = absorbing(name, msg)
     O(cl)
     return cl
 
@@ -328,25 +183,114 @@ for name in PARAMS:
         if HASHLIB[name] in hashlib.algorithms_available:
             check(f'[oracle] hashlib {name} {MNAME[msg]}', None, hashlib.new(HASHLIB[name], msg).digest(), want)
 
+DIG = hashlib.sha256(b'abc').digest()
+section('The generic sequence (<<Zkl-software.adoc#KLE-pseudocode-hash>>): chunks, final pieces, halts, export/import')
+for name, (w, b, n, t) in PARAMS.items():
+    bb = b // 8
+    ref = lambda m, nb, o, name=name: (hashlib.new(HASHLIB[name], m[:nb // 8]).digest()[:o]
+                                       if nb % 8 == 0 and HASHLIB[name] in hashlib.algorithms_available
+                                       else ref_bits(name, m, nb, o))
+    msgs = hash_msgs(bb, edges=(bb - 2 * w // 8 - 1, bb - 2 * w // 8), bits=True)
+    check_hash(name, lambda name=name: Port(name), ref, msgs if name in ('SHA-256', 'SHA-512') else msgs[::3], t // 8)
+res = [ref_bits('SHA-256', b'abc', 24) == hashlib.sha256(b'abc').digest()]
+for nb in (1, 5, 447, 448, 449, 511, 1000):
+    m = bytes((3 * i + 7) & 0xFF for i in range(-(-nb // 8)))
+    res.append(hash_run(Port(), m, nb, 32)[0] == ref_bits('SHA-256', m, nb))
+check('bit-length messages of 1, 5, 447, 448, 449, 511 and 1000 bits: the final piece MSB-first, the pad bit in its '
+      'last byte (<<KLE-SHA-2>>), against an independent FIPS 180-4 bit-string reference', all(res))
+res = []
+for name, nb in (('SHA-256', 510), ('SHA-256', 517), ('SHA-256', 1029), ('SHA-512', 1022), ('SHA-512', 1037)):
+    m = bytes((3 * i + 7) & 0xFF for i in range(-(-nb // 8)))
+    t = PARAMS[name][3] // 8
+    res.append(hash_run(Port(name), m, nb, t, piece=nb % 8 + 16)[0] == ref_bits(name, m, nb))
+check('a final piece of nbits mod 8 + 16 bits that ends at, or straddles, a block boundary (SHA-256 510, 517, 1029 '
+      'bits; SHA-512 1022, 1037 bits): the pad bit in its last byte, against the bit-string reference', all(res))
+r = []
+for x in (8, 224, 256):
+    o, st, _ = hash_run(Port(), b'abc', 24, x // 8, end=('B', x))
+    r.append((o, st))
+o_a, st_a, _ = hash_run(Port(), b'abc', 24, 32, end=('A', None))
+check('bound (<<KLE-hash-functions-MACs-XOFs>>): Form B Xs = 8, t - 8, t gives that prefix of the digest and _Success_; '
+      'Form A the full digest', None, (r, (o_a, st_a)),
+      ([(DIG[:x // 8], KL_STATE_SUCCESS) for x in (8, 224, 256)], (DIG, KL_STATE_SUCCESS)))
+res = []
+for xs in (264, 12):
+    cl = absorbing(data=b'abc')
+    cl.setst(KL_STATE_HASH_OUTPUT, 'B', xs)
+    res.append(cl.st)
+cl = absorbing(data=b'abc')
+cl.setst(KL_STATE_HASH_OUTPUT, 'B', 128)
+o1 = C(8)(cl)[1]
+cl = Sha2.load('SHA-256', cl.st, cl.export())
+o2 = cl.exec('C', nbytes=16, prior=b'\xa5' * 16)[1]
+check('bound Xs = t + 8 or 12 (not a multiple of 8) -> _Invalid_; Xs = 128 read as 8 B, export/import, then 16 B: '
+      'the bound survives, the excess is cleared, _Success_', None, (res, o1 + o2, cl.st),
+      ([KL_STATE_INVALID] * 2, DIG[:16] + bytes(8), KL_STATE_SUCCESS))
+res = []
+for label, ops in [
+        ('Xs = 0 then a kl.exec (MR10)', (A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), B(b'c'))),
+        ('Xs = b + 8', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 520))),
+        ('_Hash_Output_ before the final piece (last_block_len != 0)',
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), O)),
+        ('a second kl.exec in _Hash_Absorb_Last_Block_',
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), B(b'a'), B(b'b'))),
+        ('a final piece of 16 bits in a KLLEN of 8 (MR2)',
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16), B(b'a'))),
+        ('_Ready_ -> _Hash_Absorb_Last_Block_', (lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8),))]:
+    cl = Sha2().provision()
+    run(cl, *ops)
+    res.append((label, cl.st))
+check('final piece: _Invalid_ for ' + '; '.join(l for l, _ in res), None, [st for _, st in res], [KL_STATE_INVALID] * 6)
+res = []
+for d, ks in ((b'', 0), (b'a', 2)):
+    cl = Sha2().provision()
+    run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16))
+    HART.klstart = ks
+    res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
+check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
+      'window, _Invalid_ (MR2, GR44)', None, res, [('invalid', KL_STATE_INVALID, 0)] * 2)
+cl = Sha2().provision()
+run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0))
+r = B(b'')(cl)[0], cl.st
+check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR44)', None,
+      (r, run(cl, O, C(32))[1]), (('empty', KL_STATE_HASH_LAST_BLOCK), hashlib.sha256(b'ab').digest()))
+m = bytes(range(70))
+cl = absorbing(data=m[:6])
+run(cl, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK), B(m[6:]), lambda c: c.setst(KL_STATE_HASH_OUTPUT, 'B', 0))
+o = C(32)(cl)[1]
+cl2 = absorbing(data=m[:6])
+run(cl2, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK), O)
+check('Form A into _Hash_Absorb_Last_Block_ (last_block_len = b): a 512-bit piece, then Form B Xs = 0 into '
+      '_Hash_Output_: the full digest, _Success_; Form A, then _Hash_Output_ before the piece: _Invalid_', None,
+      (o, cl.st, cl2.st), (hashlib.sha256(m).digest(), KL_STATE_SUCCESS, KL_STATE_INVALID))
+control('caller-padded message: the digest differs', digest('SHA-256', M_ABC + md_pad(24, 32), 'multi') != DIG)
+cl = absorbing(data=b'abc')
+HART.klstart = 3
+r = cl.exec('B', b'xyz', resume=True)[0], cl.st, HART.klstart
+check('_Hash_Absorb_ with block_base = 24, a 3-byte kl.exec with klstart = 3: empty window, State kept, klstart = 0 '
+      '(GR44 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
+      (('empty', KL_STATE_HASH_ABSORB, 0), DIG))
+
 section('Serialized Content')
 for name, (w, b, n, t) in PARAMS.items():
-    check(f'{name} Content1 = n+64+b bits, padded to 128', None, len(absorbing(name, bytes(8)).export()),
+    check(f'{name} Content1 = n+16+16+32+64+b bits, padded to 128', None, len(absorbing(name, bytes(8)).export()),
           {32: 112, 64: 208}[w])
 
 section('State machine')
-PAD_ABC = M_ABC + fips_pad(3, 32)
 DIG_ABC = bytes.fromhex(VEC['SHA-256'][M_ABC])
+cl = Sha2().provision()
+check('"abc" unpadded, then the kl.setst into _Hash_Output_ with block_base != 0: the Machine pads, digest correct',
+      run(cl, A, B(b'abc'), O, C(32))[1] == DIG_ABC and cl.st == KL_STATE_SUCCESS)
 for label, ops in [
-        ('entering _Hash_Output_ with block_base != 0', (A, B(b'abc'), O)),
-        ('kl.exec in _Ready_ (GR17)', (B(PAD_ABC),)),
+        ('kl.exec in _Ready_ (GR17)', (B(M_ABC),)),
         ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (GR17)', (A, B(PAD_ABC), O, O)),
-        ('kl.setst #kl_state_hash_last_block', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
+        ('same-State kl.setst to _Hash_Output_ (GR17)', (A, B(M_ABC), O, O)),
+        ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', (A, C(16))),
-        ('Form B kl.exec in _Hash_Output_ (MR1)', (A, B(PAD_ABC), O, B(bytes(64)))),
-        ('kl.exec in _Success_ (GR16), output zeroed', (A, B(PAD_ABC), O, C(32), C(32)))]:
+        ('Form B kl.exec in _Hash_Output_ (MR1)', (A, B(M_ABC), O, B(bytes(64)))),
+        ('kl.exec in _Success_ (GR16), output zeroed', (A, B(M_ABC), O, C(32), C(32)))]:
     cl = Sha2().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
@@ -359,42 +303,42 @@ for ks in (32, 40, 4):
 check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 (no interruption point): '
       '_Invalid_, [4, 32) zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
-MP = M2_64 + fips_pad(len(M2_64), 32)  # 128 bytes for SHA-256
+MP = M2_64  # 112 bytes
 cl = absorbing(data=MP[:5])
 r = cl.exec('B', MP[5:69], halt=True)[0], HART.klstart, cl.block_base
-r += (run(cl, B(MP[69:]), O, C(32))[1],)
-check('a 5-byte transfer, then a 64-byte one with a halt requested at each 3.i (<<KLE-process-VLI>>): no halt at '
-      'klstart = 59 (8 x 59 not a multiple of 32), retired; the digest is correct', None, r,
-      ('retired', 0, 40, hashlib.sha256(M2_64).digest()))
+r += (cl.exec('B', MP[5:69], resume=True)[0], run(cl, B(MP[69:]), O, C(32))[1])
+check('a 5-byte transfer, then a 64-byte one with a halt requested at each 3.i (<<KLE-process-VLI>>): a halt at '
+      'klstart = 59, where the block is full (granularity 8 bits), block_base = 0; resumed, the digest is correct',
+      None, r, ('interrupted', 59, 0, 'retired', hashlib.sha256(M2_64).digest()))
 res = []
 for ks in (59, 4):
     cl = absorbing(data=MP[:5])
     HART.klstart = ks
     res.append((cl.exec('B', MP[5:69], resume=True)[0], cl.st, HART.klstart))
-check('after a 5-byte transfer, a forged resumption at klstart = 59 (not a multiple of 32 bits) or 4 (block_base '
-      '!= 0 at the window start): not an interruption point, _Invalid_', None, res,
+check('after a 5-byte transfer, a forged resumption at klstart = 59 or 4 (block_base != 0 at the window start): '
+      'not an interruption point, _Invalid_', None, res,
       [('invalid', KL_STATE_INVALID, 0)] * 2)
 cl = absorbing()
-check('kl.setst #kl_state_success -> Invalid (GR18, MR1)',
+check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',
       (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATE_INVALID))
 cl.setst(KL_STATE_UNCONFIGURED)
 check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
       (cl.exec('C', nbytes=8), cl.setst(KL_STATE_READY), cl.st, cl.state)
       == (('noop', bytes(8)), None, KL_STATE_UNCONFIGURED, 0))
-check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR18, GR26)',
+check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
 cl = outputting('SHA-224')
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(32)(cl)[1], cl.st),
       (bytes.fromhex(VEC['SHA-224'][M_ABC]) + bytes(4), KL_STATE_SUCCESS))
 cl = outputting()
 check('_Success_ -> _Ready_ (GR16), second digest', None,
-      run(cl, C(32), R, A, B(PAD_ABC), O, C(32))[1], DIG_ABC)
-cl, ready = absorbing('SHA-384', (M2_64 + fips_pad(len(M2_64), 64))[:132]), Sha2('SHA-384').provision()
+      run(cl, C(32), R, A, B(M_ABC), O, C(32))[1], DIG_ABC)
+cl, ready = absorbing('SHA-384', (M2_64 * 2)[:132]), Sha2('SHA-384').provision()
 dirty = cl.block_base and cl.state != ready.state
 R(cl)
 reset = (cl.state, cl.block, cl.block_base) == (ready.state, 0, 0)
 check('_Hash_Absorb_ -> _Ready_ mid-message: state <- IV, block, block_base <- 0',
-      dirty and reset and run(cl, A, B(M_ABC + fips_pad(3, 64)), O, C(48))[1]
+      dirty and reset and run(cl, A, B(M_ABC), O, C(48))[1]
       == bytes.fromhex(VEC['SHA-384'][M_ABC]))
 
 section('kl.derive')
@@ -402,23 +346,22 @@ SEC = bytes(range(0x40, 0x60))  # a 32-byte shared secret
 src, dst, dst2 = Source(SEC), absorbing(), absorbing()
 r = (kl_derive(dst, src, 32), dst.block_base, kl_derive(dst2, src, 32))
 check('shared secret (32 B) -> SHA-256 absorb [hashlib oracle]; the field does not advance: derived twice', None,
-      (r, run(dst, B(fips_pad(32, 32)), O, C(32))[1], run(dst2, B(fips_pad(32, 32)), O, C(32))[1]),
+      (r, run(dst, O, C(32))[1], run(dst2, O, C(32))[1]),
       (('done', 256, 'done'), hashlib.sha256(SEC).digest(), hashlib.sha256(SEC).digest()))
 src, dst = Source(SEC[:30]), absorbing()
-check('shared secret (30 B), length 32 (30 rounded up to 4 B) -> SHA-256 absorb: zero beyond the secret [hashlib]',
-      kl_derive(dst, src, 32) == 'done' and run(dst, B(fips_pad(32, 32)), O, C(32))[1]
-      == hashlib.sha256(SEC[:30] + bytes(2)).digest())
+check('shared secret (30 B), length 30 -> SHA-256 absorb: exactly the secret (GR32 item 5) [hashlib]',
+      kl_derive(dst, src, 30) == 'done' and run(dst, O, C(32))[1] == hashlib.sha256(SEC[:30]).digest())
 src, dst = Source(SEC * 2), absorbing('SHA-224')
 r = kl_derive(dst, src, 64)
 whole = r == 'done' and dst.block_base == 0 and dst.state != Sha2('SHA-224').provision().state
-check('shared secret (64 B) -> SHA-224 absorb (one block) [hashlib oracle]', whole and run(dst, B(fips_pad(64, 32)), O,
+check('shared secret (64 B) -> SHA-224 absorb (one block) [hashlib oracle]', whole and run(dst, O,
       C(28))[1] == hashlib.sha224(SEC * 2).digest())
 src, dst = outputting(msg=b'hello'), absorbing()
 check('SHA-256 digest in _Hash_Output_ as a source (GR32 item 1): refused, source _Invalid_, destination untouched; '
       'the same digest moved by kl.exec gives SHA-256(SHA-256("hello"))',
       kl_derive(dst, src, 32) == 'refused' and src.st == KL_STATE_INVALID
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0)
-      and run(dst, B(C(32)(outputting(msg=b'hello'))[1] + fips_pad(32, 32)), O, C(32))[1]
+      and run(dst, B(C(32)(outputting(msg=b'hello'))[1]), O, C(32))[1]
       == bytes.fromhex(SHA256D_HELLO))
 src, dst = Source(bytes(range(16)), secret=False), absorbing()
 check('a CMAC (16 B) -> SHA-256 absorb: pair not admitted (GR32 item 3), both _Invalid_',
@@ -427,12 +370,12 @@ src, dst = Source(SEC), Sha2().provision()
 check('destination in _Ready_ (GR32 item 2): refused, destination _Invalid_, source untouched',
       kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID and src.st == KL_STATE_HASH_OUTPUT)
 res = []
-for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 29), (SEC[:30], 33)):
+for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 29), (SEC[:30], 32), (SEC[:30], 33)):
     dst = absorbing()
     res.append((kl_derive(dst, Source(s), length), dst.st))
-check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B with length 29 or 33 (GR32 item 5: from '
-      'the secret length to it rounded up to 4 B): destination _Invalid_', None, res,
-      [('refused', KL_STATE_INVALID)] * 5)
+check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B with length 29, 32 or 33 (GR32 item 5: '
+      'exactly the secret length): destination _Invalid_', None, res,
+      [('refused', KL_STATE_INVALID)] * 6)
 
 src, dst, s28, d28, h, dh = Source(SEC), KeyDest(32), Source(SEC[:28]), KeyDest(32), outputting(), KeyDest(32)
 check('shared secret -> a 32-byte `key` in _Ready_, length 40: the secret; a 28-byte secret -> a 32-byte key '
@@ -443,7 +386,7 @@ check('shared secret -> a 32-byte `key` in _Ready_, length 40: the secret; a 28-
 
 section('Negative controls')
 control('message words without bswap', digest('SHA-256', M_ABC, 'multi', bswap_words=False) != DIG_ABC)
-control('klstart written in bits', digest('SHA-256', M2_32, 'interrupt', klstart_bits=True)
-        != bytes.fromhex(VEC['SHA-256'][M2_32]))
+control('klstart written in bits', digest('SHA-256', M2_64, 'interrupt', klstart_bits=True)
+        != hashlib.sha256(M2_64).digest())
 
 done()

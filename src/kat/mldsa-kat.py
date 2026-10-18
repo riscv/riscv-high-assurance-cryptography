@@ -5,7 +5,7 @@ record), including the external-mu interface the unit exposes, and a model of an
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips204 as D  # noqa: E402
-from common import (ERROR_STATES, MDH_FIELD, LoopBound, check, control, done, info,  # noqa: E402
+from common import (ERROR_STATES, MDH_FIELD, LoopBound, check, control, done,  # noqa: E402
                     mdh_pack, raises, section, sl, spec_note, KL_STATE_READY as READY,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID)
 
@@ -37,7 +37,6 @@ class MLDSALocker:
         self.ps, self.rbg, self.n = ps, rbg, dict(zip(('privkey', 'pubkey', 'signature'), D.sizes(ps)))
         self.privkey = self.pubkey = b''
         self.clear()
-        self.mdh = 0
         self.mdh = mdh_pack(Machine=MLDSA[ps], MachinePolicy=policy, AuxInfo=aux, MachineUse=pi_use, State=READY)
         self.use = 0                               # provisioning zeroes MachineUse, keeps AuxInfo
 
@@ -87,8 +86,7 @@ class MLDSALocker:
         self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # MR6; MR9 W
         if st == READY:
             self.clear()
-            self.set_flag('HasMu', 0)
-        if st == MU_IN:
+        if st in (READY, MU_IN):
             self.set_flag('HasMu', 0)
         if st in IN_F:
             setattr(self, IN_F[st], b'')           # MR9: reloading replaces
@@ -120,29 +118,25 @@ class MLDSALocker:
         f = getattr(self, name)[:w].ljust(w, b'\0')
         setattr(self, name, f[:w] + data[:n])
         self.use = w + n
-        if len(data) > n and name in ('pubkey', 'signature'):    # G9-01: excess data is a data error (FIPS 204 3.6.2)
+        if len(data) > n and name in ('pubkey', 'signature'):    # <<KLE-PQC-ML-DSA>>: excess data is a data error (FIPS 204 3.6.2)
             setattr(self, name, b'')
             self.use = 0
             self.put('State', FAILURE)
             return n
-        if self.use == self.size(name) and name == 'privkey':
-            if not D.sk_well_formed(self.privkey, self.ps):
+        flag = {'privkey': 'HasPrivKey', 'pubkey': 'HasPubKey', 'mu': 'HasMu'}.get(name)
+        if flag and self.use == self.size(name):   # MR9: the flag is set when the load completes
+            if name == 'privkey' and not D.sk_well_formed(self.privkey, self.ps):
                 return self.invalid()              # malformed privkey: configuration error
-            self.set_flag('HasPrivKey', 1)
-        elif self.use == self.size(name) and name == 'pubkey':
-            self.set_flag('HasPubKey', 1)
-        elif self.use == self.size(name) and name == 'mu':
-            self.set_flag('HasMu', 1)                 # MR9: set when the load completes
+            self.set_flag(flag, 1)
         return n
 
     def exec_C(self, n):                           # Form C in an emitting State (MR9)
-        if self.state not in ERROR_STATES and self.gated():
+        if self.state in ERROR_STATES or self.gated():
             return bytes(n)                        # GR28: the output window is zeroed
         name, w = OUT_F.get(self.state), self.use
-        if self.state in ERROR_STATES or name is None or w + n > self.size(name):
-            if self.state not in ERROR_STATES:
-                self.invalid()
-            return bytes(n)                        # GR28
+        if name is None or w + n > self.size(name):
+            self.invalid()
+            return bytes(n)
         self.use = w + n
         out = getattr(self, name)[w:w + n]
         if self.use == self.size(name):            # MR9: a completely emitted field -> _Success_
@@ -197,20 +191,15 @@ class MLDSALocker:
             return self.put('State', SUCCESS if ok else FAILURE)
         else:
             return self.invalid()                  # GR17 in _Ready_, MR1 elsewhere
-        if st == GEN:                              # the key pair, then _pubkey_Output_ emits pubkey
-            self.set_flag('HasPubKey', 1)
-            self.set_flag('HasPrivKey', 1)
-            self.put('State', PK_OUT)
-            self.use = 0
-        elif st == COMPUTE_PK:                     # <<KLE-PQC-ML-DSA>>: back to _Ready_, which keeps the key pair
-            self.set_flag('HasPubKey', 1)
-            self.set_flag('HasPrivKey', 1)
-            self.put('State', READY)
+        if st == SIGN_GEN:
+            return self.put('State', SIGN_OUT)
+        self.set_flag('HasPubKey', 1)
+        self.set_flag('HasPrivKey', 1)
+        self.put('State', PK_OUT if st == GEN else READY)   # <<KLE-PQC-ML-DSA>>: _Ready_ keeps the key pair
+        self.use = 0
+        if st == COMPUTE_PK:
             self.clear()
             self.set_flag('HasMu', 0)
-            self.use = 0
-        else:
-            self.put('State', SIGN_OUT)
 
     def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: a set bit removes a function,
         if v:                                      # a zero field changes nothing
@@ -232,7 +221,7 @@ class MLDSALocker:
 
 class KeyDest:
     """A symmetric `key` in _Ready_ (a destination of <<KLE-derive-endpoints>>), or an ECC `Scalar` in
-    _Set_Scalar_ (no longer a destination)."""
+    _Set_Scalar_ (not a destination)."""
     def __init__(self, ecc=True, size=32, state=None, keytype=0):
         self.ecc, self.size, self.keytype, self.key = ecc, size, keytype, bytes(size)
         self.state = SET_SCALAR if ecc and state is None else state or READY
@@ -433,7 +422,7 @@ def t_state_machine():
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ by kl.setst zeroes MachineUse; the pubkey is emitted again', cc.use == 0
           and b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
-    check('kl.exec after the field is complete (now in _Success_): _Invalid_, OUTPUT zeroed (GR16)',
+    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR16)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
     cc.setst(MU_IN)
@@ -559,7 +548,7 @@ def t_sign_verify():
     pk, mu, sig = h(v['pk']), h(v['mu']), h(v['sig'])
     a = loaded(44, (PK_IN, pk + b'\x00'))
     b = loaded(44, (PK_IN, pk), (MU_IN, mu), (SIGN_IN, sig + b'\x00'))
-    check('G9-01: a pubkey or signature with excess data in the final transfer: data error, _Failure_, field zeroed, '
+    check('a pubkey or signature with excess data in the final transfer: data error, _Failure_, field zeroed, '
           'HasPubKey clear for the pubkey (FIPS 204 3.6.2)', (a.state, a.pubkey, a.flag('HasPubKey'), b.state, b.signature)
           == (FAILURE, b'', False, FAILURE, b''))
     for cc in (a, b):
@@ -569,7 +558,7 @@ def t_sign_verify():
         for st, data in ((MU_IN, mu), (SIGN_IN, sig)):
             cc.setst(st); cc.exec_B(data)
         run(cc, SIGN_VERIFY)
-    check('G9-01: from that _Failure_, _Ready_ and exact-length loads reach _Sign_Verify_ again: _Success_',
+    check('from that _Failure_, _Ready_ and exact-length loads reach _Sign_Verify_ again: _Success_',
           (a.state, b.state) == (SUCCESS, SUCCESS))
     cc = generated()
     mu = D.mu_external(D.H(cc.pubkey, 64), D.format_Mp(b'KLE', b'round trip'))   # caller: tr, ctx 'KLE'

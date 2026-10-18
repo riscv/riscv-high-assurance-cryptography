@@ -65,12 +65,7 @@ def _make_sbox():
             if _gmul8(x, y) == 1:
                 inv[x] = y
                 break
-    sbox = []
-    for x in range(256):
-        b = inv[x]
-        s = b ^ _rol8(b, 1) ^ _rol8(b, 2) ^ _rol8(b, 3) ^ _rol8(b, 4) ^ 0x63
-        sbox.append(s)
-    return sbox
+    return [b ^ _rol8(b, 1) ^ _rol8(b, 2) ^ _rol8(b, 3) ^ _rol8(b, 4) ^ 0x63 for b in inv]
 
 SBOX = _make_sbox()
 INV_SBOX = [0] * 256
@@ -92,10 +87,7 @@ def _key_expand(key: bytes):
         elif nk > 6 and i % nk == 4:
             t = [SBOX[x] for x in t]
         w.append([a ^ b for a, b in zip(w[i - nk], t)])
-    rks = []
-    for r in range(nr + 1):
-        rks.append(bytes(sum(w[4 * r:4 * r + 4], [])))
-    return rks, nr
+    return [bytes(sum(w[4 * r:4 * r + 4], [])) for r in range(nr + 1)], nr
 
 def _add_rk(s, rk):
     return [a ^ b for a, b in zip(s, rk)]
@@ -103,8 +95,7 @@ def _add_rk(s, rk):
 def aes_encrypt(key: bytes, block: bytes) -> bytes:
     assert len(block) == 16
     rks, nr = _key_expand(key)
-    s = list(block)
-    s = _add_rk(s, rks[0])
+    s = _add_rk(block, rks[0])
     for r in range(1, nr + 1):
         s = [SBOX[x] for x in s]                              # SubBytes
         s = [s[(i + 4 * (i % 4)) % 16] for i in range(16)]    # ShiftRows (col-major flat)
@@ -120,6 +111,27 @@ def aes_encrypt(key: bytes, block: bytes) -> bytes:
                 ]
             s = t
         s = _add_rk(s, rks[r])
+    return bytes(s)
+
+def aes_decrypt(key: bytes, block: bytes) -> bytes:
+    assert len(block) == 16
+    rks, nr = _key_expand(key)
+    s = _add_rk(block, rks[nr])
+    for r in range(nr - 1, -1, -1):
+        s = [s[(i - 4 * (i % 4)) % 16] for i in range(16)]    # InvShiftRows
+        s = [INV_SBOX[x] for x in s]                          # InvSubBytes
+        s = _add_rk(s, rks[r])
+        if r != 0:                                            # InvMixColumns
+            t = []
+            for c in range(4):
+                col = s[4 * c:4 * c + 4]
+                t += [
+                    _gmul8(col[0], 14) ^ _gmul8(col[1], 11) ^ _gmul8(col[2], 13) ^ _gmul8(col[3], 9),
+                    _gmul8(col[0], 9) ^ _gmul8(col[1], 14) ^ _gmul8(col[2], 11) ^ _gmul8(col[3], 13),
+                    _gmul8(col[0], 13) ^ _gmul8(col[1], 9) ^ _gmul8(col[2], 14) ^ _gmul8(col[3], 11),
+                    _gmul8(col[0], 11) ^ _gmul8(col[1], 13) ^ _gmul8(col[2], 9) ^ _gmul8(col[3], 14),
+                ]
+            s = t
     return bytes(s)
 
 # ---------------------------------------------------------------- DES / TDEA (FIPS 46-3, SP 800-67): 64-bit blocks
@@ -184,28 +196,6 @@ def tdea_encrypt(key: bytes, block: bytes) -> bytes:
     assert len(block) == 8 and len(key) in (16, 24)
     k1, k2, k3 = key[:8], key[8:16], key[16:24] or key[:8]
     return _des(k3, _des(k2, _des(k1, block), decrypt=True))
-
-def aes_decrypt(key: bytes, block: bytes) -> bytes:
-    assert len(block) == 16
-    rks, nr = _key_expand(key)
-    s = list(block)
-    s = _add_rk(s, rks[nr])
-    for r in range(nr - 1, -1, -1):
-        s = [s[(i - 4 * (i % 4)) % 16] for i in range(16)]    # InvShiftRows
-        s = [INV_SBOX[x] for x in s]                          # InvSubBytes
-        s = _add_rk(s, rks[r])
-        if r != 0:                                            # InvMixColumns
-            t = []
-            for c in range(4):
-                col = s[4 * c:4 * c + 4]
-                t += [
-                    _gmul8(col[0], 14) ^ _gmul8(col[1], 11) ^ _gmul8(col[2], 13) ^ _gmul8(col[3], 9),
-                    _gmul8(col[0], 9) ^ _gmul8(col[1], 14) ^ _gmul8(col[2], 11) ^ _gmul8(col[3], 13),
-                    _gmul8(col[0], 13) ^ _gmul8(col[1], 9) ^ _gmul8(col[2], 14) ^ _gmul8(col[3], 11),
-                    _gmul8(col[0], 11) ^ _gmul8(col[1], 13) ^ _gmul8(col[2], 9) ^ _gmul8(col[3], 14),
-                ]
-            s = t
-    return bytes(s)
 
 # ---------------------------------------------------------------- GHASH field (SP 800-38D 6.3)
 
@@ -331,10 +321,6 @@ def mdh_pack(**f) -> int:
 def mdh_unpack(v: int) -> dict:
     return {n: sl(v, hi, lo) for n, (hi, lo) in MDH_FIELD.items()}
 
-def mdh_reserved(v: int) -> int:
-    """The Reserved bits of an MDH, OR-ed together (0 if all clear)."""
-    return any(sl(v, hi, lo) for n, hi, lo in MDH_FIELDS if n is None)
-
 # <<KLE-State-field>>, <<KLE-state-constants-symmetric>>
 KL_STATE_UNCONFIGURED, KL_STATE_READY = 0, 1
 KL_STATE_OPERATE = KL_STATE_HASH_ABSORB = 2
@@ -346,14 +332,14 @@ KL_STATE_SUCCESS, KL_STATE_FAILURE = 46, 47
 (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_OUT_OF_MEMORY, KL_STATE_MGMT_AUTH,
  KL_STATE_PRIV_VIOLATION, KL_STATE_EXPIRED) = range(48, 54)
 ERROR_STATES = range(48, 56)
+(KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
+ KL_CFG_PPI_IMPORTING) = range(56, 61)
+KL_CFG_MANAGEMENT_END = 63
 
 def inert(state) -> bool:
     """GR26: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
     performs no operation and raises no exception, its unwritten output zeroed (GR28)."""
     return state == KL_STATE_UNCONFIGURED or state in ERROR_STATES
-(KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
- KL_CFG_PPI_IMPORTING) = range(56, 61)
-KL_CFG_MANAGEMENT_END = 63
 
 class IllegalInstruction(Exception):
     pass
@@ -415,6 +401,158 @@ def done():
     print(f"KAT-RESULT: {'PASS' if ok else 'FAIL'}")
     sys.exit(0 if ok else 1)
 
+# ---------------------------------------------------------------- generic hash driver
+
+def md_pad(nbits: int, w: int) -> bytes:
+    """The rest of the FIPS 180-4 sect. 5.1 / GB/T 32905 padding of a message of nbits bits (w = 32
+    or 64), as <<KLE-SHA-2>> `finalize()` absorbs it: 0x80 if nbits is a multiple of 8 (otherwise
+    the final piece already carries the bit 1), the zero bytes, then nbits as a 2w-bit big-endian
+    integer.  For the models only: the references keep their own padding."""
+    head = b'\x80' if nbits % 8 == 0 else b''
+    nb = -(-nbits // 8) + len(head)
+    return head + bytes(-(nb + w // 4) % (2 * w)) + nbits.to_bytes(w // 4, 'big')
+
+def bits_of(msg: bytes, nbits: int, msb: bool) -> str:
+    """The first nbits bits of msg as a '0'/'1' string in the order of the standard: MSB-first
+    within each byte (FIPS 180-4, GB/T 32905) or LSB-first (FIPS 202, SP 800-232)."""
+    return ''.join(format(x, '08b') if msb else format(x, '08b')[::-1] for x in msg)[:nbits]
+
+class HashPort:
+    """The interface a KAT gives its locker model, so that `hash_run` drives it as
+    <<Zkl-software.adoc#KLE-pseudocode-hash>> does.  A subclass provides:
+      b, msb               the block size in bits, and whether a partial byte is MSB-first
+      bitwise              whether the final piece may have a non-byte length
+      setst(immed, form='A', xs=None)
+      exec_in(data, halt_at=None) -> str   Form B kl.exec from byte klstart: 'done', 'empty',
+          'invalid' or 'interrupted' (precise halt at the first interruption point after byte
+          halt_at, klstart set)
+      exec_out(n, halt_at=None, prior=b'') -> (str, bytes)    Form C kl.exec of n bytes, likewise
+      export() -> image;  imported(image) -> HashPort
+      st, klstart (bytes)"""
+    msb, bitwise = False, True
+
+def hash_chunks(bb: int) -> dict:
+    """Transfer-size plans for a rate of bb bytes (sizes cycled; 0 is an empty window)."""
+    return {'whole': None, 'bytes': (1,), 'threes': (3,), 'odd': (1, 3, bb + 5),
+            'blocks': (bb,), 'straddle': (bb - 1, 2, 2 * bb + 7), 'empties': (0, 5, 0, bb)}
+
+def hash_msgs(bb: int, edges=(), bits=False) -> list:
+    """(msg, nbits) pairs: lengths 0, 1, 3, bb - 1, bb, bb + 1, 2 bb, 2 bb + 3 and the padding
+    edges, in bytes; with bits, also 5, 8 bb - 3, 8 bb + 5 and 16 bb + 61 bits."""
+    lens = sorted({0, 1, 3, bb - 1, bb, bb + 1, 2 * bb, 2 * bb + 3, *edges})
+    out = [(bytes((7 * i + 1) & 0xFF for i in range(n)), 8 * n) for n in lens]
+    if bits:
+        for nb in (5, 8 * bb - 3, 8 * bb + 5, 16 * bb + 61):
+            out.append((bytes((5 * i + 3) & 0xFF for i in range(-(-nb // 8))), nb))
+    return out
+
+OUT_SPLITS = {'one': None, 'odd': (1, 3), 'bytes': (1,), 'tail1': (-1, 1)}  # -1: all but one
+
+def _split(data, sizes):
+    if not sizes:
+        return [data] if data else []
+    out, i, k = [], 0, 0
+    while i < len(data) or (k < len(sizes) and sizes[k] == 0):
+        n = sizes[k % len(sizes)]
+        out.append(data[i:i + n])
+        i, k = i + n, k + 1
+        if k > 4 * len(data) + 8:
+            break
+    return out
+
+def _out_sizes(n, split):
+    if not split:
+        return [n]
+    if split == (-1, 1):
+        return [n - 1, 1] if n > 1 else [n]
+    out, k = [], 0
+    while sum(out) < n:
+        out.append(min(split[k % len(split)], n - sum(out)))
+        k += 1
+    return out
+
+def _piece_bits(port, piece, nbits):
+    """The final-piece length in bits for a `piece` variant, or None (direct, or not applicable)."""
+    r = {'listing': nbits % 64, 'b': port.b, 'b-8': port.b - 8}.get(piece, piece)
+    if r is None or r > nbits or (nbits - r) % 8 or (r % 8 and not port.bitwise):
+        return None
+    return r
+
+def hash_run(port, msg, nbits, out_len, chunks=None, halt=False, migrate=False, out_split=None,
+             end=('B', None), piece='listing', start=None):
+    """The listing on `port` for the first nbits bits of msg: `start` (default: Form A into
+    _Hash_Absorb_), the head in `chunks` transfers (each halted at every interruption point and
+    resumed with halt; export and import after every transfer and halt with migrate), the final
+    piece through _Hash_Absorb_Last_Block_ (piece: 'listing' = nbits mod 64, an int, 'b', 'b-8',
+    or None for the direct kl.setst into _Hash_Output_), the kl.setst into _Hash_Output_ as
+    end = (form, xs), xs None meaning 8 * out_len, and out_len bytes in out_split.  Returns
+    (output, final State, halts)."""
+    halts = []
+    mig = (lambda p: p.imported(p.export())) if migrate else (lambda p: p)
+    (start or (lambda p: p.setst(KL_STATE_HASH_ABSORB)))(port)
+    port = mig(port)
+    r = None if piece is None else _piece_bits(port, piece, nbits)
+    head = msg[:(nbits - (r or 0)) // 8]
+    for ch in _split(head, chunks):
+        st = port.exec_in(ch, 0 if halt else None)
+        while st == 'interrupted':
+            halts.append(port.klstart)
+            port = mig(port)
+            st = port.exec_in(ch, port.klstart if halt else None)
+        port = mig(port)
+    if r is not None:
+        port.setst(KL_STATE_HASH_LAST_BLOCK, 'B', r)
+        port = mig(port)
+        if r:
+            port.exec_in(msg[len(head):len(head) + -(-r // 8)])
+            port = mig(port)
+    form, xs = end
+    port.setst(KL_STATE_HASH_OUTPUT, form, (8 * out_len if xs is None else xs) if form == 'B' else None)
+    port = mig(port)
+    out = b''
+    for n in _out_sizes(out_len, out_split):
+        st, o = port.exec_out(n, 0 if halt else None)
+        while st == 'interrupted':
+            halts.append(port.klstart)
+            port = mig(port)
+            st, o = port.exec_out(n, port.klstart if halt else None, prior=o)
+        out += o
+    return out, port.st, halts
+
+def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_plans=None,
+               pieces=('listing', None, 0, 8, 'b-8', 'b'), splits=None, end=('B', None)):
+    """One check per message: one factor at a time, every chunk plan, every final-piece variant,
+    every output split, halts, export/import, and both together on odd chunks, give
+    ref(msg, nbits, out_len) and the final State."""
+    port0 = new()
+    plans = chunk_plans or hash_chunks(port0.b // 8)
+    for msg, nbits in msgs:
+        want = ref(msg, nbits, out_len)
+        cfgs = [dict(chunks=c) for c in plans.values()]
+        cfgs += [dict(piece=p) for p in pieces]
+        cfgs += [dict(out_split=s) for s in (splits or OUT_SPLITS).values()]
+        cfgs += [dict(halt=True), dict(migrate=True), dict(halt=True, migrate=True, chunks=plans.get('odd'),
+                                                          out_split=(1, 3))]
+        bad = []
+        for cfg in cfgs:
+            cfg.setdefault('end', end)
+            if 'piece' in cfg and (_piece_bits(port0, cfg['piece'], nbits) is None if cfg['piece'] is not None
+                                   else nbits % 8):
+                continue  # not applicable: a piece longer than the message, or a direct end of a bit message
+            out, st, _ = hash_run(new(), msg, nbits, out_len, **cfg)
+            if (out, st) != (want, final):
+                bad.append(cfg)
+        check(f'{label}: {nbits}-bit message, {len(cfgs)} chunk/piece/halt/export/output plans -> reference, '
+              f'final State {final}', not bad, bad[:3] or None, [] if bad else None)
+    wrong = []
+    for form in ('B', 'C'):
+        p = new()
+        p.setst(KL_STATE_HASH_ABSORB)
+        p.setst(KL_STATE_READY, form, 8)
+        wrong.append(p.st)
+    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR16, GR61)', None, wrong,
+          [KL_STATE_INVALID] * 2)
+
 # ---------------------------------------------------------------- self-tests
 
 def selftest(verbose: bool = False) -> bool:
@@ -463,7 +601,7 @@ def selftest(verbose: bool = False) -> bool:
     Hs = aes_encrypt(bytes(16), bytes(16))
     chk("GHASH H (38D tc1)", Hs.hex(), "66e94bd4ef8a2c3b884cfa59ca342b2e")
 
-    # doubling sanity: CMAC K1 for the all-zero AES-128 key (SP 800-38B D.1)
+    # doubling: CMAC K1 for the SP 800-38B D.1 AES-128 key
     L = aes_encrypt(bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c"), bytes(16))
     K1 = double_ocb(b2v(L))
     chk("CMAC K1 (38B D.1)", v2b(K1, 16).hex(), "fbeed618357133667c85e08f7236a8de")
@@ -474,6 +612,78 @@ def selftest(verbose: bool = False) -> bool:
     chk("CMAC-TDES L", L.hex(), "4eba739c998bcb60")
     chk("CMAC-TDES K1, K2 (R_64)", [v2b(double_ocb(b2v(L), 64), 8).hex(),
         v2b(double_ocb(double_ocb(b2v(L), 64), 64), 8).hex()], ["9d74e739331796c0", "3ae9ce72662f2d9b"])
+
+    # md_pad: SHA-256 built on it against hashlib, every length 0..129 bytes; the padding against
+    # the FIPS 180-4 sect. 5.1.1 bit string for every bit length 0..1100, w = 32 and 64
+    import hashlib, struct
+    K = [int(x, 16) for x in (
+        '428a2f98 71374491 b5c0fbcf e9b5dba5 3956c25b 59f111f1 923f82a4 ab1c5ed5 d807aa98 12835b01 243185be '
+        '550c7dc3 72be5d74 80deb1fe 9bdc06a7 c19bf174 e49b69c1 efbe4786 0fc19dc6 240ca1cc 2de92c6f 4a7484aa '
+        '5cb0a9dc 76f988da 983e5152 a831c66d b00327c8 bf597fc7 c6e00bf3 d5a79147 06ca6351 14292967 27b70a85 '
+        '2e1b2138 4d2c6dfc 53380d13 650a7354 766a0abb 81c2c92e 92722c85 a2bfe8a1 a81a664b c24b8b70 c76c51a3 '
+        'd192e819 d6990624 f40e3585 106aa070 19a4c116 1e376c08 2748774c 34b0bcb5 391c0cb3 4ed8aa4a 5b9cca4f '
+        '682e6ff3 748f82ee 78a5636f 84c87814 8cc70208 90befffa a4506ceb bef9a3f7 c67178f2').split()]
+    M32 = 0xffffffff
+    ror = lambda x, n: ((x >> n) | (x << (32 - n))) & M32
+    def sha256(data):
+        H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+        data += md_pad(8 * len(data), 32)
+        for o in range(0, len(data), 64):
+            w = list(struct.unpack('>16I', data[o:o + 64]))
+            for i in range(16, 64):
+                s0 = ror(w[i - 15], 7) ^ ror(w[i - 15], 18) ^ (w[i - 15] >> 3)
+                s1 = ror(w[i - 2], 17) ^ ror(w[i - 2], 19) ^ (w[i - 2] >> 10)
+                w.append((w[i - 16] + s0 + w[i - 7] + s1) & M32)
+            a, b_, c, d, e, f, g, h = H
+            for i in range(64):
+                t1 = (h + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) & M32
+                t2 = ((ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & b_) ^ (a & c) ^ (b_ & c))) & M32
+                a, b_, c, d, e, f, g, h = (t1 + t2) & M32, a, b_, c, (d + t1) & M32, e, f, g
+            H = [(x + y) & M32 for x, y in zip(H, (a, b_, c, d, e, f, g, h))]
+        return struct.pack('>8I', *H)
+    msgs = [bytes((7 * i + 1) & 0xFF for i in range(n)) for n in range(130)]
+    chk("md_pad: SHA-256 = hashlib, 0..129 bytes", [n for n, m in enumerate(msgs) if sha256(m) != hashlib.sha256(m).digest()], [])
+    bad = []
+    for w in (32, 64):
+        for nb in range(1101):
+            m = bytes((5 * i + 3) & 0xFF for i in range(-(-nb // 8)))
+            bs = bits_of(m, nb, True)
+            ref = bs + '1' + '0' * (-(nb + 1 + 2 * w) % (16 * w)) + format(nb, f'0{2 * w}b')
+            k = nb % 8
+            last = (m[-1] & (0xFF << (8 - k)) & 0xFF) | (1 << (7 - k)) if k else None
+            got = (m[:nb // 8] + (bytes([last]) if k else b'')) + md_pad(nb, w)
+            if bits_of(got, len(got) * 8, True) != ref:
+                bad.append((w, nb))
+    chk("md_pad: = the FIPS 180-4 bit-string padding, 0..1100 bits, w = 32, 64", bad, [])
+
+    # hash_run on a trivial port: an XOF over SHAKE128 that halts after every byte
+    class _Port(HashPort):
+        b, bitwise = 64, False
+        def __init__(p, data=b'', st=KL_STATE_READY, pos=0):
+            p.data, p.st, p.pos, p.klstart = data, st, pos, 0
+        def setst(p, immed, form='A', xs=None): p.st = immed
+        def exec_in(p, d, halt_at=None):
+            if halt_at is not None and halt_at + 1 < len(d):
+                p.data += d[p.klstart:halt_at + 1]
+                p.klstart = halt_at + 1
+                return 'interrupted'
+            p.data += d[p.klstart:]
+            p.klstart = 0
+            return 'done'
+        def exec_out(p, n, halt_at=None, prior=b''):
+            out = hashlib.shake_128(p.data).digest(p.pos + n)[p.pos:p.pos + n]
+            p.pos += n
+            return 'done', out
+        def export(p): return (p.data, p.st, p.pos, p.klstart)
+        def imported(p, img):
+            q = _Port(*img[:3])
+            q.klstart = img[3]
+            return q
+    m = bytes(range(40))
+    want = hashlib.shake_128(m).digest(20)
+    res = {k: hash_run(_Port(), m, 320, 20, chunks=c, halt=True, migrate=True, out_split=(1, 3))[0]
+           for k, c in hash_chunks(8).items()}
+    chk("hash_run: every chunk plan with halts, export/import and odd output splits", res, {k: want for k in res})
     return ok
 
 if __name__ == "__main__":

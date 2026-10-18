@@ -693,7 +693,7 @@ Metadata is _unsupported_ when the combination of _Machine_, _MachinePolicy_, _M
 A supplied MDH is _invalid_ when any of the following holds:
 
 * _Version_ is unsupported, or is 3 in a PI or in a PCCC of base type `pi`;
-* _Version_ is 3 at import, and _State_ is not _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`, _AuxDataLen_ is zero, or _StateExtension_, _KeyType_, _ADSDropped_, _MachineUse_ or _AuxInfo_ is non-zero (<<KLE-system-specific-import>>);
+* _Version_ is 3 at import, and _State_ is not _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`, _AuxDataLen_ is zero, or _StateExtension_, _KeyType_, _ADSDropped_ or _MachineUse_ is non-zero (<<KLE-system-specific-import>>);
 * _KeyType_ is 1 or 2 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 3, or 2 outside a PI and a PCCC of base type `pi`;
 * _SCProtection_ is 3, a reserved value (<<KLE-SCProtection-field>>);
@@ -929,8 +929,6 @@ Issuing a Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW`/8 rais
 Each unit thus keeps its own information, and the two values can still be explicitly "`desynced`", as in locker management operations.
 +
 `kl.mvin` and `kl.mvout` keep the two independent by design: their `klstart` is a locker offset that accumulates across instructions, while `vstart` tracks the vector register.
-+
-The uninterruptible vector-form instructions listed in Rule <<KLE-GR-vector-legality>> produce no `vstart` value and therefore consume none.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2024,6 +2022,7 @@ A usage instruction meets these conditions in order, the first that applies deci
 For `kl.derive`, the State class (Rule <<KLE-GR-management-check-order>>) and then each condition above are evaluated in order, each for the source and then for the destination.
 
 [[KLE-GR-to-ready,GR16]]GR16:: In every Valid State, a `kl.setst` naming _Ready_ and `kl.clearads` (<<KLE-instruction-clearads>>) are admitted; in _Success_ and _Failure_, they are the only usage instructions admitted.
+Unless the Machine defines another Form for it, a `kl.setst` naming _Ready_ is of Form A.
 
 [[KLE-GR-same-state,GR17]]GR17:: Unless the Machine explicitly allows it and defines what it does, a Valid State does not admit (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>):
 +
@@ -2036,7 +2035,7 @@ For `kl.derive`, the State class (Rule <<KLE-GR-management-check-order>>) and th
 
 [[KLE-GR-success-failure-cannot-be-set-directly,GR19]]GR19:: No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 46 or 47). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
 
-[[KLE-GR-policy-narrowing-state,GR20]]GR20:: A `kl.restrictl` or `kl.restrictv` that narrows _MachinePolicy_ (<<KLE-instruction-restrict>>) to a value that the Machine forbids, such as zero for a Machine that requires a set bit, transitions the locker to Error State _Invalid_; any other narrowing does not by itself transition the locker to an Error State.
+[[KLE-GR-policy-narrowing-state,GR20]]GR20:: A `kl.restrictl` or `kl.restrictv` that narrows _MachinePolicy_ (<<KLE-instruction-restrict>>) to a value that the Machine forbids, such as zero for a Machine that requires a set bit (<<KLE-Metadata-validity>>), transitions the locker to Error State _Invalid_; any other narrowing does not by itself transition the locker to an Error State.
 The narrowed _MachinePolicy_ takes effect from the next instruction that performs an operation of the Machine (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>).
 Such an instruction transitions the locker to Error State _Invalid_ if it is issued in a State that performs an operation that _MachinePolicy_ now disables, or from which every operation that the Machine can complete is disabled, unless it is a `kl.setst` that names _Ready_ or a State that performs no disabled operation and from which an enabled operation can still be reached; it does so also if it would enter a State whose operation _MachinePolicy_ disables, either by explicitly naming it (as a `kl.setst` does) or on its completion.
 Otherwise the narrowing invalidates no instruction, and all other Rules still apply.
@@ -2211,7 +2210,9 @@ A field that fails a check when its transfer completes (Rule <<Zkl-ISA-machines.
 . The pair must be admitted; otherwise both transition.
 . The effective length (Rule <<KLE-GR-derive-rule-both-fixed-size>>) must meet the length constraints of the destination, a final partial input unit included, and the untransferred suffix must fit its remaining capacity; otherwise the destination transitions.
 . A destination key field of `dest_length` bytes is loaded in full: it requires `length` {ge} `dest_length`, `klstart` = 0, and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes, unless its Machine admits a shorter key under conditions that it states, as <<Zkl-ISA-machines.adoc#KLE-HMAC,HMAC>> does; otherwise the destination transitions. The key field receives `eff_length` bytes, zero-filled beyond them, which replace whatever a `kl.exec` loaded into it and complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
-A message input receiving a shared secret (Rule <<KLE-GR-shared-secret>>) requires `klstart` = 0 and a `length` at least the length of the secret and at most that length rounded up to a multiple of the granularity of the destination; otherwise the destination transitions.
+A message input receiving a shared secret (Rule <<KLE-GR-shared-secret>>) requires `klstart` = 0 and a `length` equal to the length of the secret; otherwise the destination transitions.
+// Before byte-granular hash inputs:
+// A message input receiving a shared secret (Rule <<KLE-GR-shared-secret>>) requires `klstart` = 0 and a `length` at least the length of the secret and at most that length rounded up to a multiple of the granularity of the destination; otherwise the destination transitions.
 . For any other destination, if `klstart` {ge} `eff_length`, `length` = 0 included, the instruction retires with `klstart` = 0, skipping the remaining checks and changing nothing else.
 . The source must be able to supply the untransferred suffix, a final partial output unit included (Rule <<KLE-GR-derive-rule-both-fixed-size>>); otherwise the source transitions.
 +
@@ -2365,6 +2366,8 @@ NOTE: Such an event should be rare, since for most applications Machines will ne
 
 [horizontal]
 [[KLE-GR-sysfmt-import-only,GR54]]GR54:: System-specific formats are optional, and are only imported, never provisioned: a PI, or a PCCC of base type `pi`, with _Version_ = 3 is invalid Metadata (<<KLE-Metadata-validity>>).
+A system-specific import takes the place of a provisioning: the format provides the starting point of the cryptographic operations of the Machine, and a successful import leaves the locker in _Ready_. It is never a snapshot of a Machine whose operation has started.
+The format provides every field that the Machine needs and cannot set itself, the fields of the MDH included, such as _AuxInfo_.
 _Version_ = 3 exists only within such an import, base or nested, and in the PCCC of a nested export taken during it; every other exported image carries _Version_ 0 (or 1 in a future version of this specification).
 An implementation may support several system-specific formats, and distinguishes them in an implementation-defined way.
 
@@ -2379,7 +2382,8 @@ An implementation may support several system-specific formats, and distinguishes
   Where the format also specifies a Machine, the import-completing `kl.mgmt` verifies, before converting the data, that it is the same: the format's _Machine_ and _MachineExtension_ must equal those of the MDH, and the _MachinePolicy_ of the MDH may enable only operations that the format allows, so that it can further restrict the Machine.
   If the verification fails, the locker transitions to Error State _Invalid_.
 * _SCProtection_, _UsagePolicy_, _Locality_ and _ExpirationDate_: the policies, which apply as in any other import.
-* _State_, _StateExtension_, _KeyType_, _ADSDropped_, _MachineUse_ and _AuxInfo_: zero; the format carries no ADS.
+* _AuxInfo_: as in a PI of the Machine.
+* _State_, _StateExtension_, _KeyType_, _ADSDropped_ and _MachineUse_: zero; the format carries no ADS.
 --
 
 [[KLE-GR-sysfmt-policies,GR56]]GR56:: The format may carry further policies, which apply in addition to those of the declared MDH, never in their place: the implementation converts them into KLE policies in an implementation-defined way, never weaker than those the format carries.
@@ -2389,9 +2393,11 @@ The format defines whether, and how, its data is protected; this specification r
 A nested export taken during the import (<<KLE-management-formats-and-states>>) is a PCCC that carries only what software supplied: the MDH, which keeps _Version_ 3 and _AuxDataLen_, followed by the data loaded, at _ContentOffset_ 0; its nested import restores the locker.
 
 [[KLE-GR-sysfmt-completion,GR58]]GR58:: The import-completing `kl.mgmt` receives an `ml` whose _State_ is _Unconfigured_.
-It converts the data and translates the policies of the format; a failure of a check that the format defines transitions the locker to Error State _Authentication Failed_ if the format authenticates its data, and to _Invalid_ otherwise.
+It converts the data and translates the policies of the format; a failure of a check that the format defines transitions the locker to Error State _Authentication Failed_ if the format authenticates its data, and to _Invalid_ otherwise, and ends the import.
 The converted Content then undergoes every check that the Machine makes on a provisioning or an import of the same fields, with the same outcomes (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>), and each field that it configures is marked as configured, as a completed load of that field marks it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
-It then narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>), transitioning the locker to Error State _Privilege Violation_ if the narrowing fails; otherwise it sets _Version_ to 0 (or 1 in a future version of this specification) and _AuxDataLen_ to 0, and sets _State_ to _Ready_, with the operations of entering it, as at the completion of a provisioning (<<KLE-locker-management>>).
+If one of these checks left the locker in an Error State, the import ends there.
+Otherwise the instruction narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>), transitioning the locker to Error State _Privilege Violation_ if the narrowing fails; otherwise it sets _Version_ to 0 (or 1 in a future version of this specification) and _AuxDataLen_ to 0, and, unless a check above left the locker in _Failure_, sets _State_ to _Ready_, with the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>).
+A step that a Machine performs on a provisioning, such as setting a default or clearing a field, applies only to a field that the converted Content does not configure.
 
 NOTE: The pseudocode examples (<<Zkl-software.adoc#KLE-pseudocode-examples>>) include no such import.
 A CC imported from a system-specific format can be bound by its _Locality_ to the implementations meant to use it.

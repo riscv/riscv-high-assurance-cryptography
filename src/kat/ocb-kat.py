@@ -4,7 +4,7 @@ nonces of any length), with its state machine, Serialized Content and kl.derive 
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bswap, bin_, bxor, aes_encrypt, aes_decrypt, update_mask,
-                    double_ocb, MASK128, IllegalInstruction,
+                    double_ocb, MASK128,
                     KL_STATE_READY as READY, KL_STATE_HASH_ABSORB as ABSORB,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
@@ -12,7 +12,7 @@ from common import (b2v, v2b, sl, cat, bswap, bin_, bxor, aes_encrypt, aes_decry
                     KL_STATE_ENC_TAG_FINALIZE as TAG_FIN, KL_STATE_SET_AUX_VALUE as SET_AUX,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE,
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, raises, done)
+                    section, check, control, info, done)
 
 B, MAXB = 128, 1 << 48                                # MAX_BLOCKS
 JUNK = b2v(bytes([0x5A, 0xC3]) * 32)
@@ -108,7 +108,7 @@ class Ocb:
         s._ready()
     def _ready(s):
         s.N = s.N_len = s.hash_A = s.checksum_P = s.index = 0
-        s.tag_len = 128                                # so that field x always has a code
+        s.tag_len = 128                                # so that the tag_len field always has a code
         s.has_n = False                                # HasN, _StateExtension_ bit 0
     def _invalid(s, why=None, out=0):
         s._ready()                                     # GR29
@@ -130,7 +130,7 @@ class Ocb:
     def setst(s, immed, form='A', aux=0):
         if s.state in ERROR_STATES:                    # GR26
             return
-        if immed == READY:                             # GR16
+        if immed == READY and form == 'A':             # GR16: Form A
             s.state = READY
             return s._ready()
         if (s.state not in s.SETST.get((immed, form), ())   # MR1, GR16
@@ -189,7 +189,7 @@ class Ocb:
             return s._blocks(st, INPUT, klen)
         if st == TAG_FIN:
             if klen < s.tag_len:
-                s._invalid('KLLEN < tag_len')          # MR2: no truncated OCB tag (G4-01)
+                s._invalid('KLLEN < tag_len')          # MR2: no truncated OCB tag
             s.state, t = SUCCESS, s.tag_len
             return cat((0, B - t), (sl(s.checksum_P, t - 1, 0), t)) & ((1 << klen) - 1)
         if st == VERIFY:                               # MR14: the Form B kl.exec supplies the expected tag
@@ -250,17 +250,16 @@ class Ocb:
             new._invalid()                             # MR13: code 3 is never produced
             return new
         if isinstance(new, OcbNonce) and not 6 <= new.N_len <= 120:
-            new._invalid()                             # MR13: N_len is checked on import too
+            new._invalid()                             # MR13: N_len checked on import
         return new
 
 def derive(src, dst, length, klstart=0):
-    """kl.derive into `key` (Ready) from a listed source's bytes (a shared secret, a keystream or a CMAC);
-    no OCB State is a source, the tag included, and `N` is no destination (<<KLE-derive-endpoints>>).
-    Uninterruptible (GR38)."""
+    """kl.derive into `key` (Ready) from a listed source's bytes; no OCB State is a source, the tag included,
+    and `N` is no destination (<<KLE-derive-endpoints>>).  Uninterruptible (GR38)."""
     if dst.state in ERROR_STATES or isinstance(src, Ocb) and src.state in ERROR_STATES:
         return                                         # GR26: an inert endpoint
     if isinstance(src, Ocb):
-        src._invalid('GR32 item 1')                    # no Form C output of OCB is a source
+        src._invalid('GR32 item 1')
     if dst.state != READY or isinstance(dst, OcbNonce):
         dst._invalid('GR32 item 2')                    # no endpoint in this State or Machine, `N` included
     if dst.skid is not None:
@@ -497,13 +496,14 @@ INVALID_CASES = [
     ("kl.setst #set_aux_value Form A", lambda: Ocb(K128), lambda c: c.setst(SET_AUX, 'A')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.setst #encrypt from Hash_Absorb", at_absorb, lambda c: c.setst(ENCRYPT, 'A')),
+    ("Form B kl.setst naming Ready (GR16, GR61)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
     ("kl.exec in Hash_Absorb_Last_Block, last_block_len = 0", lambda: last_set(0), lambda c: c.exec('D')),
     ("second kl.exec in Hash_Absorb_Last_Block", last_done, lambda c: c.exec('B', 0, 64)),
     ("kl.setst #enc_tag_finalize from Encrypt", at_crypt, lambda c: c.setst(TAG_FIN, 'A')),
     ("kl.exec Form A in Enc_Last_Block, last_block_len = 0", lambda: at_last(n=0)[0], lambda c: c.exec('A')),
-    ("second kl.exec in Enc_Last_Block (now Enc_Tag_Finalize)", lambda: at_last(finish=True)[0],
+    ("second kl.exec after Enc_Last_Block, in Enc_Tag_Finalize", lambda: at_last(finish=True)[0],
      lambda c: c.exec('A', b2v(S40[32:40]), 64)),
-    ("second kl.exec in Dec_Last_Block (now Hash_Verify)", lambda: at_last(True, finish=True)[0],
+    ("second kl.exec after Dec_Last_Block, in Hash_Verify", lambda: at_last(True, finish=True)[0],
      lambda c: c.exec('A', b2v(CT13[32:40]), 64)),
     ("kl.setst #hash_verify in Decrypt", lambda: at_crypt(True), lambda c: c.setst(VERIFY, 'C')),
     ("MR19: kl.setst #enc_tag_finalize in Enc_Last_Block", lambda: at_last()[0], lambda c: c.setst(TAG_FIN, 'A')),
@@ -535,7 +535,7 @@ INVALID_CASES = [
      lambda c: c.exec('C')),
     ("KLLEN = 120 < tag_len = 128 in Hash_Verify, right tag (MR2)", lambda: at_last(True, finish=True)[0],
      lambda c: c.exec('B', b2v(CT13[40:]), 120)),
-    ("second kl.exec in Hash_Verify (now Success, GR16)", lambda: at_end(True),
+    ("second kl.exec after Hash_Verify, in Success (GR16)", lambda: at_end(True),
      lambda c: c.exec('B', b2v(CT13[40:]))),
 ] + [(f"last_block_len = {n}", at_absorb, lambda c, n=n: c.setst(LAST, 'B', n))
      for n in (4, 12, 124, 128, 136)]
@@ -708,7 +708,7 @@ check("PI N, N_len = 100: pad bits cleared as by the Set_Aux_Value kl.exec", Tru
       OcbNonce.provisioned(K7, (1 << 120) - 1, 100).N, ref.N)
 
 section("kl.derive")
-secret = K128 + bytes(range(0xF0, 0x100))              # the bytes of a listed source (shared secret, keystream, CMAC)
+secret = K128 + bytes(range(0xF0, 0x100))              # the bytes of a listed source
 for length in (16, 32):
     cl = Ocb(bytes(16))
     derive(secret, cl, length)
@@ -736,7 +736,7 @@ cl.setst(SET_AUX, 'B', 96)
 check("_Hash_Absorb_ without a loaded nonce (HasN clear, MR11) -> Invalid", True,
       (bool(inval(cl.setst, ABSORB, 'B', 128)), cl.state), (True, INVALID))
 src, dst = at_crypt(), Ocb(bytes(16))
-check("OCB in Encrypt as a kl.derive source (no source endpoint, GR32 item 1) -> only the source Invalid",
+check("OCB in Encrypt as a kl.derive source (none, GR32 item 1) -> only the source Invalid",
       inval(derive, src, dst, 16) and (src.state, dst.state, dst.key) == (INVALID, READY, bytes(16)))
 src, dst = at_last(finish=True)[0], Ocb(bytes(16))
 check("the tag in Enc_Tag_Finalize into a 128-bit `key`: the tag is no source (GR32 item 1) -> only the source "
@@ -744,8 +744,8 @@ check("the tag in Enc_Tag_Finalize into a 128-bit `key`: the tag is no source (G
       ("('GR32 item 1', 0)", INVALID, READY, bytes(16)))
 src, dst = at_last(finish=True)[0], Ocb(K128)
 dst.setst(SET_AUX, 'B', 96)
-check("the tag in Enc_Tag_Finalize into `N` of another OCB: the source check comes first (GR32 item 1) -> only the "
-      "source Invalid, the destination still in Set_Aux_Value", True,
+check("the tag in Enc_Tag_Finalize into `N` of another OCB: the source check first (GR32 item 1) -> only the "
+      "source Invalid, the destination in Set_Aux_Value", True,
       (str(inval(derive, src, dst, 16)), src.state, dst.state, dst.has_n),
       ("('GR32 item 1', 0)", INVALID, SET_AUX, False))
 
