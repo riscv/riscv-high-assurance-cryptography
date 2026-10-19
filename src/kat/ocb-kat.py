@@ -4,15 +4,16 @@ nonces of any length), with its state machine, Serialized Content and kl.derive 
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bswap, bin_, bxor, aes_encrypt, aes_decrypt, update_mask,
-                    double_ocb, MASK128, IllegalInstruction,
+                    double_ocb, MASK128,
                     KL_STATE_READY as READY, KL_STATE_HASH_ABSORB as ABSORB,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
                     KL_STATE_ENC_LAST_BLOCK as ENC_LAST, KL_STATE_DEC_LAST_BLOCK as DEC_LAST,
                     KL_STATE_ENC_TAG_FINALIZE as TAG_FIN, KL_STATE_SET_AUX_VALUE as SET_AUX,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE,
-                    KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    section, check, control, info, raises, done)
+                    KL_STATE_INVALID as INVALID, KL_STATE_EXPIRED as EXPIRED, ERROR_STATES,
+                    IllegalInstruction, raises,
+                    section, check, control, info, done)
 
 B, MAXB = 128, 1 << 48                                # MAX_BLOCKS
 JUNK = b2v(bytes([0x5A, 0xC3]) * 32)
@@ -65,7 +66,7 @@ class Invalid(Exception): pass                         # args: (why, OUTPUT as l
 
 SKS = {}
 LAYOUT = [('N', 120), ('N_len', 7), ('pad', 1), ('Lstar', 128), ('offset', 128), ('hash_A', 128),
-          ('checksum_P', 128), ('index', 49), ('tag_len', 2), ('last_blk_len', 7)]
+          ('checksum_P', 128), ('index', 49), ('tag_len', 2), ('last_block_len', 7)]
 
 def pack(vals, lay):
     """Rows from bit 0 upwards, zero-padded to a multiple of 128 bits."""
@@ -83,27 +84,37 @@ def unpack(data, lay):
     return out
 
 class Ocb:
-    # (immed, Form) -> States it is allowed from (GR23 included, but not into Hash_Absorb,
-    # Hash_Absorb_Last_Block, Encrypt or Decrypt); VERIFY Form A: KLIOBUF substitution
+    USES_HASN = True
+    # (immed, Form) -> States it is allowed from; the only same-State kl.setst is into Set_Aux_Value, which
+    # restarts the nonce load (GR17, MR9). No kl.setst names Enc_Tag_Finalize or Hash_Verify, which the
+    # Machine enters by itself (MR14: the tag is verified by a Form B kl.exec in Hash_Verify)
     SETST = {(SET_AUX, 'B'): (READY, SET_AUX), (ABSORB, 'B'): (SET_AUX,),
-             (LAST, 'B'): (ABSORB,), (ENC_LAST, 'B'): (ENCRYPT, ENC_LAST),
-             (DEC_LAST, 'B'): (DECRYPT, DEC_LAST), (ENCRYPT, 'A'): (LAST,),
-             (DECRYPT, 'A'): (LAST,), (VERIFY, 'C'): (VERIFY,), (VERIFY, 'A'): (VERIFY,),
-             (TAG_FIN, 'A'): (TAG_FIN,)}
+             (LAST, 'B'): (ABSORB,), (ENC_LAST, 'B'): (ENCRYPT,),
+             (DEC_LAST, 'B'): (DECRYPT,), (ENCRYPT, 'A'): (LAST,),
+             (DECRYPT, 'A'): (LAST,)}
+    GATE = {ENCRYPT: 1, ENC_LAST: 1, TAG_FIN: 1, DECRYPT: 2, DEC_LAST: 2, VERIFY: 2}   # MR11
+    def restrictl(s, v):                               # a set bit removes a function (<<KLE-instruction-restrict>>)
+        if s.state in ERROR_STATES:
+            return
+        s.policy &= ~v & 3
+        if not s.policy:
+            s._invalid('GR20: MachinePolicy = 0')      # MR11
     def __init__(s, key, policy=0b11, skid=None, **nc):
         s.key, s.skid, s.policy, s.state = key, skid, policy, READY
         s.nc = dict(dict(dbl=double_ocb, ktop_bswap=True, msb_first=False, pad_byte0=False), **nc)
         if skid is not None:
             SKS[skid] = key
-        s.Lstar = s.offset = s.last_blk_len = s.Ldollar = 0
-        s.tag_len, s.L = None, []
+        s.Lstar = s.offset = s.last_block_len = s.Ldollar = 0
+        s.L = []
         s._ready()
     def _ready(s):
         s.N = s.N_len = s.hash_A = s.checksum_P = s.index = 0
+        s.tag_len = 128                                # so that the tag_len field always has a code
+        s.has_n = False                                # HasN, _StateExtension_ bit 0
     def _invalid(s, why=None, out=0):
-        s._ready()                                     # GR30
+        s._ready()                                     # GR29
         s.state, s.key, s.skid, s.tag_len, s.L = INVALID, None, None, None, []
-        s.Lstar = s.offset = s.last_blk_len = 0
+        s.Lstar = s.offset = s.last_block_len = 0
         if why:
             raise Invalid(why, out)
     def enc(s, v):
@@ -118,33 +129,38 @@ class Ocb:
             s.L.append(s.nc['dbl'](s.L[-1]))
         return s.L[i]
     def setst(s, immed, form='A', aux=0):
-        if s.state in ERROR_STATES:                    # GR19.a
+        if immed in ERROR_STATES:                      # GR30
+            if immed >= 54:
+                raise IllegalInstruction('reserved #immed7')   # GR18
+            s._invalid()                               # GR29: Content cleared
+            s.state = immed
             return
-        if immed == READY:                             # GR22
+        if s.state in ERROR_STATES:                    # GR26
+            return
+        if immed == READY and form == 'A':             # GR16: Form A
             s.state = READY
             return s._ready()
-        if (s.state not in s.SETST.get((immed, form), ())   # MR1, GR27
-                or not s.policy & {ENCRYPT: 1, DECRYPT: 2}.get(immed, 3)):   # <<KLE-Machine-field>>
+        if (s.state not in s.SETST.get((immed, form), ())   # MR1, GR16
+                or not s.policy & s.GATE.get(s.state, 3)    # MR11 at issue (GR20)
+                or not s.policy & s.GATE.get(immed, 3)):
             s._invalid('transition')
         if immed == SET_AUX:
             if not 6 <= aux <= 120:
                 s._invalid('N_len')
-            s.N_len = aux
+            s.N_len, s.N, s.has_n = aux, 0, False
         elif immed == ABSORB:
+            if s.USES_HASN and not s.has_n:
+                s._invalid('HasN')                     # MR11: entry condition
             if aux not in (64, 96, 128):
                 s._invalid('tag_len')
             s.index, s.tag_len, s.offset, s.Lstar = 1, aux, 0, s.enc(0)
             s._ladder()
         elif immed in (LAST, ENC_LAST, DEC_LAST):
             if aux % 8 or aux > 120:
-                s._invalid('last_blk_len')
-            s.last_blk_len = aux
+                s._invalid('last_block_len')
+            s.last_block_len = aux
         elif immed in (ENCRYPT, DECRYPT):
             s._setup()
-        elif immed == VERIFY:
-            t = s.tag_len
-            s.state = SUCCESS if sl(aux, t - 1, 0) == sl(s.checksum_P, t - 1, 0) else FAILURE
-            return
         s.state = immed
     def _set_N(s, INPUT):                              # clear the pad bits of byte q-1
         q, pad = (s.N_len + 7) // 8, -s.N_len % 8
@@ -160,30 +176,47 @@ class Ocb:
         s.index = 1
         s.offset = bswap(sl(s.Stretch_be, 191 - s.bottom, 64 - s.bottom), 16)
     def exec(s, form, INPUT=0, klen=B):
-        st, n = s.state, s.last_blk_len
-        if st in ERROR_STATES:                         # GR19.a, GR34
+        st, n = s.state, s.last_block_len
+        if st in ERROR_STATES:                         # GR26, GR28
             return 0
-        want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B' if n else '',
+        if not s.policy & s.GATE.get(st, 3):
+            s._invalid('MR11')                         # at issue (GR20)
+        want = {SET_AUX: 'B', ABSORB: 'B', LAST: 'B',
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
-                DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C'}.get(st, '')
+                DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C', VERIFY: 'B'}.get(st, '')
         if not want or form not in (want, 'D'):
-            s._invalid('Form')                         # MR1, GR24, GR28; a wrong Form (GR80)
+            s._invalid('Form')                         # MR1, GR17, GR16; a wrong Form (GR62)
         if st == SET_AUX:
+            if klen < 8 * ((s.N_len + 7) // 8):
+                s._invalid('KLLEN < 8q')               # MR7, MR2: a fixed-width input shorter than the nonce
             s._set_N(INPUT)
+            s.has_n = True
             return 0
         if st in (ABSORB, ENCRYPT, DECRYPT):
             return s._blocks(st, INPUT, klen)
         if st == TAG_FIN:
+            if klen < s.tag_len:
+                s._invalid('KLLEN < tag_len')          # MR2: no truncated OCB tag
             s.state, t = SUCCESS, s.tag_len
             return cat((0, B - t), (sl(s.checksum_P, t - 1, 0), t)) & ((1 << klen) - 1)
+        if st == VERIFY:                               # MR14: the Form B kl.exec supplies the expected tag
+            t = s.tag_len
+            if klen < t:
+                s._invalid('KLLEN < tag_len')          # MR2
+            s.state = SUCCESS if sl(INPUT, t - 1, 0) == sl(s.checksum_P, t - 1, 0) else FAILURE
+            return 0
         if klen < n:
-            s._invalid('KLLEN < last_blk_len')
+            s._invalid('KLLEN < last_block_len')
+        if klen == 0 and not (n == 0 and st in (ENC_LAST, DEC_LAST)):
+            return 0                                   # GR44 item 2: an empty window does not reach the Machine
+        if st == LAST and not n:
+            s._invalid('MR10: empty or already processed final block')
         if n and s.index > MAXB:
             s._invalid('index > MAX_BLOCKS')
         if st == LAST:
             s.offset ^= s.Lstar
             s.hash_A ^= s.enc(ocb_pad(INPUT, n) ^ s.offset)
-            s.last_blk_len = 0                         # a second kl.exec is not allowed (MR10)
+            s.last_block_len = 0                         # a second kl.exec is not allowed (MR10)
             return 0
         out, tmp = 0, s.offset                         # Form D when n = 0
         if n:
@@ -220,31 +253,30 @@ class Ocb:
         """A fresh locker with this locker's MDH, loaded from Content1; derived L$, L[i] recomputed (MR4)."""
         f = unpack(c1, lay or s.lay())
         new = type(s)(SKS[f['key']] if s.skid is not None else v2b(f['key'], len(s.key)), s.policy, s.skid, **s.nc)
-        for k in ('N', 'N_len', 'Lstar', 'offset', 'hash_A', 'checksum_P', 'index', 'last_blk_len'):
+        for k in ('N', 'N_len', 'Lstar', 'offset', 'hash_A', 'checksum_P', 'index', 'last_block_len'):
             setattr(new, k, f.get(k, 0))
-        new.state, new.tag_len = s.state, 32 * (f['tag_len'] + 2)
+        new.state, new.tag_len, new.has_n = s.state, 32 * (f['tag_len'] + 2), s.has_n   # HasN is in the MDH
         new._ladder()
+        if f['tag_len'] == 3:
+            new._invalid()                             # MR13: code 3 is never produced
+            return new
         if isinstance(new, OcbNonce) and not 6 <= new.N_len <= 120:
-            new._invalid()                             # MR14: N_len is checked on import too
+            new._invalid()                             # MR13: N_len checked on import
         return new
 
-def derive(src, dst, length):
-    """kl.derive into `key` (Ready; GR54/GR56 source) or `N` (Set_Aux_Value) from a listed source's bytes,
-    or from an Ocb source, which emits its tag in Enc_Tag_Finalize (GR55)."""
-    if dst.state in ERROR_STATES:
-        return
+def derive(src, dst, length, klstart=0):
+    """kl.derive into `key` (Ready) from a listed source's bytes; no OCB State is a source, the tag included,
+    and `N` is no destination (<<KLE-derive-endpoints>>).  Uninterruptible (GR38)."""
+    if dst.state in ERROR_STATES or isinstance(src, Ocb) and src.state in ERROR_STATES:
+        return                                         # GR26: an inert endpoint
     if isinstance(src, Ocb):
-        if src.state != TAG_FIN:
-            src._invalid('GR50 items 1-2')             # Form C emits only the tag
-        ok = dst.state == SET_AUX or dst.state == READY and dst.skid is None and len(dst.key) <= min(length, 16)
-        src = v2b(src.exec('C'), src.tag_len // 8) if ok else b''     # GR55: emitted as by Form C
-    if dst.state == SET_AUX:                           # GR49: min(length, q) bytes, zero-filled
-        q = (dst.N_len + 7) // 8
-        return dst.exec('B', b2v(src[:min(length, q)]), 8 * q)
-    if dst.state != READY:
-        dst._invalid('GR50 items 1-2')                # no endpoint in this State
-    if dst.skid is not None or length < len(dst.key) or len(src) < len(dst.key):
-        dst._invalid('GR53 (GR50 item 2), GR50 item 5')
+        src._invalid('GR32 item 1')
+    if dst.state != READY or isinstance(dst, OcbNonce):
+        dst._invalid('GR32 item 2')                    # no endpoint in this State or Machine, `N` included
+    if dst.skid is not None:
+        dst._invalid('GR68 (GR32 item 2)')
+    if klstart or length < len(dst.key) or len(src) < len(dst.key):
+        dst._invalid('GR32 item 5')                    # the key loaded in full
     dst.key = src[:len(dst.key)]
 
 def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False, lay=None,
@@ -286,7 +318,7 @@ def run(K, N, A, X, t, dec=False, n_len=None, per_exec=1, junk=False, hop=False,
     cl = nxt(cl)
     if dec:
         P = feed(X[:-t // 8], fA, DEC_LAST)
-        cl.setst(VERIFY, 'A' if subst else 'C', b2v(X[-t // 8:]) | (junk_above(t) if junk else 0))
+        cl.exec(fB, b2v(X[-t // 8:]) | (junk_above(t) if junk else 0))
         return P, cl.state == SUCCESS
     C = feed(X, fA, ENC_LAST)
     tag = cl.exec('D' if subst else 'C')
@@ -298,6 +330,7 @@ class OcbNonce(Ocb):
     """<<KLE-OCB-with-nonce-mode>>: N, N_len from the PI; no _Set_Aux_Value_; _Ready_ keeps them."""
     SETST = {k: tuple(READY if st == SET_AUX else st for st in v) for k, v in Ocb.SETST.items() if k[0] != SET_AUX}
     PI = [('N', 120), ('N_len', 7), ('pad', 1)]
+    USES_HASN = False                                  # HasN unused: _StateExtension_ bit 0 stays 0 (GR23)
     @classmethod
     def provisioned(cls, K, N, N_len, **kw):
         f = unpack(pack(dict(key=b2v(K), N=N, N_len=N_len, pad=0), [('key', 8 * len(K))] + cls.PI),
@@ -423,7 +456,7 @@ check("iterated test output", True,
 
 section("Serialized Content")
 info("<<KLE-OCB-mode>> Serialized Content rows are packed from bit 0 upwards (lowest address first).")
-FITS, fits = ('N', 'N_len', 'tag_len', 'index', 'last_blk_len', 'Lstar', 'offset', 'hash_A'), True
+FITS, fits = ('N', 'N_len', 'tag_len', 'index', 'last_block_len', 'Lstar', 'offset', 'hash_A'), True
 for vals in ((0, 120, 128, MAXB + 1, 120), ((1 << 47) - 1, 6, 64, 1, 0), (1 << 119, 7, 96, MAXB, 8)):
     cl = Ocb(K128)
     vars(cl).update(zip(FITS, vals + (MASK128,) * 3), checksum_P=MASK128)
@@ -432,7 +465,12 @@ check("every admissible value fits its row", fits)
 for sk in (None, 0x0123456789ABCDEF):
     check(f"export/import after every instruction, key {'by value' if sk is None else 'as SKID'}: "
           "vector 07", True, run(*E7, hop=True, skid=sk, per_exec=0), VEC[7][5])
-info("tag_len is exported as code 0 before _Hash_Absorb_ first assigns it.")
+cl = Ocb(K128)
+c1 = cl.export()
+check("_Ready_ sets tag_len = 128: exported before _Hash_Absorb_ as code 2", True,
+      (cl.tag_len, unpack(c1, cl.lay())['tag_len']), (128, 2))
+f = unpack(c1, cl.lay()); f['tag_len'] = 3
+check("an import with tag_len code 3 -> Invalid", True, cl.imported(pack(f, cl.lay())).state, INVALID)
 
 section("state machine")
 def at_absorb(K=K128, **kw):
@@ -456,7 +494,7 @@ def at_last(dec=False, n=64, finish=False):
     return cl, out
 def at_end(dec=False):
     cl = at_last(dec, finish=True)[0]
-    cl.setst(VERIFY, 'C', 0) if dec else cl.exec('C')
+    cl.exec('B', 0) if dec else cl.exec('C')
     return cl
 def last_set(n=64, absorb=False):
     cl = at_absorb()
@@ -464,54 +502,80 @@ def last_set(n=64, absorb=False):
     absorb and cl.exec('B', b2v(S40[:8]), 64)
     return cl
 last_done = lambda: last_set(absorb=True)
+cl = last_set(0)
+check("Hash_Absorb_Last_Block, last_block_len = 0: a kl.exec with KLLEN = 0 has an empty window, no operation "
+      "(GR44, MR10)", True, (cl.exec('B', 0, 0), cl.state), (0, LAST))
 INVALID_CASES = [
     ("kl.setst #hash_absorb from Ready", lambda: Ocb(K128), lambda c: c.setst(ABSORB, 'B', 128)),
     ("kl.setst #set_aux_value Form A", lambda: Ocb(K128), lambda c: c.setst(SET_AUX, 'A')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.setst #encrypt from Hash_Absorb", at_absorb, lambda c: c.setst(ENCRYPT, 'A')),
-    ("kl.exec in Hash_Absorb_Last_Block, last_blk_len = 0", lambda: last_set(0), lambda c: c.exec('D')),
+    ("Form B kl.setst naming Ready (GR16, GR62)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
+    ("kl.exec in Hash_Absorb_Last_Block, last_block_len = 0", lambda: last_set(0), lambda c: c.exec('D')),
     ("second kl.exec in Hash_Absorb_Last_Block", last_done, lambda c: c.exec('B', 0, 64)),
     ("kl.setst #enc_tag_finalize from Encrypt", at_crypt, lambda c: c.setst(TAG_FIN, 'A')),
-    ("kl.exec Form A in Enc_Last_Block, last_blk_len = 0", lambda: at_last(n=0)[0], lambda c: c.exec('A')),
-    ("second kl.exec in Enc_Last_Block (now Enc_Tag_Finalize)", lambda: at_last(finish=True)[0],
+    ("kl.exec Form A in Enc_Last_Block, last_block_len = 0", lambda: at_last(n=0)[0], lambda c: c.exec('A')),
+    ("second kl.exec after Enc_Last_Block, in Enc_Tag_Finalize", lambda: at_last(finish=True)[0],
      lambda c: c.exec('A', b2v(S40[32:40]), 64)),
-    ("second kl.exec in Dec_Last_Block (now Hash_Verify)", lambda: at_last(True, finish=True)[0],
+    ("second kl.exec after Dec_Last_Block, in Hash_Verify", lambda: at_last(True, finish=True)[0],
      lambda c: c.exec('A', b2v(CT13[32:40]), 64)),
     ("kl.setst #hash_verify in Decrypt", lambda: at_crypt(True), lambda c: c.setst(VERIFY, 'C')),
+    ("MR20: kl.setst #enc_tag_finalize in Enc_Last_Block", lambda: at_last()[0], lambda c: c.setst(TAG_FIN, 'A')),
+    ("MR20: kl.setst #hash_verify in Dec_Last_Block", lambda: at_last(True)[0], lambda c: c.setst(VERIFY, 'C', 0)),
     ("kl.setst #hash_verify in Enc_Tag_Finalize", lambda: at_last(finish=True)[0],
      lambda c: c.setst(VERIFY, 'C')),
-    ("second tag kl.exec, in Success (GR28)", at_end, lambda c: c.exec('C')),
-    ("kl.setst #decrypt in Success (GR27)", at_end, lambda c: c.setst(DECRYPT, 'A')),
-    ("kl.setst #decrypt in Failure (GR27)", lambda: at_end(True), lambda c: c.setst(DECRYPT, 'A')),
+    ("second tag kl.exec, in Success (GR16)", at_end, lambda c: c.exec('C')),
+    ("kl.setst #decrypt in Success (GR16)", at_end, lambda c: c.setst(DECRYPT, 'A')),
+    ("kl.setst #decrypt in Failure (GR16)", lambda: at_end(True), lambda c: c.setst(DECRYPT, 'A')),
     ("KLLEN = 64 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 64)),
     ("KLLEN = 136 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
-    ("KLLEN = 56 < last_blk_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
-    ("same-State kl.setst #hash_absorb (GR23)", at_absorb, lambda c: c.setst(ABSORB, 'B', 128)),
-    ("same-State kl.setst #hash_last_block after its kl.exec (GR23, MR10)", last_done,
+    ("KLLEN = 56 < last_block_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
+    ("same-State kl.setst #hash_absorb (GR17)", at_absorb, lambda c: c.setst(ABSORB, 'B', 128)),
+    ("same-State kl.setst #hash_last_block after its kl.exec (GR17, MR10)", last_done,
      lambda c: c.setst(LAST, 'B', 64)),
-    ("same-State kl.setst #encrypt (GR23)", at_crypt, lambda c: c.setst(ENCRYPT, 'A')),
-    ("same-State kl.setst #decrypt (GR23)", lambda: at_crypt(True), lambda c: c.setst(DECRYPT, 'A')),
-] + [(f"last_blk_len = {n}", at_absorb, lambda c, n=n: c.setst(LAST, 'B', n))
+    ("same-State kl.setst #encrypt (GR17)", at_crypt, lambda c: c.setst(ENCRYPT, 'A')),
+    ("same-State kl.setst #decrypt (GR17)", lambda: at_crypt(True), lambda c: c.setst(DECRYPT, 'A')),
+    ("same-State kl.setst #hash_last_block before its kl.exec (GR17)", last_set, lambda c: c.setst(LAST, 'B', 64)),
+    ("same-State kl.setst #enc_last_block before its kl.exec (GR17)", lambda: at_last()[0],
+     lambda c: c.setst(ENC_LAST, 'B', 64)),
+    ("same-State kl.setst #dec_last_block before its kl.exec (GR17)", lambda: at_last(True)[0],
+     lambda c: c.setst(DEC_LAST, 'B', 64)),
+    ("same-State kl.setst #enc_tag_finalize (GR17)", lambda: at_last(finish=True)[0],
+     lambda c: c.setst(TAG_FIN, 'A')),
+    ("kl.setst #hash_verify in Hash_Verify, even of Form C with the right tag (GR17, MR14)",
+     lambda: at_last(True, finish=True)[0], lambda c: c.setst(VERIFY, 'C', b2v(CT13[40:]))),
+    ("Form C kl.exec in Hash_Verify (MR1: Form B expected)", lambda: at_last(True, finish=True)[0],
+     lambda c: c.exec('C')),
+    ("KLLEN = 120 < tag_len = 128 in Hash_Verify, right tag (MR2)", lambda: at_last(True, finish=True)[0],
+     lambda c: c.exec('B', b2v(CT13[40:]), 120)),
+    ("second kl.exec after Hash_Verify, in Success (GR16)", lambda: at_end(True),
+     lambda c: c.exec('B', b2v(CT13[40:]))),
+] + [(f"last_block_len = {n}", at_absorb, lambda c, n=n: c.setst(LAST, 'B', n))
      for n in (4, 12, 124, 128, 136)]
 for name, mk, act in INVALID_CASES:
     cl = mk()
     check(f"{name} -> Invalid", inval(act, cl) is not None and cl.state == INVALID)
 cl = Ocb(K128)
 inval(cl.exec, 'B')
-check("kl.exec in Ready -> Invalid (GR24); Content cleared (GR30); then no operation (GR19.a)",
+check("kl.exec in Ready -> Invalid (GR17); Content cleared (GR29); then no operation (GR26)",
       True, (cl.state, cl.key, cl.hash_A, cl.exec('A', 1234), cl.state), (INVALID, None, 0, 0, INVALID))
+cl = Ocb(K128)
+cl.setst(EXPIRED)
+cx = Ocb(K128)
+check("kl.setst naming Expired -> Expired, Content cleared (GR30, GR29); reserved 54 raises illegal-instruction "
+      "(GR18)", True, (cl.state, cl.key, raises(cx.setst, 54), cx.state), (EXPIRED, None, True, READY))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
-    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR80, MR1)",
+    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR62, MR1)",
           inval(cl.exec, form, 0) is not None and cl.state == INVALID)
-check("Form D kl.exec, Form A kl.setst substitutions: all vectors, both directions",
+check("Form D kl.exec substitutions, the Hash_Verify kl.exec included: all vectors, both directions",
       all(run(*v[1:5], v[6], subst=True) == v[5] and run(*v[1:3], v[3], v[5], v[6], dec=True, subst=True)
           == (v[4], True) for v in VEC))
 for name, mk in (("Success", at_end), ("Failure", lambda: at_end(True)), ("Encrypt", at_crypt)):
     cl = mk()
     cl.setst(READY)
-    check(f"kl.setst #ready from {name}, then vector 07 (GR22)", True,
+    check(f"kl.setst #ready from {name}, then vector 07 (GR16)", True,
           run(None, *E7[1:], cl=cl), VEC[7][5])
 cl = at_crypt()
 e = inval(cl.exec, 'A', b2v(S40[:16]) | 1 << 140, 144)
@@ -523,9 +587,14 @@ check("Enc_Last_Block, Enc_Tag_Finalize with KLLEN 256: one block, rest of OUTPU
       (CT13[32:40] + bytes(24), CT13[40:] + bytes(16), SUCCESS))
 cl, pfull = at_last(dec=True)
 out = cl.exec('A', b2v(CT13[32:40]) | junk_above(64, 256), 256)
-cl.setst(VERIFY, 'C', b2v(CT13[40:]))
-check("Dec_Last_Block with KLLEN 256: one block, rest of OUTPUT zero; verify Success", True,
-      (v2b(pfull, 32), v2b(out, 32), cl.state), (S40[:32], S40[32:] + bytes(24), SUCCESS))
+st = cl.state
+cl.exec('B', b2v(CT13[40:]) | junk_above(128, 256), 256)
+check("Dec_Last_Block with KLLEN 256: one block, rest of OUTPUT zero; Hash_Verify entered by the Machine; "
+      "the Form B kl.exec with KLLEN 256 >= tag_len verifies INPUT[127:0]: Success (MR14)", True,
+      (v2b(pfull, 32), v2b(out, 32), st, cl.state), (S40[:32], S40[32:] + bytes(24), VERIFY, SUCCESS))
+cl = at_last(True, finish=True)[0]
+cl.exec('B', b2v(CT13[40:]) ^ 1)
+check("Hash_Verify: the Form B kl.exec with tag bit 0 flipped -> Failure (MR14)", True, cl.state, FAILURE)
 tr, (lab, K, N, A, P, CT, t) = {}, VEC[16]
 run(K, N, A, P, t, trace=tr)
 check("tag_len = 96: tag OUTPUT = zeros(32) @ checksum_P[95:0]", True, v2b(tr['tag'], 16),
@@ -538,6 +607,47 @@ cl.setst(SET_AUX, 'B', 96)
 cl.exec('B', b2v(nonce(0x3)))
 cl.exec('B', b2v(N13) | junk_above(96))
 check("a repeated nonce kl.exec rewrites N", True, run(None, None, S40, S40, 128, cl=cl), CT13)
+cn = Ocb(K128)
+cn.setst(SET_AUX, 'B', 96)
+en = inval(cn.exec, 'B', b2v(N13), 64)
+cl = Ocb(K128)
+cl.setst(SET_AUX, 'B', 96); cl.exec('B', b2v(N13)); cl.setst(ABSORB, 'B', 128); cl.setst(LAST, 'B', 0)
+cl.setst(ENCRYPT, 'A'); cl.setst(ENC_LAST, 'B', 0); cl.exec('D')
+assert cl.state == TAG_FIN
+e = inval(cl.exec, 'C', 0, 64)
+check("Enc_Tag_Finalize with KLLEN = 64 < tag_len = 128 -> Invalid, no tag (MR2)", True, (bool(e), cl.state),
+      (True, INVALID))
+check("a 96-bit nonce loaded with KLLEN = 64 < 8q -> Invalid, HasN clear (MR7, MR2)", True,
+      (bool(en), cn.state, cn.has_n), (True, INVALID, False))
+cl = Ocb(K128)
+cl.setst(SET_AUX, 'B', 100)
+cl.exec('B', b2v(N13), 104)
+check("a 100-bit nonce loaded with KLLEN = 104 = 8q: accepted, HasN set (MR7)", True, (cl.state, cl.has_n),
+      (SET_AUX, True))
+cl = Ocb(K128)
+cl.setst(SET_AUX, 'B', 64)
+cl.exec('B', b2v(nonce(0x3)))
+cl.setst(SET_AUX, 'B', 96)
+st = (cl.state, cl.N_len, cl.N, cl.has_n)
+cl.exec('B', b2v(N13))
+check("same-State kl.setst #set_aux_value restarts the nonce load (GR17, MR9): N_len replaced, N zeroed, HasN "
+      "clear; then vector 0D", True, (st, run(None, None, S40, S40, 128, cl=cl)), ((SET_AUX, 96, 0, False), CT13))
+lab, K, N, A, P, CT, t = VEC[16]
+cl = Ocb(K)
+cl.setst(SET_AUX, 'B', 96)
+cl.exec('B', b2v(N))
+cl.setst(ABSORB, 'B', 96)
+cl.exec('B', b2v(A[:32]), 256)
+cl.setst(LAST, 'B', 64)
+cl.exec('B', b2v(A[32:]), 64)
+cl.setst(DECRYPT, 'A')
+cl.exec('A', b2v(CT[:32]), 256)
+cl.setst(DEC_LAST, 'B', 64)
+cl.exec('A', b2v(CT[32:40]), 64)
+c2 = cl.imported(cl.export())
+cl.exec('B', b2v(CT[40:]), 96)
+check("tag_len = 96: the Hash_Verify kl.exec with KLLEN = 96 -> Success; KLLEN = 88 -> Invalid (MR2)", True,
+      (cl.state, bool(inval(c2.exec, 'B', b2v(CT[40:]), 88)), c2.state), (SUCCESS, True, INVALID))
 for pol, st in ((0b10, ENCRYPT), (0b01, DECRYPT), (0b10, DECRYPT), (0b01, ENCRYPT)):
     ok = bool(pol & (1 if st == ENCRYPT else 2))
     cl = at_absorb(policy=pol)
@@ -545,6 +655,13 @@ for pol, st in ((0b10, ENCRYPT), (0b01, DECRYPT), (0b10, DECRYPT), (0b01, ENCRYP
     check(f"_MachinePolicy_ {pol:02b}: kl.setst #{'encrypt' if st == ENCRYPT else 'decrypt'} "
           f"{'accepted' if ok else '-> Invalid'}", True,
           (inval(cl.setst, st, 'A') is None, cl.state), (ok, st if ok else INVALID))
+
+for x in (0, 32, 120, 136):
+    cl = Ocb(K128)
+    cl.setst(SET_AUX, 'B', 96)
+    cl.exec('B', b2v(N13))
+    check(f"kl.setst #hash_absorb with Xs = {x}, not a tag_len of 64, 96 or 128 -> Invalid",
+          bool(inval(cl.setst, ABSORB, 'B', x)) and cl.state == INVALID)
 
 section("index > MAX_BLOCKS = 2^48")
 def with_index(cl, idx):
@@ -566,15 +683,15 @@ for name, mk, args in (("Hash_Absorb", at_absorb, ('B', 0)),
     ok.exec(*args)
     check(f"{name}: a block at index 2^48 passes, at 2^48+1 -> Invalid",
           ok.state not in ERROR_STATES and inval(with_index(mk(), MAXB + 1).exec, *args))
-cl = with_index(at_last()[0], MAXB + 1)
+cl = with_index(at_crypt(), MAXB + 1)
 cl.setst(ENC_LAST, 'B', 0)
 cl.exec('D')
-check("Enc_Last_Block Form D (last_blk_len = 0) has no index guard", True, cl.state, TAG_FIN)
+check("Enc_Last_Block Form D (last_block_len = 0) has no index guard", True, cl.state, TAG_FIN)
 check("largest L index of an admissible block: ntz(2^48) = 48", True,
       max(ntz(i) for i in (1 << 47, MAXB - 1, MAXB, 3 << 46)), 48)
 cl = last_done().imported(last_done().export())
-check("Hash_Absorb_Last_Block: the kl.exec clears last_blk_len, so a second one, also after export/import, "
-      "-> Invalid", cl.last_blk_len == 0 and inval(cl.exec, 'B', 0, 64) and inval(last_done().exec, 'B', 0, 64))
+check("Hash_Absorb_Last_Block: the kl.exec clears last_block_len, so a second one, also after export/import, "
+      "-> Invalid", cl.last_block_len == 0 and inval(cl.exec, 'B', 0, 64) and inval(last_done().exec, 'B', 0, 64))
 
 section("OCB with Set Nonce (Mode 9, `AES*_OCB_NONCE`, <<KLE-OCB-with-nonce-mode>>)")
 for lab, K, N, A, P, CT, t in VEC:
@@ -583,6 +700,8 @@ for lab, K, N, A, P, CT, t in VEC:
     check(f"vector {lab}: nonce from the PI, encrypt and decrypt", ok)
 K7, N7, A7, P7, t7 = E7
 cl = OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7))
+check("provisioning leaves HasN (_StateExtension_ bit 0) clear (GR23), and _Hash_Absorb_ needs no HasN", True,
+      (cl.has_n, run(None, None, A7, P7, t7, cl=OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7)))), (False, VEC[7][5]))
 c1 = run(None, None, A7, P7, t7, cl=cl)
 cl.setst(READY)
 check("_Ready_ keeps N and N_len: the next message reuses the nonce", True,
@@ -590,12 +709,17 @@ check("_Ready_ keeps N and N_len: the next message reuses the nonce", True,
 check("export/import after every instruction: vector 07", True,
       run(None, None, A7, P7, t7, hop=True, cl=OcbNonce.provisioned(K7, b2v(N7), 8 * len(N7))), VEC[7][5])
 cl = OcbNonce.provisioned(bytes(16), b2v(N7), 8 * len(N7))
-derive(K7 + bytes(16), cl, 16)
-check("kl.derive into `key` in _Ready_ (<<KLE-derive-endpoints>>), then vector 7 under the PI nonce", True,
-      run(None, None, A7, P7, t7, cl=cl), VEC[7][5])
+check("OCB with Set Nonce is not a kl.derive destination (<<KLE-OCB-with-nonce-mode>>, GR32 item 2) -> Invalid",
+      True, (bool(inval(derive, K7 + bytes(16), cl, 16)), cl.state), (True, INVALID))
 check("kl.setst #set_aux_value -> Invalid", bool(inval(OcbNonce.provisioned(K7, b2v(N7), 96).setst, SET_AUX, 'B', 96)))
 check("PI N_len 5 or 121 -> Invalid at provisioning", True,
       [OcbNonce.provisioned(K7, b2v(N7), n).state for n in (5, 121, 6, 120)], [INVALID, INVALID, READY, READY])
+cl, res = OcbNonce.provisioned(K7, b2v(N7), 96), []
+for n in (5, 121):
+    f = unpack(cl.export(), cl.lay())
+    f['N_len'] = n
+    res.append(cl.imported(pack(f, cl.lay())).state)
+check("an import with N_len 5 or 121 -> Invalid (MR13)", True, res, [INVALID, INVALID])
 ref = Ocb(K7)
 ref.setst(SET_AUX, 'B', 100)
 ref.exec('B', (1 << 120) - 1)
@@ -603,48 +727,46 @@ check("PI N, N_len = 100: pad bits cleared as by the Set_Aux_Value kl.exec", Tru
       OcbNonce.provisioned(K7, (1 << 120) - 1, 100).N, ref.N)
 
 section("kl.derive")
-secret = K128 + bytes(range(0xF0, 0x100))
+secret = K128 + bytes(range(0xF0, 0x100))              # the bytes of a listed source
 for length in (16, 32):
     cl = Ocb(bytes(16))
     derive(secret, cl, length)
     check(f"`key` in Ready, length {length}, then vector 0D", True,
           run(None, N13, S40, S40, 128, cl=cl, per_exec=0), CT13)
-for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (GR50 item 5)", lambda: Ocb(bytes(16)), secret, 8),
-        ("length 0 into the key (GR50 item 5)", lambda: Ocb(bytes(16)), secret, 0),
-        ("12-byte source into the 16-byte key (GR50 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16),
-        ("into a locker in Hash_Absorb (GR50 items 1-2)", at_absorb, secret, 16),
-        ("into a locker in Success (GR50 items 1-2)", at_end, secret, 16),
-        ("into the key of a KeyType 1 locker (GR53, GR50 item 2)", lambda: Ocb(K128, skid=7), secret, 16)]:
+for name, mk, src, n, ks in [
+        ("length 8 into the 16-byte key, no zero-fill (GR32 item 5)", lambda: Ocb(bytes(16)), secret, 8, 0),
+        ("length 0 into the key (GR32 item 5)", lambda: Ocb(bytes(16)), secret, 0, 0),
+        ("12-byte source into the 16-byte key (GR32 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16, 0),
+        ("klstart = 8 (uninterruptible, GR38; GR32 item 5)", lambda: Ocb(bytes(16)), secret, 16, 8),
+        ("into a locker in Hash_Absorb (GR32 item 2)", at_absorb, secret, 16, 0),
+        ("into a locker in Success (GR32 item 2)", at_end, secret, 16, 0),
+        ("into the key of a KeyType 1 locker (GR68, GR32 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
     cl = mk()
-    check(f"{name} -> Invalid", inval(derive, src, cl, n) and cl.key is None)
-for n, nv in ((12, N13), (8, N13[:8] + bytes(4))):
+    check(f"{name} -> Invalid", inval(derive, src, cl, n, ks) and cl.key is None)
+res = []
+for n_len, src, length in ((96, N13 + bytes(4), 12), (96, N13, 8), (61, bytes(0xA5 ^ i for i in range(16)), 16)):
     cl = Ocb(K128)
-    cl.setst(SET_AUX, 'B', 96)
-    derive(N13 + bytes(4), cl, n)
-    check(f"`N` in Set_Aux_Value, N_len = 96, length {n} (GR49 zero-fill)", True,
-          run(None, None, S40, S40, 128, cl=cl), run(K128, nv, S40, S40, 128))
-cl, src = Ocb(K128), bytes(0xA5 ^ i for i in range(16))
-cl.setst(SET_AUX, 'B', 61)
-derive(src, cl, 16)
-check("`N` in Set_Aux_Value, N_len = 61, length 16: ceil(61/8) = 8 bytes, pad bits of byte 7 ignored", True,
-      run(None, None, S40, S40, 128, cl=cl), run(K128, src[:7] + bytes([src[7] & 0xF8]), S40, S40, 128, n_len=61))
+    cl.setst(SET_AUX, 'B', n_len)
+    res.append((str(inval(derive, src, cl, length)), cl.state, cl.has_n))
+check("`N` in Set_Aux_Value (N_len = 96, length 12 or 8; N_len = 61, length 16) is no destination (GR32 item 2) "
+      "-> Invalid, HasN clear", True, res, [("('GR32 item 2', 0)", INVALID, False)] * 3)
+cl = Ocb(K128)
+cl.setst(SET_AUX, 'B', 96)
+check("_Hash_Absorb_ without a loaded nonce (HasN clear, MR11) -> Invalid", True,
+      (bool(inval(cl.setst, ABSORB, 'B', 128)), cl.state), (True, INVALID))
 src, dst = at_crypt(), Ocb(bytes(16))
-check("OCB in Encrypt as a kl.derive source (no Form C output, GR50 item 1) -> only the source Invalid",
+check("OCB in Encrypt as a kl.derive source (none, GR32 item 1) -> only the source Invalid",
       inval(derive, src, dst, 16) and (src.state, dst.state, dst.key) == (INVALID, READY, bytes(16)))
 src, dst = at_last(finish=True)[0], Ocb(bytes(16))
-tag = v2b(at_last(finish=True)[0].exec('C'), 16)
-derive(src, dst, 16)
-check("the tag in Enc_Tag_Finalize into a 128-bit `key` (GR55, unusual but admitted): the key is the tag, the source "
-      "then Success", True, (src.state, dst.state, dst.key), (SUCCESS, READY, tag))
-src, dst, ref = at_last(finish=True)[0], Ocb(K128), Ocb(K128)
-tag = v2b(at_last(finish=True)[0].exec('C'), 16)
-for c in (dst, ref):
-    c.setst(SET_AUX, 'B', 96)
-derive(src, dst, 16)
-ref.exec('B', b2v(tag[:12]), 96)
-check("the tag in Enc_Tag_Finalize into `N` of another OCB (GR55): its first 12 bytes, as a Form B kl.exec; the "
-      "source then Success", True, (src.state, dst.state, dst.N, dst.N_len), (SUCCESS, ref.state, ref.N, ref.N_len))
+check("the tag in Enc_Tag_Finalize into a 128-bit `key`: the tag is no source (GR32 item 1) -> only the source "
+      "Invalid, the key unchanged", True, (str(inval(derive, src, dst, 16)), src.state, dst.state, dst.key),
+      ("('GR32 item 1', 0)", INVALID, READY, bytes(16)))
+src, dst = at_last(finish=True)[0], Ocb(K128)
+dst.setst(SET_AUX, 'B', 96)
+check("the tag in Enc_Tag_Finalize into `N` of another OCB: the source check first (GR32 item 1) -> only the "
+      "source Invalid, the destination in Set_Aux_Value", True,
+      (str(inval(derive, src, dst, 16)), src.state, dst.state, dst.has_n),
+      ("('GR32 item 1', 0)", INVALID, SET_AUX, False))
 
 section("nonces of any bit length 6..120 (REF on bit strings)")
 Am, Pm = bytes(range(24)), bytes(range(40))
@@ -668,6 +790,24 @@ check("N_len = 6: distinct nonces -> distinct ciphertexts",
       run(K128, bytes([0b10110000]), Am, Pm, 128, n_len=6))
 check("N_len in {0, 5, 121, 128, 255} -> Invalid",
       all(inval(run, K128, bytes(15), Am, Pm, 128, False, n) for n in (0, 5, 121, 128, 255)))
+
+section("kl.restrictl (GR20, MR11)")
+cl = at_absorb()
+cl.restrictl(1)
+cl.setst(LAST, 'B', 0)
+st = cl.state
+check("GR20: narrowed to decrypt-only in Hash_Absorb: the locker stays Valid; kl.setst #encrypt -> Invalid", True,
+      (st, bool(inval(cl.setst, ENCRYPT, 'A')), cl.state), (LAST, True, INVALID))
+cl = at_crypt()
+cl.restrictl(1)
+check("GR20, MR11: narrowed to decrypt-only in Encrypt: the next kl.exec -> Invalid", True,
+      (bool(inval(cl.exec, 'A', 0)), cl.state), (True, INVALID))
+cl = at_crypt()
+cl.restrictl(1)
+cl.setst(READY)
+check("GR20, GR16: narrowed in Encrypt, kl.setst naming Ready admitted", True, cl.state, READY)
+cl = Ocb(K128)
+check("GR20: narrowed to MachinePolicy = 0 -> Invalid", bool(inval(cl.restrictl, 3)) and cl.state == INVALID)
 
 section("negative controls")
 control("L-ladder via little-endian update_mask", run(*E7, dbl=update_mask) != VEC[7][5])

@@ -38,12 +38,12 @@ For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value
 * `V xor W`, `V and W`, `V or W`: bitwise operations on values of equal length.
 * `V << k`, `V >> k`: logical shifts of `V` by `k` bits within its declared width, bits shifted out being discarded and zeros shifted in; a left shift moves data towards the *later* bytes of the string.
 * `A @ B`: concatenation (<<KLE-Notation-concatenation>>); `A[] || B[]`: concatenation of two arrays of blocks, the elements of `A[]` first, in index order.
-* `X {vvert} Y`, for byte strings or arrays of blocks: `X` followed by `Y`, `X` at the lower offsets or indices; this specification uses `{vvert}` only in this little-endian sense (<<KLE-Notation-transcription>>).
+* `X {vvert} Y`, for byte strings or arrays of blocks: `X` followed by `Y`, `X` at the lower offsets or indices; this specification uses `{vvert}` only in this little-endian sense, and transcribes a standard's formula into it (<<KLE-Notation-transcription>>); a standard's own `{vvert}` appears only in the examples of that transcription and in the description of the conventions of the standards (<<KLE-Notation-standards>>).
 * `foreach(i from a to b) { {ellipsis} }`: executes its body once for each integer `i` from `a` to `b`, both included, in increasing order, and not at all if `a` > `b`; `foreach(i from a to b by s)` advances `i` in steps of `s`, with `s` > 0.
 * `x^k^`: `x` raised to the power `k`; `x**k` in listing blocks.
 * `local x : T`: an internal variable of the pseudocode, not part of any architectural state.
 * `function f(a : T, {ellipsis}) → T' = { {ellipsis} }`, `struct { {ellipsis} }`, `array [i..j] of T`, `return`: function definition, record, array type, and result.
-* `if (c) then:` and `foreach({ellipsis}) do:` followed by indented lines: the same constructs, with the indented lines as their body.
+* `if (c) then:`, followed by indented lines, performs them only if `c` holds; a following `else:` performs its own indented lines otherwise. `foreach({ellipsis}) do:` and `while (c) do:`, followed by indented lines, are the `foreach` loop above and a loop that performs its lines as long as `c` holds, testing `c` before each pass.
 * `(a, b)` after `return`, and `x, y {leftarrow} f({ellipsis})`: a result with several components and its component-wise assignment, in declaration order; a result type written `{x : T, {ellipsis}}` is such a tuple.
 * `bool`, `true`, `false`: the Boolean type and its values.
 * A variable first assigned in a listing without `local` is local to that function.
@@ -56,16 +56,16 @@ For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value
 * `bswap(m)`: the byte string `m` with its byte order reversed; for a value `V` of `8n` bits, the value whose byte `i` is byte `n-1-i` of `V`.
   An optional second argument `n` takes the `n` least significant bytes of `m` and reverses them, discarding the others: `bswap(m, n)` = `bswap(m[8n-1:0])`, an `8n`-bit value.
 * `ceil(x)`, also `{lceil}x{rceil}`: the smallest integer not smaller than `x`; `floor(x)`, also `{lfloor}x{rfloor}`: the largest integer not larger than `x`.
-* `double(S)`: doubling in the OCB3 field (<<Zkl-ISA-machines.adoc#KLE-OCB-mode>>).
+* `double(S)`: doubling in GF(2^`b`^), as <<Zkl-ISA-machines.adoc#KLE-OCB-mode>> and <<Zkl-ISA-machines.adoc#KLE-CMAC-mode>> define it; the two coincide for `b` = 128.
 * `Galoismul(a, b)`: multiplication of `a` and `b` in the GHASH field (<<Zkl-ISA-machines.adoc#KLE-GCM-mode>>).
 * `int(V)`: the unsigned integer with bit `V[i]` as the coefficient of 2^i^, that is `V` read as a little-endian unsigned binary number.
 * `len_in_bits(M)`: the length of the value or string `M` in bits; `len_in_bytes(M)` = `len_in_bits(M) / 8`, defined only when `len_in_bits(M)` is a multiple of 8.
 * `lsb(x)`, `msb(x)`: the least, resp. most, significant bit of `x`; `lsb~c~(x)`, `msb~c~(x)`: its `c` least, resp. most, significant bits.
 * `m[i .. j]`: the bytes from the ``i``-th to the ``j``-th of byte array `m`, both inclusive; `m[j:i]`: the bits from the ``i``-th to the ``j``-th of `m`, both inclusive.
 * `min(x, y, {ellipsis})`, `max(x, y, {ellipsis})`: the smallest, resp. largest, of the arguments.
-* `Montmul(a, b)`: the POLYVAL field operation.
+* `Montmul(a, b)`: the POLYVAL field operation (<<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>).
 * `ones(i)`, `zeros(i)`: a sequence of `i` ones, resp. zeros.
-* `update_mask(M)`: the XEX/XTS mask update (<<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>).
+* `update_mask(M)`: the XEX/XTS mask update (<<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>); outside that section, that of `AES128_XEX`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -105,12 +105,18 @@ It is an aid to review, and does not relieve an algorithm description of the obl
 | Direct mapping for ECB and for the XTS data path, with `update_mask` as defined in <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
   KLE selects a 32-bit big-endian counter in the trailing bytes of the CTR counter block, assembled via `bswap` (<<Zkl-ISA-machines.adoc#KLE-keystream-modes>>), and
   CMAC's subkeys via the big-endian `double` (<<Zkl-ISA-machines.adoc#KLE-CMAC-mode>>): three orderings in one row.
+| GB/T 17964-2021 (XTS with SM4)
+| byte strings; the multiplication that updates the mask takes the bits of each byte in the reverse order of SP 800-38E.
+| `update_mask` of `SM4_XEX` as defined in <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
+| HCTR2 (XCTR)
+| byte strings; the block counter is a little-endian integer, XORed into the IV.
+| Direct mapping: the input block is `IV xor (zeros(b - j) @ ctr)`, with no `bswap` (<<Zkl-ISA-machines.adoc#KLE-keystream-modes>>).
 | SP 800-38D (GCM)
 | byte strings; GHASH field bit-reflected within bytes; counters big-endian.
 | `Galoismul` as defined in <<Zkl-ISA-machines.adoc#KLE-GCM-mode>>; every counter and length field via `bswap`.
 | RFC 8452 (AES-GCM-SIV)
 | byte strings; POLYVAL field fully little-endian; block counter little-endian.
-| `Montmul` as defined in <<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>; counters and length blocks via `bin`.
+| `Montmul` as defined in <<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>; counters and length blocks via `bin`.
 | RFC 7253 (OCB3)
 | bit strings, first bit most significant; `double` and the `Stretch` window are
   big-endian.
@@ -119,13 +125,28 @@ It is an aid to review, and does not relieve an algorithm description of the obl
 | FIPS 202 (SHA-3, SHAKE)
 | bit strings mapped to the state by {sect}3.1; lanes little-endian.
 | Direct mapping of the absorbed string; the lane indexing of FIPS 202 {sect}3.1 applies
-  unchanged.
-| FIPS 180-4 (SHA-2)
-| Big-endian words and length encoding.
-| Message schedule words and the appended length via `bswap`.
+  unchanged; a final piece of any bit length maps directly, its last bits in the least significant positions (<<Zkl-ISA-machines.adoc#KLE-SHA-3>>).
+| SP 800-185 (cSHAKE, KMAC)
+| bit strings as in FIPS 202; `left_encode` and `right_encode` write an integer big-endian, most significant byte first.
+| As FIPS 202; `right_encode` as defined in <<Zkl-ISA-machines.adoc#KLE-KMAC>>. The `cshake_block` and `key_block` use the same order, whether the provisioner forms them or, for a system key or a random key (_KeyType_ = 1 or 2), the KLE unit.
+| RFC 7693 (BLAKE2)
+| byte strings; words, counter and parameter block little-endian.
+| Direct mapping: words and counter via `bin`, no `bswap`; a final piece is a whole number of bytes (<<Zkl-ISA-machines.adoc#KLE-BLAKE2>>).
+| FIPS 180-4 (SHA-2), GB/T 32905 (SM3)
+| Bit strings, first bit most significant within a byte; big-endian words and length encoding.
+| Message schedule words, chaining variables (hence the digest) and the appended length via `bswap`; a final piece whose length is not a multiple of 8 carries its last bits in the most significant positions of its last byte (<<Zkl-ISA-machines.adoc#KLE-SHA-2>>; Rule <<Zkl-ISA-machines.adoc#KLE-MGR-last-blk-len>>, second bullet).
 | SP 800-232 (Ascon)
 | Little-endian throughout, including `{vvert}`.
-| Direct mapping. See also the note in <<Zkl-ISA-machines.adoc#KLE-Ascon-AEAD128>>.
+| Direct mapping, also within the last byte of a final block of any bit length (_Enc_Last_Block_ and _Dec_Last_Block_ in <<Zkl-ISA-machines.adoc#KLE-Ascon-AEAD128>>, the final piece of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>> and the `Z` of <<Zkl-ISA-machines.adoc#KLE-Ascon-CXOF128>>; Rule <<Zkl-ISA-machines.adoc#KLE-MGR-last-blk-len>>).
+| FIPS 186-5, SP 800-56A, SP 800-186, RFC 5639, GM/T 0003 (ECDSA, ECDH, SM2)
+| integers and coordinates as big-endian octet strings.
+| Every value little-endian via `bin`, converted by the caller (<<Zkl-ISA-machines.adoc#KLE-ECC>>); `Hash` holds `bin(e, h)` of the big-endian digest integer `e`; the shared secret that _Output_ emits keeps the big-endian order of its standard, via `bswap`.
+| RFC 7748, RFC 8032 (X25519, X448, EdDSA)
+| little-endian integers, _u_-coordinates and point encodings.
+| Direct mapping via `bin`, the shared secret `K` and the encoded points and signatures included (<<Zkl-ISA-machines.adoc#KLE-X25519-X448>>, <<Zkl-ISA-machines.adoc#KLE-EdDSA>>).
+| FIPS 198-1 (HMAC)
+| bit strings, as in its hash function; `ipad` and `opad` repeat a single byte.
+| Direct mapping; a final piece in the bit order of `H` (<<Zkl-ISA-machines.adoc#KLE-HMAC>>).
 | FIPS 203 / FIPS 204 (ML-KEM, ML-DSA)
 | byte strings produced by the standard's own encoding routines.
 | Direct mapping of the encoded byte strings; no re-encoding.

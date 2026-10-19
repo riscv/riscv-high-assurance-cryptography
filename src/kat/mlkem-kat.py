@@ -6,9 +6,9 @@ import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips203 as K  # noqa: E402
 from common import (ERROR_STATES, inert, MDH_FIELD, MDH_FIELDS, IllegalInstruction, LoopBound, check, control,  # noqa: E402
-                    done, info, mdh_pack, raises, section, sl, spec_note,
+                    done, mdh_pack, raises, section, sl, spec_note,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
-                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID,
+                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID, KL_STATE_UNSUPPORTED as UNSUP,
                     KL_STATE_PRIV_VIOLATION as PRIV_VIOLATION, KL_STATE_EXPIRED as EXPIRED,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_HASH_ABSORB as HASH_ABSORB,
                     KL_STATE_SET_AUX_VALUE as SET_AUX, KL_STATE_SET_KEY as SET_KEY)
@@ -23,13 +23,12 @@ LONG = (GEN, ENC, DEC)
 STEPS = {GEN: K.keygen_internal_steps, ENC: K.encaps_internal_steps, DEC: K.decaps_internal_steps}
 IN_F = {EK_IN: 'encapsk', DK_IN: 'decapsk', CT_IN: 'ciphertext'}
 OUT_F = {EK_OUT: 'encapsk', CT_OUT: 'ciphertext'}
-SK_SRC = (SK_OUT,)                                 # <<KLE-derive-endpoints>>: sharedkey only in _sharedkey_Output_
 FIELDS = ('decapsk', 'ciphertext', 'sharedkey')    # encapsk is the ek sub-field of decapsk
-# <<KLE-ML-KEM-field-lifetime>>: fields zeroed on entering a State (MR9 zeroes a loaded field)
+# <<KLE-PQC-ML-KEM>> Behavior: fields zeroed on entering a State (MR9 zeroes a loaded field)
 ZEROED = {READY: ('sharedkey',), EK_IN: ('decapsk',), DK_IN: ('decapsk',), CT_IN: ('ciphertext', 'sharedkey'),
           ENC: ('sharedkey',), DEC: ('sharedkey',)}
 # <<KLE-ML-KEM-sizes>> (bytes); Internal State (bits: decapsk, its encapsk, ciphertext, sharedkey), the
-# encapsk byte offset and the byte total; Serialized Content (bits) and its "MDH included" bytes and 128-bit blocks.
+# encapsk byte offset and the byte total; Serialized Content (bits) and its total in bytes (Content only) and 128-bit blocks.
 SIZES = {512: (800, 1632, 768, 32), 768: (1184, 2400, 1088, 32), 1024: (1568, 3168, 1568, 32)}
 IS_BITS = {512: (13056, 6400, 6144, 256), 768: (19200, 9472, 8704, 256), 1024: (25344, 12544, 12544, 256)}
 EK_OFF = {512: 768, 768: 1152, 1024: 1536}
@@ -42,14 +41,14 @@ def key(bits): return {READY: ('key', bits)}
 
 MLKEM = {512: mc(11, 0), 768: mc(11, 1), 1024: mc(11, 2)}
 SET_SCALAR = 3                                     # ECC _Set_Scalar_
-# kl.derive destination endpoints {State: (field, bits)}: <<KLE-derive-endpoints>>
-DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', {**key(192), SET_AUX: ('J0', 128)}),
-        mc(0, 4): ('AES128_GCM', {**key(128), SET_AUX: ('J0', 128)}), mc(2, 1): ('AES256_CTR', key(256)),
-        mc(3, 0): ('SM4_ECB', key(128)), mc(0, 7): ('AES128_CMAC', {**key(128), HASH_ABSORB: ('input', 0)}), mc(8, 0): ('Ascon-AEAD128', key(128)),
+# kl.derive destination endpoints {State: (field, bits)}: <<KLE-derive-endpoints>>; the GCM IV, the CMAC input and
+# the ECC `Scalar` are not destinations (GR32 item 2)
+DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', key(192)),
+        mc(0, 4): ('AES128_GCM', key(128)), mc(2, 1): ('AES256_CTR', key(256)),
+        mc(3, 0): ('SM4_ECB', key(128)), mc(0, 7): ('AES128_CMAC', key(128)), mc(8, 0): ('Ascon-AEAD128', key(128)),
         mc(0, 3): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {SET_KEY: ('K0', 512)}),
         mc(6, 1): ('SHA3-256', {HASH_ABSORB: ('input', 0)}), mc(6, 10): ('KMAC128', {HASH_ABSORB: ('input', 0)}),
-        mc(10, 0): ('secp256r1', {SET_SCALAR: ('Scalar', 256)}), mc(10, 1): ('secp384r1', {SET_SCALAR: ('Scalar', 384)}),
-        mc(10, 3): ('ed25519', {SET_SCALAR: ('Scalar', 256)})}
+        mc(10, 0): ('secp256r1', {}), mc(10, 1): ('secp384r1', {}), mc(10, 3): ('x25519', {})}
 AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
 FILL = b'\x5a'                                     # placeholder key of a provisioned destination
 USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}     # <<KLE-UsagePolicy>>
@@ -81,15 +80,15 @@ class Locker:
     def barred(self): return self.get('UsagePolicy') >> USAGE_BIT[HART['mode']] & 1
     def expired(self): return 0 != self.get('ExpirationDate') <= HART['now']   # <<KLE-Metadata-expiration-date>>
 
-    def enter_error(self, st):                     # GR30
+    def enter_error(self, st):                     # GR29
         for f, v in (('State', st), ('AuxDataLen', 0), ('ADSDropped', 0)):
             self.put(f, v)
         self.clear_content()
 
     def gate(self):
-        """<<KLE-GR-gate-order>> for one locker; True when the Machine's rules are reached."""
+        """<<KLE-GR-management-check-order>> (GR24) for one locker; True when the Machine's rules are reached."""
         if inert(self.state):
-            return False                           # GR19.a
+            return False                           # GR26
         if self.barred():
             raise PrivilegeViolation
         if self.expired():
@@ -99,7 +98,7 @@ class Locker:
 
 class Dest(Locker):
     """A kl.derive destination; only its field (`key`) or absorbed input is modelled."""
-    def __init__(self, machine, state=READY, keytype=0, skid=0, **mdh):
+    def __init__(self, machine, state=READY, keytype=0, **mdh):
         self.name, self.eps = DEST[machine]
         if keytype == 2:
             keytype = 0                            # <<KLE-KeyType-field>>: random key, KeyType 0
@@ -122,6 +121,12 @@ class MLKEMLocker(Locker):
     def provision(self):                           # the completing kl.mgmt (<<KLE-management-formats-and-states>>, <<KLE-length-rule>>)
         self.mdh = fset(fset(fset(self.pi, 'State', READY), 'StateExtension', 0), 'MachineUse', 0)
         self.clear_content()
+        if self.get('MachinePolicy'):              # unsupported Metadata (<<KLE-PQC-ML-KEM>>):
+            self.enter_error(UNSUP)                # the handler sets _Unsupported_
+
+    def restrictl_policy(self, v):                 # <<KLE-PQC-ML-KEM>>: the Machine uses no _MachinePolicy_
+        if v and not inert(self.state):
+            self.enter_error(INVALID)              # a zero field leaves the MDH unchanged
 
     def clear_content(self):
         for n in FIELDS:
@@ -160,8 +165,8 @@ class MLKEMLocker(Locker):
         if (st in (EK_OUT, ENC) and not self.se & 1 or st == DEC and self.se & 6 != 6       # MR11 entry conditions
                 or st == CT_OUT and not self.se & 4):
             return self.enter_error(INVALID)
-        if self.state == SK_OUT and st != SK_OUT:
-            self.zero('sharedkey')                 # leaving _sharedkey_Output_ zeroes sharedkey
+        if self.state == SK_OUT and st != SK_OUT or self.state == CT_OUT and st != SK_OUT:
+            self.zero('sharedkey')                 # leaving _sharedkey_Output_, or _ciphertext_Output_ elsewhere
         self.put('State', st)
         self.discard()
         for n in ZEROED.get(st, ()):
@@ -172,8 +177,6 @@ class MLKEMLocker(Locker):
             self.set_ct(0)
 
     def setst(self, imm):                          # Form A; ML-KEM uses no auxiliary parameter
-        if imm in (SUCCESS, FAILURE):
-            raise IllegalInstruction               # GR26
         if imm == UNCONF:
             self.mdh = 0
             self.clear_content()
@@ -183,15 +186,14 @@ class MLKEMLocker(Locker):
         elif self.gate():
             if imm == CLEAR_ADS:                   # State kept; MachineUse is P only in a long-running State
                 self.discard(self.state in LONG)
-            elif imm == READY or GEN <= imm <= CT_OUT and self.state != FAILURE:   # GR27
+            elif imm == READY or (GEN <= imm <= CT_OUT and self.state != FAILURE     # GR16
+                                  and (imm != self.state or imm in IN_F)):          # GR17: only a load restarts
                 name = IN_F.get(self.state)
                 if name and self.use < self.size[name] and imm != self.state:   # left incomplete (MR9)
                     self.zero('ciphertext' if name == 'ciphertext' else 'decapsk')   # no State keeps a partial field
                 self.transition(imm)
-            elif imm == SK_OUT == self.state:      # same-State (GR23); otherwise entered only on completion
-                self.transition(SK_OUT)
-            else:
-                self.enter_error(INVALID)
+            else:                                  # _sharedkey_Output_ is entered only on completion
+                self.enter_error(INVALID)          # MR1; #46, #47: GR18
 
     def exec_B(self, data):                        # Form B in a loading State (MR9)
         if not self.gate():
@@ -200,20 +202,21 @@ class MLKEMLocker(Locker):
         if name is None or w >= self.size[name]:
             return self.enter_error(INVALID)
         n, f = min(len(data), self.size[name] - w), getattr(self, name)
+        excess = len(data) > n                     # <<KLE-PQC-ML-KEM>>: excess data in the final transfer fails the type check
         setattr(self, name, f[:w] + data[:n] + f[w + n:])
         self.use = w + n
         if self.use < self.size[name]:
             return
         v = getattr(self, name)                    # the FIPS 203 7.2/7.3 checks
         if name == 'ciphertext':
-            ok = self.ct_check(v, self.ps)
+            ok = not excess and self.ct_check(v, self.ps)
             if not ok:
                 self.zero(name)                    # data error: _Failure_, ciphertext zeroed
             self.set_ct(int(ok))
             self.transition(READY if ok else FAILURE)
-        elif self.check_keys and name == 'decapsk' and not K.check_decaps_key(v, self.ps):
+        elif name == 'decapsk' and (excess or self.check_keys and not K.check_decaps_key(v, self.ps)):
             self.enter_error(INVALID)              # configuration error (MR12)
-        elif self.check_keys and name == 'encapsk' and not K.check_encaps_input(v, self.ps):
+        elif name == 'encapsk' and (excess or self.check_keys and not K.check_encaps_input(v, self.ps)):
             self.zero('decapsk')                   # data error (MR12): a public key; flags stay clear
             self.transition(FAILURE)
         else:                                      # a decapsk sets HasEncapsk only if its ek passes 7.2
@@ -230,10 +233,10 @@ class MLKEMLocker(Locker):
                     self.transition(SK_OUT if self.state == CT_OUT and self.se & 8 else READY)
                 return out
             self.enter_error(INVALID)
-        return bytes(n)                            # GR34
+        return bytes(n)                            # GR28
 
     def exec_D(self, halt_after=None):
-        """Form D; halt_after=n halts precisely after n steps (GR77.a).  Returns 'retired', 'halted' or 'noop'."""
+        """Form D; halt_after=n halts precisely after n steps (GR46.a).  Returns 'retired', 'halted' or 'noop'."""
         if not self.gate():
             return 'noop'
         st = self.state
@@ -243,14 +246,15 @@ class MLKEMLocker(Locker):
         if self.use == 0 or self.resume_redraws:   # MR6: start anew, drawing fresh values
             w = ({'d': self.rbg(), 'z': self.rbg()} if st == GEN else {'ek': self.encapsk, 'm': self.rbg()}
                  if st == ENC else {'dk': self.decapsk, 'c': self.ciphertext})
-            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR78
+            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR53
                 self.enter_error(INVALID)
                 return 'retired'
             self.ads = {'w': w, 'next': 0}
         steps = STEPS[st](self.ps)
         for n in range(len(steps) - self.ads['next']):
             if halt_after is not None and n >= halt_after:
-                self.use = self.ads['next'] + 1    # P != 0 at a halt, the data in a 6-block ADS
+                self.use = self.ads['next'] + 1    # P != 0 at a halt: the step count only, never which key
+                                                   # _Decapsulate_ selected (<<KLE-PQC-ML-KEM>>); data in a 6-block ADS
                 self.put('AuxDataLen', 6)
                 return 'halted'
             try:
@@ -280,7 +284,7 @@ class MLKEMLocker(Locker):
         if new.state == SK_OUT and not new.se & 8:  # an unsupported State | StateExtension: invalid Metadata
             new.enter_error(INVALID)
             return new
-        if new.check_keys and new.se & 2 and not K.check_decaps_key(new.decapsk, new.ps):    # MR14 on import:
+        if new.check_keys and new.se & 2 and not K.check_decaps_key(new.decapsk, new.ps):    # MR13 on import:
             new.enter_error(INVALID)               # a configuration error
             return new
         if new.check_keys and new.se & 1 and not K.check_encaps_input(new.encapsk, new.ps):
@@ -293,13 +297,6 @@ class MLKEMLocker(Locker):
         else:
             new.discard()
         return new
-
-    def emit(self, n):                             # GR49: as Form C kl.exec would
-        name, w = OUT_F[self.state], self.use
-        if w + n > self.size[name]:
-            return None
-        self.use = w + n
-        return getattr(self, name)[w:w + n]
 
 def der2_narrow(dest, src):
     """<<KLE-GR-narrowing>>; False when the narrowing fails and the destination becomes _Privilege Violation_."""
@@ -317,50 +314,45 @@ def der2_narrow(dest, src):
 
 def kl_derive(dest, src, length):
     """kl.derive Kd, Ks1, Xs2 (Xs2 = length) from an ML-KEM source.  Returns 'retired' or 'noop'."""
-    ends = (src, dest)                             # Gate Order Rule: each condition on both, source first
+    ends = (src, dest)                             # GR15: each condition on both endpoints, source first
     if dest is src:
-        raise IllegalInstruction                   # equal lockers (<<KLE-illegal-instruction-grounds>>)
+        raise IllegalInstruction                   # equal lockers (<<KLE-exceptions-list>>)
     if any(inert(lk.state) for lk in ends):
-        return 'noop'                              # GR20: an inert endpoint makes it a no-op
+        return 'noop'                              # GR26: an inert endpoint makes it a no-op
     if any(lk.barred() for lk in ends):
         raise PrivilegeViolation
     for lk in ends:
         if lk.expired():
             lk.enter_error(EXPIRED)
             return 'noop'
-    out = src.state in OUT_F                       # the State selects the source: the GR55 output, else sharedkey
     field, bits = dest.eps.get(dest.state, (None, 0))
-    n, is_key = bits // 8, field not in (None, 'input', 'J0')
-    bad = [lk for lk, ok in ((src, out or src.state in SK_SRC and src.se & 8),
-                             (dest, field and not (is_key and dest.get('KeyType') == 1))) if not ok]
-    cmac_in = field == 'input' and dest.name.endswith('CMAC')
-    if not bad and not out and (field == 'J0' or cmac_in):
-        bad = [src, dest]                          # GR50 item 3: GR54 admits no IV and no CMAC input
-    for lk in bad:                                 # GR50 items 1-3; GR53
-        lk.enter_error(INVALID)
-    if bad:
+    n, is_key = bits // 8, field not in (None, 'input')
+    if not (src.state == SK_OUT and src.se & 8):
+        src.enter_error(INVALID)                   # GR32 item 1: the only source is sharedkey in _sharedkey_Output_
         return 'retired'
-    avail = src.size[OUT_F[src.state]] - src.use if out else len(src.sharedkey)
-    if is_key and (length < n or avail < n) or not out and field == 'input' and length < avail:
-        dest.enter_error(INVALID)                  # GR50 item 5; a message input takes the whole secret (GR54)
+    if not field or is_key and dest.get('KeyType') == 1:
+        dest.enter_error(INVALID)                  # GR32 item 2; GR68 (sharedkey -> any destination: item 3 holds)
         return 'retired'
-    if not out and dest.get('SCProtection') < src.get('SCProtection'):
-        dest.enter_error(PRIV_VIOLATION)           # GR51: never to a weaker level
-        return 'retired'
-    if not out and not der2_narrow(dest, src):
-        dest.enter_error(PRIV_VIOLATION)           # GR54: restricted, also into a hash input; a failed narrowing (GR51)
-        return 'retired'
-    if not out:                                    # GR54 (GR49)
-        if is_key: dest.key = src.sharedkey[:n]
-        else: dest.absorbed += src.sharedkey[:length].ljust(length, b'\0')
-        return 'retired'
-    data = src.emit(length if field == 'input' else n if is_key else min(length, n))     # GR55, GR52; GR49
-    if data is None:
-        src.enter_error(INVALID)                   # MR9
-    elif field == 'input':
-        dest.absorbed += data
+    sk = src.sharedkey
+    if field == 'K0':
+        ok = min(length, n) == len(sk)             # exactly eff_length bytes, which replace K0
+    elif is_key:
+        ok = length >= n and len(sk) >= n
     else:
-        dest.key = data.ljust(n, b'\0')
+        ok = length == len(sk)                     # the whole secret, exactly (GR32 item 5)
+    if not ok:
+        dest.enter_error(INVALID)                  # GR32 item 5
+        return 'retired'
+    if dest.get('SCProtection') < src.get('SCProtection'):
+        dest.enter_error(PRIV_VIOLATION)           # GR33: never to a weaker level
+        return 'retired'
+    if not der2_narrow(dest, src):
+        dest.enter_error(PRIV_VIOLATION)           # GR34: restricted, also into a hash input; a failed narrowing (GR33)
+        return 'retired'
+    if field == 'input':                           # GR34: the whole secret (GR32 item 5); uninterruptible (GR38)
+        dest.absorbed += sk
+    else:                                          # GR32 item 5, GR31: eff_length bytes, zero-filled beyond
+        dest.key = sk[:n].ljust(n, b'\0')
     return 'retired'
 
 def kl_size(mdh, content1):
@@ -454,6 +446,12 @@ def t_mdh():
     for s, n in LISTED_GLOBAL:
         if glob[s] != n:
             spec_note(f'the ML-KEM State list labels {n} _{s}_; <<KLE-states-valid>> names it _{NAME[n]}_')
+    cu, c0, c1 = MLKEMLocker(768, pi_extra=mdh_pack(MachinePolicy=1)), MLKEMLocker(768), MLKEMLocker(768)
+    c0.restrictl_policy(0)
+    c1.restrictl_policy(1)
+    check('a PI with a non-zero _MachinePolicy_ is unsupported Metadata (_Unsupported_); kl.restrictl with a zero '
+          '_MachinePolicy_ field changes nothing, with a non-zero one -> _Invalid_', None,
+          (cu.state, c0.state, c1.state), (UNSUP, READY, INVALID))
     cc = MLKEMLocker(768, pi_extra=mdh_pack(StateExtension=0b1010, MachineUse=0x1234, AuxInfo=0x5A5A))
     check('PI State _Unconfigured_; kl.mgmt sets _Ready_, zeroes StateExtension and MachineUse; '
           'AuxInfo, unused by ML-KEM, is not checked (<<KLE-MachineUse>>)',
@@ -541,7 +539,7 @@ def t_input_checks():
     cc = to(load(copy.copy(dkl), CT_IN, c[:16]), READY)
     check('_ciphertext_Input_ left incomplete for _Ready_: ciphertext zeroed, decapsk and both flags kept',
           cc.state == READY and zero(cc.ciphertext) and cc.decapsk == dk and cc.se == 3)
-    check('a completely loaded ciphertext always passes the FIPS 203 7.3 type check (F7): ACVP, all-zero and all-ones values',
+    check('a completely loaded ciphertext always passes the FIPS 203 7.3 type check: ACVP, all-zero and all-ones values',
           all(K.check_ciphertext(v, ps) for v in (c, bytes(len(c)), b'\xff' * len(c))))
     c3 = load(copy.copy(dkl), CT_IN, c[:-16])
     c4 = to(copy.copy(c3), READY)
@@ -566,7 +564,7 @@ def t_input_checks():
     cc = to(load(MLKEMLocker(ps), EK_IN, h(vec('encaps', ps)['ek'])), READY)
     cc.decapsk = cc.decapsk[:384 * cc.k] + malformed_ek(ps) + cc.decapsk[768 * cc.k + 32:]
     imp = cc.export_import()
-    check('import restoring an encapsk that fails its check, with HasEncapsk: _Failure_, decapsk zeroed (MR14, MR12)',
+    check('import restoring an encapsk that fails its check, with HasEncapsk: _Failure_, decapsk zeroed (MR13, MR12)',
           imp.state == FAILURE and zero(imp.decapsk) and not imp.se & 3)
 
 def t_state_machine():
@@ -585,14 +583,24 @@ def t_state_machine():
     cc.exec_B(bytes(16))
     check('kl.exec after completion: _Invalid_', cc.state == INVALID)
     cc = load(MLKEMLocker(ps), EK_IN, ek + b'\xaa' * 64, (1024, 224))
-    check('excess of the final loading transfer ignored', cc.use == size and cc.encapsk == ek and cc.state == EK_IN)
+    check('excess data in the final loading transfer of encapsk fails the type check: data error, _Failure_, '
+          'HasEncapsk clear', cc.state == FAILURE and not cc.se & 1)
+    x = vec('decaps', ps)
+    dke = load(MLKEMLocker(ps), DK_IN, h(x['dk']) + bytes(16))
+    cte = load(load(MLKEMLocker(ps), DK_IN, h(x['dk'])), CT_IN, h(x['c']) + bytes(16))
+    check('excess data in the final transfer of decapsk: configuration error, _Invalid_; of ciphertext: data '
+          'error, _Failure_, ciphertext zeroed, HasCiphertext clear', (dke.state, cte.state, zero(cte.ciphertext),
+          bool(cte.se & 4)) == (INVALID, FAILURE, True, False))
+    cc = load(MLKEMLocker(ps), EK_IN, ek, (1024, 160))
     cc.setst(EK_IN)
-    check('same-State kl.setst zeroes MachineUse and the field (GR23, MR9)', cc.use == 0 and cc.encapsk == bytes(size))
+    check('same-State kl.setst zeroes MachineUse and the field (GR17, MR9)', cc.use == 0 and cc.encapsk == bytes(size))
     cc.exec_B(b'\x77' * 32)
     check('reloading replaces the field', cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
+    check('same-State kl.setst in _encapsk_Output_: _Invalid_, no re-emission (GR17, GR18)',
+          voided(to(load(MLKEMLocker(ps), EK_IN, ek), EK_OUT, EK_OUT)))
     cc = MLKEMLocker(ps)
     cc.exec_D()
-    check('kl.exec in _Ready_: _Invalid_ (GR24)', cc.state == INVALID)
+    check('kl.exec in _Ready_: _Invalid_ (GR17)', cc.state == INVALID)
 
     cc = encapsulated()
     check('_Encapsulate_ -> _ciphertext_Output_, MachineUse zeroed, HasCiphertext set',
@@ -605,7 +613,7 @@ def t_state_machine():
     check('_ciphertext_Output_ emits the ACVP ciphertext, then _sharedkey_Output_, sharedkey kept',
           emit(cc, (512, 512, 64)).hex() == v['c'] and cc.state == SK_OUT and cc.sharedkey.hex() == v['k'])
     got = cc.exec_C(16)
-    check('kl.exec after completion (now in _sharedkey_Output_, which admits none): _Invalid_, OUTPUT zeroed',
+    check('kl.exec after completion (in _sharedkey_Output_, which admits none): _Invalid_, OUTPUT zeroed',
           cc.state == INVALID and got == bytes(16))
     cc = to(encapsulated(), READY, CT_OUT)
     check('_ciphertext_Output_ entered from _Ready_ (HasSharedKey clear): completion -> _Ready_',
@@ -622,6 +630,10 @@ def t_state_machine():
           '_sharedkey_Output_', None,
           [(m.se & 8, zero(m.sharedkey)) for m in (moved(encapsulated(), READY), moved(encapsulated(), CT_IN),
                                                    moved(encapsulated(), ENC), moved(out, READY))], [(0, True)] * 4)
+    check('leaving _ciphertext_Output_ for _encapsk_Input_, _decapsk_Input_ or _GenerateKeyPair_ zeroes '
+          'sharedkey and clears HasSharedKey', None,
+          [(m.se & 8, zero(m.sharedkey)) for m in (moved(encapsulated(), EK_IN), moved(encapsulated(), DK_IN),
+                                                   moved(encapsulated(), GEN))], [(0, True)] * 3)
     bad = copy.copy(out)
     bad.put('StateExtension', bad.se & ~8)
     check('import: _sharedkey_Output_ with HasSharedKey clear is invalid Metadata; with it set, flag and key survive',
@@ -650,7 +662,7 @@ def t_state_machine():
           and cc.decapsk.hex() == kv['dk'])
     c2 = moved(cc, READY)
     c2.exec_D()
-    check('kl.exec in _Ready_ after key generation: _Invalid_ (GR24)', c2.state == INVALID)
+    check('kl.exec in _Ready_ after key generation: _Invalid_ (GR17)', c2.state == INVALID)
     c2 = moved(cc)
     run(c2, GEN)
     check('kl.setst _GenerateKeyPair_ again and kl.exec: another key pair, in _encapsk_Output_', c2.state == EK_OUT
@@ -669,7 +681,7 @@ def t_state_machine():
         run(cc, ENC)                               # key pair, ciphertext and sharedkey all set
         before = cc.fields() + [cc.se]
         run(cc, st)
-        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR78, GR30)',
+        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR53, GR29)',
               voided(cc) and not zero(*before[:3]))
 
     states = set()
@@ -689,14 +701,13 @@ def t_state_machine():
     c2 = moved(cc, EK_OUT)
     check('_sharedkey_Output_ -> _encapsk_Output_ (HasEncapsk set): admitted, sharedkey zeroed on leaving',
           c2.state == EK_OUT and zero(c2.sharedkey) and c2.decapsk.hex() == x['dk'])
-    c2 = moved(cc, SK_OUT)
-    check('same-State kl.setst in _sharedkey_Output_ (GR23): State and sharedkey kept',
-          c2.state == SK_OUT and c2.sharedkey.hex() == x['k'])
+    check('same-State kl.setst in _sharedkey_Output_: _Invalid_, sharedkey not re-emitted, Content cleared (GR17, GR18)',
+          voided(moved(cc, SK_OUT)))
     bad = [NAME[s] for s in (READY, GEN, ENC, DEC, EK_IN, DK_IN, EK_OUT, CT_IN, CT_OUT)
            if moved(to(decaps_ready(x), s) if s != DEC else decaps_ready(x), SK_OUT).state != INVALID]
     check('kl.setst _sharedkey_Output_ in any other State: _Invalid_', None, bad, [])
     bad = [NAME[st] for st in range(GEN, SK_OUT + 1) if not voided(moved(failed(MLKEMLocker(ps)), st))]
-    check('kl.setst from _Failure_ to any Machine State: _Invalid_ (GR27)', None, bad, [])
+    check('kl.setst from _Failure_ to any Machine State: _Invalid_ (GR16)', None, bad, [])
     check('kl.setst from _sharedkey_Output_ to kl_cfg_clear_ads / _Ready_ / _Unconfigured_ / an Error State permitted',
           None, [moved(cc, i).state for i in (CLEAR_ADS, READY, UNCONF, EXPIRED)], [SK_OUT, READY, UNCONF, EXPIRED])
     c2 = moved(cc, READY)
@@ -705,18 +716,21 @@ def t_state_machine():
 
     cc = load(MLKEMLocker(ps), EK_IN, ek)
     for imm in (SUCCESS, FAILURE):
-        check(f'kl.setst #{imm}: illegal instruction, nothing changed (GR26)',
-              raises(cc.setst, imm) and cc.state == EK_IN and cc.encapsk == ek)
+        c1 = load(MLKEMLocker(ps), EK_IN, ek)
+        check(f'kl.setst #{imm} -> Invalid (GR18, MR1)', (raises(c1.setst, imm), c1.state) == (False, INVALID))
+        c1 = to(MLKEMLocker(ps), UNCONF)
+        check(f'kl.setst #{imm} on an Unconfigured locker: no operation (GR18, GR26)',
+              (raises(c1.setst, imm), c1.state) == (False, UNCONF))
     for imm in (11, 45, 65):
         check(f'kl.setst #{imm} (undefined): _Invalid_', to(MLKEMLocker(ps), imm).state == INVALID)
     cc.setst(PRIV_VIOLATION)
-    check('kl.setst to an Error State: no exception, Content cleared (GR30)', voided(cc, PRIV_VIOLATION) and cc.use == 0)
+    check('kl.setst to an Error State: no exception, Content cleared (GR29)', voided(cc, PRIV_VIOLATION) and cc.use == 0)
     cc.setst(54)
     check('kl.setst #54 (reserved Error State): _Invalid_', cc.state == INVALID)
     load(cc, EK_IN, ek)
     got = cc.exec_C(16)
     cc.exec_D()
-    check('use in an Error State: no operation, State kept, OUTPUT zeroed (GR19.a, GR34)', voided(cc) and got == bytes(16))
+    check('use in an Error State: no operation, State kept, OUTPUT zeroed (GR26, GR28)', voided(cc) and got == bytes(16))
     for st in LONG:
         c2 = to(MLKEMLocker(ps), st)
         c2.exec_B(bytes(16))
@@ -783,7 +797,10 @@ def t_long_running():
           and cc.rbg.draws == 2 and cc.state == EK_OUT and cc.use == 0 and cc.get('AuxDataLen') == 0
           and cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
     cc = to(halted_gen()[0], GEN)
-    check('same-State kl.setst zeroes P and discards the draws; fresh draws follow',
+    check('same-State kl.setst in a halted _GenerateKeyPair_: _Invalid_, P zeroed, the data discarded (GR17, GR29)',
+          voided(cc) and cc.use == 0 and cc.ads is None)
+    cc = to(halted_gen()[0], READY, GEN)
+    check('re-entered through _Ready_: P zeroed, the draws discarded; fresh draws follow',
           cc.use == 0 and cc.ads is None and restarted(cc))
     for target in (READY, INVALID):
         cc = to(halted_gen()[0], target)
@@ -813,7 +830,7 @@ def t_long_running():
     check('export/import keeping the ADS: P kept, resumes to the ACVP key pair',
           same and kept.rbg.draws == 2 and kept.state == EK_OUT and kept.encapsk.hex() == kv['ek'])
     dropped = halted_gen()[0].export_import(keep_ads=False)
-    check('import completing without Content2 (GR77.c, MR6) zeroes P: restart with fresh values',
+    check('import completing without Content2 (GR46.c, MR6) zeroes P: restart with fresh values',
           dropped.use == 0 and dropped.state == GEN and restarted(dropped))
     x = vec('decaps', ps)
     cc = decaps_ready(x)
@@ -825,7 +842,7 @@ def t_long_running():
     check('kl.clearads keeps the State, removes the ADS, zeroes P (MR6); the operation restarts',
           cc.state == GEN and cc.get('AuxDataLen') == 0 and cc.use == 0 and restarted(cc))
 
-def t_loop_bound():
+def t_loop_bound():                     # the bound is mandatory (<<KLE-PQC-ML-KEM>>)
     section('SampleNTT limit (FIPS 203 Appendix B): the operation ends without output in _Failure_ (<<KLE-PQC-ML-KEM>>)')
     ps = 768
     kv, ev = vec('keyGen', ps), vec('encaps', ps)
@@ -868,84 +885,94 @@ def t_derive():
         check(f'_sharedkey_Output_ -> {dest.name} key: the {n} least significant bytes of sharedkey',
               dest.key == ss[:n] and dest.state == READY and src.state == SK_OUT and src.sharedkey == ss and src.use == 0)
     dest = derived(Dest(AES128_ECB), src, 33)
-    check('length above the key size: exactly dest_length bytes (GR50 item 5, GR49)',
+    check('length above the key size: exactly dest_length bytes (GR32 item 5, GR31)',
           dest.key == ss[:16] and dest.state == READY)
     for n in (15, 0):
         dest = derived(Dest(AES256_CTR), src, n)
         check(f'length {n} below the 32-B key: destination _Invalid_, source untouched',
               dest.state == INVALID and dest.key == bytes(32) and src.state == SK_OUT and src.sharedkey == ss)
     for st, nm in ((ENCRYPT, 'Encrypt'), (SUCCESS, 'Success')):
-        check(f'destination in _{nm}_ (GR50 items 1-2): _Invalid_, source untouched',
+        check(f'destination in _{nm}_ (GR32 item 2): _Invalid_, source untouched',
               derived(Dest(AES128_GCM, state=st), src).state == INVALID and src.state == SK_OUT)
     for code in (mc(10, 0), mc(10, 3)):
         dest = derived(Dest(code, state=SET_SCALAR), src, 32)
-        check(f'{dest.name} in _Set_Scalar_ receives sharedkey as its private key Scalar (GR54)',
-              dest.key == ss and dest.state == SET_SCALAR)
+        check(f'{dest.name} in _Set_Scalar_: the `Scalar` is no destination: destination _Invalid_ (GR32 item 2), '
+              'source untouched', dest.state == INVALID and src.state == SK_OUT and src.sharedkey == ss)
     check('secp256r1 in _Ready_ (endpoint in _Set_Scalar_): destination _Invalid_, source untouched',
           derived(Dest(mc(10, 0)), src, 32).state == INVALID and src.state == SK_OUT)
-    check('secp384r1: Scalar longer than sharedkey: destination _Invalid_ (GR50 item 5)',
-          derived(Dest(mc(10, 1), state=SET_SCALAR), src, 48).state == INVALID and src.state == SK_OUT
-          and src.sharedkey == ss)
     dv = vec('decaps', ps, 'valid')
     cd = decaps_ready(dv)
     cd.exec_D()
     sk = h(dv['k'])
     xex, k0 = derived(Dest(mc(0, 3)), src, 64), derived(Dest(mc(4, 7), state=SET_KEY), src, 64)
-    s3, s4 = derived(Dest(SHA3_256, state=HASH_ABSORB), cd, 40), shared(UsagePolicy=0b00110)
+    s3, s4 = derived(Dest(SHA3_256, state=HASH_ABSORB), cd, 32), shared(UsagePolicy=0b00110)
     km = derived(Dest(mc(6, 10), state=HASH_ABSORB), s4, 32)
-    check('sharedkey (GR54): `key1 || key2` in _Ready_ gets all 32 B; HMAC `K0` (64 B) _Invalid_ (GR50 item 5); '
-          'SHA3-256 / KMAC128 _Hash_Absorb_ absorb it (40 B: zero-padded, GR49), restricted (narrowed, GR51); '
+    check('sharedkey (GR34): `key1 || key2` in _Ready_ gets all 32 B; HMAC `K0` (64 B) with length 64 _Invalid_ '
+          '(GR32 item 5: eff_length 64, not the 32 B of the secret); '
+          'SHA3-256 / KMAC128 _Hash_Absorb_ absorb it (32 B), restricted (narrowed, GR33); '
           'sources untouched', True,
           (xex.state, xex.key, k0.state, s3.state, s3.absorbed, km.absorbed, km.get('UsagePolicy'), src.state, cd.state),
-          (READY, ss, INVALID, HASH_ABSORB, sk + bytes(8), ss, 0b00110, SK_OUT, SK_OUT))
+          (READY, ss, INVALID, HASH_ABSORB, sk, ss, 0b00110, SK_OUT, SK_OUT))
+    big = [derived(Dest(SHA3_256, state=HASH_ABSORB), shared(), n) for n in (33, 40, 1 << 60)]
+    check('sharedkey into SHA3-256 _Hash_Absorb_ with length 33, 40 or 2^60, other than 32: destination _Invalid_, '
+          'nothing absorbed (GR32 item 5: exactly the secret length, no unbounded uninterruptible derive)',
+          True, [(d.state, d.absorbed) for d in big], [(INVALID, b'')] * 3)
+    k0s = [derived(Dest(mc(4, 7), state=SET_KEY), shared(), n) for n in (32, 16, 33)]
+    check('sharedkey into HMAC `K0` in _Set_Key_ with length 32: admitted, eff_length = 32 = the secret, K0 = '
+          'sharedkey zero-filled to 64 B, restricted (narrowed, GR33); length 16 or 33: destination _Invalid_ '
+          '(GR32 item 5: eff_length must be exactly the 32 B of the source)', True,
+          [(d.state, d.key) for d in k0s], [(SET_KEY, ss + bytes(32)), (INVALID, bytes(64)), (INVALID, bytes(64))])
     s5, s6 = shared(), shared()
     d5, d6 = derived(Dest(SHA3_256, state=HASH_ABSORB), s5, 16), derived(Dest(mc(0, 7), state=HASH_ABSORB), s6, 32)
-    check('sharedkey, 16 of 32 B, into SHA3-256 _Hash_Absorb_: destination _Invalid_ (GR50 item 5, GR54: the whole '
-          'secret); into AES128-CMAC _Hash_Absorb_: both _Invalid_ (GR54 excepts CMAC, GR50 item 3)', True,
+    check('sharedkey, 16 of 32 B, into SHA3-256 _Hash_Absorb_: destination _Invalid_ (GR32 item 5, GR34: the whole '
+          'secret); into AES128-CMAC _Hash_Absorb_ (the CMAC input is no destination): destination _Invalid_ '
+          '(GR32 item 2), source untouched', True,
           (d5.state, d5.absorbed, s5.state, d6.state, d6.absorbed, s6.state),
-          (INVALID, b'', SK_OUT, INVALID, b'', INVALID))
+          (INVALID, b'', SK_OUT, INVALID, b'', SK_OUT))
     dest = derived(Dest(AES128_GCM, state=SET_AUX), src)
-    check('sharedkey into the GCM IV (no GR54 pair): both _Invalid_ (GR50 item 3)',
-          dest.state == INVALID and src.state == INVALID)
-    src = shared()
-    check('KMAC128 in _Ready_ (endpoint in _Hash_Absorb_): destination _Invalid_ (GR50 items 1-2)',
+    check('sharedkey into the GCM IV (no destination): destination _Invalid_ (GR32 item 2), source untouched',
+          dest.state == INVALID and src.state == SK_OUT and src.sharedkey == ss)
+    check('KMAC128 in _Ready_ (endpoint in _Hash_Absorb_): destination _Invalid_ (GR32 item 2)',
           derived(Dest(mc(6, 10)), src).state == INVALID and src.state == SK_OUT)
-    s2 = encapsulated()
-    check('ML-KEM destination (no destination endpoint): only it becomes _Invalid_ (GR50 items 1-2)',
-          derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == CT_OUT)
-    check('KeyType 1 key never importable (GR53): destination _Invalid_',
-          derived(Dest(AES128_ECB, keytype=1, skid=0x1234), src).state == INVALID and src.state == SK_OUT)
+    s2 = shared()
+    check('ML-KEM destination (no destination endpoint): only it becomes _Invalid_ (GR32 item 2)',
+          derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == SK_OUT)
+    check('KeyType 1 key never importable (GR68): destination _Invalid_',
+          derived(Dest(AES128_ECB, keytype=1), src).state == INVALID and src.state == SK_OUT)
     dest = derived(Dest(AES128_ECB, keytype=2), src)
-    check('a locker provisioned with KeyType 2 (now KeyType 0) receives the key',
+    check('a locker provisioned with KeyType 2 (stored as KeyType 0) receives the key',
           dest.get('KeyType') == 0 and dest.key == ss[:16] and dest.state == READY)
     check('source in _sharedkey_Output_ after _Decapsulate_: key delivered',
           derived(Dest(AES256_CTR), cd, 32).key.hex() == dv['k'] and cd.state == SK_OUT)
     for st in (EK_IN, DK_IN):                      # <<KLE-derive-endpoints>>: sharedkey is a source only in _sharedkey_Output_
         s2 = to(encapsulated(None), st)
         dest = derived(Dest(AES128_ECB), s2)
-        check(f'source in _{NAME[st]}_ (sharedkey non-zero, not a source): source _Invalid_ (GR50 item 1)',
+        check(f'source in _{NAME[st]}_ (sharedkey non-zero, not a source): source _Invalid_ (GR32 item 1)',
               s2.state == INVALID and dest.state == READY)
     for s2, why in ((to(encapsulated(), READY, EK_IN), '_encapsk_Input_ after _Ready_ (sharedkey cleared)'),
                     (failed(encapsulated()), '_Failure_ after a failed encapsulation key check')):
         dest = derived(Dest(AES128_ECB), s2)
-        check(f'{why}: not a sharedkey source: source _Invalid_ (GR50 item 1)',
+        check(f'{why}: not a sharedkey source: source _Invalid_ (GR32 item 1)',
               s2.state == INVALID and dest.state == READY and dest.key == ph)
     for st, f in ((EK_OUT, 'encapsk'), (CT_OUT, 'ciphertext')):
         s2 = to(encapsulated(), st)
         dest = derived(Dest(AES128_ECB), s2)
-        check(f'source in _{NAME[st]}_ (kl.exec output, never sharedkey) into an AES key in _Ready_ (GR55, unusual '
-              f'but admitted): the first 16 bytes of {f}, MachineUse as Form C',
-              dest.state == READY and dest.key == getattr(s2, f)[:16] and s2.use == 16)
-    for code, st, n, ln, why in ((mc(10, 0), SET_SCALAR, 32, 64, 'ECC `Scalar`'), (mc(4, 7), SET_KEY, 64, 64, 'HMAC `K0`'),
-                                 (AES128_GCM, SET_AUX, 16, 24, 'GCM IV (GR49: min(length, 16))')):
-        s2 = encapsulated(UsagePolicy=0b00110)
-        dest = derived(Dest(code, state=st), s2, ln)
-        check(f'_ciphertext_Output_ -> {why}: the ciphertext, MachineUse as Form C, not narrowed (GR55, GR52)',
-              dest.key == s2.ciphertext[:n] and s2.use == n and dest.state == st and dest.get('UsagePolicy') == 0)
+        check(f'source in _{NAME[st]}_ ({f} output, not a source) into an AES key in _Ready_: source _Invalid_ '
+              '(GR32 item 1), nothing transferred', s2.state == INVALID and dest.state == READY and dest.key == ph)
+    res = []
+    for code, st, ln in ((mc(10, 0), SET_SCALAR, 64), (mc(4, 7), SET_KEY, 64), (AES128_GCM, SET_AUX, 24),
+                         (SHA3_256, HASH_ABSORB, 1088)):
+        s2, dest = encapsulated(UsagePolicy=0b00110), Dest(code, state=st)
+        k = dest.key
+        kl_derive(dest, s2, ln)
+        res.append((s2.state, dest.state, dest.key == k, dest.absorbed, s2.use))
+    check('_ciphertext_Output_ into an ECC `Scalar`, HMAC `K0`, the GCM IV or SHA3-256 _Hash_Absorb_: the source '
+          'is checked first, source _Invalid_ (GR32 item 1), destination unchanged, nothing emitted', True, res,
+          [(INVALID, st, True, b'', 0) for st in (SET_SCALAR, SET_KEY, SET_AUX, HASH_ABSORB)])
     check('equal lockers: illegal instruction', raises(kl_derive, src, src, 32))
     blank = Dest(AES128_ECB)
     blank.mdh = 0
-    check('Unconfigured endpoint: no operation (GR20)', kl_derive(blank, src, 16) == 'noop' and blank.state == UNCONF)
+    check('Unconfigured endpoint: no operation (GR26)', kl_derive(blank, src, 16) == 'noop' and blank.state == UNCONF)
     dest, s3 = Dest(AES128_ECB), shared()
     dest.enter_error(PRIV_VIOLATION)
     check('Error State on the destination: no-op', kl_derive(dest, s3, 16) == 'noop'
@@ -961,29 +988,28 @@ def t_derive():
           raises(kl_derive, dest, su, 16, exc=PrivilegeViolation) and dest.state == READY
           and dest.key == ph and su.state == SK_OUT)
     dest = derived(Dest(AES128_ECB, UsagePolicy=0b10000, Locality=0b101000101), su)
-    check('GR51: UsagePolicy OR bits 0-3, AND bit 4; Locality stricter per chain, bits 6-8 OR-ed',
+    check('GR33: UsagePolicy OR bits 0-3, AND bit 4; Locality stricter per chain, bits 6-8 OR-ed',
           dest.key == ss[:16] and dest.get('UsagePolicy') == 0b01110 and dest.get('Locality') == 0b101001110)
     HART['mode'] = 'M'
-    for skw, dkw, why in (({'Locality': 0b010000}, {'Locality': 0b100000}, 'differing Boot Session entries'),):
-        s2 = shared(**skw)
-        dest = derived(Dest(AES128_ECB, **dkw), s2)
-        check(f'GR51 {why}: a failed narrowing, destination _Privilege Violation_, nothing moved',
-              dest.state == PRIV_VIOLATION and dest.key == bytes(16) and s2.state == SK_OUT)
+    s2 = shared(Locality=0b010000)
+    dest = derived(Dest(AES128_ECB, Locality=0b100000), s2)
+    check('GR33 differing Boot Session entries: a failed narrowing, destination _Privilege Violation_, nothing moved',
+          dest.state == PRIV_VIOLATION and dest.key == bytes(16) and s2.state == SK_OUT)
     s5 = shared(SCProtection=2)
     dest = derived(Dest(AES128_ECB, SCProtection=1), s5)
-    check('GR51: a destination at a lower SCProtection than the source -> _Privilege Violation_, nothing moved',
+    check('GR33: a destination at a lower SCProtection than the source -> _Privilege Violation_, nothing moved',
           dest.state == PRIV_VIOLATION and dest.key == bytes(16) and s5.state == SK_OUT)
     dest = derived(Dest(AES128_ECB, SCProtection=2), shared(SCProtection=1))
-    check('GR51: a destination at a higher SCProtection receives the key, its level unchanged',
+    check('GR33: a destination at a higher SCProtection receives the key, its level unchanged',
           dest.key == ss[:16] and dest.get('SCProtection') == 2)
     HART['now'] = 1000
     s4 = shared(ExpirationDate=5000)
     dest = derived(Dest(AES128_ECB, ExpirationDate=1000), s4)
-    check('expired destination: _Expired_, key cleared (GR30), source untouched', dest.state == EXPIRED
+    check('expired destination: _Expired_, key cleared (GR29), source untouched', dest.state == EXPIRED
           and dest.key == bytes(16) and s4.state == SK_OUT and s4.sharedkey == ss)
     for date in (9000, 0):
         dest = derived(Dest(AES128_ECB, ExpirationDate=date), s4)
-        check(f'GR51 ExpirationDate {date} -> the smaller non-zero date',
+        check(f'GR33 ExpirationDate {date} -> the smaller non-zero date',
               dest.key == ss[:16] and dest.get('ExpirationDate') == 5000)
     s5 = shared(ExpirationDate=1001)
     HART['now'] = 1001
@@ -992,25 +1018,18 @@ def t_derive():
           s5.state == EXPIRED and dest.state == READY and dest.key == ph)
     HART['now'] = 0
 
-    s6, hl = encapsulated(UsagePolicy=0b00110, Locality=0b11), Dest(SHA3_256, state=HASH_ABSORB)
-    kl_derive(hl, s6, 512)
-    mid = s6.use
-    kl_derive(hl, s6, 576)
-    check('GR55: _ciphertext_Output_ -> SHA3-256 in two transfers, MachineUse as Form C', hl.absorbed.hex() == v['c']
-          and mid == 512 and s6.use == 1088 and s6.state == CT_OUT and hl.state == HASH_ABSORB)
-    check('GR52: no narrowing', hl.get('UsagePolicy') == 0 and hl.get('Locality') == 0)
-    kl_derive(hl, s6, 16)
-    check('transfer past the field: source _Invalid_ (MR9), nothing absorbed',
-          s6.state == INVALID and len(hl.absorbed) == 1088)
     kv = vec('keyGen', ps)
     g = to(MLKEMLocker(ps, rbg=RBG(h(kv['d']), h(kv['z']))), GEN)
     g.exec_D()
     hl = derived(Dest(SHA3_256, state=HASH_ABSORB), to(g, EK_OUT), SIZES[ps][0])
-    check('GR55: _encapsk_Output_ -> SHA3-256; H(encapsk) matches decapsk',
-          hl.absorbed.hex() == kv['ek'] and K.H(hl.absorbed) == g.decapsk[768 * 3 + 32:768 * 3 + 64])
+    check('_encapsk_Output_ -> SHA3-256 (no ML-KEM output is a source): source _Invalid_ (GR32 item 1), nothing '
+          'absorbed', g.state == INVALID and hl.state == HASH_ABSORB and hl.absorbed == b'')
     s7 = encapsulated()
-    check('hash destination in _Ready_: only it becomes _Invalid_',
-          derived(Dest(SHA3_256), s7, 32).state == INVALID and s7.state == CT_OUT)
+    check('hash destination in _Ready_, from the ciphertext output: the source is checked first and becomes '
+          '_Invalid_ (GR32 item 1)', derived(Dest(SHA3_256), s7, 32).state == READY and s7.state == INVALID)
+    s7 = shared()
+    check('hash destination in _Ready_, from sharedkey: only it becomes _Invalid_ (GR32 item 2)',
+          derived(Dest(SHA3_256), s7, 32).state == INVALID and s7.state == SK_OUT)
 
 def t_controls():
     section('Negative controls')
