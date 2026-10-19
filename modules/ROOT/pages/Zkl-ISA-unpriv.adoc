@@ -1583,20 +1583,19 @@ Operand::
 A zero field of `Xs1` leaves the corresponding field of `md` unchanged; a non-zero field other than these four transitions the locker to _Invalid_.
 
 Per-field behavior::
-For _Locality_ and _ExpirationDate_, the result is the narrowing of `md` by `Xs1` (<<KLE-Metadata-narrowing>>), except that a _Locality_ request weaker than `md` transitions the locker to _Privilege Violation_ instead of being overridden.
-_UsagePolicy_ follows its own field rule below: `Xs1` is a request, not an MDH policy, so a clear bit 4 does not withdraw the Debug grant.
-Each non-zero field of `Xs1` is handled as follows:
+Each non-zero field of `Xs1` narrows the matching field of `md` (<<KLE-Metadata-narrowing>>), with these rules:
 +
-* _MachinePolicy_: each set bit clears the corresponding bit of `md`, disabling that function, and each clear bit changes nothing, so that no disabled function can be enabled.
-  A request for a Machine that does not use the field or uses it to extend _Machine_, or one that leaves a value that the Machine forbids, transitions the locker to _Invalid_; a request that disables the operation of the current State takes effect as Rule <<KLE-GR-policy-narrowing-state>> states.
+* _MachinePolicy_: each set bit clears the matching bit of `md`, and each clear bit changes nothing, so no disabled function can be enabled again.
+  The locker transitions to _Invalid_ if the Machine does not use the field, uses it to extend _Machine_, or forbids the resulting value; a request that disables the operation of the current State takes effect as Rule <<KLE-GR-policy-narrowing-state>> states.
   A Machine with fields that exist only for some values of _MachinePolicy_, such as the ECC Machines (<<Zkl-ISA-machines.adoc#KLE-ECC>>), states what a narrowing does to them.
-* _Locality_: each subfield (<<KLE-locality-indexes>>), bits [1:0], [3:2] and [5:4] and each of bits 6, 7 and 8, is treated independently.
-  A subfield of `Xs1` that is zero or equal to that of `md` requests no change, and a zero subfield of `md` takes the value of `Xs1`.
+* _Locality_: each subfield (<<KLE-locality-indexes>>), bits [1:0], [3:2], [5:4], 6, 7 and 8, is treated independently.
+  A subfield of `Xs1` that is zero or equal to that of `md` changes nothing, and a zero subfield of `md` takes the value of `Xs1`.
   A non-zero HW Binding subfield may be replaced only by a stricter entry of its chain: _SiPScrt_ by _ChipFamScrt_ or _ChipScrt_, _ChipFamScrt_ by _ChipScrt_, _OEMScrt_ by _ProdScrt_ or _DevScrt_, and _ProdScrt_ by _DevScrt_.
-  Any other change, a weakening or a change of a non-zero Boot Session or SW Filter subfield included, transitions the locker to _Privilege Violation_.
+  Any other change, including a weakening or a change of a non-zero Boot Session or SW Filter subfield, transitions the locker to _Privilege Violation_ instead of overriding the field.
   A later export binds its SCC to the new _Locality_.
-* _UsagePolicy_: each set bit removes a permission, and each clear bit changes nothing: bits 0–3 set the corresponding disallow bits of `md`, and bit 4 clears its Debug grant, so no request can widen the set of modes that may use the CC.
-* _ExpirationDate_: if `md`._ExpirationDate_ is zero or `Xs1`._ExpirationDate_ {le} `md`._ExpirationDate_, the value in `Xs1` replaces it; otherwise the field is unchanged, without error.
+* _UsagePolicy_: each set bit removes a permission, and each clear bit changes nothing: bits 0–3 set the matching disallow bits of `md`, and bit 4 clears its Debug grant.
+  `Xs1` is a request, not an MDH policy, so a clear bit 4 does not withdraw the Debug grant, and no request widens the set of modes that may use the CC.
+* _ExpirationDate_: the value of `Xs1` replaces that of `md` if `md`._ExpirationDate_ is zero or `Xs1`._ExpirationDate_ {le} `md`._ExpirationDate_; otherwise the field is unchanged, without error.
 
 Validity of the result::
 Validity (<<KLE-Metadata-validity>>) is evaluated on the changed fields only.
@@ -1959,14 +1958,6 @@ A Machine may store additional state information in _AuxInfo_, _MachineUse_ or t
 The immediate of `kl.setst` (<<KLE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further state-change operations: the architected `kl_cfg_clear_ads` (64, <<KLE-instruction-clearads>>) and `kl_cfg_clearall` (65, <<KLE-instruction-clearall>>), and the values 66–127, available to Machines.
 
 <<KLE-states-graph>> shows the default state transitions.
-The legend of the graph is:
-
-* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
-* Single-bordered rounded rectangles: the Valid States.
-* Double-bordered rounded rectangles: the Error States.
-* Continuous edges: transitions induced by usage instructions.
-* Dashed edges: transitions induced by reaching the expiration date.
-* Dotted edges: transitions induced by configuration operations.
 
 [[KLE-states-graph]]
 .Default State Transitions
@@ -2000,6 +1991,15 @@ image::statestikz-3.svg[]
 INSERT TIKZ HERE
 ....
 ////
+
+The legend of the graph is:
+
+* Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
+* Single-bordered rounded rectangles: the Valid States.
+* Double-bordered rounded rectangles: the Error States.
+* Continuous edges: transitions induced by usage instructions.
+* Dashed edges: transitions induced by reaching the expiration date.
+* Dotted edges: transitions induced by configuration operations.
 
 //
 
