@@ -240,7 +240,7 @@ class Sha3:
         s.set_machine(f['Machine'])
         s.st, s.state, s.block_base = f['State'], sl(v, N - 1, 0), sl(v, N + 15, N)
         s.last_block_len, s.out_len = sl(v, N + 31, N + 16), sl(v, N + 63, N + 32)
-        if s.block_base >= s.b or s.last_block_len > s.b:  # inconsistent Content
+        if s.block_base > (s.t if s.st == KL_STATE_SUCCESS else s.b - 1) or s.last_block_len > s.b:  # inconsistent Content
             s.reset()
         return s
 
@@ -901,4 +901,11 @@ check('SHAKE128 Form A: unbounded, never _Success_', None, (squeeze(cl, 400)[1],
       (oracle('SHAKE128', MSG_ABC, 400), KL_STATE_HASH_OUTPUT))
 
 info('the two-block padding clause needs b - block_base < |D| + 2 <= 6: reached only through a final piece')
+cl = absorbing('SHAKE128', MSG_ABC)
+cl.setst(KL_STATE_HASH_OUTPUT, 'B', 1344)
+o1 = squeeze(cl, 168)[1]
+cl = Sha3.load(cl.mdh(), cl.export())
+check('SHAKE128 bound t = 1344 bits: _Success_ with block_base = t (the loop returns before update()); '
+      'export/import keeps _Success_', None, (o1, cl.st, cl.block_base),
+      (oracle('SHAKE128', MSG_ABC, 168), KL_STATE_SUCCESS, 1344))
 done()

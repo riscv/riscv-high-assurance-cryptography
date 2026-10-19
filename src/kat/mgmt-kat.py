@@ -419,6 +419,7 @@ class Unit:
         self.mlocality, self.hlocality, self.slocality = _secret(b'mloc'), _secret(b'hloc'), _secret(b'sloc')
         self.mode, self.kls_off, self.llstatus, self.vstart, self._rbg = 'M', False, {}, 0, 0
         self.zero_alloc = True                                      # <<KLE-destructive-config>>: allocations read 0
+        self.kleemulation = False                                   # mstatus[27], <<KLE-kleemulation>>
         self.reset()
         self.__dict__.update(attrs)
     def reset(self):                                                # <<KLE-out-of-reset-unpriv>>
@@ -599,8 +600,13 @@ class Unit:
         if form == 'A': return self.getmd(k), False
         self._pre()
         return (unpack(lo & MASK64), True) if form == 'B' else (as_md(m), True)
+    def _not_native(self, m, supplied, sizing):                    # <<KLE-kleemulation>>
+        if not supplied or (sizing and m['State'] in ERROR_STATES) or self.available(m): return False
+        if self.kleemulation: raise Trap('illegal', 2)               # second group of grounds
+        return True
     def size(self, form='A', k=None, lo=None, m=None, vec_bits=128):     # <<KLE-instruction-size>>
         m, supplied = self._md_operand(form, k, lo, m, vec_bits)
+        if self._not_native(m, supplied, True): return 0
         return self.size_of(m, supplied, low=form == 'B')
     def size_of(self, m, supplied, low=False):
         st = m['State']
@@ -614,6 +620,7 @@ class Unit:
         return 16 + mach.pi_content_size(m)
     def avail(self, form='A', k=None, lo=None, m=None, vec_bits=128):
         m, supplied = self._md_operand(form, k, lo, m, vec_bits)
+        if self._not_native(m, supplied, False): return 0
         return 0 if not supplied and m['State'] == UNCONF else self.available(m)
     def layout(self, m):
         """(ContentOffset, content_size, image_size, image_end) of <<KLE-serialized-image>>."""
@@ -1732,6 +1739,14 @@ def t_lengths():
     eq('kl.avail examines no other field; Form B uses [63:0]',
        (a.avail('C', m=cipher(State=63, res=3 << 116, Locality=loc(boot=3), Version=2)), a.avail('B', lo=pack(base))),
        (1, 1))
+    em_ = fresh(kleemulation=True)
+    rdy, uns = md(Machine=M_ABSENT, MachinePolicy=1, State=READY), md(Machine=M_ABSENT, MachinePolicy=1, State=UNSUP)
+    eq('kleemulation: Forms B/C of kl.avail and kl.size trap on a non-native MDH; an Error-State MDH is sized 16; '
+       'Form A and native MDHs unaffected; clear: 0',
+       [trap_of(em_.size, 'C', m=rdy), trap_of(em_.size, 'B', lo=pack(rdy) & MASK64), trap_of(em_.avail, 'C', m=rdy),
+        trap_of(em_.avail, 'B', lo=pack(uns) & MASK64), em_.size('C', m=uns), em_.size('B', lo=pack(uns) & MASK64),
+        em_.avail('C', m=base), em_.avail('A', 0), fresh().size('C', m=rdy), fresh().avail('C', m=rdy)],
+       ['illegal/2'] * 4 + [16, 16, 1, 0, 0, 0])
     provision(a, 0, base)
     a.setst(0, EXPIRED)
     a.mgmt(1, PROV, cipher(KeyType=3))

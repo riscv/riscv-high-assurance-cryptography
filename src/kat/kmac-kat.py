@@ -288,7 +288,8 @@ class Kmac:
             self._resolve(key)                                           # GR69: SKID resolved after import
         else:
             self.kb = key
-        if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
+        bad_base = self.block_base > (self.t if self.st == SUCCESS else self.b - 1)
+        if bad_base and self.st not in ERROR_STATES:                     # inconsistent image (negative control)
             self.invalidate()
         elif self.bad_policy():                                          # <<KLE-MVR-open>>
             self._reject()
@@ -1098,4 +1099,10 @@ check('KMACXOF128 bounded at 8 and 1000 B: the prefix of the unbounded stream (r
       (r, c.st, bytes(squeeze(c2, 300)[0][1]) == ref_kmac(128, KEY, b'abc', 0, TAG, xof=True, n=300), c2.st),
       ([(True, SUCCESS)] * 2, INVALID, True, OUTPUT))
 
+c = squeezing(128, DATA4, 8 * RATE[128])
+o = bytes(squeeze(c, RATE[128])[0][1])
+c2 = Kmac(Hart()).import_(*c.export())
+check('KMAC128 L = t = 1344: _Success_ with block_base = t (the loop returns before update()); '
+      'export/import keeps _Success_', True, (o, c2.st, c2.block_base),
+      (ref_kmac(128, KEY, DATA4, 8 * RATE[128], S=TAG), SUCCESS, 8 * RATE[128]))
 done()
