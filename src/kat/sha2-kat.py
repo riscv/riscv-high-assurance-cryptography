@@ -390,6 +390,12 @@ for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 29), (SEC[:30], 32)
 check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B with length 29, 32 or 33 (GR32 item 5: '
       'exactly the secret length): destination _Invalid_', None, res,
       [('refused', KL_STATE_INVALID)] * 6)
+dst, dst2 = absorbing(data=b'abc'), absorbing(data=b'abc')
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+check('shared secret into SHA-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_; '
+      'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret [hashlib]', None,
+      (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),
+      ('refused', KL_STATE_INVALID, 'done', hashlib.sha256(b'abc' + SEC).digest()))
 
 src, dst, s28, d28, h, dh = Source(SEC), KeyDest(32), Source(SEC[:28]), KeyDest(32), outputting(), KeyDest(32)
 check('shared secret -> a 32-byte `key` in _Ready_, length 40: the secret; a 28-byte secret -> a 32-byte key '

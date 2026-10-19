@@ -11,7 +11,7 @@ from common import (install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decr
                     KL_STATE_INVALID as INVALID, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR18)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 B = 128
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
@@ -602,7 +602,7 @@ cl = new_xex(k1, k2)
 st = cl.state
 check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
       ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
-check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR18, MR1)", True,
+check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)", True,
       [(raises(c.setst, i), c.state) for i in (46, 47) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
 
 section("negative controls")

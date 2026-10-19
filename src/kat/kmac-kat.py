@@ -328,7 +328,7 @@ class Kmac:
                 self.L = x
                 return self._to_output()
         if immed == VERIFY and done and form == 'B' and not self.xof and self.policy & 2:   # MR11
-            if aux is not None and aux % 8 == 0 and 64 <= aux <= self.b:
+            if aux is not None and aux % 8 == 0 and 32 <= aux <= self.b:   # SP 800-185 8.4.2
                 self.L = aux
                 return self._to_output(VERIFY)
         self.invalidate()
@@ -866,6 +866,11 @@ for sec, xof, L in ((128, False, 256), (256, True, 0)):
 check('shared secret (32 B, length 32) -> open KMAC128 and KMACXOF256 _Hash_Absorb_ between two DATA4 (GR34)', True,
       res, [(0, OUTPUT, ref_kmac(128, KEY, DATA4 + SS + DATA4, 256, TAG)),
             (0, OUTPUT, ref_kmac(256, KEY, DATA4 + SS + DATA4, 0, TAG, True, 32))])
+dst = absorbing(128, DATA4, hart=h)
+dst.setst(LAST, 'B', 0)
+derive(h, dst, FieldSrc(SS), 32)
+check('shared secret into KMAC128 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
+      True, dst.st, INVALID)
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), absorbing(128, DATA4, hart=h)
 derive(h, dst, src, 32)
 dst.exec(inp=DATA4)
@@ -997,7 +1002,7 @@ c.exec(inp=ref_kmac(128, KEY, DATA200, 64, TAG))
 check('KMAC128 _Hash_Verify_, L = 64, KLLEN = 64, klstart = 8: an empty window (GR44 item 2), _Hash_Verify_ kept, '
       'klstart = 0; then the right tag -> Success', True, res + (c.st,), ('empty', VERIFY, 0, SUCCESS))
 res = []
-for label, act in (('L = 56 < 64', lambda: verifying(128, 56)), ('L = 100, not a multiple of 8', lambda: verifying(128, 100)),
+for label, act in (('L = 24 < 32', lambda: verifying(128, 24)), ('L = 100, not a multiple of 8', lambda: verifying(128, 100)),
                    ('L = b + 8', lambda: verifying(128, 8 * RATE[128] + 8)),
                    ('KLLEN = 64 < L = 256', lambda: (lambda c: (c.exec(inp=bytes(8)), c)[1])(verifying(128, 256))),
                    ('same-State kl.setst', lambda: (lambda c: (c.setst(VERIFY, 'B', 256), c)[1])(verifying(128, 256))),

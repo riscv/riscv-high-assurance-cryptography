@@ -732,6 +732,10 @@ for name, n, length in [('SHA-512', 30, 29), ('SHA-512', 30, 31), ('SHA-512', 30
 check('shared secret into _Hash_Absorb_ with length 29, 31 or 32 for 30 B (SHA-512), 2^60 or 0 for 32 B, 31 for 30 B '
       '(SHA3-256) -> destination _Invalid_ (GR32 item 5: exactly the secret length)', None, res,
       [('refused', KL_STATE_INVALID)] * 6)
+dst = fresh('SHA-512', 'NIK', key7, (A, B(b'abc')))
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+check('shared secret into HMAC-SHA-512 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
+      (kl_derive(dst, FieldSrc(S32), 32), dst.st) == ('refused', KL_STATE_INVALID))
 src, dst = CmacSrc(bytes(16)), fresh('SHA-256', 'NIK', key7, (A,))
 check('a CMAC -> HMAC _Hash_Absorb_: pair not admitted (GR32 item 3), both _Invalid_', None,
       (kl_derive(dst, src, 16), src.st, dst.st), ('refused', KL_STATE_INVALID, KL_STATE_INVALID))

@@ -748,6 +748,10 @@ r = kl_derive(dst, src, 336)
 check('SHAKE128 output in _Hash_Output_ as a source (GR32 item 1): source _Invalid_, destination untouched',
       (r, src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_ABSORB)
       and snap == (dst.state, dst.block_base))
+dst = absorbing('SHA3-256', MSG_ABC)
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+check('shared secret into SHA3-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
+      (kl_derive(dst, Source(SEC), 32), dst.st) == ('invalid', KL_STATE_INVALID))
 src, dst = Source(bytes(range(16)), secret=False), absorbing('SHA3-256')
 check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR32 item 3), both _Invalid_',
       (kl_derive(dst, src, 16), src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_INVALID))

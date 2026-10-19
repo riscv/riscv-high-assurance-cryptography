@@ -253,6 +253,12 @@ for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 32), (SEC[:30], 33)
     res.append((kl_derive(dst, Source(s), length), dst.st))
 check('shared secret into SM3 absorb: 32 B with length 0, 31 or 36, 30 B with length 32 or 33 (GR32 item 5: '
       'exactly the secret length): destination _Invalid_', None, res, [('refused', KL_STATE_INVALID)] * 5)
+dst, dst2 = absorbing(b'abc'), absorbing(b'abc')
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+check('shared secret into SM3 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_; '
+      'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret', None,
+      (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),
+      ('refused', KL_STATE_INVALID, 'done', sm3_ref(b'abc' + SEC)))
 
 src, dst, h, dh = Source(SEC), KeyDest(16), outputting(), KeyDest(16)
 check('shared secret -> an SM4 `key` in _Ready_, length 32: its first 16 bytes; SM3("abc") -> a key (GR32 item 1): '

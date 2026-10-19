@@ -721,6 +721,17 @@ check('Enc_Tag_Finalize: a KLLEN below 128 other than 120, 112, 104, 96, 64 -> I
       '64, 96 and 120 emit MSB_t(T)', True, res,
       [(0, INV)] * 5 + [(b2v(RT) & ((1 << kl) - 1), SUCC) for kl in (64, 96, 120)])
 
+c48, t48 = ref_gcm(K, IV, A, P[:48])
+e, d = at('enc'), at('dec')
+e.exec('A', b2v(P[:48]), 384)
+d.exec('A', b2v(c48), 384)
+for cl, last, fin in ((e, ELB, ETF), (d, DLB, DTF)):
+    cl.setst(last, 'B', 96)
+    cl.setst(fin, 'C', len_block(384, 8 * len(A)))     # leaves the last-block State before its kl.exec
+d.setst(HV, 'C', b2v(t48))
+check('a kl.setst that leaves Enc_Last_Block or Dec_Last_Block before its kl.exec omits the final block: '
+      'tag and verification of the 48 whole bytes', (v2b(e.exec('C', 0, 128), 16), d.state) == (t48, SUCC))
+
 section('counter: Invalid when ctr reaches (start_ctr - 1) mod 2^32')
 
 def fresh(iv):

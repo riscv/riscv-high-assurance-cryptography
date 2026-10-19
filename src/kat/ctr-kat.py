@@ -8,7 +8,7 @@ from common import (install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, 
                     KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_HASH_ABSORB, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
                     KL_STATE_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR18)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 B, ONES64 = 128, (1 << 64) - 1
 RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATE_INVALID
@@ -463,6 +463,6 @@ cl = ctr_cl(key)
 st = cl.state
 check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
       ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR18, MR1)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)",
    [(raises(c.setst, i), c.state) for i in (46, 47) for c in [ctr_cl(key)]], [(False, INV)] * 2)
 done()

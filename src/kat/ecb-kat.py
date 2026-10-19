@@ -8,7 +8,7 @@ from common import (install_key, aes_encrypt, aes_decrypt, sm4_encrypt, sm4_decr
                     KL_STATE_DECRYPT, KL_STATE_INVALID, KL_STATE_PRIV_VIOLATION, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR18)
+RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 
 # ---------------------------------------------------------------- the model
@@ -392,7 +392,7 @@ eq("ECB locker as source (no source endpoint) -> only the source Invalid", (src_
 cl = new_cl(ci, k, state=ENC)
 check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
       ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, ENC))
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR18, MR1)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)",
    [(raises(c.setst, i), c.state) for i in (46, 47) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 2)
 
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test; Forms of kl.setst")

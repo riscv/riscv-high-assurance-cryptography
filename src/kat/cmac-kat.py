@@ -8,6 +8,7 @@ from common import (b2v, v2b, sl, cat, bxor, aes_encrypt, tdea_encrypt, update_m
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_HASH_OUTPUT as OUTPUT, KL_STATE_SUCCESS as SUCCESS,
                     KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID, ERROR_STATES,
+                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_PRIV_VIOLATION as PRIV, inert, IllegalInstruction,
                     section, check, control, info, raises, done)
 
 B = 128
@@ -85,7 +86,14 @@ class Cmac:
     SETST = {(ABSORB, 'A'): (READY,), (LAST, 'B'): (ABSORB,),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
-        if s.state in ERROR_STATES:               # GR26
+        if immed in (54, 55):
+            raise IllegalInstruction('reserved #immed7')  # GR18
+        if immed == UNCONF or immed in ERROR_STATES:  # kl.clear, GR30: in every State and Form
+            if s.state != UNCONF:
+                s.state, s.key, s.skid = immed, None, None  # GR29
+                s._ready()
+            return
+        if inert(s.state):                        # GR26
             return
         if immed == READY and form == 'A':        # GR16: Form A
             s.state = READY
@@ -110,7 +118,7 @@ class Cmac:
             s.tag_len = min(aux, s.b)
         s.state = immed
     def restrictl(s, clear):                      # kl.restrictl clearing _MachinePolicy_ bits (GR20)
-        if s.state in ERROR_STATES:
+        if inert(s.state):
             return
         s.policy &= ~clear
         if not s.policy:
@@ -118,7 +126,7 @@ class Cmac:
     def exec(s, form, INPUT=0, klen=None, klstart=0):
         klen = s.b if klen is None else klen
         st = s.state
-        if st in ERROR_STATES:                    # GR26, GR28
+        if inert(st):                             # GR26, GR28
             return 0
         if (st, s.policy & (1 if st == OUTPUT else 2)) in ((OUTPUT, 0), (VERIFY, 0)):
             s._invalid('MR11, GR20: the operation of the State is disabled')
@@ -187,7 +195,7 @@ def derive(src, dst, length):
     """kl.derive; src is a Cmac locker, a Keystream, or the bytes of a GR34/GR35 source.
     Endpoints: `hash` in Hash_Output (GR35 source, b/8 bytes); `key` in Ready (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
-    if any(c.state in ERROR_STATES for c in lockers):
+    if any(inert(c.state) for c in lockers):
         return                                    # GR26: an inert endpoint
     if isinstance(src, Cmac) and src.state == OUTPUT and not src.policy & 1:
         src._invalid('MR11: generation disabled')
@@ -523,6 +531,19 @@ check("CMAC-TDES as a kl.derive source supplies b/8 = 8 bytes: into a 16-byte `k
       "destination Invalid", raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 check("CMAC-TDES: Serialized Content holds a 64-bit `hash`", True,
       [w for f, w in Cmac(TK3, cipher='tdea').lay() if f == 'hash'], [64])
+
+section("kl.clear, Error-State kl.setst, reserved #immed7")
+c1 = at_absorb(); c1.exec('B', b2v(MSG[:16])); c1.setst(UNCONF)
+check("kl.clear in _Hash_Absorb_ -> _Unconfigured_, Content cleared; a later kl.exec or kl.setst performs no "
+      "operation, OUTPUT zeroed (GR26, GR28)", True,
+      (c1.state, c1.key, c1.hash, c1.exec('C'), c1.setst(READY), c1.state), (UNCONF, None, 0, 0, None, UNCONF))
+c2 = Cmac(K128); c2.setst(PRIV); c3 = Kx(); c3.setst(OUTPUT); c3.setst(PRIV); c3.setst(INVALID)
+check("kl.setst naming _Privilege Violation_ in _Ready_ and in _Hash_Output_ -> that State, Content cleared; a "
+      "second Error-State kl.setst replaces it (GR30, GR29)", True,
+      (c2.state, c2.key, c3.state, c3.hash), (PRIV, None, INVALID, 0))
+c4 = at_absorb()
+check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept (GR18)", True,
+      ([raises(c4.setst, i) for i in (54, 55)], c4.state), ([True] * 2, ABSORB))
 
 section("negative controls")
 control("K2 for a full final block", all(tag(K, M, k2full=True) != W for _, K, M, W in VEC

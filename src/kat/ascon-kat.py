@@ -1337,6 +1337,10 @@ for s, n in ((sec, 16), (sec, 40), (sec, 0), (sec[:12], 13), (sec[:12], 16)):
     res.append(dst.st)
 check('a shared secret into XOF128 _Hash_Absorb_: 32 B with length 16, 40 or 0, 12 B with length 13 or 16 (GR32 '
       'item 5: exactly the secret length): destination _Invalid_', True, res, [INVALID] * 5)
+dst = XOF().setst(ABSORB, 'A').setst(HLAST, 'B', 0)
+kl_derive(dst, Secret(sec), 32)
+check('shared secret into XOF128 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
+      True, dst.st, INVALID)
 res = []
 for dst, n in ((XOF().setst(ABSORB, 'A'), 32), (AEAD(K), 16)):
     dst.klstart = 1
