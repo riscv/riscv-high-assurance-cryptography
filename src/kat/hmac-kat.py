@@ -8,7 +8,7 @@ from common import (b2v, v2b, sl, bswap, bin_, bxor, ERROR_STATES, inert, KL_STA
                     KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SET_KEY,
                     KL_STATE_HASH_VERIFY, KL_STATE_OPERATE,
                     KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, section, check, control, info, raises, done,
-                    md_pad, HashPort, hash_msgs, check_hash)
+                    md_pad, HashPort, hash_msgs, check_hash, IllegalInstruction)
 
 # ---------------------------------------------------------------- FIPS 180-4
 
@@ -250,9 +250,11 @@ class Hmac:
                    (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR17: restarts the load
                    (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MR11: K0 loaded
                    (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): s.policy & 1}  # MR11; none from _Hash_Output_ (GR17)
+        if immed in (54, 55):
+            raise IllegalInstruction('reserved #immed7')  # GR18
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
-                s.reset(KL_STATE_INVALID if immed > 53 else immed)
+                s.reset(immed)
         elif inert(s.st):
             pass  # GR26
         elif immed == KL_STATE_READY and form == 'A':  # GR16: Form A; K0 kept, unless its load was left incomplete (MR9)
@@ -619,6 +621,8 @@ check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroe
       (cl.exec('C', nbytes=8), cl.setst(KL_STATE_READY), cl.st) == (('noop', bytes(8)), None, KL_STATE_UNCONFIGURED))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR18, GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
+check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
+      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
 cl = fresh(variant='NIK', key=None)
 r = run(cl, SK, B(K0_7 + b'\xde\xad\xbe\xef' * 4))[0]
 term = r == 'terminated' and cl.h.cumul_len == 512 and cl.K0 == b2v(K0_7)

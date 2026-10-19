@@ -100,7 +100,7 @@ class XexLocker:
     def provision(s, pi):
         s.mdh = b2v(pi[:16])
         if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # <<KLE-Machine-field>>: at least one bit
+            return s.invalidate()   # MR11: at least one bit
         w1, w2 = s.widths
         c = b2v(pi[16:])
         s._install(sl(c, w1 - 1, 0), sl(c, w1 + w2 - 1, w1) if w2 else 0, False)
@@ -116,7 +116,7 @@ class XexLocker:
         w1, w2 = s.widths
         s.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
         if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # <<KLE-Machine-field>>: at least one bit
+            return s.invalidate()   # MR11: at least one bit
         s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
@@ -448,12 +448,12 @@ check("Encrypt -> Decrypt with the tweak again: Decrypt, the ciphertext decrypts
       (cl.state, out), (DECRYPT, b2v(data)))
 cl = tw(new_xex(k1, k2, POL_ENC))
 check("Encrypt -> Decrypt in an encrypt-only locker: Invalid (MR11)", True, tw(cl, DECRYPT).state, INVALID)
-check("MachinePolicy = 0 -> Invalid at provisioning (<<KLE-Machine-field>>)", True,
+check("MachinePolicy = 0 -> Invalid at provisioning (MR11)", True,
       new_xex(k1, k2, 0).state, INVALID)
 cl = new_xex(k1, k2)
 cl2 = XexLocker()
 cl2.import_scc(fset(cl.mdh, 'MachinePolicy', 0), cl.content1())
-check("MachinePolicy = 0 -> Invalid at import (<<KLE-Machine-field>>)", True, cl2.state, INVALID)
+check("MachinePolicy = 0 -> Invalid at import (MR11)", True, cl2.state, INVALID)
 check("MachinePolicy decrypt-only: -> Encrypt gives Invalid", True,
       tw(new_xex(k1, k2, POL_DEC)).state, INVALID)
 check("MachinePolicy decrypt-only: -> Decrypt decrypts", True,

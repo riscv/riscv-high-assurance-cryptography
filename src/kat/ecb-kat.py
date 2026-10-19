@@ -71,7 +71,7 @@ class EcbLocker:
 
     def provision(self, pi):
         self.mdh, self.key, self.skid = b2v(pi[:16]), None, None
-        if fld(self.mdh, 'MachinePolicy') == 0:   # <<KLE-Machine-field>>: at least one bit
+        if fld(self.mdh, 'MachinePolicy') == 0:   # MR11: at least one bit
             return self.invalidate()
         self._install(sl(b2v(pi[16:]), self.key_width - 1, 0), False)
         if self.state not in ERROR_STATES:

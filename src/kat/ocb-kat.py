@@ -98,7 +98,7 @@ class Ocb:
             return
         s.policy &= ~v & 3
         if not s.policy:
-            s._invalid('GR20: MachinePolicy = 0')      # <<KLE-Machine-field>>
+            s._invalid('GR20: MachinePolicy = 0')      # MR11
     def __init__(s, key, policy=0b11, skid=None, **nc):
         s.key, s.skid, s.policy, s.state = key, skid, policy, READY
         s.nc = dict(dict(dbl=double_ocb, ktop_bswap=True, msb_first=False, pad_byte0=False), **nc)

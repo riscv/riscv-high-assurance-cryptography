@@ -4,7 +4,7 @@ FIPS 180-4 cores from scratch; hashlib is only a labeled reference oracle."""
 import hashlib, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK,
-                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, section, check,
+                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, section, check,
                     control, raises, done, md_pad, hash_run, hash_msgs, check_hash)
 from sha2_sm3_common import HART, MdHash, MdPort, KeyDest, Source, kl_derive, A, O, R, B, C, run
 
@@ -271,6 +271,12 @@ check('_Hash_Absorb_ with block_base = 24, a 3-byte kl.exec with klstart = 3: em
       '(GR44 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
       (('empty', KL_STATE_HASH_ABSORB, 0), DIG))
 
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
+      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
+      '<<KLE-instruction-restrict>>)',
+      None, (Sha2().provision(1).st, absorbing(data=b'abc').restrictl(1).st, absorbing(data=b'abc').restrictl(0).st),
+      (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_HASH_ABSORB))
+
 section('Serialized Content')
 for name, (w, b, n, t) in PARAMS.items():
     check(f'{name} Content1 = n+16+16+32+64+b bits, padded to 128', None, len(absorbing(name, bytes(8)).export()),
@@ -333,6 +339,8 @@ check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroe
       == (('noop', bytes(8)), None, KL_STATE_UNCONFIGURED, 0))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
+check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
+      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
 cl = outputting('SHA-224')
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(32)(cl)[1], cl.st),
       (bytes.fromhex(VEC['SHA-224'][M_ABC]) + bytes(4), KL_STATE_SUCCESS))

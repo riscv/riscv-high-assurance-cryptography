@@ -605,6 +605,7 @@ The architecture does not enforce these sequences or their order.
 The following pseudocode illustrates how to use an ECB CC to encrypt data with a block cipher.
 Here, as in most other examples, we assume the block cipher has a width of 128 bits (`KLLEN` is also 128).
 The uppercase `IMPORT` instruction is a placeholder for an import code snippet, library, or API call.
+Most listings omit the `kl.getst` with which software checks, before it uses an output, that the locker is still in a Valid State (<<KLE-reading-locker-state>>): a usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
 
 [[KLE-pseudocode-ECB-encryption]]
 .Simple Example: Encryption with no Authentication
@@ -619,7 +620,7 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 
   kl.setst K0, #kl_state_encrypt         // Configure locker to encrypt
   kl.getst X1, K0
-  if (48 <= X1 <= 55) then: handle error
+  if (X1 != kl_state_encrypt) then: handle error
 
   // assume plaintext in whole blocks
   foreach(i from 0 to len_in_bytes(plaintext)/16-1) do:
@@ -1078,7 +1079,7 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag, as shown belo
   kl.setst K0, #kl_state_hash_absorb
   blocks    ← floor(M_len/128)
   remainder ← M_len mod 128
-  if remainder == 0 and blocks > 0 then  // a whole number of full blocks:
+  if (remainder = 0 and blocks > 0) then: // a whole number of full blocks:
     blocks    ← blocks - 1               // the last one is the "last block"
     remainder ← 128                  // a full last block takes no 10* padding
 
@@ -1090,7 +1091,7 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag, as shown belo
   kl.setst K0, #kl_state_hash_last_block, X1
                                          // with X1 = 0 (empty message),
                                          // the padded block is absorbed here
-  if remainder != 0 then:
+  if (remainder != 0) then:
     V0 ← M[16*blocks .. 16*blocks+ceil(remainder/8)-1]
     kl.exec K0, V0                       // absorbs the last block
 
@@ -1125,7 +1126,7 @@ significant ones, and for HMAC as for its `H`, each as its standard orders bits.
 `X1` = 8 {times} `out_bytes` makes the Machine emit exactly `out_bytes` bytes and then enter
 _Success_; for KMAC128 and KMAC256 it is also the output length `L` that the MAC encodes,
 while KMACXOF128 and KMACXOF256 encode `L` = 0 and only stop after `out_bytes` bytes.
-`out_bytes` is at least 1, and at least 8 for HMAC; it is at most the digest length for a fixed-output Machine, and below 2^29^ for an XOF, KMAC128 or KMAC256.
+`out_bytes` is at least 1, at least 8 for HMAC, and at least 4 for KMAC128 and KMAC256; it is at most the digest length for a fixed-output Machine, and below 2^29^ for an XOF, KMAC128 or KMAC256.
 `X1` = 0 would instead ask for the full digest, or for an unbounded XOF; it is invalid for KMAC128 and KMAC256.
 Except for KMAC128 and KMAC256, `out_bytes` only truncates the output of the Machine: a BLAKE2 digest of `nn` bytes other
 than `nn~max~`, such as BLAKE2b-256, comes from an SCC whose `nn` was set by the _Set_Aux_Value_
@@ -1160,7 +1161,7 @@ in the NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>, takes no first `kl.s
 
   X1 ← r
   kl.setst K0, #kl_state_hash_last_block, X1  // r = 0: does nothing
-  if r != 0 then:
+  if (r != 0) then:
     n ← ceil(r/8)
     vsetvli zero, n, e8, m1, ta, ma
     V0 ← M[h .. h+n-1]

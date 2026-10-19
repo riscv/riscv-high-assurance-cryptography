@@ -10,7 +10,8 @@ from common import (b2v, v2b, mdh_pack, mdh_unpack, KL_STATE_UNCONFIGURED as UNC
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_LAST_BLOCK as LAST,
                     KL_STATE_HASH_OUTPUT as OUTPUT, KL_STATE_SUCCESS as SUCCESS, KL_STATE_INVALID as INVALID,
                     KL_STATE_SET_AUX_VALUE as SET_AUX, KL_STATE_UNSUPPORTED as UNSUP, section, check, control,
-                    info, done, HashPort, hash_msgs, check_hash)
+                    info, done, HashPort, hash_msgs, check_hash, ERROR_STATES, inert,
+                    KL_STATE_OUT_OF_MEMORY, IllegalInstruction, raises)
 
 # ---------------------------------------------------------------- RFC 7693
 
@@ -126,7 +127,7 @@ class Blake2:
         return bool(self.syskey) and not self.policy & 1  # needs bit 0; every useful State leads only to it
 
     def restrict(self, clear):                            # kl.restrictl: clears _MachinePolicy_ bits (GR20)
-        if clear and self.st not in (UNCONF, INVALID, UNSUP):   # a zero field changes nothing
+        if clear and not inert(self.st):                  # a zero field changes nothing; GR26
             if not self.syskey:                           # the field is unused: <<KLE-instruction-restrict>>
                 return self.invalid()
             self.policy &= ~clear
@@ -136,7 +137,16 @@ class Blake2:
 
     # -- kl.setst (xs None: Form A)
     def setst(self, t, xs=None):
-        if self.st in (UNCONF, INVALID):
+        if t == UNCONF:                                   # kl.clear (#immed7 = 0), in any State and Form
+            self.__init__(self.v, self.sks, self.bad)
+            return self
+        if t in (54, 55):
+            raise IllegalInstruction('reserved #immed7')  # GR18
+        if t in ERROR_STATES:                             # GR30: in every State; _Unconfigured_ is left unchanged
+            if self.st != UNCONF:
+                self.st = t
+            return self
+        if inert(self.st):                                # GR26
             return self
         if t == READY:                                    # GR16: Form A
             return self.ready() if xs is None else self.invalid()
@@ -191,6 +201,8 @@ class Blake2:
     def exec(self, data, halt=False, klstart=0):
         """halt: halt at the first interruption point; self.klstart then records it (GR41)."""
         self.klstart = 0
+        if inert(self.st):                                # GR26
+            return self
         if self.st in (ABSORB, LAST, OUTPUT) and self.gated():
             return self.invalid()                         # GR20: the first operation after the narrowing
         if self.st == ABSORB:
@@ -230,6 +242,8 @@ class Blake2:
 
     def output(self, nbytes, klstart=0, prior=None):
         head = (prior or bytes(nbytes))[:klstart]         # MR8: the bytes below klstart are not written
+        if inert(self.st):                                # GR26, GR28
+            return head.ljust(nbytes, b'\0')
         if self.st != OUTPUT or self.gated():             # GR20 in _Hash_Output_
             self.invalid()
             return head.ljust(nbytes, b'\0')              # GR28: [klstart, KLLEN/8-1] zeroed
@@ -628,7 +642,7 @@ class Port(HashPort):
     st = property(lambda p: p.cl.st)
     klstart = property(lambda p: getattr(p.cl, 'klstart', 0))
     def setst(p, immed, form='A', xs=None):  # no kl.setst of BLAKE2 is native in Form C
-        p.cl.invalid() if form == 'C' and p.cl.st not in (UNCONF, INVALID) else p.cl.setst(immed, xs if form == 'B' else None)
+        p.cl.invalid() if form == 'C' and not inert(p.cl.st) else p.cl.setst(immed, xs if form == 'B' else None)
     def exec_in(p, d, halt_at=None):
         k = getattr(p.cl, 'klstart', 0)
         p.cl.exec(d, halt=halt_at is not None, klstart=k)
@@ -687,6 +701,19 @@ for v in VARIANTS:
     res.append(kl_derive(Blake2(v).provision().setst(ABSORB).setst(LAST, 0), SEC, 32).st)
     check(f'{v}: klstart = 1, a length of 31 or 33 bytes for a 32-byte secret (GR32 item 5), or a destination in '
           '_Hash_Absorb_Last_Block_ (GR32 item 2) -> _Invalid_', None, res, [INVALID] * 4)
+
+section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR26, GR30)')
+for v in VARIANTS:
+    got = []
+    for imm in (UNCONF, KL_STATE_OUT_OF_MEMORY):
+        c = Blake2(v).provision().setst(ABSORB).exec(b'abc').setst(imm)
+        got += [c.st, c.setst(READY).exec(b'x').restrict(1).st]
+    c = Blake2(v).provision().setst(ABSORB)
+    got += [raises(c.setst, 54), raises(c.setst, 55), c.st]
+    check(f'{v}: kl.clear in _Hash_Absorb_ -> _Unconfigured_, a kl.setst naming _Out_of_Memory_ -> that State; '
+          'then a kl.setst, a kl.exec and a kl.restrictl change nothing; a reserved 54 or 55 raises '
+          'illegal-instruction (GR18)', None, got,
+          [UNCONF, UNCONF, KL_STATE_OUT_OF_MEMORY, KL_STATE_OUT_OF_MEMORY, True, True, ABSORB])
 
 section('Negative controls')
 for v in VARIANTS:

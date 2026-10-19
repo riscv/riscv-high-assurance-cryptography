@@ -7,7 +7,7 @@ from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
                     KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, KL_CFG_PROVISIONING, section, check,
-                    control, info, raises, done, HashPort, hash_run, hash_msgs, check_hash)
+                    control, info, raises, done, HashPort, hash_run, hash_msgs, check_hash, IllegalInstruction)
 
 # ---------------------------------------------------------------- FIPS 202
 
@@ -260,9 +260,11 @@ class Sha3:
         s.out_len = s.bound or (0 if s.xof else s.t)  # <<KLE-hash-functions-MACs-XOFs>>: the output bound
 
     def setst(s, immed, form='A', xs=None):
+        if immed in (54, 55):
+            raise IllegalInstruction('reserved #immed7')  # GR18
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED or not immed:
-                s.reset(KL_STATE_INVALID if immed > 53 else immed)
+                s.reset(immed)
         elif inert(s.st):
             pass  # GR30, GR26
         elif immed == KL_STATE_READY and form == 'A':  # GR16: Form A
@@ -676,6 +678,8 @@ check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroe
       == ('noop', bytes(8), KL_STATE_UNCONFIGURED))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR18, GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
+check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
+      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
 for mid in ('_Hash_Absorb_', '_Hash_Output_'):
     cl = absorbing('SHAKE128', MSG_A3[:50])
     if mid == '_Hash_Output_':

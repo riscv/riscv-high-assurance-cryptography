@@ -12,7 +12,8 @@ from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, KL_CF
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_OUTPUT as OUTPUT,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY, KL_STATE_FAILURE as FAILURE,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_INVALID as INVALID, KL_STATE_UNSUPPORTED as UNSUP,
-                    section, check, control, done, HashPort, hash_run, hash_msgs, check_hash)
+                    section, check, control, done, HashPort, hash_run, hash_msgs, check_hash,
+                    KL_STATE_OUT_OF_MEMORY, IllegalInstruction, raises)
 
 # ------------------------------------------------------------------ Keccak-f[1600]
 RC = [
@@ -297,9 +298,16 @@ class Kmac:
         self.st, self.block_base, self.last_block_len, self.state, self.L = READY, 0, 0, 0, 0
 
     def setst(self, immed, form='A', aux=None):
-        if immed == UNCONF:
+        if immed == UNCONF:                                              # kl.clear, in any State and Form
             return self.__init__(self.hart, self.bad)
-        if self.st in ERROR_STATES:                                      # GR26
+        if immed in (54, 55):
+            raise IllegalInstruction('reserved #immed7')                 # GR18
+        if immed in ERROR_STATES:                                        # GR30; _Unconfigured_ is left unchanged
+            if self.st != UNCONF:
+                self.invalidate()
+                self.st = immed
+            return
+        if self.st == UNCONF or self.st in ERROR_STATES:                 # GR26
             return
         if immed == READY and form == 'A':                               # GR16: Form A
             return self.ready()
@@ -316,7 +324,7 @@ class Kmac:
         done = self.st == ABSORB or self.st == LAST and self.last_block_len == 0
         if immed == OUTPUT and done and (form in 'AB' if self.xof else form == 'B') and (self.xof or self.policy & 1):
             x = (aux or 0) if form == 'B' else 0
-            if (x % 8 == 0 and x < 1 << 32) if self.xof else 0 < x < 1 << 32:   # KMACXOF: a bound; KMAC: 0 < L < 2^32
+            if (x % 8 == 0 and x < 1 << 32) if self.xof else 32 <= x < 1 << 32:  # KMAC: 32 <= L < 2^32 (SP 800-185)
                 self.L = x
                 return self._to_output()
         if immed == VERIFY and done and form == 'B' and not self.xof and self.policy & 2:   # MR11
@@ -347,7 +355,7 @@ class Kmac:
         return status
 
     def restrictl(self, clear):                                          # kl.restrictl (GR20)
-        if self.st in ERROR_STATES or not clear:                         # a zero field changes nothing
+        if self.st == UNCONF or self.st in ERROR_STATES or not clear:    # GR26; a zero field changes nothing
             return
         if self.xof:                                                     # the field is unused: _Invalid_
             return self.invalidate()
@@ -358,7 +366,7 @@ class Kmac:
     def exec(self, inp=None, out=None, sew=None, halt=None, literal=False):
         """kl.exec: Form B with `inp`, Form C with `out` (a bytearray); `halt` = byte count after
         which to halt at the next interruption point; `sew` = vector element width."""
-        if self.st in ERROR_STATES:
+        if self.st == UNCONF or self.st in ERROR_STATES:                 # GR26
             return self._end('noop', out)
         if self.st in (OUTPUT, VERIFY) and not self.xof and not self.policy & (1 if self.st == OUTPUT else 2):
             self.invalidate()                                            # MR11 1.a, GR20
@@ -717,6 +725,8 @@ check('block_base = 80, output only, klstart = 5 -> _Invalid_, [5, 63] zeroed', 
 section('States, transitions and expected Forms')
 for label, c, act in (
         ('KMAC128 Form B kl.setst with L = 0', absorbing(128, DATA4), lambda c: c.setst(OUTPUT, 'B', 0)),
+        ('KMAC128 Form B kl.setst with L = 31 < 32 (SP 800-185 8.4.2)', absorbing(128, DATA4),
+         lambda c: c.setst(OUTPUT, 'B', 31)),
         ('KMAC128 Form B kl.setst with L = 2^32', absorbing(128, DATA4), lambda c: c.setst(OUTPUT, 'B', 1 << 32)),
         ('KMAC128 Form A kl.setst to _Hash_Output_', absorbing(128, DATA4), lambda c: c.setst(OUTPUT)),
         ('KMACXOF256 Form B kl.setst to _Hash_Output_ with a bound not a multiple of 8', absorbing(256, DATA4, True),
@@ -1022,6 +1032,22 @@ check('kl.restrictl clearing bit 0 in _Hash_Output_: the output kl.exec -> _Inva
       'verification still succeeds; clearing the only set bit -> _Invalid_; KMACXOF: any set bit -> _Invalid_, a zero '
       'field changes nothing (GR20, MR11, <<KLE-instruction-restrict>>)', True,
       (rg, bytes(og), cg.st, cv.st, cz.st, cx.st, c0.st), ('invalid', bytes(32), INVALID, SUCCESS, INVALID, INVALID, READY))
+
+section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR26, GR30)')
+got = []
+for xof in (False, True):
+    for imm in (UNCONF, KL_STATE_OUT_OF_MEMORY):
+        c = absorbing(128, DATA4, xof=xof)
+        c.setst(imm)
+        got.append(c.st)
+        c.setst(READY); c.setst(ABSORB); c.exec(inp=DATA4); c.restrictl(3)
+        got.append(c.st)
+    c = absorbing(128, DATA4, xof=xof)
+    got += [raises(c.setst, 54), raises(c.setst, 55), c.st]
+check('KMAC128 and KMACXOF128: kl.clear in _Hash_Absorb_ -> _Unconfigured_, a kl.setst naming _Out_of_Memory_ -> '
+      'that State; then a kl.setst, a kl.exec and a kl.restrictl change nothing; a reserved 54 or 55 raises '
+      'illegal-instruction (GR18)', True, got,
+      [UNCONF, UNCONF, KL_STATE_OUT_OF_MEMORY, KL_STATE_OUT_OF_MEMORY, True, True, ABSORB] * 2)
 
 section('Negative controls')
 control('left_encode(L) in place of right_encode(L) (#2, #6)',

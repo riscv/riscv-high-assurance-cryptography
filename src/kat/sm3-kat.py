@@ -4,7 +4,7 @@ The core is from scratch; hashlib 'sm3', where present, is only a labeled refere
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK,
-                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, section, check,
+                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, section, check,
                     control, raises, done, hash_run, hash_msgs, check_hash)
 from sha2_sm3_common import HART, MdHash, MdPort, KeyDest, Source, kl_derive, A, O, R, B, C, run
 
@@ -141,6 +141,12 @@ check('bound: Form B Xs = 8, t - 8, t gives that prefix and _Success_; Xs = 264 
       ([(DIG_ABC[:x // 8], KL_STATE_SUCCESS) for x in (8, 248, 256)], KL_STATE_INVALID))
 control('caller-padded message: the digest differs', digest(b'abc' + pad(3)) != DIG_ABC)
 
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
+      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
+      '<<KLE-instruction-restrict>>)',
+      None, (Sm3().provision(1).st, absorbing(data=b'abc').restrictl(1).st, absorbing(data=b'abc').restrictl(0).st),
+      (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_HASH_ABSORB))
+
 section('Serialized Content')
 check('Content1 = n+16+16+32+64+b bits, padded to 128', None, len(absorbing(bytes(8)).export()), 112)
 
@@ -194,6 +200,8 @@ check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroe
       == (('noop', bytes(8)), None, KL_STATE_UNCONFIGURED, 0))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
+check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
+      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
 cl = outputting()
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(40)(cl)[1], cl.st),
       (DIG_ABC + bytes(8), KL_STATE_SUCCESS))

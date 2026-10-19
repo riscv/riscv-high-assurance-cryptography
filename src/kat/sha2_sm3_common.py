@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
-                    KL_STATE_INVALID, md_pad, HashPort)
+                    KL_STATE_INVALID, KL_STATE_UNSUPPORTED, md_pad, HashPort, IllegalInstruction)
 
 class Hart:
     klstart = 0  # bytes, <<KLE-CSR-klstart>>
@@ -49,8 +49,15 @@ class MdHash:
             s.state = s.iv_state
         return s
 
-    def provision(s):  # PI = MDH only
+    def provision(s, policy=0):  # PI = MDH only
+        if policy:  # unsupported Metadata (<<KLE-hash-functions-MACs-XOFs>>, MDH: MachinePolicy)
+            return s.reset(KL_STATE_UNSUPPORTED)
         return s.reset(KL_STATE_READY)
+
+    def restrictl(s, clear):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use
+        if clear and not inert(s.st):  # a zero field changes nothing (<<KLE-instruction-restrict>>)
+            s.reset()
+        return s
 
     def process_block(s):
         wd = lambda v, j: sl(v, (j + 1) * s.w - 1, j * s.w)
@@ -75,9 +82,11 @@ class MdHash:
         return s
 
     def setst(s, immed, form='A', xs=None):  # <<KLE-instruction-setst>>
+        if immed in (54, 55):
+            raise IllegalInstruction('reserved #immed7')  # GR18
         if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_UNCONFIGURED:
-                s.reset(KL_STATE_INVALID if immed > 53 else immed)
+                s.reset(immed)
         elif inert(s.st):
             pass  # GR26
         elif immed == KL_STATE_READY and form == 'A':  # GR16: Form A

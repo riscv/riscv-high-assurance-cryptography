@@ -159,7 +159,7 @@ class Siv:
             return
         s.policy &= ~v & 3
         if not s.policy:
-            s._invalid()                                 # GR20: <<KLE-Machine-field>> requires a set bit
+            s._invalid()                                 # GR20: MR11 requires a set bit
 
     def setst(s, immed, form='A', aux=0, klen=128):
         """klen: KLLEN of a Form C operand."""

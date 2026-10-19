@@ -77,7 +77,7 @@ class KsLocker:
     def provision(self, pi):
         self.mdh = b2v(pi[:16])
         if fld(self.mdh, 'MachinePolicy') == 0:
-            return self.invalidate()   # <<KLE-Machine-field>>: at least one bit
+            return self.invalidate()   # MR11: at least one bit
         self._install(sl(b2v(pi[16:]), self.kw - 1, 0), False)
         if self.state not in ERROR_STATES:
             self.enter_ready()
@@ -92,7 +92,7 @@ class KsLocker:
         _, _, n, j = self.params()
         self.IV, self.ctr = sl(v, self.kw + n - 1, self.kw), sl(v, self.kw + n + j - 1, self.kw + n)
         if fld(self.mdh, 'MachinePolicy') == 0:
-            return self.invalidate()   # <<KLE-Machine-field>>: at least one bit
+            return self.invalidate()   # MR11: at least one bit
         self._install(sl(v, self.kw - 1, 0), True)
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
@@ -398,10 +398,10 @@ eq("KeyType 2: PI of 32 B as with KeyType 0; random key, KeyType 0, Content1 32 
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
 eq("the all-ones SKID is an ordinary SKID: unresolved -> Invalid", cl.state, INV)
 cl.provision(build_pi('AES-128', b2v(key), policy=0))
-eq("MachinePolicy = 0 -> Invalid at provisioning (<<KLE-Machine-field>>)", cl.state, INV)
+eq("MachinePolicy = 0 -> Invalid at provisioning (MR11)", cl.state, INV)
 cl2 = ctr_cl(key, T1, C0)
 cl.import_scc(put(cl2.mdh, 'MachinePolicy', 0), cl2.content1())
-eq("MachinePolicy = 0 -> Invalid at import (<<KLE-Machine-field>>)", cl.state, INV)
+eq("MachinePolicy = 0 -> Invalid at import (MR11)", cl.state, INV)
 for pol in (1, 2):
     cl = KsLocker(SKS)
     cl.provision(build_pi('AES-128', b2v(key), policy=pol))

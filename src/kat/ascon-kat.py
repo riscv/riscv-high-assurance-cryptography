@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bxor, mdh_pack, mdh_unpack, ERROR_STATES,
+                    KL_STATE_OUT_OF_MEMORY, IllegalInstruction, raises,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_UNSUPPORTED as UNSUP,
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_LAST_BLOCK as HLAST,
                     KL_STATE_HASH_VERIFY as VERIFY, KL_STATE_HASH_OUTPUT as OUTPUT,
@@ -141,7 +142,12 @@ class Locker:
     def invalidate(self, **_): self.st = INVALID; self._clear()  # GR29
     def _resolve_key(self, sks): pass
     def setst(self, immed, form='A', Xs=None, INPUT=0, KLLEN=0):
-        if self.in_error(): pass                                  # GR26
+        if immed == UNCONF:                                       # kl.clear, in any State and Form
+            self.invalidate(); self.st, self.policy, self.machine_use, self.key_type = UNCONF, 0, 0, 0
+        elif immed in (54, 55): raise IllegalInstruction('reserved #immed7')   # GR18
+        elif immed in ERROR_STATES:                               # GR30; _Unconfigured_ is left unchanged
+            if self.st != UNCONF: self.invalidate(); self.st = immed
+        elif self.in_error() or self.st == UNCONF: pass           # GR26
         elif immed == READY and form == 'A': self._enter_ready()  # GR16
         elif self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:
             self.invalidate()                                     # GR20, MR11 1.a: issued in a disabled State
@@ -155,7 +161,7 @@ class Locker:
         `halt_after` = n halts precisely after n blocks; re-issuing resumes at klstart."""
         has_out, done, self.halted = form in 'AC', out & mask(8 * self.klstart), False
         zeroed = done if has_out else out                        # GR28
-        if self.in_error(): return zeroed
+        if self.in_error() or self.st == UNCONF: return zeroed   # GR26
         if self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:   # GR20: disabled by a narrowing
             self.invalidate(); self.klstart = 0; return zeroed
         ks = 8 * self.klstart                                    # <<KLE-GR-transfer-window-checks>>: interruption point?
@@ -488,6 +494,7 @@ def kl_derive(dst, src, length):
     if eff: dst.derive_dest(src.derive_source(eff))
 
 def kl_restrictl(cc, machine_policy, machine_use=0):               # _MachineUse_: not changeable
+    if cc.in_error() or cc.st == UNCONF: return                      # GR26: no operation on an inert locker
     if machine_use: return cc.invalidate()
     if not machine_policy: return
     new = cc.policy & ~machine_policy                                # a set bit removes a function
@@ -517,7 +524,7 @@ def provision(pi, sks=None):
     if mode == 0: cc = AEAD((ent or 0) if kt else k, pol, skid)
     elif mode == 1: cc = AEADNonce((ent or 0) if kt else k, sl(v, 255 + kw, 128 + kw), pol, skid)
     else: cc = AEADMask(*((ent or (0, 0)) if kt else (k, sl(v, 383, 256))), pol, skid)
-    if kt and ent is None: cc.invalidate()                        # <<KLE-MVR-open>>
+    if kt and ent is None or not pol: cc.invalidate()             # <<KLE-MVR-open>>; MR11: zero is invalid Metadata
     return cc
 
 # ------------------------------------------------------------------ drivers
@@ -1352,6 +1359,25 @@ check('Ascon-Hash256: entering _Ready_ zeroes out_len (Position viii)', None, (b
 
 check('Ascon-Hash256, XOF128, CXOF128: a PI with a non-zero _MachinePolicy_ is unsupported Metadata (_Unsupported_)',
       True, [provision(build_pi(m, [], policy=1)).st for m in (3, 4, 5)], [UNSUP] * 3)
+
+got = []
+for Cls in (Hash256, XOF, CXOF):
+    for imm in (UNCONF, KL_STATE_OUT_OF_MEMORY):
+        c = Cls(); c.setst(ABSORB, 'A'); c.exec('B', INPUT=0x636261, KLLEN=24); c.setst(imm)
+        got.append(c.st)
+        c.setst(READY, 'A'); c.exec('B', INPUT=0x61, KLLEN=8); kl_restrictl(c, 0b01)
+        got.append(c.st)
+    c = Cls(); c.setst(ABSORB, 'A')
+    got += [raises(c.setst, 54), raises(c.setst, 55), c.st]
+check('Ascon-Hash256, XOF128, CXOF128: kl.clear in _Hash_Absorb_ -> _Unconfigured_, a kl.setst naming _Out_of_Memory_ '
+      '-> that State; then a kl.setst, a kl.exec and a kl.restrictl change nothing (<<KLE-instruction-setst>>, GR26, '
+      'GR30); a reserved 54 or 55 raises illegal-instruction (GR18)', True, got,
+      [UNCONF, UNCONF, KL_STATE_OUT_OF_MEMORY, KL_STATE_OUT_OF_MEMORY, True, True, ABSORB] * 3)
+
+check('MR11: an Ascon-AEAD128, set-Nonce or Nonce-Masking PI with _MachinePolicy_ = 0 is invalid Metadata '
+      '(<<KLE-Metadata-validity>>) -> _Invalid_', True,
+      [provision(build_pi(0, [(K, 128)])).st, provision(build_pi(1, [(K, 128), (NN, 128)])).st,
+       provision(build_pi(2, [(K1v, 128), (K2v, 128)])).st], [INVALID] * 3)
 
 section('Negative control')
 control('domain separation on state[0] instead of state[4] (Count=1, 17, 166, 235)',
