@@ -754,7 +754,8 @@ Each block uses the current mask and then updates it by a multiplication in GF(2
 KLE uses the two-key form: `key1` is `K1`, which encrypts the data, and `key2` is `K2`, which encrypts the tweak.
 (((KLE, Machine, XEX)))
 The Machine cannot check that the two keys are independent: the provisioner must supply two independently generated keys,
-and a System Key Identifier must resolve to two independently generated keys in the SKS.
+a System Key Identifier must resolve to two independently generated keys in the SKS, and software that derives `key1 {vvert} key2`
+(<<KLE-derive-endpoints>>) must take it from a source whose two halves are independent, such as a keystream.
 
 Parameters::
 
@@ -1707,7 +1708,7 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
  ** The `kl.exec` of _Enc_Tag_Finalize_ synthesizes `SIV` and makes the transition to _Encrypt_ (Rule <<KLE-MGR-machine-transitions>>).
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
  ** Gated States (Rule <<KLE-MGR-policy-gate>>): _MachinePolicy_[0] gates _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_; _MachinePolicy_[1] gates _Decrypt_, _Dec_Last_Block_ and _Dec_Tag_Finalize_.
- ** A `kl.setst` that leaves _Enc_Last_Block_ or _Dec_Last_Block_ before its `kl.exec` omits the final block.
+ ** A `kl.setst` into _Dec_Tag_Finalize_ that leaves _Dec_Last_Block_ before its `kl.exec` omits the final block from `tmp`, and so from the recomputed SIV. A `kl.setst` that leaves _Enc_Last_Block_ before its `kl.exec` only leaves the final ciphertext block unproduced: the SIV already covers the whole plaintext.
  ** A final plaintext or ciphertext block shorter than `b` goes through _Enc_Last_Block_, resp. _Dec_Last_Block_.
 
 * *Behavior:*
@@ -1802,8 +1803,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
     . `ctr <- ctr + 1`.
     . `last_block_len <- 0`
 --
-+
-A `kl.setst` into _Dec_Tag_Finalize_ before this `kl.exec` omits the final block from `tmp`.
+
 
 ** In State _Dec_Tag_Finalize_, a single Form B "```kl.exec Kn, INPUT```" is expected, whose `INPUT` the caller sets to
    `bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`; `INPUT` is truncated to its 128 least significant bits
@@ -1944,6 +1944,7 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode ma
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Set_Aux_Value_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_
+ ** _Set_Aux_Value_ -> _Set_Aux_Value_, which restarts the nonce load (see below).
  ** _Hash_Absorb_Last_Block_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Hash_Absorb_Last_Block_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Encrypt_ -> _Enc_Last_Block_ -> _Enc_Tag_Finalize_ -> _Success_.
@@ -2365,6 +2366,7 @@ A `kl.exec` with `absorbed_all` = `true`, or a `KLLEN` smaller than `last_block_
 --
 . a Form A `kl.setst` with `#immed7` = `#kl_state_hash_output` enters State _Hash_Output_;
 . a single Form C ``kl.exec`` with `KLLEN` {ge} 64 writes `hash` into `OUTPUT` and clears the bits beyond the `b`-th (Rule <<KLE-MGR-clear-output>>).
+  It processes a single block, so its only interruption point is 0 (Rule <<KLE-MGR-one-klexec-per-block>>).
   With `KLLEN` < `b`, it emits the first `KLLEN`/8 bytes: the truncated tag of cite:[nist-SP-800-38B] {sect}6.2;
   as a `kl.derive` source (<<KLE-derive-endpoints>>), _Hash_Output_ supplies the `b`/8 bytes of `hash`;
 . the CC transitions to State _Success_.
@@ -2843,6 +2845,7 @@ The PI of the “Key In PI” (KIP) variant has the following format:
 The key provisioned or held in a CC is the value `K0` of cite:[nist-fips-198-1] {sect}4, Steps 1 to 3: the key `K` padded with zeros to `b` bits, or, if `K` is longer than `b` bits, `H(K)` padded with zeros to `b` bits.
 Whoever provisions the key derives `K0` from it.
 With _KeyType_ = 1, the SKS returns `K`, and the KLE unit forms `K0` from it by the same Steps.
+A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>) that configures the `K0` of a NIK CC forms it by the same Steps from the key that the format carries, and sets `HasKey`, as a completed load of `K0` does (Rule <<KLE-MGR-sysfmt-standard>>).
 --
 
 * *Internal State*:
@@ -4657,8 +4660,9 @@ Leaving _ciphertext_Output_ for a State other than _sharedkey_Output_ also zeroe
 ** The input checks of cite:[nist-fips-203] {sect}7.2 and {sect}7.3 are performed when a field is written
    (Rule <<KLE-MGR-check-on-write>>): when its load completes, and when an import restores a key that `HasEncapsk` or
    `HasDecapsk` marks as configured.
-   A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>) checks a converted `decapsk` or
-   `encapsk`, and sets `HasEncapsk` and `HasDecapsk`, as a completed load of that field does, with the same outcomes (Rule <<KLE-MGR-sysfmt-standard>>).
+   A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>) checks a converted `decapsk`,
+   `encapsk` or `ciphertext` as a completed load of that field does, with the same outcomes, and sets `HasEncapsk`,
+   `HasDecapsk` and `HasCiphertext` as that load sets them (Rule <<KLE-MGR-sysfmt-standard>>).
    A `kl.setst` that leaves _encapsk_Input_, _decapsk_Input_ or _ciphertext_Input_ before the field is complete zeroes
    the field (Rule <<KLE-MGR-load-long-field>>): `HasEncapsk` and `HasDecapsk`, resp. `HasCiphertext`, stay clear.
    Departing from Rule <<KLE-MGR-load-long-field>>, excess data in the final loading transfer of `encapsk`, `decapsk` or
@@ -4966,9 +4970,11 @@ ML-DSA Machines define:
 
 ** Entering _privkey_Input_ clears `HasPrivKey` and `HasPubKey` and erases `pubkey`. When the load completes and
    `privkey` passes its check (see Serialized Content), `HasPrivKey` is set.
-   A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>) that converts a `privkey` drops any
-   `pubkey` that the format carries: `pubkey` stays zero and `HasPubKey` clear, as entering _privkey_Input_ leaves
-   them, and _compute_pubKey_ then derives `pubkey` (Rule <<KLE-MGR-sysfmt-standard>>).
+   A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>) checks a converted `privkey` as a
+   completed load does, with the same outcomes, and sets `HasPrivKey`; it drops any `pubkey` that the format carries:
+   `pubkey` stays zero and `HasPubKey` clear, as entering _privkey_Input_ leaves them, and _compute_pubKey_ then derives
+   `pubkey`. A `pubkey` that the import converts without a `privkey` sets `HasPubKey`, as a completed load does
+   (Rule <<KLE-MGR-sysfmt-standard>>).
 
 ** Entering _pubkey_Input_ requires `HasPrivKey` to be clear (Rule <<KLE-MGR-policy-gate>>), and clears `HasPubKey`; when
    the load completes without excess data, `HasPubKey` is set.

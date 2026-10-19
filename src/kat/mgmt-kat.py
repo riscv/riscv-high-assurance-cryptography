@@ -546,7 +546,8 @@ class Unit:
             self._dirty(k)
     def _enter_error(self, k, st):                                  # GR29
         cl = self.lockers[k]                                        # klnamedlocker keeps naming it
-        cl.mdh.update(State=st, AuxDataLen=0, ADSDropped=0)
+        cl.mdh.update(State=st, AuxDataLen=0, ADSDropped=0,
+                      Version=0 if cl.mdh['Version'] == 3 else cl.mdh['Version'])   # GR29: a Version of 3 to 0
         cl.c1 = cl.c2 = b''
         cl.img, cl.alloc, cl.off = None, 0, None
         self._dirty(k)
@@ -672,7 +673,7 @@ class Unit:
         self._zeroize(k)
         cl = self.lockers[k]
         if imm == IMP and ml['State'] in ERROR_STATES:              # short import
-            cl.mdh = dict(ml, AuxDataLen=0, ADSDropped=0)
+            cl.mdh = dict(ml, AuxDataLen=0, ADSDropped=0, Version=0 if ml['Version'] == 3 else ml['Version'])
             if ml['State'] in (54, 55) or (ml['State'] == EXPIRED and not self.zklexpire):
                 cl.mdh['State'] = INVALID
             self._after_mgmt(k)
@@ -1636,6 +1637,9 @@ def t_validity():
     u = fresh(zklexpire=False)
     eq('the short import applies no validity check', (u.mgmt(0, IMP, odd), u.getmd(0)),
        ('short import', dict(odd, AuxDataLen=0, ADSDropped=0)))
+    u = fresh(zklexpire=False)
+    eq('the short import of an Error-State MDH with Version 3 installs Version 0 (GR29)',
+       (u.mgmt(0, IMP, dict(odd, Version=3)), u.getmd(0)['Version']), ('short import', 0))
 
 def t_lengths():
     section('Length rule, kl.size, kl.avail  <<KLE-length-rule>>, <<KLE-instruction-size>>')

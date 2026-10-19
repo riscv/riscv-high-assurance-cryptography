@@ -659,7 +659,7 @@ a, b_ = ref_kmac(128, KEY, DATA4, 256, TAG), ref_kmac(128, KEY, DATA4, 512, TAG)
 got, c = kl_kmac(128, DATA4, 512, TAG)
 check('KMAC128 L=512 is not an extension of L=256; 64 B then _Success_', True,
       (b_[:32] != a, got, c.st), (True, b_, SUCCESS))
-for L in (255, 250, 257, 1000, 1001):
+for L in (32, 39, 255, 250, 257, 1000, 1001):
     got, c = kl_kmac(128, DATA4, L, TAG)
     check(f'KMAC128 L={L}: ceil(L/8) B, last byte zero-padded, _Success_', True, (got, c.st),
           (ref_kmac(128, KEY, DATA4, L, TAG), SUCCESS))
@@ -777,7 +777,7 @@ for sec in (128, 256):
     check(f'KMAC{sec}: the SKS returns K, the unit forms key_block: tag = KMAC under K', True,
           bytes(squeeze(c, 32)[0][1]), ref_kmac(sec, SKS[SK], DATA4, 256, TAG))
     mdh, img = c.export()
-    check(f'KMAC{sec} Content1 with a SKID: key_block replaced by the 64-bit SKID (Pos. v), KeyType kept', True,
+    check(f'KMAC{sec} Content1 with a SKID: key_block replaced by the 64-bit SKID (Pos. vi), KeyType kept', True,
           (len(img), mdh_unpack(mdh)['KeyType'], sl(b2v(img), 1664 + 8 * w + 63, 1664 + 8 * w)),
           (scc_len(8 * w, 1), 1, SK))
     c2 = Kmac(Hart()).import_(mdh, img)
@@ -986,14 +986,14 @@ def verifying(sec, L, X=DATA200, policy=0b11):
     return c
 res = []
 for sec in (128, 256):
-    for L in (256, 64, 8 * RATE[sec]):
+    for L in (256, 64, 32, 8 * RATE[sec]):
         tag = ref_kmac(sec, KEY, DATA200, L, TAG)
         ok, bad = verifying(sec, L), verifying(sec, L)
         ok.exec(inp=tag)
         bad.exec(inp=bytes([tag[0] ^ 1]) + tag[1:])
         res.append((ok.st, bad.st))
-check('KMAC128/256 _Hash_Verify_ with L = 256, 64 and b (L enters right_encode, as SP 800-185 requires): match -> '
-      'Success, first byte flipped -> Failure', True, res, [(SUCCESS, FAILURE)] * 6)
+check('KMAC128/256 _Hash_Verify_ with L = 256, 64, 32 and b (L enters right_encode, as SP 800-185 requires): match -> '
+      'Success, first byte flipped -> Failure', True, res, [(SUCCESS, FAILURE)] * 8)
 c = verifying(128, 64)
 c.hart.klstart = 8
 r = c.exec(inp=bytes(8))
@@ -1012,7 +1012,7 @@ for label, act in (('L = 24 < 32', lambda: verifying(128, 24)), ('L = 100, not a
                    ('KMACXOF: _Hash_Verify_ does not exist (MR1)', lambda: (lambda c: (c.setst(ABSORB), c.setst(VERIFY, 'B', 256), c)[2])(
                        locker(128, xof=True)))):
     res.append(act().st)
-check('KMAC _Invalid_: L = 56, 100, b + 8; KLLEN < L; same-State; verify on 0b01; output on 0b10; KMACXOF Hash_Verify',
+check('KMAC _Invalid_: L = 24, 100, b + 8; KLLEN < L; same-State; verify on 0b01; output on 0b10; KMACXOF Hash_Verify',
       True, res, [INVALID] * 8)
 check('MachinePolicy = 0: KMAC128 invalid Metadata; KMACXOF128 gates nothing and computes #3', True,
       (locker(128, policy=0).st, kl_kmac(128, DATA200, 256, TAG, xof=True, n=32)[0] ==

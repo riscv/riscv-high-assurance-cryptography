@@ -478,8 +478,8 @@ The following tables give the values of _State_ common to all Machines, includin
 |  48    | `kl_state_unsupported`         | _Unsupported_           | Unsupported Machine, or an unsupported variant, _KeyType_, protection level or field value of it (<<KLE-Metadata-validity>>).
 |  49    | `kl_state_invalid`             | _Invalid_               | The locker has been invalidated by invalid Metadata, by an operation not permitted in its current State, or by another error that the architecture or the Machine reports as _Invalid_ (<<KLE-error-architecture>>).
 |  50    | `kl_state_out_of_memory`       | _Out of Memory_         | Insufficient KLF memory for a configuration instruction. Privileged code that does not handle, or fails to handle, locker allocation may set it to return an error.
-|  51    | `kl_state_mgmt_auth`           | _Authentication Failed_ | Authentication failure while completing an SCC import or a locker export.
-|  52    | `kl_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies, including a failed narrowing of them, or a transfer to a lower _SCProtection_.
+|  51    | `kl_state_mgmt_auth`           | _Authentication Failed_ | Authentication failure while completing an SCC import or a locker export, or a failed check of a system-specific format that authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
+|  52    | `kl_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies, including a failed narrowing of them, or a transfer to a lower _SCProtection_ (Rules <<KLE-GR-narrowing>> and <<KLE-GR-sysfmt-completion>>).
 |  53    | `kl_state_expired`             | _Expired_               | The locker has expired. Not in effect without `Zklexpire`.
 | 54, 55 | (Reserved)                     | {empty}                 | Reserved.
 |===
@@ -2280,7 +2280,7 @@ An implementation achieves this by:
 . _Timeout, then precise halt and resumption:_ option 3, after a system-imposed timeout.
 . _Precise halt and restart_ at `klstart` = 0, discarding all partial work: for a memory instruction, only while none of its component accesses, in this or an earlier attempt, has had a visible effect, and at most a documented number of consecutive times, after which option 3 applies; for an internal computation of Rule <<KLE-GR-long-running-no-data>>, under its own restart rules, keeping the committed prefix of the enclosing instruction.
 
-`kl.exec` and the vector `kl.mvin` and `kl.mvout` use option 3 or 4 (Rule <<KLE-GR-precise-halt>>).
+`kl.exec` and the vector `kl.mvin` and `kl.mvout` use option 3 or 4 (Rule <<KLE-GR-precise-halt>>); a long-running operation (Rule <<KLE-GR-long-running-no-data>>) may also use option 5 (Rule <<KLE-GR-long-running-preemption>>).
 A synchronous exception raised by a component access halts the instruction precisely, with `klstart` at the last prefix-complete point, among those that the instruction permits, before the faulting byte (RVV 1.0 §3.7).
 --
 
@@ -2377,7 +2377,7 @@ A health-test failure from which the entropy source can recover makes the bits t
 [horizontal]
 [[KLE-GR-sysfmt-import-only,GR54]]GR54:: System-specific formats are optional and only imported: a PI, or a PCCC of base type `pi`, with _Version_ = 3 is invalid Metadata (<<KLE-Metadata-validity>>).
 Such an import replaces a provisioning and is never a snapshot of a started Machine: the format supplies every field that the Machine needs and cannot set itself, MDH fields such as _AuxInfo_ included, and a successful import ends in _Ready_.
-_Version_ = 3 appears only during such an import, base or nested, and in the PCCC of a nested export taken during it; every other exported image has _Version_ 0 (or 1 in a future version of this specification).
+_Version_ = 3 appears only during such an import, base or nested, and in the PCCC of a nested export taken during it; no other exported image has _Version_ 3.
 An implementation may support several such formats and distinguishes them in an implementation-defined way.
 
 NOTE: A system-specific format may authenticate its data, so the code that consumes it must handle an authentication failure.
@@ -2527,10 +2527,11 @@ These conditions set an Error State without an exception:
 ** an instruction that the Machine, its State or _MachinePolicy_ does not admit, a wrong Form and a `kl.setst` with a non-allowed immediate included (Rules <<KLE-GR-same-state>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-GR-form-mismatch>>, <<KLE-GR-to-ready>>, <<KLE-GR-checks>>, <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>> and <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
 ** a transfer window of a length that the Machine does not admit, or a `klstart` inside it that is not an interruption point (Rule <<KLE-GR-transfer-window-checks>>);
 ** a permanent RBG failure (Rule <<KLE-GR-rbg-failure>>);
-** a configuration error of the Machine (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>).
+** a configuration error of the Machine (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>);
+** a system-specific import whose MDH does not match its format, or whose format check fails when the format does not authenticate its data (Rules <<KLE-GR-sysfmt-mdh>> and <<KLE-GR-sysfmt-completion>>).
 * _Expired_: an _ExpirationDate_ that has passed (<<KLE-Metadata-expiration-date>>).
-* _Privilege Violation_: a failed narrowing (<<KLE-Metadata-narrowing>>, <<KLE-instruction-restrict>>, Rule <<KLE-GR-narrowing>>).
-* _Authentication Failed_: a failed SCC authentication, at the completion of an import (<<KLE-SCC-import>>) or of an export (<<KLE-mgmt-completes-export>>), so software checks the _State_ after both.
+* _Privilege Violation_: a failed narrowing (<<KLE-Metadata-narrowing>>, <<KLE-instruction-restrict>>, Rule <<KLE-GR-narrowing>>), or a system-specific import whose format requires a higher side-channel protection level than the declared _SCProtection_ (Rule <<KLE-GR-sysfmt-completion>>).
+* _Authentication Failed_: a failed SCC authentication, at the completion of an import (<<KLE-SCC-import>>) or of an export (<<KLE-mgmt-completes-export>>), so software checks the _State_ after both; and a failed check of a system-specific format that authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
 * Any Error State: the one that a `kl.setst` names (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
 
 Two outcomes are not Error States: a Machine enters _Failure_ on a data error (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>) or on a failed verification of an AEAD tag or a signature, which is a result, not an error; and an ADS that fails its check at import is dropped, the SCC accepted (<<KLE-SCC-import>>).

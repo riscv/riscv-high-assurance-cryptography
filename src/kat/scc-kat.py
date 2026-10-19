@@ -136,7 +136,8 @@ class Locker:
         return self.mdh, tuple(self.content1 or ()), None if self.content2 is None else tuple(self.content2)
 
 def err_mdh(m, st):                            # <<KLE-GR-clear-locker-content-error-state>>
-    return put(put(put(m, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
+    m = put(put(put(m, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
+    return put(m, 'Version', 0) if fld(m, 'Version') == 3 else m   # GR29: a Version of 3 to 0
 
 def enter_error_state(cl, st):
     cl.content1, cl.content2, cl.mdh = None, None, err_mdh(cl.mdh, st)
@@ -848,6 +849,10 @@ for st in ERROR_STATES:
         bad.append(st)
 eq("Error States 48-55: the short import installs the whole MDH unchecked, AuxDataLen and ADSDropped 0, "
    "54 and 55 as Invalid, registers untouched", bad, [])
+cl_v = Locker()
+unit.mgmt_open_import(cl_v, put(put(dirty, 'State', INVALID), 'Version', 3))
+eq("the short import of an Error-State MDH with Version 3 installs Version 0 (GR29)",
+   fld(cl_v.snapshot()[0], 'Version'), 0)
 cl_x = Locker()
 exp_unit.mgmt_open_import(cl_x, put(dirty, 'State', EXPIRED))
 eq("without Zklexpire the short import of Expired installs the MDH in Invalid",

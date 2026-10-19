@@ -454,6 +454,10 @@ check("klstart: a resumption in _Hash_Absorb_ at a block offset skips the blocks
       (v2b(cb.exec('C'), 16), cc.state, cd.state,
        (e, ce.state), cf.state, cg.state),
       (W4, INVALID, INVALID, (0, OUTPUT), INVALID, INVALID))
+ch = Kx(); ch.setst(OUTPUT)
+check("klstart = b/8 in _Hash_Output_ with KLLEN = 2b: the State processes a single block, so 16 is no "
+      "interruption point (MR3, GR44 item 3) -> Invalid", True,
+      (raises(ch.exec, 'C', 0, 2 * B, 16, exc=Invalid), ch.state), (True, INVALID))
 
 section("kl.derive")
 secret = K128 + bytes(range(0xF0, 0x100))
