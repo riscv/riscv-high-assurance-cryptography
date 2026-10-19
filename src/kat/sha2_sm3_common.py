@@ -27,15 +27,15 @@ def pack(*fields):
 
 class MdHash:
     """The Machine with parameters (w, b, n, t), 8 words of w bits in `state`, the initial value iv, and
-    compress(H, W) -> H on big-endian words; gran is the input granularity in bytes."""
+    compress(H, W) -> H on big-endian words."""
 
-    def __init__(s, name, w, b, n, t, iv, compress, gran=1, bswap_words=True, klstart_bits=False):
-        s.name, s.w, s.b, s.n, s.t, s.iv, s.compress, s.gran = name, w, b, n, t, iv, compress, gran
+    def __init__(s, name, w, b, n, t, iv, compress, bswap_words=True, klstart_bits=False):
+        s.name, s.w, s.b, s.n, s.t, s.iv, s.compress = name, w, b, n, t, iv, compress
         s.bswap_words, s.klstart_bits = bswap_words, klstart_bits
         s.reset(KL_STATE_UNCONFIGURED)
 
     def to_state(s, H):
-        """Words H into `state`: word i in bits [w*i, w*i + w), byte-swapped."""
+        """Words H into `state`: word i in bits [w*i, w*i + w-1], byte-swapped."""
         return sum(bswap(bin_(h, s.w), s.w // 8) << (i * s.w) for i, h in enumerate(H))
 
     @property
@@ -86,7 +86,7 @@ class MdHash:
             s.st, s.last_block_len = immed, s.b  # Form A; last_block_len <- b (<<KLE-hash-functions-MACs-XOFs>>)
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
                 form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # any bit length, MSB-first (MR15, second bullet); Form A keeps b
+            s.st = immed  # any bit length, MSB-first (MR16, second bullet); Form A keeps b
             if form == 'B':
                 s.last_block_len = xs
         elif immed == KL_STATE_HASH_OUTPUT and form in 'AB' and (
@@ -95,7 +95,7 @@ class MdHash:
             if x and (x % 8 or x > s.t):
                 return s.reset()  # the bound: a multiple of 8, at most d = t
             s.finalize()
-            s.st, s.block_base, s.out_len = immed, 0, x or s.t
+            s.st, s.block_base, s.last_block_len, s.out_len = immed, 0, 0, x or s.t
         else:
             s.reset()  # MR1; no same-State kl.setst (GR17); _Ready_ -> _Hash_Output_
 
@@ -108,7 +108,7 @@ class MdHash:
             if p >= nbytes:
                 HART.klstart = 0
                 return 'empty', prior  # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
-            if p:  # not an interruption point: a hash reaches _Success_ before any
+            if p and s.block_base:  # not an interruption point (<<KLE-hash-functions-MACs-XOFs>>)
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', prior[:p] + bytes(nbytes - p)  # GR28
@@ -137,11 +137,11 @@ class MdHash:
         if resume and s.st == KL_STATE_HASH_ABSORB and form == 'B' and HART.klstart >= len(data):
             HART.klstart = 0
             return 'empty', bytes(nbytes)  # GR44 item 2, before item 3
-        if resume and (HART.klstart % s.gran or HART.klstart and s.block_base):
+        if resume and HART.klstart and s.block_base:
             r, HART.klstart = 'invalid', 0  # not an interruption point (<<KLE-process-VLI>>)
         else:
             r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
-                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR17, GR16, MR1
+                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR17 item 1, MR1
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -158,14 +158,14 @@ class MdHash:
             if s.block_base == s.b:
                 s.process_block()
                 s.block_base = 0
-            if halt and ib < KLLEN and ib % (8 * s.gran) == 0:  # 3.i: at a multiple of the granularity only
+            if halt and ib < KLLEN:  # 3.i: granularity 8 bits
                 HART.klstart = ib if s.klstart_bits else ib // 8
                 return 'interrupted'
         HART.klstart = 0
         return 'retired'
 
     def output(s, nbytes, prior):  # _Hash_Output_ loop reading `state`, bounded by out_len
-        OUT, KLLEN, ob = b2v(prior or bytes(nbytes)), 8 * nbytes, 0
+        OUT, KLLEN, ob = b2v(prior or bytes(nbytes)), 8 * nbytes, 8 * HART.klstart
         while ob < KLLEN:
             amount = min(KLLEN - ob, s.t - s.block_base, s.out_len)
             OUT = setsl(OUT, ob + amount - 1, ob, sl(s.state, s.block_base + amount - 1, s.block_base))

@@ -158,7 +158,7 @@ for label, ops in [
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', (A, C(16))),
         ('Form B kl.exec in _Hash_Output_ (MR1)', (A, B(b'abc'), O, B(bytes(64)))),
-        ('kl.exec in _Success_ (GR16), output zeroed', (A, B(b'abc'), O, C(32), C(32)))]:
+        ('kl.exec in _Success_ (MR1, GR28), output zeroed', (A, B(b'abc'), O, C(32), C(32)))]:
     cl = Sm3().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
@@ -172,12 +172,18 @@ check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the len
       'window, _Invalid_ (MR2, GR44)', None, res, [('invalid', KL_STATE_INVALID, 0)] * 2)
 check('kl.exec in _Invalid_: no operation, output zeroed (GR26, GR28)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
+cl = outputting()
+HART.klstart = 4
+check('Form C, klstart = 4 at the start of _Hash_Output_ (block_base = 0): the first 28 digest bytes in [4, 31]',
+      None, (C(32)(cl), cl.st, HART.klstart), (('retired', b'\xa5' * 4 + sm3_ref(b'abc')[:28]), KL_STATE_HASH_OUTPUT, 0))
 cl, res = outputting(), []
 for ks in (32, 40, 4):
     HART.klstart = ks
     res.append((C(32)(cl), cl.st, HART.klstart))
-check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 (no interruption point): '
-      '_Invalid_, [4, 32) zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
+    if ks == 40:
+        C(1)(cl)                                  # block_base = 8: klstart = 4 is no interruption point
+check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 with block_base != 0 '
+      '(no interruption point): _Invalid_, [4, 31] zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
 cl = absorbing()
 check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',

@@ -697,6 +697,7 @@ In <<KLE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, agai
 Associated data and plaintext/ciphertext are treated differently, as <<Zkl-ISA-machines.adoc#KLE-GCM-mode>> requires.
 The caller zero-fills the final block of the AD beyond its actual end, and `GHASH` absorbs that block whole.
 For the PT and CT the caller must not rely on zero-padding: a final block shorter than `b` goes through State _Enc_Last_Block_ (or _Dec_Last_Block_ for decryption), so that no keystream bit past the end of the message is absorbed into `GHASH` or written out.
+The Machine takes the PT and the CT in whole bytes (each last-block `Xs` is a multiple of 8). These listings also take the AD in whole bytes, so `len_in_bits` is always 8 times a byte count.
 
 [[KLE-pseudocode-GCM-encryption]]
 .GCM Encryption
@@ -860,7 +861,7 @@ even though confidentiality would not be compromised.
 [[KLE-GCM-SIV-mode-examples]]
 === GCM-SIV Mode
 
-We show in <<KLE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `KLLEN` = 128).
+We show in <<KLE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `KLLEN` = 128), for AD and plaintext in whole bytes, as the Machine requires.
 <<KLE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
 
 [[KLE-pseudocode-GCM-SIV-encryption]]
@@ -989,8 +990,8 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `KLL
 ----
 // Acquire payload, initialize
 - Info:
-- authenticated data = *AD with bit length AD_len
-- plaintext = *PT with bit length PT_len
+- authenticated data = *AD with bit length AD_len, a multiple of 8
+- plaintext = *PT with bit length PT_len, a multiple of 8
 - nonce N with bit length N_len
 - tag length tag_len
 
@@ -1124,19 +1125,19 @@ significant ones, and for HMAC as for its `H`, each as its standard orders bits.
 `X1` = 8 {times} `out_bytes` makes the Machine emit exactly `out_bytes` bytes and then enter
 _Success_; for KMAC128 and KMAC256 it is also the output length `L` that the MAC encodes,
 while KMACXOF128 and KMACXOF256 encode `L` = 0 and only stop after `out_bytes` bytes.
-`out_bytes` is at least 1, at most the digest length of a fixed-output Machine, and at least
-8 for HMAC; `X1` = 0 would ask instead for the full digest, or an unbounded XOF, and is
-invalid for KMAC128 and KMAC256.
-`out_bytes` only truncates the output of the Machine: a BLAKE2 digest of `nn` bytes other
-than `nn~max~`, such as BLAKE2b-256, comes from an SCC whose `nn` the _Set_Aux_Value_
-operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> set, since `nn` enters the IV.
-An SCC whose `kk` that operation set is keyed by the caller: `M` then starts with the key,
+`out_bytes` is at least 1.
+It is at most the digest length for a fixed-output Machine, and at least 8 for HMAC; it is below 2^29^ for an XOF, KMAC128 or KMAC256.
+`X1` = 0 would instead ask for the full digest, or for an unbounded XOF; it is invalid for KMAC128 and KMAC256.
+Except for KMAC128 and KMAC256, `out_bytes` only truncates the output of the Machine: a BLAKE2 digest of `nn` bytes other
+than `nn~max~`, such as BLAKE2b-256, comes from an SCC whose `nn` was set by the _Set_Aux_Value_
+operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> or by a system-specific import, since `nn` enters the IV.
+An SCC with `kk` {ne} 0 and no system key is keyed by the caller: `M` then starts with the key,
 zero-padded to `b` bits (cite:[RFC7693] {sect}3.3), which alone forms the message for an
 empty `M`; a system key needs no such block.
 An SCC of the NIK variant of <<Zkl-ISA-machines.adoc#KLE-HMAC>> must already hold its key,
-and the SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key, must enable
-_Hash_Output_ (_MachinePolicy_[0]), or _Hash_Verify_ (_MachinePolicy_[1]) for the listing
-below.
+and the SCC of HMAC, KMAC128 or KMAC256, and that of BLAKE2 with a system key, must enable
+_Hash_Output_ (_MachinePolicy_[0]); for the MAC verification further below, the SCC of HMAC,
+KMAC128 or KMAC256 must enable _Hash_Verify_ (_MachinePolicy_[1]) instead.
 The SCC is in _Ready_; an SCC exported in _Hash_Absorb_ after a prefix of the message, as
 in the NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>, takes no first `kl.setst`, and
 `M` is then the rest of the message.
@@ -1180,6 +1181,8 @@ in the NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>, takes no first `kl.s
 To verify a MAC `T` of `T_len` bits with HMAC, KMAC128 or KMAC256 instead, the
 instructions from the
 `kl.setst` into _Hash_Output_ on are replaced by the listing below.
+The listing takes `T_len` at most `t` for HMAC and at most `b` for KMAC128 and KMAC256.
+HMAC also admits a longer `T`, but compares only its first `t` bits; KMAC128 and KMAC256 do not admit one.
 With 128-bit vectors, LMUL = 8 holds a tag of up to 1024 bits: every HMAC tag, and a KMAC
 tag up to that length.
 
@@ -1203,6 +1206,6 @@ is replaced by:
 ----
   X1 ← Z_bits                            // 0 to 2048
   kl.setst K0, #kl_state_set_aux_value, X1  // absorbs bin(Z_bits, 64)
-  // the ceil(Z_bits/8) bytes of Z by kl.exec, as M above
+  // the ceil(Z_bits/8) bytes of Z, in kl.exec of up to 16 bytes, as for M
   kl.setst K0, #kl_state_hash_absorb     // pads Z; M follows as above
 ----

@@ -213,7 +213,7 @@ class Hmac:
         typ, mode = HASHES[s.name][:2]
         kip = variant == 'KIP'  # KIP: the higher Type, or for SM3_HMAC Mode 2 (<<KLE-exec-encodings>>)
         s.variant, s.machine = variant, (typ << 4 | mode + kip) if typ == 9 else ((typ + kip) << 4 | mode)
-        if variant == 'NIK' and key_type or not s.policy & 3:
+        if variant == 'NIK' and key_type or not s.policy & 3:  # a policy above 3, unsupported Metadata, is not modelled
             s.reset()  # invalid Metadata (MachinePolicy: at least one bit), <<KLE-MVR-open>>
             return s
         s.h.ready()
@@ -305,7 +305,7 @@ class Hmac:
         h.absorb(inner)
         h.cumul_len = s.d
         h.finalize(s.b + h.cumul_len)
-        h.block_base = 0
+        h.block_base = h.last_block_len = 0
 
     def restrictl(s, clear):  # kl.restrictl clearing _MachinePolicy_ bits (GR20)
         if not inert(s.st):
@@ -324,8 +324,15 @@ class Hmac:
             return 'invalid', bytes(nbytes)
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
         if form == 'B' and s.st == KL_STATE_SET_KEY:  # granularity 8 bits: any byte count
-            r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
-            s.has_key = h.cumul_len == s.b  # MR9: set when the load completes
+            p = HART.klstart if resume else 0
+            if p >= len(data):
+                HART.klstart = 0
+                return 'empty', bytes(nbytes)  # GR44 item 2: also after a complete load
+            if p and h.block_base:
+                r, HART.klstart = 'invalid', 0       # not an interruption point (<<KLE-process-VLI>>)
+            else:
+                r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
+                s.has_key = h.cumul_len == s.b  # MR9: set when the load completes
         elif form == 'B' and s.st == KL_STATE_HASH_ABSORB:
             if resume and HART.klstart >= len(data):
                 HART.klstart = 0
@@ -370,19 +377,19 @@ class Hmac:
             if p >= nbytes:
                 HART.klstart = 0
                 return 'empty', prior  # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
-            if p:  # not an interruption point: the MAC reaches _Success_ before any
+            if p and s.h.block_base:  # not an interruption point (<<KLE-hash-functions-MACs-XOFs>>)
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', prior[:p] + bytes(nbytes - p)  # GR28
             return 'retired', s.output(nbytes, prior)
         else:
-            r = 'invalid'  # GR17, GR16, MR1
+            r = 'invalid'  # GR17 item 1, MR1
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
 
     def output(s, nbytes, prior):  # _Hash_Output_ loop of H, reading `state`
-        h, OUT, KLLEN, ob = s.h, b2v(prior or bytes(nbytes)), 8 * nbytes, 0
+        h, OUT, KLLEN, ob = s.h, b2v(prior or bytes(nbytes)), 8 * nbytes, 8 * HART.klstart
         while ob < KLLEN:
             amount = min(KLLEN - ob, s.d - h.block_base, h.out_len)
             OUT = setsl(OUT, ob + amount - 1, ob, sl(h.state, h.block_base + amount - 1, h.block_base))
@@ -585,17 +592,24 @@ for label, variant, ops in [
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
         ('same-State kl.setst to _Hash_Output_ (GR17)', 'KIP', (A, B(data7), O, O)),
-        ('kl.exec in _Success_ (GR16), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
+        ('kl.exec in _Success_ (MR1, GR28), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
 check('kl.exec in _Invalid_: no operation, output zeroed (GR26, GR28)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
+full = C(32)(fresh(key=key7, ops=(A, B(data7), O)))[1]
+cl = fresh(key=key7, ops=(A, B(data7), O))
+HART.klstart = 4
+check('Form C, klstart = 4 at the start of _Hash_Output_ (block_base = 0): the first 28 HMAC bytes in [4, 31]',
+      None, (C(32)(cl), cl.st, HART.klstart), (('retired', b'\xa5' * 4 + full[:28]), KL_STATE_HASH_OUTPUT, 0))
 cl, res = fresh(key=key7, ops=(A, B(data7), O)), []
 for ks in (32, 40, 4):
     HART.klstart = ks
     res.append((C(32)(cl), cl.st, HART.klstart))
-check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 (no interruption point): '
-      '_Invalid_, [4, 32) zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
+    if ks == 40:
+        C(1)(cl)                                  # block_base = 8: klstart = 4 is no interruption point
+check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 with block_base != 0 '
+      '(no interruption point): _Invalid_, [4, 31] zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
 cl = fresh(key=key7, ops=(A,))
 check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',
@@ -610,6 +624,18 @@ r = run(cl, SK, B(K0_7 + b'\xde\xad\xbe\xef' * 4))[0]
 term = r == 'terminated' and cl.h.cumul_len == 512 and cl.K0 == b2v(K0_7)
 check('NIK K0 + 16 excess bytes: load ends at cumul_len = b, excess ignored (step 3.h)',
       term and run(cl, A, B(data7), O, C(32))[1] == TAG7)
+res = []
+for name in ('SHA-256', 'SHA3-256'):
+    cl = fresh(name, variant='NIK')                # in _Set_Key_, K0 loaded completely
+    e = cl.exec('B', b'')[0]
+    cp = fresh(name, variant='NIK', key=None)
+    run(cp, SK, B(bytes(range(10))))
+    HART.klstart = 3
+    r = cp.exec('B', bytes(range(10, 30)), resume=True)[0]
+    res.append((e, cl.st, cl.has_key, r, cp.st))
+check('_Set_Key_: an empty window after a complete K0 load keeps the State and HasKey (GR44 item 2); a resumption at '
+      'klstart = 3 after a 10-byte load is no interruption point -> _Invalid_ (<<KLE-process-VLI>>)', None, res,
+      [('empty', KL_STATE_SET_KEY, True, 'invalid', KL_STATE_INVALID)] * 2)
 cl = fresh(variant='NIK', key=b'first key', ops=(A, B(b'ignored'), R))
 load_key(cl, K0_7, parts=5)
 check('NIK _Ready_ -> _Set_Key_ replaces K0 (entry zeroes it)', None, run(cl, A, B(data7), O, C(32))[1], TAG7)

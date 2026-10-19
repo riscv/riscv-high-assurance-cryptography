@@ -149,13 +149,13 @@ class KsLocker:
         if isinstance(src, KsLocker) and src.state != OP:
             return src.invalidate()           # GR32 item 1
         if self.state != RDY or self.keytype == 1:
-            return self.invalidate()          # GR32 item 2 (GR67)
+            return self.invalidate()          # GR32 item 2 (GR68)
         if length < n or not isinstance(src, KsLocker) and len(src) < n:
             return self.invalidate()          # GR32 item 5 (the keystream is unbounded)
         if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, unused bytes discarded
             src = keystream(src, n)
         self.key = b2v(src[:n])
-        self.enter_ready()                    # MR17, GR32 item 5: the operations of entering Ready
+        self.enter_ready()                    # MR18, GR32 item 5: the operations of entering Ready
         return True
 
 
@@ -297,7 +297,7 @@ cl.setst(AUX, 'B', C0)
 eq("Form B in Operate leaves State 2", cl.state, OP)
 cr = ctr_cl(key, ctr0=C0)
 cr.setst(RDY)
-eq("Form B in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR17)",
+eq("Form B in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR18)",
    (cr.state, cr.ctr), (RDY, 0))
 
 section("XCTR [reference-implementation anchor: google/hctr2; Ready sets HCTR2's initial ctr = 1]")
@@ -355,16 +355,16 @@ rows = []
 for ks in (0, 8, 17):
     cl = ctr_cl(key, T1, C0)
     rows.append((cl.exec(136, klstart=ks, out=(1 << 136) - 1)[0], cl.state))
-eq("KLIOBUF output, kliobuftop = 17, klstart = 0, 8, 17 -> Invalid before the empty window, [klstart, 17) zeroed",
+eq("KLIOBUF output, kliobuftop = 17, klstart = 0, 8, 17 -> Invalid before the empty window, [klstart, 16] zeroed",
    rows, [(0, INV), ((1 << 64) - 1, INV), ((1 << 136) - 1, INV)])
 cl = ctr_cl(key, T1, C0)
 for ks in (64, 80):
     eq(f"KLLEN = 512, klstart = {ks}: empty window, only klstart = 0",
        (cl.exec(512, klstart=ks, out=7), cl.state, cl.ctr), ((7, 0), OP, C0))
-eq("klstart = 8 (no interruption point) -> Invalid, [8, 64) zeroed (GR28)",
+eq("klstart = 8 (no interruption point) -> Invalid, [8, 63] zeroed (GR28)",
    (cl.exec(512, klstart=8, out=(1 << 512) - 1)[0], cl.state), ((1 << 64) - 1, INV))
 for q in (1, 2, 3):
-    for form in 'CD':                         # Form D writes the KLIOBUF as Form C writes Vd (GR60)
+    for form in 'CD':                         # Form D writes the KLIOBUF as Form C writes Vd (GR61)
         cl = ctr_cl(key, T1, C0)
         part, ks = cl.exec(512, halt_after=q)
         whole, ks2 = cl.exec(512, klstart=ks, out=part)
@@ -420,7 +420,7 @@ ks_src = keystream(ctr_cl(key, T1, C0), 32)
 for mode, want in (('CTR', 0), ('XCTR', 1)):
     cl = ctr_cl(key, ctr0=5, mode=mode)
     cl.derive_key(ks_src, 32)
-    eq(f"{mode}: Form B ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR17, GR32 item 5)",
+    eq(f"{mode}: Form B ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR18, GR32 item 5)",
        (cl.state, cl.IV, cl.ctr), (RDY, 0, want))
 
 def derived(length, keytype=0, state_op=False):
@@ -431,7 +431,7 @@ def derived(length, keytype=0, state_op=False):
 
 eq("CTR keystream (GR35), length 32, into the 16-byte key (GR31, GR32 item 5), then the F.5.1 inputs under that key",
    derived(32), (RDY, ref_ctr(ks_src[:16], NONCE, 32, C0, PT).hex()))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR67, GR32 item 2)", (32, 1)),
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR68, GR32 item 2)", (32, 1)),
                     ("destination in Operate (GR32 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst, twin = ctr_cl(key, T1, C0), ctr_cl(key), ctr_cl(key, T1, C0)

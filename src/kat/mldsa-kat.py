@@ -422,7 +422,7 @@ def t_state_machine():
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ by kl.setst zeroes MachineUse; the pubkey is emitted again', cc.use == 0
           and b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
-    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR16)',
+    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (MR1, GR28)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
     cc.setst(MU_IN)

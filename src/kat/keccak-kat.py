@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert,
                     KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
-                    KL_STATE_FAILURE, KL_STATE_INVALID, KL_CFG_PROVISIONING, section, check,
+                    KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, KL_CFG_PROVISIONING, section, check,
                     control, info, raises, done, HashPort, hash_run, hash_msgs, check_hash)
 
 # ---------------------------------------------------------------- FIPS 202
@@ -212,7 +212,15 @@ class Sha3:
         f = mdh_unpack(b2v(pi[:16]))
         assert f['State'] == KL_STATE_UNCONFIGURED and len(pi) == 16
         s.set_machine(f['Machine'])
+        if f['MachinePolicy']:  # unsupported Metadata (<<KLE-hash-functions-MACs-XOFs>>, MDH: MachinePolicy)
+            s.reset(KL_STATE_UNSUPPORTED)
+            return s
         s.reset(KL_STATE_READY)  # `state` zeroed
+        return s
+
+    def restrictl(s, clear):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use
+        if clear and not inert(s.st):  # a zero field changes nothing (<<KLE-instruction-restrict>>)
+            s.reset()
         return s
 
     def mdh(s):
@@ -248,7 +256,7 @@ class Sha3:
         s.state = keccak(s.state ^ (sl(S, room - 1, 0) << s.block_base))
         if n > room:
             s.state = keccak(s.state ^ (S >> room))
-        s.block_base, s.st = 0, KL_STATE_HASH_OUTPUT  # block[t-1:0] <- finalize() is the identity
+        s.block_base, s.last_block_len, s.st = 0, 0, KL_STATE_HASH_OUTPUT  # block[t-1:0] <- finalize() is the identity
         s.out_len = s.bound or (0 if s.xof else s.t)  # <<KLE-hash-functions-MACs-XOFs>>: the output bound
 
     def setst(s, immed, form='A', xs=None):
@@ -263,7 +271,7 @@ class Sha3:
             s.st, s.last_block_len = immed, s.b  # Form A: max_len is set by the Machine
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
                 form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # Form A keeps last_block_len = b; any bit length (MR15, FIPS 202 bit order)
+            s.st = immed  # Form A keeps last_block_len = b; any bit length (MR16, FIPS 202 bit order)
             if form == 'B':
                 s.last_block_len = xs
         elif form in 'AB' and immed == KL_STATE_HASH_OUTPUT and (
@@ -278,7 +286,7 @@ class Sha3:
         return s.st
 
     def fail(s, out, status='invalid'):
-        """No operation or Error State: the unwritten output window [klstart, top) is zeroed (GR28)."""
+        """No operation or Error State: the unwritten output window [klstart, top-1] is zeroed (GR28)."""
         if status == 'invalid':
             s.reset()
         if out is not None:
@@ -294,11 +302,11 @@ class Sha3:
             return True
         return False
 
-    def exec(s, form, inp=None, out=None, sew=None, interrupt_at=None, end_halt=False, klstart_bits=False):
-        """kl.exec; sew None = KLIOBUF; halts at the first point >= interrupt_at (window end if end_halt)."""
+    def exec(s, form, inp=None, out=None, sew=None, interrupt_at=None, klstart_bits=False):
+        """kl.exec; sew None = KLIOBUF; halts at the first point >= interrupt_at inside the window."""
         if inert(s.st):
             return s.fail(out, 'noop')  # GR26, GR28
-        halt = (interrupt_at, end_halt)
+        halt = (interrupt_at,)
         if s.st == KL_STATE_HASH_ABSORB and form in 'BD' and inp is not None and out is None:
             if sew is not None and sew < GRANULARITY:
                 return s.fail(out)  # MR2
@@ -321,16 +329,16 @@ class Sha3:
         elif s.st == KL_STATE_HASH_OUTPUT and form in 'CD' and inp is None and out is not None:
             if s.empty(len(out)):
                 return 'empty'
-            if HART.klstart and not (s.xof and s.block_base == 0):
+            if HART.klstart and s.block_base:
                 return s.fail(out)  # not an interruption point
             r = s.squeeze(out, 8 * HART.klstart, *halt)
         else:
-            return s.fail(out)  # MR1; GR17 in _Ready_; GR16 in _Success_
+            return s.fail(out)  # MR1; GR17 item 1 in _Ready_
         if r != 'interrupted':
             HART.klstart = 0
         return r
 
-    def process_vli(s, INPUT, KLLEN, ib, interrupt_at, end_halt, klstart_bits=False):
+    def process_vli(s, INPUT, KLLEN, ib, interrupt_at, klstart_bits=False):
         """PROCESS_VLI(0, state, b, state, n, input_base, block_base, 0, None, P(), None, xor_accumulate)."""
         while ib < KLLEN:
             amount = min(KLLEN - ib, s.b - s.block_base)
@@ -338,7 +346,7 @@ class Sha3:
             ib, s.block_base = ib + amount, s.block_base + amount
             if s.block_base == s.b:
                 s.state, s.block_base = keccak(s.state), 0
-            if interrupt_at is not None and ib // 8 >= interrupt_at and (ib < KLLEN or end_halt):  # 3.i
+            if interrupt_at is not None and ib // 8 >= interrupt_at and ib < KLLEN:  # 3.i
                 HART.klstart = ib if klstart_bits else ib // 8
                 return 'interrupted'
         return 'done'
@@ -348,7 +356,7 @@ class Sha3:
         assert s.st == KL_STATE_HASH_ABSORB
         s.process_vli(sl(val, nbits - 1, 0), nbits, 0, None, False)
 
-    def squeeze(s, out, ob, interrupt_at, end_halt):
+    def squeeze(s, out, ob, interrupt_at):
         OUT, KLLEN = b2v(out), 8 * len(out)
         try:
             while ob < KLLEN:
@@ -362,7 +370,7 @@ class Sha3:
                         return 'success'
                 if s.block_base == s.t:
                     s.state, s.block_base = keccak(s.state), 0  # update()
-                    if interrupt_at is not None and ob // 8 >= interrupt_at and (ob < KLLEN or end_halt):
+                    if interrupt_at is not None and ob // 8 >= interrupt_at and ob < KLLEN:
                         HART.klstart = ob // 8
                         return 'interrupted'
             return 'done'
@@ -530,14 +538,14 @@ check('SHA3-384: halt at klstart = 92 (block boundary after a 12-B transfer)', N
 check('SHA3-384 a3_200 after halt, export, clear, import, resumption', None, squeeze(cl, 48)[1],
       V('SHA3-384', 'a3_200'))
 cl = absorbing('SHA3-256')
-r = cl.exec('B', inp=MSG_A3[:136], interrupt_at=136, end_halt=True)
-snap = (cl.state, cl.block_base)
-check('halt at the window end (klstart = KLLEN/8): re-execution is an empty window, only klstart = 0',
-      (r, cl.exec('B', inp=MSG_A3[:136]), HART.klstart) == ('interrupted', 'empty', 0)
+r = cl.exec('B', inp=MSG_A3[:136])
+snap, HART.klstart = (cl.state, cl.block_base), 136
+check('klstart = KLLEN/8, which no halt in _Hash_Absorb_ produces (PROCESS_VLI step 3.i): an empty window, '
+      'only klstart = 0', (r, cl.exec('B', inp=MSG_A3[:136]), HART.klstart) == ('done', 'empty', 0)
       and (cl.state, cl.block_base) == snap)
 cl.exec('B', inp=MSG_A3[136:])
 cl.setst(KL_STATE_HASH_OUTPUT)
-check('SHA3-256 a3_200 after the end-of-window halt', None, squeeze(cl, 32)[1], V('SHA3-256', 'a3_200'))
+check('SHA3-256 a3_200 after the empty window', None, squeeze(cl, 32)[1], V('SHA3-256', 'a3_200'))
 cl = absorbing('SHA3-256', MSG_A3[:4])
 snap, HART.klstart = (cl.state, cl.block_base), 250
 check('input operand, klstart = 250 > KLLEN/8: empty window, only klstart = 0',
@@ -587,10 +595,10 @@ check('[oracle] SHAKE256 a3_200 336 B over kl.exec of 64+8+264 B', None,
       b''.join(squeeze(cl, n)[1] for n in (64, 8, 264)), oracle('SHAKE256', MSG_A3, 336))
 cl = squeezing('SHAKE256', MSG_A3)
 out = bytearray(136)
-r = cl.exec('C', out=out, interrupt_at=136, end_halt=True)
-kept = bytes(out)
-check('halt at klstart = KLLEN/8; re-execution is an empty window: OUTPUT intact, klstart = 0',
-      (r, cl.exec('C', out=out), bytes(out), HART.klstart) == ('interrupted', 'empty', kept, 0))
+r = cl.exec('C', out=out)
+kept, HART.klstart = bytes(out), 136
+check('klstart = KLLEN/8, which no halt in _Hash_Output_ produces: an empty window, OUTPUT intact, only klstart = 0',
+      (r, cl.exec('C', out=out), bytes(out), HART.klstart) == ('done', 'empty', kept, 0))
 check('[oracle] SHAKE256 stream continues at byte 136', None, kept + squeeze(cl, 64)[1],
       oracle('SHAKE256', MSG_A3, 200))
 cl = squeezing('SHAKE128', MSG_ABC)
@@ -605,7 +613,7 @@ snap, HART.klstart = (cl.st, cl.state, cl.block_base), 65
 check('output only, klstart = 65 > KLLEN/8: empty window, only klstart = 0', None,
       (squeeze(cl, 64, 0xee), (cl.st, cl.state, cl.block_base), HART.klstart), (('empty', b'\xee' * 64), snap, 0))
 HART.klstart = 5
-check('output only, klstart = 5, block_base > 0 (no interruption point): _Invalid_, [5, 64) zeroed', None,
+check('output only, klstart = 5, block_base > 0 (no interruption point): _Invalid_, [5, 63] zeroed', None,
       (squeeze(cl, 64, 0xee), cl.st, HART.klstart), (('invalid', b'\xee' * 5 + bytes(59)), KL_STATE_INVALID, 0))
 
 section('SHA3-n: _Success_ after t bits')
@@ -616,12 +624,17 @@ r2, d2 = squeeze(cl, 20)
 check('12-B read stays in _Hash_Output_; the next reaches _Success_ at the t-th bit',
       (r1, st1, r2, cl.st) == ('done', KL_STATE_HASH_OUTPUT, 'success', KL_STATE_SUCCESS))
 check('SHA3-256 abc digest split 12+20 B', None, d1 + d2, V('SHA3-256', 'abc'))
+cl = squeezing('SHA3-256', MSG_ABC)
+HART.klstart = 4
+check('SHA3-256: klstart = 4 at the start of _Hash_Output_ (block_base = 0) writes the first 28 digest bytes '
+      'into [4, 31] and keeps [0, 3]', None, (squeeze(cl, 32, 0xee), cl.st, HART.klstart),
+      (('done', b'\xee' * 4 + V('SHA3-256', 'abc')[:28]), KL_STATE_HASH_OUTPUT, 0))
 cl = squeezing('SHA3-384', MSG_ABC)
-check('64-B read of SHA3-384: returns at _Success_, bytes [48, 64) cleared', None,
+check('64-B read of SHA3-384: returns at _Success_, bytes [48, 63] cleared', None,
       squeeze(cl, 64, 0xee), ('success', V('SHA3-384', 'abc') + bytes(16)))
 cl = squeezing('SHA3-256', MSG_ABC)
 squeeze(cl, 32)
-check('kl.exec in _Success_ -> _Invalid_, output zeroed (GR16)', None,
+check('kl.exec in _Success_ -> _Invalid_, output zeroed (MR1, GR28)', None,
       (squeeze(cl, 32, 0xee), cl.st), (('invalid', bytes(32)), KL_STATE_INVALID))
 cl = squeezing('SHA3-256', b'')
 squeeze(cl, 32)
@@ -681,7 +694,7 @@ check('Serialized Content 1600 + 16 + 16 + 32 bits (out_len in Position iv) = 16
       (C1_BITS, kl_size(KL_STATE_HASH_ABSORB), kl_size(KL_STATE_INVALID)) == (1664, 240, 16))
 cl = absorbing('SHA3-256', MSG_A3[:100])
 c1 = cl.export()
-check('layout: [0,200) state, [200,202) block_base = 800, [202,204) last_block_len = b = 1088, [204,208) out_len = 0',
+check('layout: [0,199] state, [200,201] block_base = 800, [202,203] last_block_len = b = 1088, [204,207] out_len = 0',
       (len(c1), c1[:200], c1[200:202], c1[202:204], c1[204:])
       == (208, v2b(cl.state, 200), v2b(800, 2), v2b(1088, 2), bytes(4)))
 for label, name, n_abs, n_out, want in [
@@ -703,6 +716,13 @@ for label, name, n_abs, n_out, want in [
         cl.exec('B', inp=MSG_A3[n_abs:] if n_abs else MSG_ABC)
         cl.setst(KL_STATE_HASH_OUTPUT)
     check(f'export/import round trip, {label}', None, head + squeeze(cl, len(want) - len(head))[1], want)
+
+pol = Sha3().provision(v2b(mdh_pack(Machine=MACHINE['SHA3-256'], MachinePolicy=1), 16)).st
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
+      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
+      '<<KLE-instruction-restrict>>)',
+      None, (pol, absorbing('SHAKE128', MSG_ABC).restrictl(1).st, absorbing('SHAKE128', MSG_ABC).restrictl(0).st),
+      (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_HASH_ABSORB))
 
 section('kl.derive')
 SEC, SEC66 = bytes(range(0x40, 0x60)), bytes(range(0x80, 0xc2))  # shared secrets: ML-KEM, P-521 sizes

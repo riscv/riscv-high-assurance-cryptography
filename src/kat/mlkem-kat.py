@@ -331,7 +331,7 @@ def kl_derive(dest, src, length):
         src.enter_error(INVALID)                   # GR32 item 1: the only source is sharedkey in _sharedkey_Output_
         return 'retired'
     if not field or is_key and dest.get('KeyType') == 1:
-        dest.enter_error(INVALID)                  # GR32 item 2; GR67 (sharedkey -> any destination: item 3 holds)
+        dest.enter_error(INVALID)                  # GR32 item 2; GR68 (sharedkey -> any destination: item 3 holds)
         return 'retired'
     sk = src.sharedkey
     if field == 'K0':
@@ -937,7 +937,7 @@ def t_derive():
     s2 = shared()
     check('ML-KEM destination (no destination endpoint): only it becomes _Invalid_ (GR32 item 2)',
           derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == SK_OUT)
-    check('KeyType 1 key never importable (GR67): destination _Invalid_',
+    check('KeyType 1 key never importable (GR68): destination _Invalid_',
           derived(Dest(AES128_ECB, keytype=1), src).state == INVALID and src.state == SK_OUT)
     dest = derived(Dest(AES128_ECB, keytype=2), src)
     check('a locker provisioned with KeyType 2 (stored as KeyType 0) receives the key',

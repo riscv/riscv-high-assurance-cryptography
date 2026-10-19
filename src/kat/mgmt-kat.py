@@ -305,7 +305,7 @@ class ToyXof(Machine):
             self.put_state(cl, self.get_state(cl))
             return True
         if imm == self.FINAL and cl.mdh['State'] == self.ABSORB:
-            cl.mdh['State'] = self.FINAL               # a XOF never reaches Success (GR16)
+            cl.mdh['State'] = self.FINAL               # an unbounded XOF never reaches Success
             return True
         return False
     def on_ready(self, cl):
@@ -807,6 +807,9 @@ class Unit:
         cl = self.lockers[k]
         m = cl.mdh
         if imm == CLEAR_ADS:                                        # GR16: in every Valid State
+            if form != 'A':                                         # GR16: Form A only (GR62, MR1)
+                self._enter_error(k, INVALID)
+                return 'invalid'
             m.update(AuxDataLen=0, ADSDropped=0)
             cl.c2 = b''
             self._dirty(k)
@@ -818,7 +821,7 @@ class Unit:
             self._enter_error(k, INVALID)
             return 'invalid'
         mach = MACHINES[m['Machine']]
-        if imm == READY and form != 'A':                            # GR16: Form A (GR61)
+        if imm == READY and form != 'A':                            # GR16: Form A (GR62)
             self._enter_error(k, INVALID)
             return 'invalid'
         if imm == READY:                                            # GR16
@@ -843,7 +846,7 @@ class Unit:
         self.klnamedlocker = NONE
         return 'cleared all'
     def _usage_gate(self, k, needs_buf=False):
-        """GR24, GR26, GR15 items 1-5; a wrong Form is one of the Machine's rules (GR61)."""
+        """GR24, GR26, GR15 items 1-5; a wrong Form is one of the Machine's rules (GR62)."""
         m = self.lockers[k].mdh
         if m['State'] == UNCONF or m['State'] in ERROR_STATES: return 'noop'          # GR26
         if m['State'] in PARTIAL: return self._exc_config(k)
@@ -874,10 +877,10 @@ class Unit:
         m = cl.mdh
         mach = MACHINES.get(m['Machine'])
         want = mach.exec_form(m) if mach and m['State'] in VALID else None
-        sub = form == 'D' and want in ('A', 'B', 'C') and self.zklio   # without Zklio a wrong Form (GR62)
+        sub = form == 'D' and want in ('A', 'B', 'C') and self.zklio   # without Zklio a wrong Form (GR63)
         g = self._usage_gate(k, sub)
         if g: return stop(g)
-        if want is None or not (form == want or sub):              # GR17, GR16; a wrong Form (GR61, MR1)
+        if want is None or not (form == want or sub):              # GR17, GR16; a wrong Form (GR62, MR1)
             self._enter_error(k, INVALID)
             return stop('invalid')
         if m['State'] in mach.op_states and not m['MachinePolicy'] & mach.op_states[m['State']]:
@@ -1037,7 +1040,7 @@ class Unit:
                 return 'invalid'
         S, D = self.lockers[ks].mdh, self.lockers[kd].mdh
         se, de = SRC_EP.get(S['Machine']), DST_EP.get(D['Machine'])
-        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR32 items 1-2, GR67
+        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR32 items 1-2, GR68
               (kd, bool(de) and D['State'] in de[1] and not (de[0] == 'key' and D['KeyType'] == 1)))
         bad = [e for e, good in ok if not good] or ([] if de[0] in ADMITTED[se[1]] else [ks, kd])   # GR32 item 3
         if bad:
@@ -2385,7 +2388,7 @@ def t_transfers():
          fresh().csrs(kliobuflen=64).mv_iobuf(), trap_of(opened(zklio=False).mv_iobuf),
          trap_of(opened().mv_iobuf), u.csrs(kliobuftop=32).mgmt(0, END), u.mgmt(0, EXP), u.mv_iobuf(out=True),
          bytes(u.kliobuf[:16]) == v2b(u.siv, 16), u.klstart]
-    eq('KLIOBUF variants: kliobuftop bytes (a multiple of 16) between KLIOBUF[0, top) and S from klstart, both ways; '
+    eq('KLIOBUF variants: kliobuftop bytes (a multiple of 16) between KLIOBUF[0, top-1] and S from klstart, both ways; '
        'kliobuftop % 16 illegal/2; klnamedlocker 32 a no-op; no Zklio illegal/1; unconfigured KLIOBUF illegal/2', r,
        ['moved', 32, True, 'illegal/2', 'noop', 'illegal/1', 'illegal/2', 'completed', 'opened', 'moved',
         True, 32])
@@ -2470,7 +2473,7 @@ def t_sgr():
            ['ok', READY, 'cleared', 0, 'error state', PRIV, 'ads cleared', final, 0, 'invalid', INVALID, 'invalid',
             INVALID, final, True, 1, final, 'cloned', 'ok'])
     u = xof_squeezing(fresh(), 0, b'seed')
-    eq('a XOF squeezes in its output State and never reaches Success, where GR16 admits no kl.exec',
+    eq('an unbounded XOF squeezes in its output State and never reaches Success, where GR16 admits no kl.exec',
        (u.getst(0), u.exec_(0, 'C', vout=bytearray(4)), u.getmd(0)['MachineUse']), (ToyXof.FINAL, 'done', 4))
     u = fresh()
     vo = bytearray(b'\xAA' * 32)
@@ -2483,13 +2486,13 @@ def t_sgr():
     u.csrs(kliobuflen=64).kliobuf[:] = b'\xAA' * 64
     w.setst(0, EXPIRED)
     w.vstart = 2
-    eq('GR28: Error-State kl.exec zeroes [klstart, kliobuftop) of Form D, elements vstart..vl-1 of Vd; '
+    eq('GR28: Error-State kl.exec zeroes [klstart, kliobuftop-1] of Form D, elements vstart..vl-1 of Vd; '
        'SEW = 128 sets vtype.vill (KLV)',
        (u.csrs(klstart=16).exec_(0, 'D'), bytes(u.kliobuf),
         trap_of(w.csrs(klstart=16).exec_, 0, 'A', vin=buf, vout=buf, sew=128),
         w.exec_(0, 'A', vin=buf, vout=buf, sew=64), bytes(buf)),
        ('noop', b'\xAA' * 16 + bytes(48), 'illegal/1', 'noop', b'\xBB' * 16 + bytes(16)))
-    info('A Form D kl.exec on an Error-State locker zeroes [klstart, kliobuftop), although whether it is a '
+    info('A Form D kl.exec on an Error-State locker zeroes [klstart, kliobuftop-1], although whether it is a '
          'substitution depends on an operation the Error State does not define (per the purpose of GR28).')
     u, w = opened(), opened(k=3)
     r = [trap_of(u.exec_, 0, 'D'), trap_of(u.setst, 0, READY), trap_of(u.clone, 1, 0),
@@ -2508,7 +2511,7 @@ def t_sgr():
     w9, w10 = gated(), gated(mode='S')                    # KLIOBUF unconfigured: checked before UsagePolicy and expiry
     w1.setst(0, INVALID)
     eq('GR24, GR26, GR15: Error State > Configuration > KLIOBUF > UsagePolicy > expiry > Machine; a wrong Form, '
-       'a substitution without Zklio included, is one of the Machine\'s rules (GR62, GR61)',
+       'a substitution without Zklio included, is one of the Machine\'s rules (GR63, GR62)',
        [(ex(w1, 0), w1.getst(0)), trap_of(w2.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w3.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w4.exec_, 0, 'D'), (trap_of(ex, w5, 0), w5.getst(0)), (w6.exec_(0, 'D'), w6.getst(0)),
@@ -2520,13 +2523,17 @@ def t_sgr():
         'illegal/2', ('illegal/2', ToyCipher.ENCRYPT)])
     wf = [rc(), rc(), rc(unit=fresh(zklio=False))]
     eq('a wrong Form invalidates the locker, no exception: Form B or C kl.exec where Form A is native; a Form D '
-       'substitution without Zklio (GR62, GR61, MR1)',
+       'substitution without Zklio (GR63, GR62, MR1)',
        [(wf[0].exec_(0, 'B', vin=bytearray(16)), wf[0].getst(0)), (wf[1].exec_(0, 'C', vout=bytearray(16)),
          wf[1].getst(0)), (wf[2].exec_(0, 'D'), wf[2].getst(0))], [('invalid', INVALID)] * 3)
     wr = [rc(), rc()]
-    eq('GR16: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR61, MR1)',
+    eq('GR16: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR62, MR1)',
        [(wr[0].setst(0, READY, 1, form='B'), wr[0].getst(0)), (wr[1].setst(0, READY, form='C'), wr[1].getst(0))],
        [('invalid', INVALID)] * 2)
+    wc = [rc(), rc()]
+    eq('GR16: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR62, MR1)',
+       [(wc[0].setst(0, CLEAR_ADS, 1, form='B'), wc[0].getst(0)), (wc[1].setst(0, CLEAR_ADS, form='C'),
+         wc[1].getst(0))], [('invalid', INVALID)] * 2)
     rows = []
     for st in CONFIG:
         w, p = white_box(st, bytes(64)), opened()

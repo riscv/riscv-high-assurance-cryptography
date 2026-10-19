@@ -550,7 +550,7 @@ def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_pla
         p.setst(KL_STATE_HASH_ABSORB)
         p.setst(KL_STATE_READY, form, 8)
         wrong.append(p.st)
-    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR16, GR61)', None, wrong,
+    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR16, GR62)', None, wrong,
           [KL_STATE_INVALID] * 2)
 
 # ---------------------------------------------------------------- self-tests

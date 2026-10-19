@@ -38,7 +38,7 @@ def targets(state, eddsa, sig_exit=True, xdh=False):
     boundary)."""
     if xdh:                                  # no signature States
         sets = {SET_GEN, SET_SCALAR, SET_SECONDPT}
-        t = {READY: sets | {POINT_MUL}, POINT_MUL: {READY}, OUTPUT: {READY}, SUCCESS: {READY},   # MR19
+        t = {READY: sets | {POINT_MUL}, POINT_MUL: {READY}, OUTPUT: {READY}, SUCCESS: {READY},   # MR20
              FAILURE: {READY}}.get(state, sets | {POINT_MUL, READY} if state in sets else set())
         return t | ({state} if state in sets | {READY} else set())
     entry = set(SET_FIELD) | ({SET_CTX} if eddsa else set())
@@ -50,7 +50,7 @@ def targets(state, eddsa, sig_exit=True, xdh=False):
         t = free | ops | absorb | {READY}
     elif eddsa and state == MSG_ABSORB:      # <<KLE-EdDSA>>: no Set state between passes or before Sign_Verify
         t = {MSG_ABSORB, SIGN_GEN, SIGN_VER, READY}
-    elif state in (POINT_MUL, SIGN_GEN):     # _Output_ is entered only by the Form D kl.exec (MR19)
+    elif state in (POINT_MUL, SIGN_GEN):     # _Output_ is entered only by the Form D kl.exec (MR20)
         t = {READY}
     else:
         t = {READY} if state in (OUTPUT, SIGN_VER, SUCCESS, FAILURE) else set()
@@ -130,12 +130,12 @@ class Locker:
         if t != READY and not self._leads_enabled(t, xs):
             self._policy_gate()                                         # MR11 item 1.a, before the State is left
         if form == 'C':
-            raise Invalid('wrong Form: no Form C kl.setst is native')       # GR61
+            raise Invalid('wrong Form: no Form C kl.setst is native')       # GR62
         if form == 'A' and t in (SET_CTX, MSG_ABSORB):
-            raise Invalid('wrong Form: only Form B is native')         # GR61
+            raise Invalid('wrong Form: only Form B is native')         # GR62
         if (form or ('B' if xs or t in (SET_CTX, MSG_ABSORB) else 'A')) == 'B' and t not in (
                 SET_GEN, SET_SCALAR, READY, SET_CTX, MSG_ABSORB):
-            raise Invalid('wrong Form: only Form A is native')         # GR61
+            raise Invalid('wrong Form: only Form A is native')         # GR62
         if t == SET_HASH and not any(self.policy):
             raise Invalid('Hash exists only if signing or verification is allowed')   # MR11
         if t == SET_SIG and not self.policy[1]:
@@ -195,6 +195,8 @@ class Locker:
         """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLE-instruction-restrict>>): a set bit removes its
         function, a clear one changes nothing; clearing both bits erases Hash and Signature and their flags
         (<<KLE-ECC>>), and is invalid for EdDSA (<<KLE-EdDSA>>)."""
+        if self.mode == 'xdh' and (clear_sign or clear_verify):   # a Machine that does not use the field
+            raise Invalid('x25519 / x448 use no _MachinePolicy_')   # <<KLE-instruction-restrict>>
         sign, verify = self.policy[0] and not clear_sign, self.policy[1] and not clear_verify
         if self.mode == 'eddsa' and not (sign or verify):
             raise Invalid('<<KLE-EdDSA>>: _MachinePolicy_ = 0 is invalid')   # a value the Machine forbids (GR20)
@@ -855,13 +857,13 @@ cr.setst(READY)
 check(f'kl.setst #{READY} from a halted Sign_Generate discards Progress and RndNum', cleared(cr))
 check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR17, GR18)',
       invalid((lambda c: (c.halt(7, K0), c)[1])(armed()).setst, SIGN_GEN))
-check('MR19: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
+check('MR20: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
       bool(invalid(locker(P256, (SET_SCALAR, D256), to=POINT_MUL).setst, OUTPUT)) and bool(invalid(armed().setst, OUTPUT)))
 check('a Form B kl.setst into _Set_Hash_, _Set_SecondPt_, _Sign_Input_ or _Point_Mul_ is a wrong Form '
-      '(only Form A is native): _Invalid_ (GR61)', True,
+      '(only Form A is native): _Invalid_ (GR62)', True,
       [invalid(locker(P256, (SET_SCALAR, D256)).setst, t, form='B') for t in (SET_HASH, SET_SECONDPT, SET_SIG, POINT_MUL)],
       [True] * 4)
-check('a Form C kl.setst naming _Ready_ is a wrong Form (Form A or B is native): _Invalid_ (GR16, GR61)',
+check('a Form C kl.setst naming _Ready_ is a wrong Form (Form A or B is native): _Invalid_ (GR16, GR62)',
       bool(invalid(locker(P256, (SET_SCALAR, D256)).setst, READY, form='C')))
 cr = Locker(P256)
 cr.setst(SET_GEN, 1)
@@ -1267,11 +1269,14 @@ fa = [invalid(locker(EC.ED25519, (SET_SCALAR, seed)).setst, SET_CTX, 0, form='A'
       invalid(locker(EC.ED25519, (SET_SCALAR, seed), (SET_CTX, b'', None, 0)).setst, MSG_ABSORB, 0, form='A')]
 fb = locker(EC.ED25519, (SET_SCALAR, seed))
 fb.setst(SET_CTX, 0, form='B'); fb.setst(MSG_ABSORB, 0, form='B')
-check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR61); Form B admitted', None,
+check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR62); Form B admitted', None,
       fa + [fb.state], [True, True, MSG_ABSORB])
 check('EdDSA: _MachinePolicy_ = 0 is invalid, at provisioning and as the result of kl.restrictl', None,
       [invalid(Locker, EC.ED25519, sign=False, verify=False),
        invalid(locker(EC.ED25519, (SET_SCALAR, seed)).restrictl_policy, True, True)], [True, True])
+check('x25519 / x448: a kl.restrictl that requests a _MachinePolicy_ bit -> Invalid (<<KLE-instruction-restrict>>)',
+      None, [invalid(Locker(c).restrictl_policy, cs, cv) for c in (EC.X25519, EC.X448)
+             for cs, cv in ((True, False), (False, True))], [True] * 4)
 ok_ed = locker(EC.ED25519, (SET_SCALAR, seed))
 ok_ed.setst(MSG_ABSORB, 0)
 bad_ed = copy.deepcopy(ok_ed, {id(ok_ed.c): ok_ed.c}); bad_ed.has.discard('hstate')
@@ -1357,7 +1362,7 @@ def kl_derive(dest, src, length):
     if isinstance(dest, Locker) or dest.kind == 'none' \
             or dest.state != {'key': READY, 'k0': SET_KEY}.get(dest.kind, HASH_ABSORB) \
             or dest.kind != 'hash' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='destination')                            # GR32 item 2; GR67
+        raise Invalid(who='destination')                            # GR32 item 2; GR68
     sh = src.shared()                                               # GR32 item 3: every destination is admitted
     if dest.kind == 'hash':                                         # the whole secret, exactly (GR32 item 5)
         ok = length == len(sh)
@@ -1514,8 +1519,8 @@ for label, dest, src, n, who in (
         ('key destination outside _Ready_ (GR32 item 2)', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
         ('HMAC `K0` outside _Set_Key_ (GR32 item 2)', Dest('k0', READY, size=64), ecdh()[0], 32, 'destination'),
         ('key with length < key size (GR32 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
-        ('key of KeyType 1 (GR67)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
-        ('HMAC `K0` of KeyType 1 (GR67)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
+        ('key of KeyType 1 (GR68)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('HMAC `K0` of KeyType 1 (GR68)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
         ('ECC `Scalar` with length b/8 (GR32 item 2)', scalar_dest(), ecdh()[0], 32, 'destination'),
         ('ECC destination in _Ready_ (GR32 item 2)', scalar_dest(READY), ecdh()[0], 64, 'destination'),
         ('Machine without a destination endpoint (GR32 item 2)', Dest('none'), ecdh()[0], 64, 'destination')):

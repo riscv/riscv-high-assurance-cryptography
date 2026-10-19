@@ -4,7 +4,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bin_, bxor, MASK128, montmul, aes_encrypt, selftest,
-                    ERROR_STATES, section, check, control, done,
+                    ERROR_STATES, inert, IllegalInstruction, raises, section, check, control, done,
                     KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
                     KL_STATE_ENC_LAST_BLOCK as ELB, KL_STATE_DEC_LAST_BLOCK as DLB,
@@ -105,7 +105,7 @@ GATE = {ETF: 1, ENC: 1, ELB: 1, DEC: 2, DLB: 2, DTF: 2}  # MR11: the MachinePoli
 class Siv:
     """A GCM-SIV locker; MDH reduced to State, MachinePolicy (bit 0 encrypt, bit 1 decrypt),
     KeyType.  stale_derived (no MR4 re-derivation on import) is a negative control.  The hart has no Zklio:
-    every substitution is a wrong Form (GR62)."""
+    every substitution is a wrong Form (GR63)."""
 
     def __init__(s, policy=3, stale_derived=False):
         s.policy, s.stale = policy, stale_derived
@@ -165,8 +165,10 @@ class Siv:
         """klen: KLLEN of a Form C operand."""
         st = s.state
         if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR30
-            return s._error(immed if immed < 54 else INV)
-        if st in ERROR_STATES:
+            if immed >= 54:
+                raise IllegalInstruction('reserved #immed7')   # GR18
+            return None if st == UNCONF else s._error(immed)   # GR30: Unconfigured unchanged
+        if inert(st):
             return                                       # GR26
         if immed == READY and form == 'A':               # GR16
             s.state = READY
@@ -184,29 +186,28 @@ class Siv:
             s.SIV = aux & MASK128                        # MR7
         elif immed in (ELB, DLB):
             if not (0 < aux <= 120 and aux % 8 == 0):
-                return s._invalid()                      # MR15
+                return s._invalid()                      # MR16
             s.last_block_len = aux
         s.state = immed
 
     def exec(s, form, INPUT=0, KLLEN=128, start=None, stop=None):
         """kl.exec; `start` resumes at that klstart, `stop` halts after that many blocks."""
         s.halted, st = False, s.state
-        if st in ERROR_STATES:
+        if inert(st):
             return 0                                     # GR26, GR28
         if not s.policy & GATE.get(st, 3):
             return s._invalid()                          # MR11 at issue (GR20)
         want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
         if want != form:
-            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR61)
-        if KLLEN < s.last_block_len if st in (ELB, DLB) else st not in (ETF, DTF) and KLLEN % 128:
-            return s._invalid()                          # MR2: length first (<<KLE-GR-transfer-window-checks>>)
-        if start is not None:
-            s.klstart = start
-            if 8 * start >= KLLEN:
-                s.klstart = 0                            # empty window: only klstart = 0 (<<KLE-GR-transfer-window-checks>>)
-                return 0
-            if start % 16 or start and s.state in (ELB, DLB, ETF, DTF):
-                return s._invalid()                      # not an interruption point
+            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR62)
+        if KLLEN < (s.last_block_len if st in (ELB, DLB) else 128) if st in (ELB, DLB, ETF, DTF) else KLLEN % 128:
+            return s._invalid()                          # MR2, MR7: length first (<<KLE-GR-transfer-window-checks>>)
+        s.klstart = start or 0
+        if 8 * s.klstart >= KLLEN:
+            s.klstart = 0                                # empty window, KLLEN = 0 included (<<KLE-GR-transfer-window-checks>>)
+            return 0
+        if s.klstart % 16 or s.klstart and st in (ELB, DLB, ETF, DTF):
+            return s._invalid()                          # not an interruption point
         if st in (ETF, DTF):
             if KLLEN < 128:
                 return s._invalid()                      # MR7: the length block is a 128-bit fixed-width input
@@ -251,12 +252,12 @@ class Siv:
     def derive(s, src, length, klstart=0):
         """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready, from the bytes of a listed source
         (a shared secret, a keystream or a CMAC); uninterruptible (GR38)."""
-        if s.state in ERROR_STATES or isinstance(src, Siv) and src.state in ERROR_STATES:
+        if inert(s.state) or isinstance(src, Siv) and inert(src.state):
             return                                       # GR26: an inert endpoint
         if isinstance(src, Siv):                         # GR32 item 1: GCM-SIV is no source, its tag included
             return src._invalid()
         if s.key_type or s.state != READY:
-            return s._invalid()                          # GR67; Ready only (GR32 item 2)
+            return s._invalid()                          # GR68; Ready only (GR32 item 2)
         if klstart or length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR32 item 5: the key loaded in full
         s.key = src[:s.k // 8]
@@ -632,7 +633,7 @@ for name, where, ops, *kw in [
         ('MR7: KLLEN = 64 < 128 for the length block in Enc_Tag_Finalize', 'ha', [('setst', ETF), ('exec', 'A', LB0, 64)]),
         ('MR7: KLLEN = 64 < 128 for the length block in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'B', LB0, 64)]),
         ('MR1: Form C kl.setst to Decrypt', 'ha', [('setst', DEC, 'C', 0)]),
-        ('GR62: Form A kl.setst to Set_Aux_Value (the substitution) without Zklio', 'ready', [('setst', SAV)]),
+        ('GR63: Form A kl.setst to Set_Aux_Value (the substitution) without Zklio', 'ready', [('setst', SAV)]),
         ('MR1: kl.exec in Set_Aux_Value', 'sav', [('exec', 'B', 0, 128)]),
         ('MR1: Set_Aux_Value_2 -> Set_Aux_Value', 'sav', [('setst', SAV2, 'C', 0), ('setst', SAV, 'C', 0)]),
         ('kl.setst naming Encrypt in Hash_Absorb', 'ha', [('setst', ENC)]),
@@ -645,7 +646,7 @@ for name, where, ops, *kw in [
         ('kl.setst naming Enc_Last_Block in Enc_Tag_Finalize', 'etf', [('setst', ELB, 'B', 64)]),
         ('GR17: kl.exec in Ready', 'ready', [('exec', 'A', 0, 128)]),
         ('GR16: kl.exec in Success', 'success', [('exec', 'B', 0, 128)]),
-        ('GR16, GR61: Form B kl.setst naming Ready', 'sav', [('setst', READY, 'B', 0)]),
+        ('GR16, GR62: Form B kl.setst naming Ready', 'sav', [('setst', READY, 'B', 0)]),
         ('MR1: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', 0, 128)]),
         ('MR2: KLLEN = 120 in Hash_Absorb', 'ha', [('exec', 'B', 1, 120)]),
         ('MR2: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', 1, 120)]),
@@ -663,11 +664,18 @@ for name, where, ops, *kw in [
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
 ms = [at(w) for w in ('etf', 'enc', 'dec')]
 check('a Form B kl.exec where Form A is native (Enc_Tag_Finalize, Encrypt, Decrypt): a wrong Form, _Invalid_ '
-      '(GR61, MR1)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
+      '(GR62, MR1)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
 m = at('enc')
 snap = dict(vars(m))
 check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',
       [(m.exec('A', 1, kl, ks), vars(m) == snap) for kl, ks in ((256, 32), (256, 48))] == [(0, True)] * 2)
+m = at('enc')
+m.setst(ELB, 'B', 64)
+m.exec('A', 1, 64)
+snap = dict(vars(m))
+check('KLLEN = 0 in Enc_Last_Block after its kl.exec: empty window, no operation (GR44, MR10)',
+      (m.exec('A', 1, 0), vars(m) == snap) == (0, True))
+m = at('enc')
 check('KLLEN = 120, klstart = 15 in Encrypt: invalid length first, Invalid', (m.exec('A', 1, 120, 15), m.state)
       == (0, INV))
 check('MachinePolicy decrypt-only: decryption works', kl_decrypt(k5, n5, a5, w5, m=Siv.provisioned(k5, policy=2))[0] == SUCC)
@@ -676,6 +684,12 @@ m.setst(EXPIRED)
 out = m.exec('A', 0x1234, 128)
 m.setst(READY)
 check('GR30/GR26: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
+m = Siv()
+check('GR26/GR30: an Unconfigured locker ignores kl.setst and kl.exec; kl.setst naming Expired leaves it Unconfigured',
+      (m.setst(SAV, 'C', 0), m.setst(READY), m.exec('B', 1), m.setst(EXPIRED), m.state) == (None, None, 0, None, UNCONF))
+m = at('ha')
+check('GR18: kl.setst naming reserved 54 or 55 raises illegal-instruction, State kept',
+      (raises(m.setst, 54), raises(m.setst, 55), m.state) == (True, True, HA))
 m, m2 = at('ha'), at('ha')
 m.setst(HA)
 absorb(m2, a5)
@@ -691,7 +705,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR67): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR68): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -729,7 +743,7 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR67; MR4)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR68; MR4)')
 src = bytes.fromhex(VECTORS[11]['key'])                 # the bytes of a listed source
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
@@ -740,7 +754,7 @@ P = Siv.provisioned
 for name, m, s_, n, ks in (('in Hash_Absorb (GR32 item 2)', at('ha'), src, 16, 0),
                            ('in Set_Aux_Value (nonce is no endpoint, GR32 item 2)', at('sav'), src, 12, 0),
                            ('in Success (GR32 item 2)', at('success'), src, 16, 0),
-                           ('into a key configured by a SKID (GR67, GR32 item 2)', P(skid=SKID), src, 16, 0),
+                           ('into a key configured by a SKID (GR68, GR32 item 2)', P(skid=SKID), src, 16, 0),
                            ('of 8 bytes into a 128-bit key (GR32 item 5)', P(K), src, 8, 0),
                            ('of 16 bytes into a 256-bit key (GR32 item 5)', P(K256), src, 16, 0),
                            ('of 0 bytes into a key (GR32 item 5)', P(K), src, 0, 0),

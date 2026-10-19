@@ -168,7 +168,7 @@ def pack(fields):
 
 
 def scc_len(b, kt=0):                    # Serialized Content, zero-padded to 128 bits
-    return -(-(1696 + b + (64 if kt == 1 else b)) // 128) * 16
+    return -(-(1664 + b + (64 if kt == 1 else b)) // 128) * 16
 
 
 def kl_size(state, b, kt=0):             # <<KLE-instruction-size>>, AuxDataLen = 0
@@ -186,7 +186,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None, keytype=None, policy=None):
-    """PI; with a SKID (_KeyType_ = 1, GR67) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
+    """PI; with a SKID (_KeyType_ = 1, GR68) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
     _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
     policy = (0 if xof else 0b11) if policy is None else policy     # KMACXOF: no _MachinePolicy_
     kt = int(skid is not None) if keytype is None else keytype
@@ -254,7 +254,7 @@ class Kmac:
 
     def bad_policy(self):
         """KMAC: at least one of generate/verify; KMACXOF gates no State, so non-zero is unsupported."""
-        return bool(self.policy) if self.xof else not self.policy & 3
+        return bool(self.policy) if self.xof else not self.policy & 3  # a policy above 3 (unsupported) is not modelled
 
     def _reject(self):
         """KMAC without a set bit: invalid Metadata (_Invalid_); KMACXOF with one: unsupported Metadata, the KLE
@@ -264,8 +264,8 @@ class Kmac:
             self.st = UNSUP
 
     def fields(self):
-        return [(self.state, 1600), (self.block_base, 16), (self.last_block_len, 16), (0, 32), (self.cb, self.b),
-                (self.skid, 64) if self.keytype else (self.kb, self.b), (self.L, 32)]
+        return [(self.state, 1600), (self.block_base, 16), (self.last_block_len, 16), (self.L, 32), (self.cb, self.b),
+                (self.skid, 64) if self.keytype else (self.kb, self.b)]
 
     def export(self, at=False):
         """(MDH, Serialized Content); at=True is the negative control that orders with `@`."""
@@ -282,9 +282,9 @@ class Kmac:
         for _, w in self.fields():
             vals.append(v & ((1 << w) - 1))
             v >>= w
-        self.state, self.block_base, self.last_block_len, _, self.cb, key, self.L = vals
+        self.state, self.block_base, self.last_block_len, self.L, self.cb, key = vals
         if self.keytype:
-            self._resolve(key)                                           # GR68: SKID resolved after import
+            self._resolve(key)                                           # GR69: SKID resolved after import
         else:
             self.kb = key
         if self.block_base >= self.b and self.st not in ERROR_STATES:   # inconsistent image (negative control)
@@ -335,7 +335,7 @@ class Kmac:
         self.state = keccak(self.state ^ (S & ((1 << room) - 1)) << self.block_base)
         if n > room:
             self.state = keccak(self.state ^ S >> room)
-        self.st, self.block_base = target, 0
+        self.st, self.block_base, self.last_block_len = target, 0, 0
         if 'raw_last_byte' in self.bad and not self.xof:
             self.L = 8 * -(-self.L // 8)
 
@@ -347,7 +347,7 @@ class Kmac:
         return status
 
     def restrictl(self, clear):                                          # kl.restrictl (GR20)
-        if self.st in ERROR_STATES:
+        if self.st in ERROR_STATES or not clear:                         # a zero field changes nothing
             return
         if self.xof:                                                     # the field is unused: _Invalid_
             return self.invalidate()
@@ -399,7 +399,7 @@ class Kmac:
             L = self.L                                                   # MR14: constant-time compare of L bits
             self.st = SUCCESS if sl(b2v(inp), L - 1, 0) == sl(self.state, L - 1, 0) else FAILURE
             return self._end('done')
-        self.invalidate()                                                # MR1, GR17, GR16
+        self.invalidate()                                                # MR1, GR17 item 1
         return self._end('invalid', out)
 
     def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLE-process-VLI>>
@@ -666,7 +666,7 @@ check('KMAC256 #4 split 20+44 B: _Hash_Output_ after 20, _Success_ on byte 64', 
       (s1, s2, c.st, bytes(d1 + d2)), ('done', 'success', SUCCESS, WANT[3]))
 c = squeezing(256, DATA4, 512)
 (st, o), = squeeze(c, 200, fill=0xEE)
-check('KMAC256 #4 into 200 B: _Success_, bytes [64, 200) cleared', True, (st, bytes(o)),
+check('KMAC256 #4 into 200 B: _Success_, bytes [64, 199] cleared', True, (st, bytes(o)),
       ('success', WANT[3] + bytes(136)))
 got, c = kl_kmac(256, DATA200, 4096, TAG)
 check('KMAC256 L=4096 (L > t: 4 applications of update()) then _Success_', True, (got, c.st),
@@ -684,8 +684,8 @@ squeeze(ca, 137)
 squeeze(cb, 273)
 ea, eb, w2 = ca.export()[1], cb.export()[1], 2 * RATE[256]
 check('two KMAC256 L=4096 exports 1088 bits apart differ only in `state` and `L` (4096 - 1096, 4096 - 2184)', True,
-      (ea[200:208 + w2] == eb[200:208 + w2], b2v(ea[208 + w2:212 + w2]), b2v(eb[208 + w2:212 + w2]),
-       ea[212 + w2:] == eb[212 + w2:]), (True, 4096 - 1096, 4096 - 2184, True))
+      (ea[200:204] == eb[200:204], b2v(ea[204:208]), b2v(eb[204:208]),
+       ea[208:] == eb[208:]), (True, 4096 - 1096, 4096 - 2184, True))
 
 section('KMACXOF: unlimited output (<<KLE-hash-functions-MACs-XOFs>>)')
 want = ref_kmac(128, KEY, DATA200, 0, TAG, True, 600)
@@ -711,7 +711,7 @@ for ks in (64, 70):
 check('output only, klstart >= KLLEN/8 (64, 70): empty window, only klstart = 0', True, res,
       [('empty', 0, b'\xee' * 64, True)] * 2)
 h.klstart = 5
-check('block_base = 80, output only, klstart = 5 -> _Invalid_, [5, 64) zeroed', True,
+check('block_base = 80, output only, klstart = 5 -> _Invalid_, [5, 63] zeroed', True,
       (c.exec(out=o), c.st, h.klstart, bytes(o)), ('invalid', INVALID, 0, b'\xee' * 5 + bytes(59)))
 
 section('States, transitions and expected Forms')
@@ -736,7 +736,7 @@ for label, c, act in (
 c = squeezing(128, DATA4, 256)
 squeeze(c, 32)
 (st, o), = squeeze(c, 32, fill=0xEE)
-check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR16, GR28)', True,
+check('kl.exec in _Success_ -> _Invalid_, output window zeroed (MR1, GR28)', True,
       (st, c.st, bytes(o)), ('invalid', INVALID, bytes(32)))
 c = squeezing(128, DATA200, 256)
 squeeze(c, 32)
@@ -795,7 +795,7 @@ for sec, kmax, smax in ((128, 163, 157), (256, 131, 125)):
             over.append(True)
     check(f'KMAC{sec}: max |K| = {kmax}, |S| = {smax} fit one rate block, one more does not', True,
           (fits, over), ([RATE[sec]] * 2, [True, True]))
-for sec, pi_len, c1_len in ((128, 352, 560), (256, 288, 496)):
+for sec, pi_len, c1_len in ((128, 352, 544), (256, 288, 480)):
     b, w = 8 * RATE[sec], RATE[sec]
     pi, (cbk, kbk) = make_pi(sec, False, KEY, TAG), provision_blocks(sec, KEY, TAG)
     check(f'KMAC{sec} PI = MDH, cshake_block, key_block ({pi_len} B = kl.size); SCC Content1 = '
@@ -806,12 +806,10 @@ for sec, pi_len, c1_len in ((128, 352, 560), (256, 288, 496)):
     c = squeezing(sec, DATA4, 1234)
     squeeze(c, 8)
     ct = c.export()[1]
-    check(f'KMAC{sec} Content1: state, block_base = 64, last_block_len = b, 32-bit padding, cshake_block, '
-          f'key_block, L = 1234 - 64 bits left, zero padding', True,
-          (ct[:200], ct[200:202], ct[202:204], ct[204:208], ct[208:208 + w], ct[208 + w:208 + 2 * w],
-           ct[208 + 2 * w:212 + 2 * w], ct[212 + 2 * w:]),
-          (v2b(c.state, 200), v2b(64, 2), v2b(b, 2), bytes(4), cbk, kbk, v2b(1234 - 64, 4),
-           bytes(c1_len - 212 - 2 * w)))
+    check(f'KMAC{sec} Content1: state, block_base = 64, last_block_len = 0, L = 1234 - 64 bits left (Pos. iv, '
+          f'the place of out_len), cshake_block, key_block, no padding', True,
+          (ct[:200], ct[200:202], ct[202:204], ct[204:208], ct[208:208 + w], ct[208 + w:], len(ct)),
+          (v2b(c.state, 200), v2b(64, 2), v2b(0, 2), v2b(1234 - 64, 4), cbk, kbk, 208 + 2 * w))
 xof256 = ref_kmac(256, KEY, DATA200, 0, TAG, True, 300)
 for label, sec, xof, n_abs, L, n_out, want in (
         ('KMAC128 in _Ready_', 128, False, None, None, None, WANT[2]),
@@ -1016,12 +1014,14 @@ cv = absorbing(128, DATA200)
 cv.restrictl(1)
 cv.setst(VERIFY, 'B', 256)
 cv.exec(inp=ref_kmac(128, KEY, DATA200, 256, TAG))
-cz, cx = locker(128, policy=2), locker(128, xof=True, policy=0)
+cz, cx, c0 = locker(128, policy=2), locker(128, xof=True, policy=0), locker(128, xof=True, policy=0)
 cz.restrictl(2)
 cx.restrictl(1)
+c0.restrictl(0)
 check('kl.restrictl clearing bit 0 in _Hash_Output_: the output kl.exec -> _Invalid_, OUTPUT zeroed; in _Hash_Absorb_ '
-      'verification still succeeds; clearing the only set bit -> _Invalid_; KMACXOF: any -> _Invalid_ (GR20, MR11)',
-      True, (rg, bytes(og), cg.st, cv.st, cz.st, cx.st), ('invalid', bytes(32), INVALID, SUCCESS, INVALID, INVALID))
+      'verification still succeeds; clearing the only set bit -> _Invalid_; KMACXOF: any set bit -> _Invalid_, a zero '
+      'field changes nothing (GR20, MR11, <<KLE-instruction-restrict>>)', True,
+      (rg, bytes(og), cg.st, cv.st, cz.st, cx.st, c0.st), ('invalid', bytes(32), INVALID, SUCCESS, INVALID, INVALID, READY))
 
 section('Negative controls')
 control('left_encode(L) in place of right_encode(L) (#2, #6)',
