@@ -1025,6 +1025,9 @@ Description:: {empty}
 A 1 therefore does not exclude a KLE unsupported-Metadata exception that a Machine specification attaches to the value of another field, such as the _AuxInfo_ of EdDSA.
 In Form A, an _Unconfigured_ locker yields 0 whatever these fields hold.
 
+In Forms B and C, both instructions look the supplied MDH up among the Machines that the KLE unit implements natively.
+If the MDH names a Machine, or a variant of it, that the unit does not implement natively, and `mstatus.kleemulation` is 1 (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>), the instruction raises an illegal-instruction exception, so that M-mode can supply the value for an emulated Machine; if `mstatus.kleemulation` is 0, it returns 0.
+
 `kl.size` (`q` = 0) writes to `Xd` the size in bytes of the memory needed for the external image that the MDH describes: a PI, an SCC, the MDH and data of a system-specific format, whose length _AuxDataLen_ gives (Rule <<KLE-GR-sysfmt-mdh>>), or, for a locker in an Error State, the MDH alone (<<KLE-management-formats-and-states>>, <<KLE-length-rule>>).
 For an SCC the size includes the authentication tag(s) and the ADS; for a PI it covers the entire PI.
 
@@ -2421,11 +2424,12 @@ A nested export taken during the import (<<KLE-management-formats-and-states>>) 
 [[KLE-GR-sysfmt-completion,GR59]]GR59:: The `kl.mgmt` that completes a system-specific import receives an `ml` whose _State_ is _Unconfigured_ and proceeds in four steps; a step that leaves the locker in an Error State ends the import.
 +
 --
-. If the format authenticates its data, the instruction authenticates it before any other check; if the format encrypts its data, the instruction decrypts it. It then makes the check of Rule <<KLE-GR-sysfmt-mdh>>, converts the data, and translates the policies of the format. A failed check that the format defines transitions the locker to Error State _Authentication Failed_ if the format authenticates its data, and to _Invalid_ if it does not.
-. The converted Content undergoes every check that the Machine makes on a provisioning or an import of the same fields, with the same outcomes (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>), and each field that it configures is marked as configured, as a completed load of that field marks it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
-. The instruction narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>). If the narrowing fails, or if the format requires a higher side-channel protection level than the _SCProtection_ of the declared MDH, the locker transitions to Error State _Privilege Violation_.
-. The instruction sets _Version_ to 0 (or 1 in a future version of this specification) and _AuxDataLen_ to 0. Unless a Machine check left the locker in _Failure_, it then sets _State_ to _Ready_, with the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>), or with initialisation operations that the format defines in their place. Any other action that a Machine performs on a provisioning, such as setting a default or clearing a field or its flag, applies only to a field that the converted Content does not configure, and to the flag of such a field; no such action clears a flag that step 2 set.
-Initialisation operations that the format defines apply only at this completion. From then on the locker behaves as a provisioned one: every later entry into _Ready_ performs the operations of the Machine, and the import of an SCC exported from the locker completes as any other SCC import (Rule <<KLE-GR-completion-state>>).
+. It authenticates the data, if the format authenticates it, before any other check, and decrypts it, if the format encrypts it; it then makes the check of Rule <<KLE-GR-sysfmt-mdh>>, converts the data and translates the policies of the format. A failed check of the format gives Error State _Authentication Failed_ if the format authenticates its data, and _Invalid_ otherwise.
+. The converted Content undergoes every check of a provisioning or an import of the same fields, with the same outcomes (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>); each field that it configures is marked as a completed load marks it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
+. It narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>); a failed narrowing, or a format that requires a higher side-channel protection level than the declared _SCProtection_, gives Error State _Privilege Violation_.
+. It sets _Version_ to 0 (or 1 in a future version of this specification) and _AuxDataLen_ to 0 and, unless a Machine check left the locker in _Failure_, enters _Ready_ with the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>) or with initialisation operations of the format instead. The other provisioning actions of the Machine, such as setting a default or clearing a field or its flag, apply only to the fields that the converted Content does not configure, and to their flags; none clears a flag set in step 2.
+
+The initialisation operations of the format apply only at this completion: afterwards the locker behaves as a provisioned one, so every later entry into _Ready_ performs the operations of the Machine, and the import of an SCC exported from it completes as any other (Rule <<KLE-GR-completion-state>>).
 --
 
 NOTE: A CC imported from a system-specific format can be bound by its _Locality_ to the implementations meant to use it.
@@ -2488,6 +2492,7 @@ The second group depends on the state of the KLE unit:
 . A non-zero `Xl` where <<KLE-instruction-load>> or <<KLE-instruction-store>> forbids it.
 . `kl.input` or `kl.output` without `Zklio`, or an unconfigured KLIOBUF (Rule <<KLE-GR-iobuf-configured>>).
 . A `kl.derive` whose `KLNL` operand names its other locker (<<KLE-instruction-derive>>).
+. A `kl.avail` or `kl.size` of Form B or C whose MDH names a Machine, or a variant of it, that the KLE unit does not implement natively, while `mstatus.kleemulation` is 1 (<<KLE-instruction-size>>, <<Zkl-ISA-priv.adoc#KLE-kleemulation>>).
 --
 
 KLE fatal-error::
