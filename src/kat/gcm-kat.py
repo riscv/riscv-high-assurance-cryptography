@@ -112,7 +112,7 @@ class Gcm:
         if s.state in ERROR_STATES:
             return 0, 0                                  # GR29
         kb = 64 if s.key_type else s.k
-        slot = (cat((s.cumul_len, 48), (s.block_base, 16), (0, 16), (s.len, 16))   # ii.b padding, ii.e J0_padding
+        slot = (cat((s.cumul_len, 48), (s.block_base, 16), (0, 16), (s.len, 16))   # ii.b and ii.e: padding
                 if s.state == SAV else s.J0)
         return (cat((s.last_block_len, 16), (s.start_ctr, 32), (s.tag, 128), (slot, 128),
                     (s.skid if s.key_type else b2v(s.key), kb)), pad128(kb + 304))
@@ -919,7 +919,7 @@ check('export in Encrypt, import (auth_key recomputed): tc4 completes',
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:32]), 256)
 v, n = cl.export()
-check("Set_Aux_Value overlay in J0's slot: len, padding, block_base, cumul_len, J0_padding; hash in tag",
+check("Set_Aux_Value overlay in J0's slot: len, padding, block_base, cumul_len, padding; hash in tag",
       (sl(v, 143, 128), sl(v, 159, 144), sl(v, 175, 160), sl(v, 223, 176), sl(v, 255, 224), sl(v, 383, 256), n)
       == (480, 0, 0, 256, 0, cl.tag, 512))
 res = {}

@@ -717,23 +717,27 @@ Example pseudocode is given in <<Zkl-software.adoc#KLE-pseudocode-keystream-mode
 [[KLE-XEX-XTS-modes]]
 === XEX/XTS Modes
 
-The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10], and NIST made it a Recommendation in 2010 cite:[nist-SP-800-38E].
-For SM4, XTS is specified by cite:[GBT-17964-2021], which differs only in the bit order of the multiplication that updates the mask.
-XTS builds on the XEX construction of Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], which turns a block cipher into a _Tweakable Block Cipher_ (TBC) cite:[DBLP-conf-crypto-LiskovRW02].
-A TBC takes a tweak besides the key and the plaintext or ciphertext.
-Key and tweak together select the permutation that the cipher computes.
-
-cite:[nist-SP-800-38E] uses the two-key form of the XEX construction, which builds a TBC `Ẽ` from a block cipher `E`,
-with keys `K1` and `K2`, tweak `T`, and plaintext `P`, as follows:
+XEX cite:[DBLP-conf-asiacrypt-Rogaway04] turns a block cipher into a _Tweakable Block Cipher_ (TBC) cite:[DBLP-conf-crypto-LiskovRW02], whose key and tweak together select the permutation that the cipher computes.
+Its two-key form builds a TBC `Ẽ` from a block cipher `E`, with keys `K1` and `K2`, tweak `T`, and plaintext `P`:
 
 `{fournbsp}{fournbsp}` `Ẽ(K1, K2, T, P) = E(K1, P xor M) xor M` `{nbsp}{nbsp}` where `{nbsp}{nbsp}` `M = E(K2, T)` `{nbsp}{nbsp}` is called a _mask_.
 
-The single-key XEX of cite:[DBLP-conf-asiacrypt-Rogaway04] starts from the mask `x {interpunct} E(K, T)` instead, and is not architected.
+The single-key XEX of cite:[DBLP-conf-asiacrypt-Rogaway04], whose mask is `x {interpunct} E(K, T)`, is not architected.
+The Machine computes the mask once per tweak, by the `kl.setst` that sets the tweak; each block uses the current mask and then updates it by a multiplication in GF(2^b^).
+`key1` is `K1`, which encrypts the data, and `key2` is `K2`, which encrypts the tweak.
 
-In XEX mode, the mask is computed once per tweak, by the `kl.setst` that sets the tweak.
-Each block uses the current mask and then updates it by a multiplication in GF(2^b^), instead of encrypting a new tweak.
+XTS cite:[DBLP-journals-ieeesp-Martin10], designed for storage confidentiality and a NIST Recommendation since 2010, adds two things to XEX: the tweak identifies the data unit, and a data unit whose length is not a multiple of `b` is completed by ciphertext stealing.
+Software obtains both from the XEX CC (<<KLE-XTS-from-XEX>>).
+The variants differ as follows:
 
-KLE uses the two-key form: `key1` is `K1`, which encrypts the data, and `key2` is `K2`, which encrypts the tweak.
+* `AES128_XEX` and `AES256_XEX` follow cite:[nist-SP-800-38E] and cite:[IEEE-1619-2018]:
+** `update_mask` takes `V[i]` as the coefficient of `x^i^`;
+** the tweak, the `INPUT` of the `kl.setst` into _Encrypt_ or _Decrypt_, is `bin(i, b)` (<<Zkl-notation.adoc#KLE-Notation>>), the data unit sequence number `i` as a `b`-bit little-endian value;
+** a data unit has at most 2^20^ blocks, a limit that the caller keeps and the Machine neither enforces nor counts (Rule <<KLE-MGR-caller-limits>>).
+* `SM4_XEX` follows cite:[GBT-17964-2021]:
+** `update_mask` takes the bits of each byte in the reverse order;
+** the tweak is the 128-bit tweak of cite:[GBT-17964-2021], its first byte in byte 0.
+
 (((KLE, Machine, XEX)))
 The Machine cannot check that the two keys are independent: the provisioner must supply two independently generated keys,
 a System Key Identifier must resolve to two independently generated keys in the SKS, and software that derives `key1 {vvert} key2`
@@ -763,6 +767,8 @@ Data Structures::
  ** `key2`: `k` bits. `key2` = `key1` is a configuration error (Rule <<KLE-MGR-config-data-error>>).
     It is checked whenever the keys are written: by a provisioning, whether the keys are given by value, resolved from a System Key Identifier or generated (_KeyType_ = 2), by an import, and by a `kl.derive` into `key1 {vvert} key2`.
  ** `mask`: `b` bits.
+ ** `StealSkip` and `StealBack`: bits 0 and 1 of _StateExtension_, which record the two steps of ciphertext stealing in _Decrypt_ (<<KLE-XTS-from-XEX>>).
+    At most one of them is set, and only in _Decrypt_; the Machine supports no other _StateExtension_ @ _State_.
 
 * *Serialized Content*:
 +
@@ -782,8 +788,7 @@ Machine-Specific Functions::
 * `dec_blk(K, c) -> p` decrypts block `c` using the key `K`, and returns the result `p`.
 * `update_mask(mask) -> mask` updates the mask by multiplication with a generator
 of GF(2^128^): multiplication by `x` modulo `x^128^ + x^7^ + x^2^ + x + 1`.
-For `AES128_XEX` and `AES256_XEX`, `V[i]` is the coefficient of `x^i^`,
-as in cite:[nist-SP-800-38E] and cite:[IEEE-1619-2018] {sect}5.2. That is,
+For `AES128_XEX` and `AES256_XEX` (cite:[IEEE-1619-2018] {sect}5.2),
 +
 `{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[127]` = `0`
 +
@@ -792,24 +797,42 @@ and
 `{fournbsp}{fournbsp}` `update_mask(V)` = `(V << 1) xor (zeros(120) @ 0b10000111)`
 `{nbsp}{nbsp}` otherwise.
 +
-For `SM4_XEX`, the bits of each byte are taken in the reverse order, as in cite:[GBT-17964-2021]: with
+For `SM4_XEX`, with
 `B~j~` = `V[8j+7:8j]`, byte `j` of `V`, `update_mask(V)` = `B'~15~ @` {ellipsis} `@ B'~0~`, where
 +
 `{fournbsp}{fournbsp}` `B'~j~` = `B~j-1~[0] @ B~j~[7:1]` `{nbsp}{nbsp}` for `0 < j < 16`,
 +
 `{fournbsp}{fournbsp}` `B'~0~` = `B~0~ >> 1` `{fournbsp}` if `B~15~[0]` = `0`, `{nbsp}{nbsp}` and
 `B'~0~` = `(B~0~ >> 1) xor 0xE1` `{nbsp}{nbsp}` otherwise.
+* `update_mask_inv(mask) -> mask` inverts `update_mask`, dividing by `x`: `update_mask_inv(update_mask(V))` = `V`.
+For `AES128_XEX` and `AES256_XEX`,
++
+`{fournbsp}{fournbsp}` `update_mask_inv(V)` = `V >> 1` `{fournbsp}` if `V[0]` = `0`
++
+and
++
+`{fournbsp}{fournbsp}` `update_mask_inv(V)` = `((V xor (zeros(120) @ 0b10000111)) >> 1) xor (0b1 @ zeros(127))`
+`{nbsp}{nbsp}` otherwise.
++
+For `SM4_XEX`, with `B~j~` byte `j` of `V` as above, `c` = `B~0~[7]`, and `A` = `B~0~` if `c` = `0` and
+`A` = `B~0~ xor 0xE1` otherwise, `update_mask_inv(V)` = `B'~15~ @` {ellipsis} `@ B'~0~`, where
++
+`{fournbsp}{fournbsp}` `B'~j~` = `B~j~[6:0] @ B~j+1~[7]` `{nbsp}{nbsp}` for `0 < j < 15`,
++
+`{fournbsp}{fournbsp}` `B'~0~` = `A[6:0] @ B~1~[7]` `{nbsp}{nbsp}` and `{nbsp}{nbsp}` `B'~15~` = `B~15~[6:0] @ c`.
 
 State Machine::
 
-* *States:* _Ready_, _Encrypt_, and _Decrypt_ (defined as before, cf. <<KLE-ECB-mode>>).
+* *States:* _Ready_, _Encrypt_, and _Decrypt_ (defined as before, cf. <<KLE-ECB-mode>>), and _Success_.
 
 * *Allowed State Transitions:*
  ** _Ready_, _Encrypt_ or _Decrypt_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Ready_, _Encrypt_ or _Decrypt_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- ** _Encrypt_ or _Decrypt_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
+ ** _Decrypt_ -> _Success_, by the last `kl.exec` of ciphertext stealing.
+ ** _Encrypt_, _Decrypt_ or _Success_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior:*
+ ** Every transition clears `StealSkip` and `StealBack`.
  ** When entering _Ready_, `mask` {leftarrow} 0.
  ** When entering _Encrypt_ or _Decrypt_, the Form C ``kl.setst`` takes the tweak as `INPUT`
     and computes the initial mask:
@@ -818,7 +841,7 @@ State Machine::
   . `mask <- enc_blk(key2, mask)`.
  ** The Machine allows a same-State `kl.setst` into _Encrypt_ or _Decrypt_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which, like any other `kl.setst` into these States, takes a new tweak and performs these two steps.
 
- ** In States _Encrypt_ and _Decrypt_, (multi-block) Form A ``kl.exec`` instructions are expected.
+ ** In States _Encrypt_ and _Decrypt_, with `StealSkip` and `StealBack` clear, (multi-block) Form A ``kl.exec`` instructions are expected.
     For each block, they read the `INPUT` and determine the `OUTPUT` as follows:
 +
 --
@@ -826,66 +849,47 @@ State Machine::
     in State _Decrypt_, `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`.
   . `mask <- update_mask(mask)`.
 --
+ ** In State _Decrypt_, the Form A `kl.setst` with immediate `kl_xex_state_steal` (66) starts ciphertext stealing.
+    It leaves _State_ unchanged and is not a transition.
+    It requires `StealSkip` and `StealBack` clear, and otherwise transitions the locker to Error State _Invalid_.
+    It then:
+  . `mask <- update_mask(mask)`;
+  . sets `StealSkip`.
+ *** With `StealSkip` set, a Form A `kl.exec` processes a single block (Rule <<KLE-MGR-one-klexec-per-block>>):
+  . `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`;
+  . `mask <- update_mask_inv(mask)`;
+  . it clears `StealSkip` and sets `StealBack`.
+ *** With `StealBack` set, a Form A `kl.exec` processes a single block (Rule <<KLE-MGR-one-klexec-per-block>>):
+  . `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`;
+  . the locker transitions to _Success_.
 //
 
-Encryption pseudocode is provided in <<Zkl-software.adoc#KLE-pseudocode-basic-IV-mode>>;
-decryption is similar.
+Pseudocode, with support for ciphertext stealing, is given in <<Zkl-software.adoc#KLE-pseudocode-basic-IV-mode>> and <<Zkl-software.adoc#KLE-pseudocode-XEX-decryption>>.
 
-
-[[KLE-XTS-from-XEX]]
-==== Procedure: XTS and Ciphertext Stealing from an XEX Context
-
-cite:[nist-SP-800-38E] adds two things to the XEX construction above: the tweak is the
-data unit sequence number, and a data unit whose length is not a multiple of `b` is
-completed by ciphertext stealing.
-Software obtains both from the XEX CC, with no further architectural support, as this
-subsection describes.
-A data unit of `AES128_XEX` or `AES256_XEX` has at most 2^20^ blocks (cite:[nist-SP-800-38E]); the caller keeps this
-limit, which the Machine neither enforces nor counts (Rule <<KLE-MGR-caller-limits>>).
-
-*The tweak.* For `AES128_XEX` and `AES256_XEX`, the `INPUT` of the `kl.setst` into _Encrypt_ or _Decrypt_ is
-`bin(i, b)` (<<Zkl-notation.adoc#KLE-Notation>>): the data unit sequence number `i` as a `b`-bit little-endian value.
-For `SM4_XEX`, it is the 128-bit tweak of cite:[GBT-17964-2021], its first byte in byte 0.
-
-*Ciphertext stealing.* Let the data unit be `m` {ge} 1 full blocks followed by a final partial
-block of `s` bits, with `0` < `s` < `b` and `s` a multiple of 8, and number the blocks
-`P~0~` {ellipsis} `P~m-1~`, `P~m~`.
+[[KLE-XTS-from-XEX,XTS ciphertext stealing]]
+*Ciphertext stealing.* A data unit of whole blocks is processed, in both directions, by the plain XEX sequence over its blocks.
+Otherwise, let it be `m` {ge} 1 full blocks `P~0~` {ellipsis} `P~m-1~` followed by a partial block `P~m~` of `s` bits,
+with `0` < `s` < `b` and `s` a multiple of 8.
 The locker is at _mask index_ `j` when its `mask` is `update_mask` applied `j` times to `enc_blk(key2, T)`, `T` being the tweak.
-Each block uses the current `mask` and then advances it, blocks being processed in order
-(Rule <<KLE-MGR-one-klexec-per-block>>), so the `j`-th block processed after the tweak was set, counting
-from 0, is processed at mask index `j`.
+Blocks are processed in order (Rule <<KLE-MGR-one-klexec-per-block>>), so the `j`-th block after the tweak is set, counting from 0, uses mask index `j`.
+`CP @ P~m~` and `CP @ C~m~` place the partial block in the least significant bits, where the first `s`/8 bytes of a string are (<<Zkl-notation.adoc#KLE-Notation>>).
 
-Encryption needs no reordering, because SP 800-38E consumes the mask indices in their
-natural order:
+Encryption consumes the mask indices in order:
 
   . Issue `kl.exec` for `P~0~` {ellipsis} `P~m-2~`, obtaining `C~0~` {ellipsis} `C~m-2~` (no instruction if `m` = 1).
-  . Issue `kl.exec` for `P~m-1~`, obtaining `CC` at mask index `m-1`.
-  . `C~m~` {leftarrow} `CC[s-1:0]` and `CP` {leftarrow} `CC[b-1:s]`.
+  . Issue `kl.exec` for `P~m-1~`, obtaining `CC` at mask index `m-1`; `C~m~` {leftarrow} `CC[s-1:0]` and `CP` {leftarrow} `CC[b-1:s]`.
   . Issue `kl.exec` for `CP @ P~m~`, obtaining `C~m-1~` at mask index `m`.
-  . The ciphertext is `C~0~` {ellipsis} `C~m-2~`, `C~m-1~`, `C~m~`, in that order, with
-    `C~m~` the final `s` bits.
+  . The ciphertext is `C~0~` {ellipsis} `C~m-1~`, `C~m~`, with `C~m~` the final `s` bits.
 
-Decryption consumes mask index `m` before mask index `m-1`, and a mask only ever advances.
-The two are obtained from one context by cloning it once, immediately before the last two blocks:
+Decryption consumes mask index `m` before mask index `m-1`; the stealing steps of the Machine reorder the two:
 
-  . Issue `kl.exec` for `C~0~` {ellipsis} `C~m-2~`, obtaining `P~0~` {ellipsis} `P~m-2~` (no instruction if `m` = 1).
-    The `mask` of the locker is now at index `m-1`.
-  . `kl.clone` the locker into a second locker, which is therefore also at mask index `m-1`.
-  . On the clone, issue one `kl.exec` on any single block (`KLLEN` = `b`), and discard its output.
-    This consumes mask index `m-1` and leaves the clone at index `m`.
-  . On the clone, issue `kl.exec` for `C~m-1~`, obtaining `PP` at mask index `m`.
+  . Issue `kl.exec` for `C~0~` {ellipsis} `C~m-2~`, obtaining `P~0~` {ellipsis} `P~m-2~` (no instruction if `m` = 1); the `mask` is at index `m-1`.
+  . Issue the Form A `kl.setst` with immediate `kl_xex_state_steal`, which skips mask index `m-1`.
+  . Issue `kl.exec` for `C~m-1~`, obtaining `PP` at mask index `m`; the `mask` returns to index `m-1`.
   . `P~m~` {leftarrow} `PP[s-1:0]` and `CP` {leftarrow} `PP[b-1:s]`.
-  . On the original locker, still at mask index `m-1`, issue `kl.exec` for `CP @ C~m~`,
-    obtaining `P~m-1~`.
-  . Clear the clone.
+  . Issue `kl.exec` for `CP @ C~m~`, obtaining `P~m-1~` at mask index `m-1`; the locker transitions to _Success_.
 
-With stealing, decryption costs one `kl.clone` and one discarded block operation per
-data unit, whatever its length. `CP @ P~m~` and `CP @ C~m~` place the
-partial block in the least significant bits, where the first `s`/8 bytes of the
-string live under <<Zkl-notation.adoc#KLE-Notation>>.
-
-A data unit of whole blocks needs no stealing: both directions are the plain XEX sequence over
-its blocks.
+Decryption with stealing thus costs one `kl.setst` per data unit, and the next data unit starts from _Ready_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1224,7 +1228,7 @@ While the locker is in State _Set_Aux_Value_, `J0` is replaced by the following 
 | ii.b  | 16              | Padding     | Zero.
 | ii.c  | 16              | `block_base`| Amount of data, in bits, absorbed so far into the current block.
 | ii.d  | 48              | `cumul_len` | Cumulative length, in bits, of the data absorbed so far.
-| ii.e  | 32              | `J0_padding`| Zero.
+| ii.e  | 32              | Padding     | Zero.
 |===
 --
 
@@ -1330,10 +1334,9 @@ The value of `J0` is that of cite:[nist-SP-800-38D] {sect}7.1 for a 96-bit IV, t
   . the `kl.exec` that completes the IV performs `finalize()` (step 3.h of <<KLE-process-VLI>>), which transitions the
     locker to _Hash_Absorb_;
   . a `kl.setst` naming _Ready_ performs no `finalize()`: the partial IV is discarded, and `tag`, `J0`, `len`,
-    `block_base` and `cumul_len` are zeroed (Rule <<KLE-MGR-load-long-field>>).
-+
-Entering _Hash_Absorb_ requires a complete IV (Rule <<KLE-MGR-policy-gate>>).
-A `kl.setst` naming _Hash_Absorb_ from _Set_Aux_Value_ transitions the locker to Error State _Invalid_.
+    `block_base` and `cumul_len` are zeroed (Rule <<KLE-MGR-load-long-field>>);
+  . a `kl.setst` naming _Hash_Absorb_ transitions the locker to Error State _Invalid_: entering _Hash_Absorb_
+    requires a complete IV (Rule <<KLE-MGR-policy-gate>>).
 
 [NOTE]
 ====
@@ -1670,7 +1673,7 @@ The loop makes `k`/64 + 2 calls, four for `k` = 128 and six for `k` = 256, and k
 64 bits of each: these are the “first eight bytes” of cite:[RFC8452] under <<Zkl-notation.adoc#KLE-Notation>>.
 * `absorb(data)` absorbs data into the hash function by performing a step of POLYVAL:
   . `tmp <- tmp xor data`.
-  . `tmp <- Montmul(tmp, auth_key)`, with the `Montmul` of the POLYVAL of <<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>
+  . `tmp <- Montmul(tmp, auth_key)`, with the `Montmul` of the POLYVAL of <<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>.
 
 State Machine::
   * *States:*
@@ -1705,7 +1708,7 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
 * *Behavior:*
 ** Upon entering State _Ready_:
   *** The following initialization operations are performed:
-   . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
+   . `nonce <- 0`, `ctr <- 0`, `tmp <- 0` and `SIV <- 0`.
 
 ** When entering State _Set_Aux_Value_:
    . A Form C `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `INPUT` is expected.
@@ -1745,7 +1748,7 @@ Skipping it during decryption leaves `SIV` at the zero that entering _Ready_ set
 +
 --
   . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
-  . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))``,
+  . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))``.
   . `ctr <- ctr + 1`.
 --
 ** When entering State _Enc_Last_Block_:
@@ -1760,7 +1763,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
 --
 . If `last_block_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLE-MGR-single-last-block>>).
 . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
-    . ``OUTPUT <- zeros(128-last_block_len) @ (INPUT[last_block_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_block_len-1:0])``,
+    . ``OUTPUT <- zeros(128-last_block_len) @ (INPUT[last_block_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_block_len-1:0])``.
     . `ctr <- ctr + 1`.
     . `last_block_len <- 0`
 --
@@ -1769,7 +1772,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
 +
 --
 . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
-. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))``,
+. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))``.
 . `absorb(OUTPUT)`.
 . `ctr <- ctr + 1`.
 --
@@ -1785,7 +1788,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
 --
 . If `last_block_len = 0`, the final block has already been processed: the locker transitions to Error State _Invalid_ (Rule <<KLE-MGR-single-last-block>>).
 . If `ctr` = 2^32^, then the locker transitions to Error State _Invalid_: the block would be one more than a message may hold.
-    . ``OUTPUT <- zeros(128-last_block_len) @ (INPUT[last_block_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_block_len-1:0])``,
+    . ``OUTPUT <- zeros(128-last_block_len) @ (INPUT[last_block_len-1:0] xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin\((int(SIV[31:0]) + ctr) mod 2^32^, 32))[last_block_len-1:0])``.
     . `absorb(OUTPUT)`.
     . `ctr <- ctr + 1`.
     . `last_block_len <- 0`
@@ -2350,7 +2353,7 @@ A `kl.exec` with `absorbed_all` = `true`, or a `KLLEN` smaller than `last_block_
 
 ** To enter State _Hash_Output_ where _MachinePolicy_[0] is set (following Rule <<KLE-MGR-policy-gate>>), a Form A `kl.setst` with immediate `kl_state_hash_output` is issued.
 +
-A `kl.setst` naming _Hash_Output_ with `absorbed_all` = `false`, or a `kl.exec` in _Hash_Output_ with a `KLLEN` smaller than 64 (Rule <<KLE-MGR-granularity>>), transitions the locker to Error State _Invalid_.
+A `kl.setst` naming _Hash_Output_ with `absorbed_all` = `false` transitions the locker to Error State _Invalid_.
 
 ** In State _Hash_Output_, where _MachinePolicy_[0] is set (following Rule <<KLE-MGR-policy-gate>>), a single Form C `kl.exec` with `KLLEN` {ge} 64 outputs the CMAC:
 +
@@ -2359,20 +2362,22 @@ A `kl.setst` naming _Hash_Output_ with `absorbed_all` = `false`, or a `kl.exec` 
 . The CC transitions to State _Success_.
 
 The `kl.exec` processes a single block, so its only interruption point is 0 (Rule <<KLE-MGR-one-klexec-per-block>>).
+A `KLLEN` smaller than 64 transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-granularity>>).
 As a `kl.derive` source (<<KLE-derive-endpoints>>), _Hash_Output_ supplies the `b`/8 bytes of `hash`.
 --
 
 ** To enter State _Hash_Verify_ where _MachinePolicy_[1] is set (following Rule <<KLE-MGR-policy-gate>>), a Form B `kl.setst` with immediate `kl_state_hash_verify` and auxiliary operand `Xs` is issued:
 +
 --
-. `Xs` must be a multiple of 8 with `64` {le} `Xs`; else it transitions the locker to Error State _Invalid_.
+. `Xs` must be a multiple of 8 with 64 {le} `Xs`; else it transitions the locker to Error State _Invalid_.
 . It enters State _Hash_Verify_ and sets `tag_len <- min(Xs, b)`.
 
-A `kl.setst` naming _Hash_Verify_ with `absorbed_all` = `false`, or a `kl.exec` in _Hash_Verify_ with a `KLLEN` smaller than `tag_len` (Rule <<KLE-MGR-granularity>>), transitions the locker to Error State _Invalid_.
+A `kl.setst` naming _Hash_Verify_ with `absorbed_all` = `false` transitions the locker to Error State _Invalid_.
 --
 
 ** In State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `tag_len` compares, in constant time (Rule <<KLE-MGR-tag-verify>>), `INPUT[tag_len-1:0]` with `hash[tag_len-1:0]`, the first `tag_len`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2.
 The CC then transitions to State _Success_ if they match, else to _Failure_.
+A `KLLEN` smaller than `tag_len` transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-granularity>>).
 
 //
 
@@ -2392,7 +2397,7 @@ No interface fits every construction, but the one defined here covers the most c
 
 Every Machine that instantiates it pads the message as its referenced standard prescribes:
 the caller supplies the message alone, and the `kl.setst` that ends the message completes the
-padding and applies the length encoding.
+padding and applies any length encoding of that standard.
 One instruction sequence thus serves all of them (<<Zkl-software.adoc#KLE-hash-example>>).
 
 It is highly recommended that a new Machine for a hash function, MAC function or XOF work with the same instruction sequence, unless a reason prevents it.
@@ -2406,7 +2411,7 @@ Parameters::
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
 * `state_offset` = offset into the state at which the block is absorbed.
 * `tag_offset` = offset of the tag into the state, 0 unless the Machine states otherwise.
-  A Machine must satisfy `tag_offset` + `t` {le} `b` for a sponge, so that no output bit comes from the capacity,
+  A Machine must satisfy `state_offset` {le} `tag_offset` and `tag_offset` + `t` {le} `state_offset` + `b` for a sponge, so that every output bit comes from the rate,
   and `tag_offset` + `t` {le} `n` otherwise.
 * `g` = granularity: 8 bits in _Hash_Absorb_ and _Hash_Output_, for every instantiation; a State that loads a field, such as _Set_Key_ of <<KLE-HMAC>>, uses it too unless the Machine states otherwise.
 
@@ -2974,12 +2979,11 @@ where `g` is the granularity of `H`;
     _Hash_Output_ as by `H`, with `out_len` set as in <<KLE-hash-functions-MACs-XOFs>>, or verified in _Hash_Verify_.
 --
 +
-A Form B `kl.setst` into _Hash_Output_ with `Xs` {ne} 0 requires `Xs` to be a multiple of 8 with 64 {le} `Xs` {le} `t`;
-any other non-zero `Xs` transitions the locker to Error State _Invalid_, and `Xs` = 0 sets `out_len` {leftarrow} `t`, as in <<KLE-hash-functions-MACs-XOFs>>.
+For a Form B `kl.setst` into _Hash_Output_, the minimum non-zero `Xs` of <<KLE-hash-functions-MACs-XOFs>> is 64.
 
 ** To verify an HMAC where _MachinePolicy_[1] is set (Rule <<KLE-MGR-policy-gate>>):
    . a Form B `kl.setst` with immediate `kl_state_hash_verify` and auxiliary operand `Xs` enters State _Hash_Verify_ and sets
-     `tag_len` {leftarrow} `min(Xs, t)`; `Xs` must be a multiple of 8 with `64` {le} `Xs`;
+     `tag_len` {leftarrow} `min(Xs, t)`; `Xs` must be a multiple of 8 with 64 {le} `Xs`;
    . in State _Hash_Verify_, a single Form B `kl.exec` with `KLLEN` {ge} `tag_len` compares `INPUT[tag_len-1:0]` with
      `state[tag_offset+tag_len-1 : tag_offset]`, the first `tag_len`/8 bytes of the HMAC, in constant time
      (Rule <<KLE-MGR-tag-verify>>);
@@ -3227,7 +3231,7 @@ on every implementation and holds no key-dependent `state`.
 .. for `KMACXOF128` and `KMACXOF256`, the `kl.setst` into _Hash_Output_ is of Form A or of Form B:
 a Form B `Xs` {ne} 0, a multiple of 8 below 2^32^, sets `L` {leftarrow} `Xs`, the output bound in bits;
 a Form A `kl.setst`, or `Xs` = 0, sets `L` {leftarrow} 0, for an unbounded output;
-.. for `KMAC128` and `KMAC256`, where _MachinePolicy_[1] is set, the `kl.setst` into _Hash_Verify_ is of Form B, and sets `L` {leftarrow} `Xs`, the tag length in bits, with `Xs` a multiple of 8 and `32` {le} `Xs` {le} `b`, the lower bound being that of cite:[nist-SP-800-185] {sect}8.4.2;
+.. for `KMAC128` and `KMAC256`, where _MachinePolicy_[1] is set, the `kl.setst` into _Hash_Verify_ is of Form B, and sets `L` {leftarrow} `Xs`, the tag length in bits, with `Xs` a multiple of 8 and 32 {le} `Xs` {le} `b`, the lower bound being that of cite:[nist-SP-800-185] {sect}8.4.2;
 . then performs `finalize()`, which:
 .. absorbs `right_encode(L)`, or `right_encode(0)` for `KMACXOF128` and `KMACXOF256`, as a `kl.exec` in _Hash_Absorb_ would from the current `block_base`;
 .. then applies the padding of <<KLE-SHA-3>> with `D` = `00`, the suffix of cSHAKE (`pad_byte` = `0x04`), in place of the `1111` of SHAKE;
@@ -3410,7 +3414,7 @@ No ``kl.exec`` is then needed in this State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-t
 It performs:
 +
 --
-* `tmp : bits(b)`
+* `tmp : bits(128)`
 
 []
 . `tmp <- pad(INPUT[last_block_len-1:0], 128)`
@@ -3616,7 +3620,7 @@ Data Structures::
 |===
 --
 
-The Machine has the States and behavior of <<KLE-Ascon-AEAD128>>, with `K1` as
+The Machine has the Parameters, Machine-Specific Functions, States and behavior of <<KLE-Ascon-AEAD128>>, with `K1` as
 the key `key`. Its nonce setup (<<KLE-Ascon-AEAD128-nonce-setup>>) uses
 `INPUT[127:0] xor K2` in place of `INPUT`.
 `K2` enters `state` only in the nonce setup, inside the masked nonce, before `ASCON(12)`; `K1` enters it wherever `key` does in <<KLE-Ascon-AEAD128>>.
@@ -3685,7 +3689,6 @@ Machine-Specific Functions::
 State Machine::
 
 * *States and Allowed State Transitions:* those of <<KLE-hash-functions-MACs-XOFs>>.
- ** The Machine does not use _MachineUse_.
 
 * *Behavior:*
  ** Upon entering State _Ready_:
@@ -4505,6 +4508,7 @@ A `kl.setst` that enters or leaves _Msg_Absorb_ is not resumable: if it is preem
 +
 --
 . In *pure* mode (`msg_pass` = 2):
+.. `R` is `Signature.R`, which signing pass 1 set;
 .. `S` {leftarrow} `(r + k'` {interpunct} `s) mod L`.
 . In *pre-hash* mode (`msg_pass` = 0), with `Hash` holding `PH(M)`:
 .. `r` {leftarrow} `int(H(dom {vvert} prefix {vvert} Hash)) mod L`;
@@ -5025,7 +5029,7 @@ ML-DSA Machines define:
     as a completed load does, with the same outcomes, and sets `HasPrivKey`;
   . such an import drops any `pubkey` that the format carries: `pubkey` stays zero and `HasPubKey` clear, as entering
     _privkey_Input_ leaves them, and _compute_pubKey_ then derives `pubkey`;
-  . a `pubkey` that an import converts without a `privkey` sets `HasPubKey`, as a completed load does
+  . a system-specific import that converts a `pubkey` without a `privkey` sets `HasPubKey`, as a completed load does
     (Rule <<KLE-MGR-sysfmt-standard>>).
 
 ** Entering _pubkey_Input_:

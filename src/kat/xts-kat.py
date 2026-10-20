@@ -8,12 +8,14 @@ from common import (install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decr
                     MASK128, MDH_FIELD, mdh_pack,
                     KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT, KL_STATE_OPERATE as OPERATE,
-                    KL_STATE_INVALID as INVALID, ERROR_STATES,
+                    KL_STATE_INVALID as INVALID, KL_STATE_SUCCESS as SUCCESS, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, done)
 
 RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 B = 128
+STEAL = 66                                        # kl_xex_state_steal, Form A, in Decrypt only
+SKIP, BACK = 1, 2                                 # StealSkip, StealBack: bits 0 and 1 of StateExtension
 POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
 CIPHERS = {'AES-128': 128, 'AES-256': 256, 'SM4': 128}   # XTS-AES: 128- and 256-bit keys (IEEE 1619); SM4: GB/T 17964
 XEX_MACHINES = {0x03: 'AES-128', 0x23: 'AES-256', 0x33: 'SM4'}   # <<KLE-exec-encodings>> Mode 3; Type 1 has none
@@ -51,6 +53,20 @@ def kl_update_mask(V):
         return (V << 1) & MASK128
     return ((V << 1) & MASK128) ^ cat((0, 120), (0b10000111, 8))
 
+def kl_update_mask_inv(V):
+    """<<KLE-XEX-XTS-modes>> update_mask_inv, b = 128, transcribed."""
+    if sl(V, 0, 0) == 0:
+        return V >> 1
+    return ((V ^ cat((0, 120), (0b10000111, 8))) >> 1) ^ cat((1, 1), (0, 127))
+
+def kl_update_mask_inv_gb(V):
+    """<<KLE-XEX-XTS-modes>> update_mask_inv of SM4_XEX, transcribed: byte j = V[8j+7:8j]."""
+    B_ = [(V >> 8 * j) & 0xFF for j in range(16)]
+    c = B_[0] >> 7
+    A = B_[0] ^ 0xE1 if c else B_[0]
+    out = [((A if j == 0 else B_[j]) & 0x7F) << 1 | (B_[j + 1] >> 7 if j < 15 else c) for j in range(16)]
+    return sum(b << 8 * j for j, b in enumerate(out))
+
 # ---------------------------------------------------------------- REF (IEEE 1619-2007, byte strings)
 def ref_mul_alpha(t):
     """IEEE 1619-2007 5.2: multiplication of the tweak byte array by alpha."""
@@ -81,6 +97,13 @@ class XexLocker:
         s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
         s.sks, s.doubling, s.rng, s.msb_first = sks or {}, doubling, rng or random.Random(2026), msb_first
     state = property(lambda s: fget(s.mdh, 'State'))
+    se = property(lambda s: fget(s.mdh, 'StateExtension'))
+    def goto(s, st):                              # every transition clears StealSkip and StealBack
+        s.mdh = fset(fset(s.mdh, 'State', st), 'StateExtension', 0)
+    def dbl(s, inverse=False):                    # SM4_XEX: reflected bit order
+        if s.cname == 'SM4' and s.doubling is kl_update_mask:
+            return kl_update_mask_inv_gb if inverse else kl_update_mask_gb
+        return kl_update_mask_inv if inverse else s.doubling
     keytype = property(lambda s: fget(s.mdh, 'KeyType'))
     k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
     cname = property(lambda s: XEX_MACHINES[fget(s.mdh, 'Machine')])
@@ -117,6 +140,8 @@ class XexLocker:
         s.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
         if fget(s.mdh, 'MachinePolicy') == 0:
             return s.invalidate()   # MR11: at least one bit
+        if s.se and not (s.state == DECRYPT and s.se in (SKIP, BACK)):
+            return s.invalidate()   # StateExtension @ State not supported
         s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
@@ -127,7 +152,13 @@ class XexLocker:
             return
         pol = fget(s.mdh, 'MachinePolicy')
         if immed == READY and form == 'A':
-            s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
+            s.goto(READY)
+            s.mask = 0
+        elif immed == STEAL:                      # an operation: State unchanged, not a transition
+            if s.state != DECRYPT or form != 'A' or s.se or not pol & POL_DEC:   # MR11: gated with Decrypt
+                return s.invalidate()
+            s.mask = s.dbl()(s.mask)              # skips the mask index
+            s.mdh = fset(s.mdh, 'StateExtension', SKIP)
         elif (immed in (ENCRYPT, DECRYPT) and form in ('C', 'A/iobuf')
               and s.state in (READY, ENCRYPT, DECRYPT)    # also Encrypt <-> Decrypt and same State: sets the tweak
               and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR11
@@ -135,7 +166,7 @@ class XexLocker:
                 return s.invalidate()                     # MR7, MR2: INPUT narrower than the tweak
             value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
             s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(sl(value, B - 1, 0), 16)))   # MR7
-            s.mdh = fset(s.mdh, 'State', immed)
+            s.goto(immed)
         else:
             s.invalidate()                        # MR1
 
@@ -158,7 +189,18 @@ class XexLocker:
             s.invalidate()
             return out & ~window, 0
         f, key1 = BLOCK[s.cname][0 if s.state == ENCRYPT else 1], v2b(s.key1, s.k // 8)
-        dbl = kl_update_mask_gb if s.cname == 'SM4' and s.doubling is kl_update_mask else s.doubling   # SM4_XEX
+        if s.se:                                  # stealing: a single block (MR3), interruption point 0
+            if lo:
+                s.invalidate()
+                return out & ~window, 0
+            res = s.mask ^ b2v(f(key1, v2b(sl(inp, B - 1, 0) ^ s.mask, 16)))
+            if s.se == SKIP:
+                s.mask = s.dbl(inverse=True)(s.mask)
+                s.mdh = fset(s.mdh, 'StateExtension', BACK)
+            else:
+                s.goto(SUCCESS)
+            return (out & ~window) | res, 0       # MR8: rest of the window cleared
+        dbl = s.dbl()
         pos = list(range(lo, KLLEN, B))           # MR3
         for q, i in enumerate(reversed(pos) if s.msb_first else pos):
             if q == halt_after:
@@ -229,7 +271,7 @@ def cl_run(cl, data, per_block=False, klstart=0, halt_after=None):
     out, ks = cl.exec(b2v(data), 8 * len(data), klstart, halt_after=halt_after)
     return v2b(out, len(data)), ks
 
-def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw):
+def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, **kw):
     """<<KLE-XTS-from-XEX>>, step by step; s = 0 is the plain XEX sequence."""
     m, sb = divmod(len(data), 16)
     s = 8 * sb
@@ -243,11 +285,11 @@ def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, discard=0, **kw
         cc = cl.exec1(last)                                  # index m-1
         c_m1 = cl.exec1(cat((sl(cc, 127, s), B - s), (tail, s)))   # CP @ P_m at index m
         return out + v2b(c_m1, 16) + v2b(sl(cc, s - 1, 0), sb)
-    clone = cl.clone()
-    clone.exec1(discard)                                     # discarded: index m-1 consumed
-    pp = clone.exec1(last)                                   # C_{m-1} at index m
+    cl.setst(STEAL, 'A')                                     # skips index m-1
+    pp = cl.exec1(last)                                      # C_{m-1} at index m, back to m-1
     p_m1 = cl.exec1(cat((sl(pp, 127, s), B - s), (tail, s)))  # CP @ C_m at index m-1
-    clone.clear()
+    if cl.state != SUCCESS:
+        return None
     return out + v2b(p_m1, 16) + v2b(sl(pp, s - 1, 0), sb)
 
 # IEEE 1619-2007 XTS-AES vectors (Botan src/tests/data/modes/xts.vec)
@@ -411,9 +453,119 @@ for name, k1, k2, i, p, c in FULL:
 
 section("<<KLE-XTS-from-XEX>> ciphertext stealing")
 for name, k1, k2, i, p, c in CTS:
-    check(f"{name}: encrypt, decrypt (kl.clone + discarded kl.exec, fed zeros or ones)", True,
-          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, c, False, discard=MASK128)),
-          (c, p, p))
+    check(f"{name}: encrypt, decrypt (kl_xex_state_steal, ends in Success)", True,
+          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False)), (c, p))
+
+def listing_xts(key1, key2, seq, buf, n, last_len, encrypt=True):
+    """<<Zkl-software.adoc#KLE-pseudocode-basic-IV-mode>> and <<Zkl-software.adoc#KLE-pseudocode-XEX-decryption>>,
+    line by line, in place (CT = PT)."""
+    cl = new_xex(key1, key2)
+    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)
+    blk = lambda j: b2v(bytes(buf[16 * j:16 * j + 16]))
+    def put(j, v, nb=16): buf[16 * j:16 * j + nb] = v2b(v, 16)[:nb]
+    m = n if last_len == 16 else n - 1
+    w = m if encrypt or last_len == 16 else m - 1
+    for j in range(w):
+        put(j, cl.exec1(blk(j)))
+    if last_len < 16:
+        s = last_len
+        if not encrypt:
+            cl.setst(STEAL, 'A')                             # skip mask index m-1
+            v0 = cl.exec1(blk(m - 1))                        # PP, at mask index m
+        else:
+            v0 = blk(m - 1)                                  # CC, at mask index m-1
+        v1 = (v0 >> 8 * s << 8 * s) | b2v(bytes(buf[16 * m:16 * m + s]))   # CP @ P_m, or CP @ C_m
+        put(m, v0, s)                                        # C_m, or P_m
+        put(m - 1, cl.exec1(v1))                             # C_{m-1}, or P_{m-1}
+    return bytes(buf), cl.state
+
+ok = True
+r = random.Random(11)
+for size in [16, 17, 31, 32, 33, 47, 48, 63, 64, 100, 255, 256]:
+    k1, k2 = r.randbytes(16), r.randbytes(16)
+    pt = r.randbytes(size)
+    n, last_len = -(-size // 16), size - 16 * (-(-size // 16) - 1)
+    ct, st1 = listing_xts(k1, k2, 5, bytearray(pt), n, last_len)
+    back, st2 = listing_xts(k1, k2, 5, bytearray(ct), n, last_len, False)
+    ok &= (ct == ref_xts(k1, k2, 5, pt) and back == pt and st1 == ENCRYPT
+           and st2 == (DECRYPT if last_len == 16 else SUCCESS))
+check("the software listings, in place, for 16..256 bytes: SP 800-38E ciphertext; decryption ends in Decrypt, "
+      "or in Success after stealing", True, ok, True)
+
+section("kl_xex_state_steal")
+r = random.Random(7)
+vs = [r.getrandbits(128) for _ in range(2000)]
+check("update_mask_inv inverts update_mask (AES128_XEX, AES256_XEX)", True,
+      all(kl_update_mask_inv(kl_update_mask(v)) == v == kl_update_mask(kl_update_mask_inv(v)) for v in vs), True)
+check("update_mask_inv inverts update_mask (SM4_XEX)", True,
+      all(kl_update_mask_inv_gb(kl_update_mask_gb(v)) == v == kl_update_mask_gb(kl_update_mask_inv_gb(v))
+          for v in vs), True)
+k1, k2, i = CTS[0][1:4]
+dec = lambda pol=POL_ENC | POL_DEC: new_xex(k1, k2, pol).setst(DECRYPT, 'C', bin_(i, B), 128)
+def dl(**kw):
+    cl = new_xex(k1, k2, **kw)
+    cl.setst(DECRYPT, 'C', bin_(i, B), 128)
+    return cl
+cl = dl()
+m0 = cl.mask
+cl.setst(STEAL, 'A')
+check("kl.setst #kl_xex_state_steal in Decrypt: State unchanged, StealSkip set, mask advanced", True,
+      (cl.state, cl.se, cl.mask), (DECRYPT, SKIP, kl_update_mask(m0)))
+o = cl.exec(0, 256)[0]
+check("... kl.exec with KLLEN = 2b: one block (MR3), rest of the window cleared (MR8), StealBack, mask back", True,
+      (cl.state, cl.se, cl.mask, o >> B), (DECRYPT, BACK, m0, 0))
+cl.exec1(0)
+check("... the next kl.exec: Success, StateExtension 0", True, (cl.state, cl.se), (SUCCESS, 0))
+cl.exec1(0)
+check("... a kl.exec in Success: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
+check("Success -> Decrypt: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(READY, 'A')
+check("Success -> Ready: Ready, StateExtension 0, mask 0", True, (cl.state, cl.se, cl.mask), (READY, 0, 0))
+cl = new_xex(k1, k2); cl.setst(STEAL, 'A')
+check("kl_xex_state_steal in Ready: Invalid", True, cl.state, INVALID)
+cl = new_xex(k1, k2); cl.setst(ENCRYPT, 'C', bin_(i, B), 128); cl.setst(STEAL, 'A')
+check("kl_xex_state_steal in Encrypt: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'C', bin_(i, B), 128)
+check("kl_xex_state_steal of Form C: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.setst(STEAL, 'A')
+check("kl_xex_state_steal with StealSkip set: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(STEAL, 'A')
+check("kl_xex_state_steal with StealBack set: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec(0, 256, klstart=16)
+check("kl.exec with StealSkip at klstart 16: not an interruption point, Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'A'); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
+check("a same-State kl.setst into Decrypt clears StealSkip and takes a new tweak", True,
+      (cl.state, cl.se, cl.mask), (DECRYPT, 0, m0))
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(READY, 'A')
+check("Decrypt with StealBack -> Ready: StateExtension 0", True, (cl.state, cl.se), (READY, 0))
+name, k1c, k2c, ic, pc, cc = CTS[0]
+m, sb = divmod(len(cc), 16)
+src = new_xex(k1c, k2c)
+src.setst(DECRYPT, 'C', bin_(ic, B), 128)
+out = cl_run(src, cc[:16 * (m - 1)])[0]
+src.setst(STEAL, 'A')
+pp = src.exec1(b2v(cc[16 * (m - 1):16 * m]))
+dst = XexLocker()
+dst.import_scc(src.mdh, src.content1())
+s_ = 8 * sb
+p_m1 = dst.exec1(cat((sl(pp, 127, s_), B - s_), (b2v(cc[16 * m:]), s_)))
+check(f"{name}: export with StealBack, import, last kl.exec: the plaintext, Success", True,
+      (out + v2b(p_m1, 16) + v2b(sl(pp, s_ - 1, 0), sb), dst.state), (pc, SUCCESS))
+for st, se in ((ENCRYPT, SKIP), (READY, BACK), (DECRYPT, 3)):
+    src = new_xex(k1, k2)
+    dst = XexLocker()
+    dst.import_scc(fset(fset(src.mdh, 'State', st), 'StateExtension', se), src.content1())
+    check(f"import with StateExtension {se} in State {st}: not supported, Invalid", True, dst.state, INVALID)
+src = dl(); src.setst(STEAL, 'A')
+n = XexLocker()
+n.import_scc(fset(src.mdh, 'MachinePolicy', POL_ENC), src.content1())
+n.exec1(0)
+src = dl(); n = XexLocker()
+n.import_scc(fset(src.mdh, 'MachinePolicy', POL_ENC), src.content1())
+n.setst(STEAL, 'A')
+check("Decrypt narrowed to encrypt-only: kl_xex_state_steal -> Invalid (MR11)", True, n.state, INVALID)
+check("SCC with StealSkip narrowed to encrypt-only: the kl.exec -> Invalid (MR11)", True, n.state, INVALID)
 
 section("kl.clone")
 k1, k2, i = CTS[0][1:4]

@@ -646,8 +646,12 @@ class Port(HashPort):
     def exec_in(p, d, halt_at=None):
         k = getattr(p.cl, 'klstart', 0)
         p.cl.exec(d, halt=halt_at is not None, klstart=k)
+        if p.cl.st == INVALID: return 'invalid'
         return 'interrupted' if p.cl.klstart else 'done'
-    def exec_out(p, n, halt_at=None, prior=None): return 'done', p.cl.output(n, prior=prior)
+    def exec_out(p, n, halt_at=None, prior=None):
+        o = p.cl.output(n, klstart=getattr(p.cl, 'klstart', 0), prior=prior)
+        p.cl.klstart = 0
+        return ('invalid' if p.cl.st == INVALID else 'done'), o
     def export(p): return p.cl.export()
     def imported(p, img):
         c = Blake2.imported(p.v, *img, sks=p.sks)
@@ -660,6 +664,19 @@ for v in VARIANTS:
         key = sks[SKID] if sks else b''
         check_hash(f'{v}{" with a system key" if sks else ""}', lambda v=v, sks=sks: Port(v, sks),
                    lambda m, nb, o, v=v, key=key: oracle(v, m[:nb // 8], nnmax, key)[:o], hash_msgs(bb), nnmax)
+for v in VARIANTS:
+    nnmax = PARAMS[v][4]
+    p = Port(v); p.setst(ABSORB); p.exec_in(b'abc'); p.setst(LAST, 'B', 0); p.setst(OUTPUT)
+    p.cl.klstart = 5
+    s1, o1 = p.exec_out(nnmax, prior=b'\xa5' * nnmax)
+    q = Port(v); q.setst(ABSORB); q.exec_in(b'abc'); q.setst(LAST, 'B', 0); q.setst(OUTPUT)
+    q.exec_out(8)
+    q.cl.klstart = 1
+    s2, o2 = q.exec_out(8, prior=b'\xa5' * 8)
+    check(f'{v}, through the Port: a Form C kl.exec resumed at klstart = 5 with block_base = 0 writes '
+          'digest[0:n-5] from byte 5, the bytes below kept (MR8); at klstart = 1 with block_base != 0 -> '
+          '_Invalid_ (GR44 item 3), reported as such', None, (s1, o1, s2, q.st, o2),
+          ('done', b'\xa5' * 5 + oracle(v, b'abc', nnmax)[:nnmax - 5], 'invalid', INVALID, b'\xa5' + bytes(7)))
 res = []
 for v in VARIANTS:
     c = Blake2(v).provision().setst(ABSORB).exec(b'ab')
