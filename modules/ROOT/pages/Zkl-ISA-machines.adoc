@@ -460,11 +460,9 @@ Whether zero is admissible depends on the Machine.
 [[KLE-states-symmetric]]
 == Symmetric Cryptography
 
-The following table, together with
-<<Zkl-ISA-unpriv.adoc#KLE-state-off>>, <<Zkl-ISA-unpriv.adoc#KLE-states-valid>>, and <<Zkl-ISA-unpriv.adoc#KLE-states-error>>,
-defines the States of the Machines for symmetric primitives and modes.
-A Machine may override these values, and says so where it does;
-in particular, the mnemonics of the table do not apply to the public-key Machines.
+This table, with <<Zkl-ISA-unpriv.adoc#KLE-state-off>>, <<Zkl-ISA-unpriv.adoc#KLE-states-valid>> and <<Zkl-ISA-unpriv.adoc#KLE-states-error>>,
+defines the States of the symmetric Machines.
+A Machine may override these values and says so where it does; the public-key Machines define their own mnemonics.
 
 [[KLE-state-constants-symmetric]]
 .Common Constants defining CC states for Symmetric Machines
@@ -1975,12 +1973,14 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode ma
    . `tag_len <- 128`.
 
 ** When entering State _Set_Aux_Value_:
-   . A Form B `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `Xs` is expected, where `Xs` must satisfy `6` {le} `Xs` {le} `120`.
-     Every bit length in that range is admissible (Rule <<KLE-MGR-last-blk-len>>): the nonce is a bit string and need not fill whole bytes.
-   . `N_len <- Xs` and `N <- zeros(120)`, and `HasN` is cleared.
 +
+--
+. A Form B `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `Xs` is expected, where `Xs` must satisfy `6` {le} `Xs` {le} `120`.
+  Every bit length in that range is admissible (Rule <<KLE-MGR-last-blk-len>>): the nonce is a bit string and need not fill whole bytes.
+. `N_len <- Xs` and `N <- zeros(120)`, and `HasN` is cleared.
+
 Any other `Xs` transitions the locker to Error State _Invalid_.
-+
+--
 [NOTE]
 ====
 cite:[RFC7253] itself places no lower bound on the nonce length. KLE requires at least 6 bits
@@ -1992,28 +1992,30 @@ nonces shorter than 6 bits.
 
 ** While in State _Set_Aux_Value_, a Form B `kl.exec` loads `N` from the `q` = {lceil}``N_len``/8{rceil}
    least significant bytes of `INPUT`, which is truncated to its `8q` least significant bits (Rule <<KLE-MGR-fixed-width-input>>):
-   . `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared:
-     they pad the final, partial byte of the nonce string, are not part of the nonce, and are ignored.
-   . `HasN` is set.
 +
+--
+. `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared:
+they pad the final, partial byte of the nonce string, are not part of the nonce, and are ignored.
+. `HasN` is set.
+
 Each `kl.exec` in this State processes a single block, so its only interruption point is 0 (Rule <<KLE-MGR-one-klexec-per-block>>).
-+
+
 A repeated `kl.exec` rewrites `N`.
-+
+
 A `kl.setst` naming _Set_Aux_Value_ in this State restarts the load (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>): it performs the operations of entering the State with its new `Xs`.
-// Not an admissible pair for now (<<KLE-derive-endpoints>>):
-// A `kl.derive` into `N` (<<KLE-derive-endpoints>>) loads it as the `kl.exec` does and sets `HasN`; one that
-// transfers fewer than `q` bytes transitions the destination to Error State _Invalid_
-// (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 4).
+--
 
 ** When entering State _Hash_Absorb_, which requires `HasN` (Rule <<KLE-MGR-policy-gate>>):
-   . A Form B `kl.setst` with immediate `kl_state_hash_absorb` and auxiliary operand `Xs` is expected, where `Xs` must be 64, 96 or 128.
-   . `index <- 1` and `tag_len <- Xs`.
-   . `offset <- zeros(b)` – this is `Offset~0~` in the RFC.
-   . `L* <- enc_blk(key, zeros(b))` – this is `L~*~` in the RFC.
-   . `L$ <- double(L*)`, `L[0] <- double(L$)`, and `L[i] <- double(L[i-1])` for all `i` with `0 < i` {le} 48, possibly lazily.
 +
+--
+. A Form B `kl.setst` with immediate `kl_state_hash_absorb` and auxiliary operand `Xs` is expected, where `Xs` must be 64, 96 or 128.
+. `index <- 1` and `tag_len <- Xs`.
+. `offset <- zeros(b)` – this is `Offset~0~` in the RFC.
+. `L* <- enc_blk(key, zeros(b))` – this is `L~*~` in the RFC.
+. `L$ <- double(L*)`, `L[0] <- double(L$)`, and `L[i] <- double(L[i-1])` for all `i` with `0 < i` {le} 48, possibly lazily.
+
 Any other `Xs` transitions the locker to Error State _Invalid_.
+--
 
 ** In State _Hash_Absorb_, (multi-block) `kl.exec` instructions are expected to be of Form B, absorbing a data block `INPUT` into `hash_A` as follows:
 +
@@ -2023,11 +2025,15 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
  . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`.
  . `index <- index + 1`.
 --
+
 ** When entering State _Hash_Absorb_Last_Block_:
- . A Form B `kl.setst` with immediate `kl_state_hash_last_block` and auxiliary operand `Xs` is expected, where `Xs` must be a multiple of 8 with `0` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
- . `last_block_len <- Xs`, the bit length of the final block of the AD.
 +
+--
+. A Form B `kl.setst` with immediate `kl_state_hash_last_block` and auxiliary operand `Xs` is expected, where `Xs` must be a multiple of 8 with `0` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>).
+. `last_block_len <- Xs`, the bit length of the final block of the AD.
+
 Any other `Xs` transitions the locker to Error State _Invalid_.
+--
 
 ** In State _Hash_Absorb_Last_Block_, a single Form B `kl.exec` absorbs the last block of the AD into `hash_A`:
 +
