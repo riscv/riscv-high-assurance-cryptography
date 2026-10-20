@@ -1113,7 +1113,7 @@ Architected state alone determines the interruption points of `kl.exec` in _Curr
 If the locker holds `block_base` = 0 when the instruction is issued, they are the byte offsets `k` for which 8 {times} `k` is a multiple of `granularity`, or every byte offset if the invocation gives no `granularity`.
 Otherwise, the only interruption point is 0.
 +
-NOTE: Every pass of the loop but the last ends with a full block, so a halt leaves `block_base` = 0; after the last pass the instruction retires and keeps any partial block.
+NOTE: Every pass but the last ends with a full block, so a halt leaves `block_base` = 0; the last pass may leave a partial block.
 A halted instruction is thus resumed with `block_base` = 0, whatever `block_base` it started with, and the `klstart` that its halt recorded is an interruption point of the resumed instruction.
 An instruction issued with a non-zero `block_base` admits only `klstart` = 0, but can still halt where step 3.i allows it, once its first iteration has completed the block.
 At a halt, `input_base` is a whole number of bytes, so `klstart` never describes a position inside a byte, as is also the case on the output side of _Hash_Output_ (<<KLE-hash-functions-MACs-XOFs>>).
@@ -1712,7 +1712,9 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
  ** The `kl.exec` of _Enc_Tag_Finalize_ synthesizes `SIV` and transitions the locker to _Encrypt_ (Rule <<KLE-MGR-machine-transitions>>).
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
  ** Gated States (Rule <<KLE-MGR-policy-gate>>): _MachinePolicy_[0] gates _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_; _MachinePolicy_[1] gates _Decrypt_, _Dec_Last_Block_ and _Dec_Tag_Finalize_.
- ** A `kl.setst` into _Dec_Tag_Finalize_ that leaves _Dec_Last_Block_ before its `kl.exec` omits the final block from `tmp`, and so from the recomputed SIV. A `kl.setst` that leaves _Enc_Last_Block_ before its `kl.exec` only leaves the final ciphertext block unproduced: the SIV already covers the whole plaintext.
+ ** A `kl.setst` that leaves a last-block State before its `kl.exec`:
+ *** From _Dec_Last_Block_ into _Dec_Tag_Finalize_: the final block is omitted from `tmp`, and so from the recomputed SIV.
+ *** From _Enc_Last_Block_: only the final ciphertext block stays unproduced, since the SIV already covers the whole plaintext.
  ** A final plaintext or ciphertext block shorter than `b` goes through _Enc_Last_Block_, resp. _Dec_Last_Block_.
 
 * *Behavior:*
@@ -1737,13 +1739,21 @@ Skipping it during decryption leaves `SIV` at the zero that entering _Ready_ set
 ====
 
 ** The `kl.setst` into _Hash_Absorb_, _Enc_Tag_Finalize_, _Decrypt_ or _Dec_Tag_Finalize_ is of Form A.
-** A `kl.setst` naming _Set_Aux_Value_ or _Set_Aux_Value_2_ in that same State transitions the locker to Error State _Invalid_
-   (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>): the `kl.setst` that enters the State sets the value, and the State loads
-   no field by `kl.exec`.
 
-** In State _Hash_Absorb_, (multi-block) Form B `kl.exec` instructions absorb each data block into `tmp`: `absorb(INPUT)`.
-   The caller must zero-pad the AD and, on the encryption path, the plaintext, each separately to a multiple of 16 bytes,
-   as cite:[RFC8452] {sect}4 specifies: every bit of the final partial block of each, beyond the end of its data, is zero.
+** In State _Set_Aux_Value_ or _Set_Aux_Value_2_, a `kl.setst` naming that same State transitions the locker to Error State _Invalid_
+   (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>):
+   . The `kl.setst` that enters the State sets the value.
+   . The State loads no field by `kl.exec`.
+
+** In State _Hash_Absorb_, each (multi-block) Form B `kl.exec` absorbs its data blocks into `tmp`: `absorb(INPUT)`.
+   The caller zero-pads the following, each separately to a multiple of 16 bytes, as cite:[RFC8452] {sect}4 specifies:
++
+--
+. The AD.
+. On the encryption path, the plaintext.
+
+Every bit of the final partial block beyond the end of its data is zero.
+--
 
 ** In State _Enc_Tag_Finalize_, a single Form A `kl.exec` is expected, whose `INPUT` the caller sets to
    `bin(len_in_bits(plaintext), 64) @ bin(len_in_bits(AD), 64)`; `INPUT` is truncated to its 128 least significant bits
