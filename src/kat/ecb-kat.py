@@ -93,7 +93,7 @@ class EcbLocker:
             return                            # GR26
         pol = fld(self.mdh, 'MachinePolicy')
         if immed in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT) and form != 'A':
-            self.invalidate()                 # MR1, GR62: only Form A is native
+            self.invalidate()                 # MR1, GR65: only Form A is native
         elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
             self.mdh = put(self.mdh, 'State', immed)
@@ -136,7 +136,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # GR32 item 2 (GR68), item 5
+            return self.invalidate()          # GR32 item 2 (GR71), item 5
         if kind == 'shared':                  # only a restricted transfer narrows (GR33)
             if fld(self.mdh, 'SCProtection') < fld(src_mdh, 'SCProtection'):
                 return self.invalidate(KL_STATE_PRIV_VIOLATION)      # GR33: never to a weaker level
@@ -380,7 +380,7 @@ for label, kw in (("length 16 < 24 (GR32 item 5, no zero-fill)", dict(length=16)
                   ("length 0 (GR32 item 5)", dict(length=0)),
                   ("source field of 16 bytes < 24 (GR32 item 5)", dict(data=secret[:16])),
                   ("destination in Encrypt (GR32 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (GR68, GR32 item 2)", dict(keytype=1))):
+                  ("KeyType 1 destination (GR71, GR32 item 2)", dict(keytype=1))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
 eq("differing Boot Session entries (GR33, a failed narrowing) -> destination Privilege Violation, no key",
    derived(src=put(SRC, 'Locality', 0b0_10_00_00))[1:3], (KL_STATE_PRIV_VIOLATION, None))
@@ -398,10 +398,10 @@ eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)",
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test; Forms of kl.setst")
 eq("'48 <= X1 <= 55' passes every Valid State and catches every Error State",
    [s for s in range(1, 56) if 48 <= s <= 55], list(ERROR_STATES))
-eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (MR1, GR62)",
+eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (MR1, GR65)",
    ([new_cl(ci, k, state=st, form=f).state for f in 'BC' for st in (ENC, DEC)], new_cl(ci, k, state=ENC).state),
    ([INV] * 4, ENC))
-eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR16: Form A; GR62)",
+eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR16: Form A; GR65)",
    [(lambda c: (c.setst(RDY, f), c.state)[1])(new_cl(ci, k, state=ENC)) for f in 'BC'], [INV] * 2)
 
 done()

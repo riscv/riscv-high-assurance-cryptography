@@ -82,7 +82,7 @@ class Gcm:
         if s.state not in ERROR_STATES and s.policy == 0:
             s._invalid()                             # GCM requires a set bit
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR68)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR71)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -229,7 +229,7 @@ class Gcm:
         if form == 'D' and want is not None and s.zklio:
             form = want                                  # the substitution of the native Form
         if want != form:
-            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR63, GR62)
+            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR66, GR65)
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
                 KLLEN < s.last_block_len if s.state in (ELB, DLB) else
                 KLLEN < 128 and KLLEN not in TAG_LENS if s.state == ETF else KLLEN % 128):
@@ -322,7 +322,7 @@ class Gcm:
         if isinstance(src, Gcm):
             return src._invalid()                        # GR32 item 1
         if s.set_iv or s.key_type == 1 or s.state != READY:
-            return s._invalid()                          # Set IV, GR68, Set_Aux_Value: no endpoint (GR32 item 2)
+            return s._invalid()                          # Set IV, GR71, Set_Aux_Value: no endpoint (GR32 item 2)
         if length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR32 item 5
         s.key = src[:s.k // 8]
@@ -507,7 +507,7 @@ for label, *hx in VECTORS:
     if len(IVx) == 12:                                   # GCM with Set IV provisions only a 96-bit IV
         c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, iv=b2v(IVx)))
         check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR68): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR71): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 res = []
 for t in TAG_LENS:
     cl, bad = to_dtf(), to_dtf()
@@ -532,7 +532,7 @@ def wrong(where, f, *a, zklio=True):
     cl.zklio = zklio
     out = cl.exec(f, *a)
     return out, cl.state
-check('GR62: a wrong Form (A or C in _Set_Aux_Value_, B or C in _Encrypt_) -> Invalid; GR63: without Zklio the '
+check('GR65: a wrong Form (A or C in _Set_Aux_Value_, B or C in _Encrypt_) -> Invalid; GR66: without Zklio the '
       'Form D substitution is a wrong Form; with Zklio it runs as the native Form', None,
       [wrong(SAV, 'A', 0, 128), wrong(SAV, 'C', 0, 128), wrong(ENC, 'B', 0, 128), wrong(ENC, 'C', 0, 128),
        wrong(SAV, 'D', b2v(IV), 96, zklio=False)[1], wrong(SAV, 'D', b2v(IV), 96)[1]],
@@ -862,7 +862,7 @@ cl.exec('B', 0, 256, 16)
 check('Set_Aux_Value with block_base != 0: klstart = 16 is no interruption point (<<KLE-process-VLI>>) -> Invalid',
       True, (bb, cl.state), (8, INV))
 cls = [at(w) for w in ('enc', 'dec', 'enc', 'dec')]
-check('a Form B or C kl.exec where Form A is native (Encrypt, Decrypt): a wrong Form, _Invalid_ (GR62, MR1)',
+check('a Form B or C kl.exec where Form A is native (Encrypt, Decrypt): a wrong Form, _Invalid_ (GR65, MR1)',
       True, ([c.exec(f, B16, 128) for c, f in zip(cls, 'BBCC')], [c.state for c in cls]), ([0] * 4, [INV] * 4))
 cl = at('enc')
 snap = dict(vars(cl))
@@ -934,7 +934,7 @@ for ctl in (False, True):
 for mid in (16, 32, 48):
     check(f'export in Set_Aux_Value after {mid} of 60 IV bytes, import, resume: tc6', res[False, mid])
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR68, GR31; MR4)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR71, GR31; MR4)')
 stale = []
 for k, n in ((16, 16), (16, 32), (32, 32)):
     for ctl in (False, True):
@@ -958,7 +958,7 @@ check('GCM with Set IV is not a kl.derive destination (<<KLE-GCM-with-IV-mode>>,
       cl.state == INV)
 for name, cl, n in (('in Hash_Absorb (GR32 item 2)', at('ha'), 16),
                     ('in Success (GR32 item 2)', at('success'), 16),
-                    ('into a key configured by a SKID (GR68, GR32 item 2)', Gcm.provisioned(skid=SKID), 16),
+                    ('into a key configured by a SKID (GR71, GR32 item 2)', Gcm.provisioned(skid=SKID), 16),
                     ('of 8 bytes into a 128-bit key (GR32 item 5)', at('ready'), 8),
                     ('of 16 bytes into a 256-bit key (GR32 item 5)', Gcm.provisioned(bytes(32)), 16),
                     ('of 0 bytes into a key (GR32 item 5)', at('ready'), 0)):

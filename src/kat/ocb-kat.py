@@ -185,7 +185,7 @@ class Ocb:
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
                 DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C', VERIFY: 'B'}.get(st, '')
         if not want or form not in (want, 'D'):
-            s._invalid('Form')                         # MR1, GR17, GR16; a wrong Form (GR62)
+            s._invalid('Form')                         # MR1, GR17, GR16; a wrong Form (GR65)
         if st == SET_AUX:
             if klen < 8 * ((s.N_len + 7) // 8):
                 s._invalid('KLLEN < 8q')               # MR7, MR2: a fixed-width input shorter than the nonce
@@ -274,7 +274,7 @@ def derive(src, dst, length, klstart=0):
     if dst.state != READY or isinstance(dst, OcbNonce):
         dst._invalid('GR32 item 2')                    # no endpoint in this State or Machine, `N` included
     if dst.skid is not None:
-        dst._invalid('GR68 (GR32 item 2)')
+        dst._invalid('GR71 (GR32 item 2)')
     if klstart or length < len(dst.key) or len(src) < len(dst.key):
         dst._invalid('GR32 item 5')                    # the key loaded in full
     dst.key = src[:len(dst.key)]
@@ -510,7 +510,7 @@ INVALID_CASES = [
     ("kl.setst #set_aux_value Form A", lambda: Ocb(K128), lambda c: c.setst(SET_AUX, 'A')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.setst #encrypt from Hash_Absorb", at_absorb, lambda c: c.setst(ENCRYPT, 'A')),
-    ("Form B kl.setst naming Ready (GR16, GR62)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
+    ("Form B kl.setst naming Ready (GR16, GR65)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
     ("kl.exec in Hash_Absorb_Last_Block, last_block_len = 0", lambda: last_set(0), lambda c: c.exec('D')),
     ("second kl.exec in Hash_Absorb_Last_Block", last_done, lambda c: c.exec('B', 0, 64)),
     ("kl.setst #enc_tag_finalize from Encrypt", at_crypt, lambda c: c.setst(TAG_FIN, 'A')),
@@ -567,7 +567,7 @@ check("kl.setst naming Expired -> Expired, Content cleared (GR30, GR29); reserve
       "(GR18)", True, (cl.state, cl.key, raises(cx.setst, 54), cx.state), (EXPIRED, None, True, READY))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
-    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR62, MR1)",
+    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR65, MR1)",
           inval(cl.exec, form, 0) is not None and cl.state == INVALID)
 check("Form D kl.exec substitutions, the Hash_Verify kl.exec included: all vectors, both directions",
       all(run(*v[1:5], v[6], subst=True) == v[5] and run(*v[1:3], v[3], v[5], v[6], dec=True, subst=True)
@@ -740,7 +740,7 @@ for name, mk, src, n, ks in [
         ("klstart = 8 (uninterruptible, GR38; GR32 item 5)", lambda: Ocb(bytes(16)), secret, 16, 8),
         ("into a locker in Hash_Absorb (GR32 item 2)", at_absorb, secret, 16, 0),
         ("into a locker in Success (GR32 item 2)", at_end, secret, 16, 0),
-        ("into the key of a KeyType 1 locker (GR68, GR32 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
+        ("into the key of a KeyType 1 locker (GR71, GR32 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n, ks) and cl.key is None)
 res = []

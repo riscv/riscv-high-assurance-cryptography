@@ -149,7 +149,7 @@ class KsLocker:
         if isinstance(src, KsLocker) and src.state != OP:
             return src.invalidate()           # GR32 item 1
         if self.state != RDY or self.keytype == 1:
-            return self.invalidate()          # GR32 item 2 (GR68)
+            return self.invalidate()          # GR32 item 2 (GR71)
         if length < n or not isinstance(src, KsLocker) and len(src) < n:
             return self.invalidate()          # GR32 item 5 (the keystream is unbounded)
         if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, unused bytes discarded
@@ -364,7 +364,7 @@ for ks in (64, 80):
 eq("klstart = 8 (no interruption point) -> Invalid, [8, 63] zeroed (GR28)",
    (cl.exec(512, klstart=8, out=(1 << 512) - 1)[0], cl.state), ((1 << 64) - 1, INV))
 for q in (1, 2, 3):
-    for form in 'CD':                         # Form D writes the KLIOBUF as Form C writes Vd (GR61)
+    for form in 'CD':                         # Form D writes the KLIOBUF as Form C writes Vd (GR64)
         cl = ctr_cl(key, T1, C0)
         part, ks = cl.exec(512, halt_after=q)
         whole, ks2 = cl.exec(512, klstart=ks, out=part)
@@ -431,7 +431,7 @@ def derived(length, keytype=0, state_op=False):
 
 eq("CTR keystream (GR35), length 32, into the 16-byte key (GR31, GR32 item 5), then the F.5.1 inputs under that key",
    derived(32), (RDY, ref_ctr(ks_src[:16], NONCE, 32, C0, PT).hex()))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR68, GR32 item 2)", (32, 1)),
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR71, GR32 item 2)", (32, 1)),
                     ("destination in Operate (GR32 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst, twin = ctr_cl(key, T1, C0), ctr_cl(key), ctr_cl(key, T1, C0)

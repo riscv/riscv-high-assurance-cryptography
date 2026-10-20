@@ -8,7 +8,7 @@ endif::[]
 _This chapter is informative._ It gives requirements, guidelines and code examples for software that uses KLE.
 The examples follow <<Zkl-notation.adoc#KLE-Notation>>: a vector register loaded from memory holds the
 byte at the lowest address in its least significant bits.
-The example listings assume RV64.
+The example listings assume RV64, where a 64-bit operand, such as the `Xs` of a Form B `kl.setst`, is one GPR; on RV32 it is a GPR pair (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 // ///////////////////////////////////////////////////////////////////
 
@@ -574,6 +574,12 @@ A data error found by a check that the Machine attaches to a field of the PI or 
 [[KLE-machine-code-examples]]
 == Code for the Machines
 
+The listings of <<KLE-machine-code-examples>> are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target throughout.
+Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown.
+`import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`; it changes no `a` register, `s9` or `s10`, but it changes `vtype`.
+A 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, as in most examples, where `b` = 128; a shorter piece of `p` bytes is processed with `vl` = `p`, so `KLLEN` = 8 {times} `p`.
+Most listings omit the `kl.getst` that checks, before an output is used, that the locker is still in a Valid State (<<KLE-reading-locker-state>>): a usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
+
 [[KLE-substitution-example]]
 === Substituting the KLIOBUF for Vector Registers
 
@@ -602,11 +608,7 @@ The architecture does not enforce these sequences or their order.
 [[KLE-ECB-mode-example]]
 === Electronic Codebook Modes (Direct Encryption/Decryption)
 
-The listings of this section are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target throughout, and the following one encrypts data with an ECB CC.
-Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown.
-`import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`; it changes no `a` register, `s9` or `s10`, but it changes `vtype`.
-A 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, as in most examples, where `b` = 128; a shorter piece of `n` bytes is processed with `vl` = `n`, so `KLLEN` = 8 {times} `n`.
-Most listings omit the `kl.getst` that checks, before an output is used, that the locker is still in a Valid State (<<KLE-reading-locker-state>>): a usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
+The following listing encrypts data with an ECB CC.
 
 [[KLE-pseudocode-ECB-encryption]]
 .Simple Example: Encryption with no Authentication
@@ -677,12 +679,12 @@ An interrupt may halt such a `kl.exec` after some blocks; on return, the same in
 .Encrypt with Keystream Generation
 ----
 # a0 = SCC, a1 = PT, a2 = CT (may equal a1), a3 = length of PT in bytes,
-# a4 = initial counter value, a5 = the 16-byte nonce
+# a4 = initial counter value, a5 = the IV: 16 bytes in XCTR mode, 12 in CTR
 
   import_scc 0, a0
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
-  vle8.v    v1, (a5)
-  kl.setst  K0, #kl_state_operate, v1        # set the nonce
+  vle8.v    v1, (a5)              # XCTR; for CTR use vl = 12 (KLLEN = 96)
+  kl.setst  K0, #kl_state_operate, v1        # set the IV
   kl.setst  K0, #kl_state_set_aux_value, a4  # ctr <- bin(a4, j)
 
   li        t2, 16
@@ -763,7 +765,7 @@ P~m~ is read before C~m~ is written, so CT may be the same buffer as PT.
   kl.setst  K0, #kl_state_decrypt, v0 # configure to decrypt, set the tweak
 
   li        t1, 16
-  mv        t2, a3                # w = n plain blocks if last_len = 16,
+  mv        t2, a3                # n plain blocks if last_len = 16,
   beq       a4, t1, 1f
   addi      t2, a3, -2            # m-1 = n-2 otherwise
 1:
@@ -803,8 +805,7 @@ With stealing, the locker ends in _Success_, and a `kl.setst` into _Ready_ prece
 [[KLE-GCM-mode-examples]]
 === GCM Mode
 
-<<KLE-pseudocode-GCM-encryption>> encrypts with GCM, with
-`b` = `KLLEN` = 128 and `c` = 32.
+<<KLE-pseudocode-GCM-encryption>> encrypts with GCM, with `b` = 128 (one block per `kl.exec` in the loops) and `c` = 32.
 
 Associated data and plaintext/ciphertext are treated differently, as <<Zkl-ISA-machines.adoc#KLE-GCM-mode>> requires.
 The caller zero-fills the final block of the AD beyond its actual end, and `GHASH` absorbs that block whole.
@@ -816,7 +817,7 @@ The Machine takes the PT and the CT in whole bytes (each last-block `Xs` is a mu
 ----
 # a0 = CC, a1 = AD, a2 = length of AD in bytes, a3 = PT, a4 = CT (may
 # equal a3), a5 = length of PT in bytes, a6 = IV, a7 = length of IV in
-# bytes, at least 1.  The caller has zero-filled the last block of the AD.
+# bytes, 1 to 1024.  The caller has zero-filled the last block of the AD.
 
   import_scc 0, a0                # also computes the derived hash key
 
@@ -898,7 +899,7 @@ stays inside the locker.
 .GCM Decryption
 ----
 # As GCM Encryption up to label 3, with a3 = CT, a4 = PT (may equal a3),
-# a5 = length of CT in bytes, and s9 = the 16-byte received tag
+# a5 = length of CT in bytes, and s9 = address of the 16-byte received tag
 
   # Decrypt the whole blocks of the ciphertext
   kl.setst  K0, #kl_state_decrypt
@@ -954,7 +955,8 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
 .Implementing GCM encryption using an ECB CC
 ----
 # a0 = ECB encryption CC, a1 = AD, a2 = length of AD in bytes, a3 = PT,
-# a4 = CT (may equal a3), a5 = length of PT in bytes, a6 = the 12-byte IV.
+# a4 = CT (may equal a3), a5 = length of PT in bytes, a6 = the 12-byte IV;
+# a1, a3, a4 and a6 are 4-byte aligned.
 # The caller has zero-filled the last block of the AD.  vghsh.vv (Zvkg)
 # computes vd <- (vd xor vs1) * vs2 in GF(2^128), as GHASH does.
 
@@ -965,7 +967,7 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
   vsetivli  zero, 3, e32, m1, tu, ma
   vle32.v   v0, (a6)              # v0[95:0] = IV, in bytes 0..11
   vsetivli  zero, 4, e32, m1, ta, ma
-  vmv.v.i   v3, 0                 # zeros(b), "Auth Data 1"
+  vmv.v.i   v3, 0                 # zeros(b): input of H, GHASH start
   kl.exec   v4, K0, v3            # compute H
 
   addi      t1, a2, 15
@@ -1042,7 +1044,7 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
 [[KLE-GCM-SIV-mode-examples]]
 === GCM-SIV Mode
 
-<<KLE-pseudocode-GCM-SIV-encryption>> encrypts with a GCM-SIV CC (`b` = `KLLEN` = 128), for AD and plaintext in whole bytes, as the Machine requires;
+<<KLE-pseudocode-GCM-SIV-encryption>> encrypts with a GCM-SIV CC (`b` = 128, one block per `kl.exec` in the loops), for AD and plaintext in whole bytes, as the Machine requires;
 <<KLE-pseudocode-GCM-SIV-decryption>> decrypts.
 
 [[KLE-pseudocode-GCM-SIV-encryption]]
@@ -1204,7 +1206,7 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
 [[KLE-OCB-mode-examples]]
 === OCB Mode
 
-This section gives OCB encryption and decryption (`b` = `KLLEN` = 128).
+This section gives OCB encryption and decryption (`b` = 128, one block per `kl.exec` in the loops).
 
 [[KLE-pseudocode-OCB-encryption]]
 .OCB Encryption
@@ -1277,10 +1279,10 @@ This section gives OCB encryption and decryption (`b` = `KLLEN` = 128).
   # _Enc_Last_Block_ transitions to _Enc_Tag_Finalize_ on its own, so no
   # kl.setst is issued here.
   vsetivli  zero, 16, e8, m1, ta, ma
-  kl.exec   v1, K0                # output the tag
+  kl.exec   v1, K0                # v1 holds the tag, tag_len bits
 ----
 
-OCB decryption follows <<KLE-pseudocode-OCB-encryption>> up to the final block, with the roles of `PT` and `CT` exchanged, and States _Decrypt_ and _Dec_Last_Block_ in place of _Encrypt_ and _Enc_Last_Block_;
+OCB decryption follows <<KLE-pseudocode-OCB-encryption>> up to label `7`, with the roles of `PT` and `CT` exchanged, and States _Decrypt_ and _Dec_Last_Block_ in place of _Encrypt_ and _Enc_Last_Block_;
 <<KLE-pseudocode-OCB-decryption-difference>> gives only the last step, which differs:
 OCB has no _Dec_Tag_Finalize_ State, and after the last block _Dec_Last_Block_ transitions directly to
 _Hash_Verify_, where a Form B `kl.exec` supplies the received tag.
@@ -1304,7 +1306,8 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag.
 [[KLE-pseudocode-CMAC]]
 .CMAC Computation
 ----
-# a0 = CC, a1 = CMAC input M, a2 = M_len in bits, a multiple of 8
+# a0 = CC with b = 128 (AES, SM4), a1 = CMAC input M,
+# a2 = M_len in bits, a multiple of 8
 
   import_scc 0, a0
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
@@ -1344,7 +1347,8 @@ To verify a CMAC `T` of `T_len` bits instead, the code from label `4` on is repl
 [[KLE-pseudocode-CMAC-verify]]
 .CMAC Verification
 ----
-# a3 = T, a4 = T_len in bits, a multiple of 8, at least 64
+# a3 = T, a4 = T_len in bits, a multiple of 8, 64 to 128
+4:
   kl.setst  K0, #kl_state_hash_verify, a4
   srli      t1, a4, 3
   vsetvli   zero, t1, e8, m1, ta, ma # KLLEN = T_len
@@ -1359,23 +1363,22 @@ To verify a CMAC `T` of `T_len` bits instead, the code from label `4` on is repl
 
 The following sequence hashes a message with any Machine of <<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>; only the SCC and the number `out_bytes` of output bytes differ.
 
-* *Message.* The caller passes `M` unpadded; the `kl.setst` into _Hash_Output_ pads it.
+* *Message.* The caller passes `M` unpadded; the `kl.setst` that ends the message pads it.
 The final piece, of `M_bits` mod 64 bits, fits every Machine, since `b` {ge} 64; for BLAKE2 it must be a whole number of bytes.
 A partial final byte holds the final bits in the order of the standard: in its most significant positions for SHA-2 and SM3,
 in its least significant positions for SHA-3, KMAC and Ascon, and as for its `H` for HMAC.
 * *Output length.* An `Xs` = 8 {times} `out_bytes` in the `kl.setst` into _Hash_Output_ makes the Machine emit exactly `out_bytes` bytes and then enter _Success_.
 For KMAC128 and KMAC256 it is also the `L` that the MAC encodes; KMACXOF128 and KMACXOF256 encode `L` = 0.
 For every other Machine, `out_bytes` only truncates the output.
+`Xs` = 0 asks instead for the full digest, or for an unbounded XOF; it is invalid for KMAC128 and KMAC256.
 `out_bytes` is:
 ** at least 1; at least 8 for HMAC, and at least 4 for KMAC128 and KMAC256;
 ** at most the digest length for a fixed-output Machine;
 ** below 2^29^ for an XOF, KMAC128 or KMAC256.
-+
-`Xs` = 0 asks instead for the full digest, or for an unbounded XOF; it is invalid for KMAC128 and KMAC256.
 * *BLAKE2.* A digest of `nn` {ne} `nn~max~` bytes, such as BLAKE2b-256, needs an SCC whose `nn` was set by the _Set_Aux_Value_ operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> or by a system-specific import, since `nn` enters the IV.
 With `kk` {ne} 0 and no system key, the caller keys the hash: `M` starts with the key zero-padded to `b` bits (cite:[RFC7693] {sect}3.3), which alone forms the message for an empty `M`; a system key needs no such block.
 * *The SCC.*
-** It is in _Ready_; one exported in _Hash_Absorb_ after a prefix of the message, as in the NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>, takes no first `kl.setst`, and `M` is then the rest of the message.
+** It is in _Ready_; one exported in _Hash_Absorb_ after a prefix of the message, such as secret content (NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>), takes no first `kl.setst`, and `M` is then the rest of the message.
 ** An SCC of the NIK variant of <<Zkl-ISA-machines.adoc#KLE-HMAC>> must already hold its key.
 ** The SCC of HMAC, KMAC128 or KMAC256, or of BLAKE2 with a system key, must enable _Hash_Output_ (_MachinePolicy_[0]);
 for the MAC verification below, that of HMAC, KMAC128 or KMAC256 must enable _Hash_Verify_ (_MachinePolicy_[1]) instead.
@@ -1427,15 +1430,14 @@ for the MAC verification below, that of HMAC, KMAC128 or KMAC256 must enable _Ha
 
 To verify a MAC `T` of `T_len` bits with HMAC, KMAC128 or KMAC256 instead, the
 code from label `3` on is replaced by the listing below.
-The listing takes `T_len` at most `t` for HMAC and at most `b` for KMAC128 and KMAC256.
-HMAC also admits a longer `T`, but compares only its first `t` bits; KMAC128 and KMAC256 do not admit one.
-With 128-bit vectors, LMUL = 8 holds a tag of up to 1024 bits: every HMAC tag, and a KMAC
-tag up to that length.
+For HMAC, the listing takes any `T_len` and compares the first min(`T_len`, `t`) bits.
+For KMAC128 and KMAC256, it takes `T_len` {le} `b`, and `T_len` {le} 1024 if `VLEN` = 128, since with LMUL = 8 a register group holds 8 {times} `VLEN` bits.
 
 [[KLE-pseudocode-hash-verify]]
 .MAC Verification
 ----
 # a5 = T, a6 = T_len in bits, a multiple of 8, >= 64 (KMAC: 32)
+3:
   kl.setst  K0, #kl_state_hash_verify, a6
   srli      t1, a6, 3
   vsetvli   zero, t1, e8, m8, ta, ma # KLLEN = T_len

@@ -105,7 +105,7 @@ GATE = {ETF: 1, ENC: 1, ELB: 1, DEC: 2, DLB: 2, DTF: 2}  # MR11: the MachinePoli
 class Siv:
     """A GCM-SIV locker; MDH reduced to State, MachinePolicy (bit 0 encrypt, bit 1 decrypt),
     KeyType.  stale_derived (no MR4 re-derivation on import) is a negative control.  The hart has no Zklio:
-    every substitution is a wrong Form (GR63)."""
+    every substitution is a wrong Form (GR66)."""
 
     def __init__(s, policy=3, stale_derived=False):
         s.policy, s.stale = policy, stale_derived
@@ -199,7 +199,7 @@ class Siv:
             return s._invalid()                          # MR11 at issue (GR20)
         want = {HA: 'B', ETF: 'A', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', DTF: 'B'}.get(st)
         if want != form:
-            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR62)
+            return s._invalid()                          # GR17, GR16, MR1; a wrong Form (GR65)
         if KLLEN < (s.last_block_len if st in (ELB, DLB) else 128) if st in (ELB, DLB, ETF, DTF) else KLLEN % 128:
             return s._invalid()                          # MR2, MR7: length first (<<KLE-GR-transfer-window-checks>>)
         s.klstart = start or 0
@@ -257,7 +257,7 @@ class Siv:
         if isinstance(src, Siv):                         # GR32 item 1: GCM-SIV is no source, its tag included
             return src._invalid()
         if s.key_type or s.state != READY:
-            return s._invalid()                          # GR68; Ready only (GR32 item 2)
+            return s._invalid()                          # GR71; Ready only (GR32 item 2)
         if klstart or length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR32 item 5: the key loaded in full
         s.key = src[:s.k // 8]
@@ -633,7 +633,7 @@ for name, where, ops, *kw in [
         ('MR7: KLLEN = 64 < 128 for the length block in Enc_Tag_Finalize', 'ha', [('setst', ETF), ('exec', 'A', LB0, 64)]),
         ('MR7: KLLEN = 64 < 128 for the length block in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'B', LB0, 64)]),
         ('MR1: Form C kl.setst to Decrypt', 'ha', [('setst', DEC, 'C', 0)]),
-        ('GR63: Form A kl.setst to Set_Aux_Value (the substitution) without Zklio', 'ready', [('setst', SAV)]),
+        ('GR66: Form A kl.setst to Set_Aux_Value (the substitution) without Zklio', 'ready', [('setst', SAV)]),
         ('MR1: kl.exec in Set_Aux_Value', 'sav', [('exec', 'B', 0, 128)]),
         ('MR1: Set_Aux_Value_2 -> Set_Aux_Value', 'sav', [('setst', SAV2, 'C', 0), ('setst', SAV, 'C', 0)]),
         ('kl.setst naming Encrypt in Hash_Absorb', 'ha', [('setst', ENC)]),
@@ -646,7 +646,7 @@ for name, where, ops, *kw in [
         ('kl.setst naming Enc_Last_Block in Enc_Tag_Finalize', 'etf', [('setst', ELB, 'B', 64)]),
         ('GR17: kl.exec in Ready', 'ready', [('exec', 'A', 0, 128)]),
         ('GR16: kl.exec in Success', 'success', [('exec', 'B', 0, 128)]),
-        ('GR16, GR62: Form B kl.setst naming Ready', 'sav', [('setst', READY, 'B', 0)]),
+        ('GR16, GR65: Form B kl.setst naming Ready', 'sav', [('setst', READY, 'B', 0)]),
         ('MR1: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', 0, 128)]),
         ('MR2: KLLEN = 120 in Hash_Absorb', 'ha', [('exec', 'B', 1, 120)]),
         ('MR2: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', 1, 120)]),
@@ -664,7 +664,7 @@ for name, where, ops, *kw in [
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
 ms = [at(w) for w in ('etf', 'enc', 'dec')]
 check('a Form B kl.exec where Form A is native (Enc_Tag_Finalize, Encrypt, Decrypt): a wrong Form, _Invalid_ '
-      '(GR62, MR1)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
+      '(GR65, MR1)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
 m = at('enc')
 snap = dict(vars(m))
 check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',
@@ -705,7 +705,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR68): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR71): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -743,7 +743,7 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR68; MR4)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR32, GR71; MR4)')
 src = bytes.fromhex(VECTORS[11]['key'])                 # the bytes of a listed source
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
@@ -754,7 +754,7 @@ P = Siv.provisioned
 for name, m, s_, n, ks in (('in Hash_Absorb (GR32 item 2)', at('ha'), src, 16, 0),
                            ('in Set_Aux_Value (nonce is no endpoint, GR32 item 2)', at('sav'), src, 12, 0),
                            ('in Success (GR32 item 2)', at('success'), src, 16, 0),
-                           ('into a key configured by a SKID (GR68, GR32 item 2)', P(skid=SKID), src, 16, 0),
+                           ('into a key configured by a SKID (GR71, GR32 item 2)', P(skid=SKID), src, 16, 0),
                            ('of 8 bytes into a 128-bit key (GR32 item 5)', P(K), src, 8, 0),
                            ('of 16 bytes into a 256-bit key (GR32 item 5)', P(K256), src, 16, 0),
                            ('of 0 bytes into a key (GR32 item 5)', P(K), src, 0, 0),

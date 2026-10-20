@@ -173,7 +173,7 @@ class MLDSALocker:
                 return self.invalid()
             if self.use == 0:                      # MR6: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR53: RBG failure
+                if self.rnd is None:               # GR56: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after, self.sign_bound)
@@ -214,7 +214,7 @@ class MLDSALocker:
             setattr(new, f, getattr(self, f))
         new.kappa = self.kappa if content2 else 0
         if not content2:
-            new.use, new.rnd = 0, bytes(32)        # GR46.c, MR6: a restart zeroes P and destroys rnd
+            new.use, new.rnd = 0, bytes(32)        # GR52, MR6: a restart zeroes P and destroys rnd
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
             new.invalid()                          # MR13: the privkey check on import
         return new
@@ -532,7 +532,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR53)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR56)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -645,12 +645,12 @@ def t_progress():
     cc.exec_D(halt_after=2)
     a, b = cc.export_import(), cc.export_import()
     check('export/import with Content2 of a halted _Sign_Generate_, into two lockers: both resume to the same '
-          'signature, one draw (GR46.c)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
+          'signature, one draw (GR52)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
           and rbg.draws == 1)
     cc, rbg = armed()
     cc.exec_D(halt_after=2)
     r = cc.export_import(content2=False)
-    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR46.c, MR6)',
+    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR52, MR6)',
           r.state == SIGN_GEN and r.use == 0 and r.rnd == bytes(32) and r.kappa == 0)
     finish(r)
     check('the restarted operation draws a fresh rnd and signs with it', rbg.draws == 2 and r.signature

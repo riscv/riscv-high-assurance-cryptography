@@ -236,7 +236,7 @@ class MLKEMLocker(Locker):
         return bytes(n)                            # GR28
 
     def exec_D(self, halt_after=None):
-        """Form D; halt_after=n halts precisely after n steps (GR46.a).  Returns 'retired', 'halted' or 'noop'."""
+        """Form D; halt_after=n halts precisely after n steps (GR50).  Returns 'retired', 'halted' or 'noop'."""
         if not self.gate():
             return 'noop'
         st = self.state
@@ -246,7 +246,7 @@ class MLKEMLocker(Locker):
         if self.use == 0 or self.resume_redraws:   # MR6: start anew, drawing fresh values
             w = ({'d': self.rbg(), 'z': self.rbg()} if st == GEN else {'ek': self.encapsk, 'm': self.rbg()}
                  if st == ENC else {'dk': self.decapsk, 'c': self.ciphertext})
-            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR53
+            if None in w.values():                 # RBG failure (FIPS 203 Algorithms 19, 20): GR56
                 self.enter_error(INVALID)
                 return 'retired'
             self.ads = {'w': w, 'next': 0}
@@ -331,7 +331,7 @@ def kl_derive(dest, src, length):
         src.enter_error(INVALID)                   # GR32 item 1: the only source is sharedkey in _sharedkey_Output_
         return 'retired'
     if not field or is_key and dest.get('KeyType') == 1:
-        dest.enter_error(INVALID)                  # GR32 item 2; GR68 (sharedkey -> any destination: item 3 holds)
+        dest.enter_error(INVALID)                  # GR32 item 2; GR71 (sharedkey -> any destination: item 3 holds)
         return 'retired'
     sk = src.sharedkey
     if field == 'K0':
@@ -681,7 +681,7 @@ def t_state_machine():
         run(cc, ENC)                               # key pair, ciphertext and sharedkey all set
         before = cc.fields() + [cc.se]
         run(cc, st)
-        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR53, GR29)',
+        check(f'RBG failure in _{NAME[st]}_ (FIPS 203 Algorithm {alg}): _Invalid_, Content cleared (GR56, GR29)',
               voided(cc) and not zero(*before[:3]))
 
     states = set()
@@ -830,7 +830,7 @@ def t_long_running():
     check('export/import keeping the ADS: P kept, resumes to the ACVP key pair',
           same and kept.rbg.draws == 2 and kept.state == EK_OUT and kept.encapsk.hex() == kv['ek'])
     dropped = halted_gen()[0].export_import(keep_ads=False)
-    check('import completing without Content2 (GR46.c, MR6) zeroes P: restart with fresh values',
+    check('import completing without Content2 (GR52, MR6) zeroes P: restart with fresh values',
           dropped.use == 0 and dropped.state == GEN and restarted(dropped))
     x = vec('decaps', ps)
     cc = decaps_ready(x)
@@ -937,7 +937,7 @@ def t_derive():
     s2 = shared()
     check('ML-KEM destination (no destination endpoint): only it becomes _Invalid_ (GR32 item 2)',
           derived(MLKEMLocker(ps), s2, 32).state == INVALID and s2.state == SK_OUT)
-    check('KeyType 1 key never importable (GR68): destination _Invalid_',
+    check('KeyType 1 key never importable (GR71): destination _Invalid_',
           derived(Dest(AES128_ECB, keytype=1), src).state == INVALID and src.state == SK_OUT)
     dest = derived(Dest(AES128_ECB, keytype=2), src)
     check('a locker provisioned with KeyType 2 (stored as KeyType 0) receives the key',
