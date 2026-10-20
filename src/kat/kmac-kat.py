@@ -1098,6 +1098,9 @@ check('KMACXOF128 bounded at 8 and 1000 B: the prefix of the unbounded stream (r
       'Xs = 12 -> _Invalid_; Form A stays in _Hash_Output_', True,
       (r, c.st, bytes(squeeze(c2, 300)[0][1]) == ref_kmac(128, KEY, b'abc', 0, TAG, xof=True, n=300), c2.st),
       ([(True, SUCCESS)] * 2, INVALID, True, OUTPUT))
+o, st, _ = hash_run(Port(128, True), b'abc', 24, 1)
+check('KMACXOF128 bounded at 8 bits, the granularity: 1 B, the prefix of the unbounded stream, then _Success_', True,
+      (o == ref_kmac(128, KEY, b'abc', 0, TAG, xof=True, n=1), st), (True, SUCCESS))
 
 c = squeezing(128, DATA4, 8 * RATE[128])
 o = bytes(squeeze(c, RATE[128])[0][1])
