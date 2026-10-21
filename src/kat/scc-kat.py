@@ -147,9 +147,9 @@ def outcome(cl):
 class Unit:
     SC_LEVELS, VERSIONS = (0, 1, 2), (0,)
 
-    def __init__(self, CSK, LST, klmvendorid, klmarchid, klmimpid, max_aux=16, zklexpire=True):
+    def __init__(self, CSK, LST, klvendorid, klarchid, klimpid, max_aux=16, zklexpire=True):
         self.CSK, self.LST, self.max_aux, self.zklexpire = CSK, dict(LST), max_aux, zklexpire
-        self.ids = (klmvendorid, klmarchid, klmimpid)
+        self.ids = (klvendorid, klarchid, klimpid)
         self.reg_SIV = self.reg_IMPQUAL = self.reg_SIV2 = 0     # <<KLE-KLF>>
         self.klnamedlocker, self.decrypts = 32, []            # decrypts: sep of each SCC_Decrypt
 
@@ -164,7 +164,7 @@ class Unit:
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klnamedlocker:
             raise IllegalInstruction
 
-    def impqual(self):                         # zeros(32) @ klmimpid @ klmarchid @ klmvendorid
+    def impqual(self):                         # zeros(32) @ klimpid @ klarchid @ klvendorid
         v, a, i = self.ids
         return cat((0, 32), (i, 32), (a, 32), (v, 32))
 
@@ -272,7 +272,7 @@ class Unit:
             AD = [cl.mdh] + [self.lst_eff(j) for j in localities_of(cl.mdh)]      # 3.a-3.d
             self.reg_SIV, cl.content1 = SCC_Encrypt(AD, 0, 0, cl.content1, self.CSK)
             aux = fld(cl.mdh, 'AuxDataLen')
-            if aux >= 2:                       # 4: an ADS producer has klmimpid != 0
+            if aux >= 2:                       # 4: an ADS producer has klimpid != 0
                 assert self.ids[2] and len(cl.content2) == aux - 2
                 self.reg_IMPQUAL = self.impqual()
                 self.reg_SIV2, cl.content2 = SCC_Encrypt([self.reg_IMPQUAL, self.reg_SIV], 0, 1,
@@ -425,15 +425,15 @@ RFC8452_AEAD = [  # RFC 8452 C.2/C.3: (source, key, nonce, AAD, plaintext, ciphe
      '18ce4f0b8cb4d0cac65fea8f79257b20888e53e72299e56d'
      'ffffffff000000000000000000000000'),
 ]
-# Synthetic material; klmarchid bit 15 is IMPQUAL bit 47, which segment 2 must keep.
+# Synthetic material; klarchid bit 15 is IMPQUAL bit 47, which segment 2 must keep.
 CSK = b2v(bytes(range(32)))
 LST = {j: b2v(bytes([0x40 + j] * 16)) for j in range(11)}
 LST_ALT = {**LST, 4: LST[4] ^ 1 << 17}         # #4 is selected by LOC_SETS[2]
 LST_ALT_UNSEL = {**LST, 3: LST[3] ^ 1 << 17}   # #3 is selected by no set
 LST_NO_SIP = {j: v for j, v in LST.items() if j}
 LST_NO_SLOC = {**LST, 10: 0}
-IDS = dict(klmvendorid=0x0000_0489, klmarchid=0x0000_8001, klmimpid=0x0102_0304)
-IDS_NEXT_REV = dict(IDS, klmimpid=0x0102_0305)
+IDS = dict(klvendorid=0x0000_0489, klarchid=0x0000_8001, klimpid=0x0102_0304)
+IDS_NEXT_REV = dict(IDS, klimpid=0x0102_0305)
 CONTENT1 = deser(bytes(range(0x80, 0xA0)))     # the AES256_ECB key
 CONTENT2 = [b2v(bytes([0xA0 + i] * 16)) for i in range(2)]
 AUX_LEN = 2 + len(CONTENT2)
@@ -662,8 +662,8 @@ s2, c2 = SCC_Encrypt([unit.impqual(), s1], 0, 1, CONTENT2, CSK)
 eq("SCC = MDH | SIV | IMPQUAL | SIV2 | Content1 | Content2, length kl.size (<<KLE-SCC>>)",
    (scc_i, len(scc_i)),
    (b''.join(v2b(x, 16) for x in (mdh_i, s1, unit.impqual(), s2, *c1, *c2)), unit.kl_size(mdh_i)))
-eq("IMPQUAL = zeros(32) @ klmimpid @ klmarchid @ klmvendorid", scc_i[32:48],
-   b''.join(IDS[k].to_bytes(4, 'little') for k in ('klmvendorid', 'klmarchid', 'klmimpid')) + bytes(4))
+eq("IMPQUAL = zeros(32) @ klimpid @ klarchid @ klvendorid", scc_i[32:48],
+   b''.join(IDS[k].to_bytes(4, 'little') for k in ('klvendorid', 'klarchid', 'klimpid')) + bytes(4))
 full = (mdh_i, tuple(CONTENT1), tuple(CONTENT2))
 no_ads = (put(mdh_i, 'AuxDataLen', 0), tuple(CONTENT1), None)
 unit.decrypts = []
@@ -681,7 +681,7 @@ for label, img, dec in (("mismatching IMPQUAL: Content2 dropped undecrypted", sc
     other.decrypts = []
     cl, res = import_image(other, Mem(img))
     eq(f"{label}; Content1 imports, AuxDataLen -> 0", (res, cl.snapshot(), other.decrypts), ('ok', no_ads, dec))
-check("sep = 1: AD2[0][47] (klmarchid bit 15) is authenticated, not cleared",
+check("sep = 1: AD2[0][47] (klarchid bit 15) is authenticated, not cleared",
       SCC_Encrypt([unit.impqual() ^ 1 << 47, s1], 0, 1, CONTENT2, CSK)[0] != s2)
 small, mem = new_unit(max_aux=AUX_LEN - 1), Mem(scc_i)
 cl, res = import_image(small, mem)

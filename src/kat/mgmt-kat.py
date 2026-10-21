@@ -409,9 +409,9 @@ class Locker:
         self.mdh, self.c1, self.c2, self.img, self.alloc, self.off = md(), b'', b'', None, 0, None
 
 class Unit:
-    IDS = (0xA11, 0x42, 0x7)                     # klmvendorid, klmarchid, klmimpid
-    RO_ID = ('klmvendorid', 'klmarchid', 'klmimpid', 'klmaxiobuflen')     # URO aliases of the M-mode registers
-    M_ID = {'mklmvendorid': 'vendorid', 'mklmarchid': 'archid', 'mklmimpid': 'impid',
+    IDS = (0xA11, 0x42, 0x7)                     # klvendorid, klarchid, klimpid
+    RO_ID = ('klvendorid', 'klarchid', 'klimpid', 'klmaxiobuflen')     # URO aliases of the M-mode registers
+    M_ID = {'mklvendorid': 'vendorid', 'mklarchid': 'archid', 'mklimpid': 'impid',
             'mklmaxiobuflen': 'klmaxiobuflen'}                             # MRW registers holding the values
     MIN_IOBUF = 16                                                         # lower bound of klmaxiobuflen
     def __init__(self, zklv=True, zklio=True, zklmv=True, zklexpire=True, zklmem_hw=True,
@@ -573,7 +573,7 @@ class Unit:
         self._pre(ro_id=name in self.RO_ID)
     def csr_read(self, name):
         self._csr(name)
-        return {'klmvendorid': self.vendorid, 'klmarchid': self.archid, 'klmimpid': self.impid}.get(
+        return {'klvendorid': self.vendorid, 'klarchid': self.archid, 'klimpid': self.impid}.get(
             name, getattr(self, self.M_ID.get(name, name), None))
     def csrs(self, **kv):
         for name, v in kv.items():
@@ -2468,8 +2468,8 @@ def t_kliobuf():
         'illegal/2', 'illegal/1'])
     m, s_, n2 = Unit(), Unit(), Unit(zklio=False)
     s_.mode = 'S'
-    v = [m.csr_read('mklmvendorid'), m.csr_read('mklmarchid'), m.csr_read('mklmimpid'), m.csr_read('mklmaxiobuflen')]
-    m.csr_write('mklmvendorid', 0x55); m.csr_write('mklmarchid', 0x66); m.csr_write('mklmimpid', 0x77)
+    v = [m.csr_read('mklvendorid'), m.csr_read('mklarchid'), m.csr_read('mklimpid'), m.csr_read('mklmaxiobuflen')]
+    m.csr_write('mklvendorid', 0x55); m.csr_write('mklarchid', 0x66); m.csr_write('mklimpid', 0x77)
     m.csrs(kliobuflen=200)
     m.csr_write('mklmaxiobuflen', 100)
     w = [m.csr_read(c) for c in Unit.RO_ID] + [m.kliobuflen, m.kliobuftop]
@@ -2478,8 +2478,8 @@ def t_kliobuf():
     n2.csr_write('mklmaxiobuflen', 64)
     eq('mkl* registers: M-mode read/write, klm* aliases follow, WARL maxiobuflen, reduction clips kliobuflen, '
        'illegal below M-mode, no effect without Zklio',
-       v + w + [trap_of(s_.csr_read, 'mklmimpid'), trap_of(s_.csr_write, 'mklmaxiobuflen', 32),
-                s_.csr_read('klmimpid'), n2.csr_read('mklmaxiobuflen'), n2.csr_read('klmaxiobuflen')],
+       v + w + [trap_of(s_.csr_read, 'mklimpid'), trap_of(s_.csr_write, 'mklmaxiobuflen', 32),
+                s_.csr_read('klimpid'), n2.csr_read('mklmaxiobuflen'), n2.csr_read('klmaxiobuflen')],
        [0xA11, 0x42, 0x7, 256, 0x55, 0x66, 0x77, 100, 100, 100, 16, 'illegal/1', 'illegal/1', 0x7, 0, 0])
     src = bytes(0x10 + 3 * i & 0xFF for i in range(64))
     u, mem = fresh().csrs(kliobuflen=64, kliobuftop=48), Memory(src)
@@ -2922,7 +2922,7 @@ def t_errors():
        ([trap_of(u.getmd, 0), trap_of(u.clearall), trap_of(u.csr_read, 'klstart'),
          trap_of(u.input_, Memory(), BASE, 1)],
         [u.csr_read(c) for c in Unit.RO_ID], [trap_of(k.getmd, 0), trap_of(k.csr_write, 'klstart', 0),
-                                              trap_of(k.mgmt, 0, PROV, cipher())], k.csr_read('klmimpid')),
+                                              trap_of(k.mgmt, 0, PROV, cipher())], k.csr_read('klimpid')),
        (['no_csk'] * 4, [0xA11, 0x42, 0x7, 256], ['illegal/1'] * 3, 0x7))
     u = rc()
     u.mode, u.llstatus = 'S', {0: 'off', 5: 'off'}
