@@ -5,14 +5,14 @@ import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bswap, bxor, MASK128, aes_encrypt, gmul_ghash, kl_galoismul,
                     selftest, ERROR_STATES, IllegalInstruction, raises, section, check, control, done,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_HASH_VERIFY as HV,
                     KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
                     KL_STATE_ENC_LAST_BLOCK as ELB, KL_STATE_DEC_LAST_BLOCK as DLB,
                     KL_STATE_ENC_TAG_FINALIZE as ETF, KL_STATE_DEC_TAG_FINALIZE as DTF,
                     KL_STATE_SET_AUX_VALUE as SAV, KL_STATE_SUCCESS as SUCC,
-                    KL_STATE_FAILURE as FAIL, KL_STATE_INVALID as INV,
-                    KL_STATE_PRIV_VIOLATION as PRIV)
+                    KL_STATE_FAILURE as FAIL, KL_STATEEXT_INVALID as INV,
+                    KL_STATEEXT_PRIV_VIOLATION as PRIV)
 
 def pad16(s): return s + bytes(-len(s) % 16)
 def pad128(n): return -(-n // 128) * 128
@@ -164,8 +164,6 @@ class Gcm:
         """klen: KLLEN of a Form C operand.  form 'A/iobuf': a Form A kl.setst, `aux` the KLIOBUF bytes;
         where the State expects Form C it is the substitution (<<KLE-usage-input-output>>)."""
         st = s.state
-        if immed in (54, 55):                            # reserved #immed7: first group, State kept
-            raise IllegalInstruction(immed)
         if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR30
             return s._error(immed)
         if st in ERROR_STATES:
@@ -542,9 +540,8 @@ check('Form A kl.setst substituting each Form C one, input in the KLIOBUF: tc4 t
       (kl_encrypt(K, IV, A, P, subst=True)[:2], kl_decrypt(K, IV, A, RC, RT, subst=True)[:2],
        kl_decrypt(K, IV, A, RC, RT, subst=True, extra=b'\x5a' * 16)[1],
        kl_decrypt(K, IV, A, RC, bytes(16), subst=True)[1]), ((RC, RT), (P, SUCC), SUCC, FAIL))
-cl = at('enc')
-check('kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept', True,
-      ([raises(cl.setst, i) for i in (54, 55)], cl.state), ([True] * 2, ENC))
+check('kl.setst #48, #53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)', True,
+      [(raises(c.setst, i), c.state) for i in (48, 53) for c in [at('enc')]], [(False, INV)] * 2)
 check('kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18), from Encrypt and from Success', True,
       [(raises(c.setst, i), c.state) for i in (SUCC, FAIL) for c in (at('enc'), at('success'))], [(False, INV)] * 4)
 for n in (1, 8, 15, 21):

@@ -94,7 +94,7 @@ NOTE: Repeated restarts may prevent a provisioning or an import from completing,
 [[KLE-SR-handler-duty,SR11]]SR11:: A handler that neither resolves nor forwards, to another handler, in-process handlers included, an exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, and that does not terminate the process, must:
 +
 --
-. set the _State_ of the locker on which the exception was raised, for `KLNL` the one that `klnamedlocker` names (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>), to that Error State, through the short import of <<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>> if the locker is _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); a locker in a Configuration State keeps its _State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>>); and
+. set the _State_ of the locker on which the exception was raised, for `KLNL` the one that `klnamedlocker` names (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>), to that Error State with a `kl.setste` naming it (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>), also if the locker is _Unconfigured_; a locker in a Configuration State keeps its _State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>>); and
 . advance `xepc` past the trapping instruction, which would otherwise trap again; for a usage instruction, keep the output prefix that `klstart` and `vstart` record, zero the rest of the output window (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>), and apply the retirement effects on `klstart` and `vstart` (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-klstart-updates>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klstart-vstart>>).
 --
 
@@ -180,7 +180,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 * To inspect lockers by number, software writes each number in turn to `klnamedlocker` and names `KLNL` in the following instructions.
 * `kl.getst` reads the _State_, `kl.getstx` the _StateExtension_, and `kl.getmd` the whole MDH.
 * On RV32, `kl.getst` and `kl.getstx` write the GPR pair `X[d+1] @ X[d]`, and `kl.getmd` a quartet (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getst>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-getmd>>).
-* A _State_ in 48–55, that is, with `(State & 0x38) = 0x30`, is an Error State (<<Zkl-ISA-unpriv.adoc#KLE-states-error>>).
+* A locker with _State_ 0 is _Unconfigured_ if its _StateExtension_ is 0, and in an Error State otherwise (<<Zkl-ISA-unpriv.adoc#KLE-State-field>>).
 * Before using the output of a usage instruction, software checks, immediately after the instruction, that the locker is in a Valid State.
 
 // ////////////////////////////////////////////////////////////////////
@@ -239,7 +239,7 @@ A handler that passes `ml` through the KLIOBUF for the other lockers configures 
 
 A handler that can neither resolve nor forward a KLE exception covered by Rule <<KLE-SR-handler-duty>>, nor terminate the process:
 
-. unless the locker is in a Configuration State, sets it to the Error State that <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives, or to _Invalid_ where it gives none: with `kl.setst` and that Error State as immediate (<<Zkl-ISA-unpriv.adoc#KLE-instruction-setst>>), or, if the locker is _Unconfigured_, by the short import of an MDH holding that State (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>); and
+. unless the locker is in a Configuration State, sets it to the Error State that <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives, or to _Invalid_ where it gives none: with `kl.setste` and the code of that Error State as immediate (<<Zkl-ISA-unpriv.adoc#KLE-instruction-setst>>), also on an _Unconfigured_ locker; and
 . advances `xepc` past the instruction, retiring a usage instruction as Rule <<KLE-SR-handler-duty>> states.
 
 // ///////////////////////////////////////////////////////////////////
@@ -281,11 +281,23 @@ On exit the routines restore the saved value (Rule <<KLE-SR-klnamedlocker-write>
 Checking the _State_::
 +
 --
-After each management instruction, the code reads the _State_ of the locker with `kl.getst`.
+After each management instruction, the code reads the _State_ of the locker with `kl.getst`, and its _StateExtension_ with `kl.getstx` if the _State_ is 0.
 If a handler has meanwhile cleared the locker or set it to an Error State, every following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, including a `KLNL` opening after a clear, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and the check detects the change:
 
-* after a clear, `KLNL` reads as an _Unconfigured_ locker, so the check finds _State_ 0: a provisioning or an import restarts at its preamble, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
-* after an Error State, or after the completing `kl.mgmt`, `KLNL` still names the locker, so the check reads its final _State_; an Error State abandons the operation.
+* after a clear, `KLNL` reads as an _Unconfigured_ locker, so the check finds _State_ and _StateExtension_ 0: a provisioning or an import restarts at its preamble, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
+* after an Error State, or after the completing `kl.mgmt`, `KLNL` still names the locker, so the check reads its final _State_ and _StateExtension_; an Error State abandons the operation.
+
+The macro `check_state` makes this check for provisioning and import; an export branches to `handle_errors` on _State_ 0 alone.
+----
+.macro check_state on_clear       # after a management instruction
+  kl.getst  t2, KLNL
+  bnez      t2, 1f                # State not 0: no clear, no Error State
+  kl.getstx t2, KLNL
+  beqz      t2, \on_clear         # Unconfigured: the locker was cleared
+  j         handle_errors         # Error State
+1:
+.endm
+----
 
 Only the check after the last instruction is required; the earlier ones react sooner.
 The code may bound the number of restarts and then branch to its error handling, for robustness only: system software must let the operation complete (Rule <<KLE-SR-no-unconditional-clear>>).
@@ -310,7 +322,6 @@ The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `kl.mgmt`
 
   ld        s4, 0(t6)             # load MDH[63:0] from memory
   ld        s5, 8(t6)             # load MDH[127:64] from memory
-  li        t3, 0x30              # const useful to determine Error States
   kl.getnl  s8                    # save the caller's value: the routine may
                                   # run inside another management operation
 
@@ -318,10 +329,7 @@ restart:
   select_locker                   # name the locker: every KLE instruction
                                   # below acts on it; a clear resets it to 32
   kl.mgmt   KLNL, #kl_cfg_provisioning, s5:s4 # start provisioning, load MDH
-  kl.getst  t2, KLNL              # get _State_ field from MDH
-  beqz      t2, restart           # locker cleared: must restart
-  andi      t2, t2, 0x38          # Check the three top bits of State
-  beq       t3, t2, handle_errors # Error State: provisioning ended
+  check_state restart             # Error State: provisioning ended
 
   addi      t4, t6, 16            # source pointer: first byte after MDH
   mv        s1, t5                # working byte count, re-derived from t5
@@ -338,18 +346,12 @@ vloop:
   kl.mvin   v1                    # move it into the locker
   add       t4, t4, s2            # bump the source pointer
   sub       s1, s1, s2            # decrement the bytes still to load
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared: must restart
-  andi      t2, t2, 0x38          # Three top bits -> Error or Management
-  beq       t3, t2, handle_errors # *new* Error State
+  check_state restart             # *new* Error State
   bnez      s1, vloop
 
   kl.mgmt   KLNL, #kl_cfg_management_end # complete provisioning
                                   # and possibly reconstruct data
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared: must restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
+  check_state restart             # catches errors at completion (e.g., SKS)
 
 finished:
   kl.setnl  s8                    # restore the caller's value
@@ -362,29 +364,19 @@ finished:
 ----
   ld        s4, 0(t6)             # load MDH[63:0] from memory
   ld        s5, 8(t6)             # load MDH[127:64] from memory
-  li        t3, 0x30              # const useful to determine Error States
   kl.getnl  s8                    # save the caller's value
 
 restart:
   select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_provisioning, s5:s4 # start prov. and load MDH
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared: must restart
-  andi      t2, t2, 0x38          # Check the three top bits of State
-  beq       t3, t2, handle_errors # Error State?
+  check_state restart             # Error State?
 
   # Assume that the Content directly follows the MDH in memory.
   kl.load   16(t6), x0            # load rest of PI into the locker
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors
+  check_state restart
   kl.mgmt   KLNL, #kl_cfg_management_end # complete provisioning
                                   # and possibly reconstruct data
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared: must restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
+  check_state restart             # catches errors at completion (e.g., SKS)
 finished:
   kl.setnl  s8                    # restore the caller's value
 ----
@@ -395,7 +387,6 @@ finished:
 
 *Export Code (`Zklmv`)*
 ----
-  li         t3, 0x30             # to determine Error States
   kl.getnl   s8                   # save the caller's value
   select_locker                   # name the locker for all that follows
   kl.size    s1, KLNL             # TOTAL size to export
@@ -404,9 +395,7 @@ finished:
   {...}  # here code that allocates the buffer to store the exported data
 
   kl.getmd   s5:s4, KLNL          # get MDH, including its _State_
-  srli       t2, s4, 18           # _State_ of that MDH, bits [23:18]
-  andi       t2, t2, 0x3f
-  beqz       t2, handle_errors    # locker cleared since kl.size
+  beqz       s4, handle_errors    # all zero: locker cleared since kl.size
   sd         s4, 0(t6)            # store MDH[63:0] to memory
   sd         s5, 8(t6)            # store MDH[127:64] to memory
 
@@ -416,9 +405,7 @@ finished:
 
   kl.mgmt    KLNL, #kl_cfg_exporting  # start exporting
   kl.getst   t2, KLNL
-  beqz       t2, handle_errors    # locker cleared: the CC is lost
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors # Error State set meanwhile
+  beqz       t2, handle_errors    # cleared, or Error State set meanwhile
   kl.size    t2, KLNL             # size now that the export is open
   bne        t2, s1, handle_errors # ADS changed since the buffer was sized
   addi       s1, s1, -16          # adjust size to remove the MDH
@@ -436,18 +423,14 @@ store_loop:
   add        t4, t4, s2           # bump the destination pointer
   sub        s1, s1, s2           # decrement the bytes still to store
   kl.getst   t2, KLNL
-  beqz       t2, handle_errors    # locker cleared: the CC is lost
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors
+  beqz       t2, handle_errors    # cleared (CC lost), or Error State
   bnez       s1, store_loop
 
 finished:
   # Restore _State_ from the saved MDH.
   kl.mgmt    KLNL, #kl_cfg_management_end, s5:s4
   kl.getst   t2, KLNL
-  beqz       t2, handle_errors    # locker cleared: the CC is lost
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors # catches `kl_state_mgmt_auth`
+  beqz       t2, handle_errors    # cleared, or `kl_stateext_mgmt_auth`
 done:
   kl.setnl   s8                   # restore the caller's value
 ----
@@ -466,9 +449,7 @@ A locker under management is exported by the same sequence, but the caller must 
   kl.store  0(t6), x0             # store SIV, IMPQUAL, SIV2 and Content
                                   # of the locker (Xl = x0)
   kl.getst  t2, KLNL
-  beqz      t2, handle_errors     # locker cleared: the CC is lost
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors
+  beqz      t2, handle_errors     # cleared (CC lost), or Error State
 ----
 
 [[KLE-import-code]]
@@ -478,21 +459,20 @@ A locker under management is exported by the same sequence, but the caller must 
 ----
   ld         s4, 0(t6)            # load MDH[63:0] from memory
   ld         s5, 8(t6)            # load MDH[127:64] from memory
-  li         t3, 0x30             # to determine Error States
-  srli       s7, s4, 18           # _State_ of the saved MDH, bits [23:18]
-  andi       s7, s7, 0x38         # s7 = 0x30: image of an Error-State locker
+  srli       s7, s4, 18           # bits [27:18] of the saved MDH:
+  andi       s7, s7, 0x3ff        # _StateExtension_ @ _State_
   kl.getnl   s8                   # save the caller's value
 
 restart:
   select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_importing, s5:s4    # open locker for import, load MDH
   kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  bne       t3, t2, 2f            # three top bits of _State_ = 110 ?
-  beq       t3, s7, success       # yes, as saved: the short import is complete,
-                                  # with this one kl.mgmt and no load
-  j         handle_errors         # yes, but new (e.g., invalid Metadata)
+  bnez      t2, 2f                # State not 0: the import is open
+  kl.getstx t2, KLNL
+  beqz      t2, restart           # Unconfigured: locker cleared, restart
+  slli      t2, t2, 6             # Error State: if as saved, the short import
+  beq       t2, s7, success       # is complete, with this one kl.mgmt
+  j         handle_errors         # new Error State (e.g., invalid Metadata)
 2:
   kl.size   s1, KLNL              # size of the image the locker accepts,
                                   # without a dropped ADS
@@ -511,18 +491,12 @@ vloop:
   kl.mvin   v2                    # move it into the locker, advance klstart
   add       t4, t4, s2
   sub       s1, s1, s2
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors
+  check_state restart
   bnez      s1, vloop
 
   kl.mgmt   KLNL, #kl_cfg_management_end, s5:s4 # decrypt and auth SCC
                                   # and restore _State_ from the saved MDH
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # catches "Authentication Failed"
+  check_state restart             # catches "Authentication Failed"
 
 success:
   kl.setnl  s8                    # restore the caller's value
@@ -532,34 +506,28 @@ success:
 ----
   ld        s4, 0(t6)             # load MDH[63:0] from memory
   ld        s5, 8(t6)             # load MDH[127:64] from memory
-  li        t3, 0x30              # to determine Error States
-  srli      s7, s4, 18            # _State_ of the saved MDH, bits [23:18]
-  andi      s7, s7, 0x38          # s7 = 0x30: image of an Error-State locker
+  srli      s7, s4, 18            # bits [27:18] of the saved MDH:
+  andi      s7, s7, 0x3ff         # _StateExtension_ @ _State_
   kl.getnl  s8                    # save the caller's value
 
 restart:
   select_locker                   # name the locker (a clear resets it to 32)
   kl.mgmt   KLNL, #kl_cfg_importing, s5:s4    # open locker for import, load MDH
   kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  bne       t3, t2, 2f            # three top bits of _State_ = 110 ?
-  beq       t3, s7, success       # yes, as saved: the short import is complete
-  j         handle_errors         # yes, but new (e.g., invalid Metadata)
+  bnez      t2, 2f                # State not 0: the import is open
+  kl.getstx t2, KLNL
+  beqz      t2, restart           # Unconfigured: locker cleared, restart
+  slli      t2, t2, 6             # Error State: if as saved, the short import
+  beq       t2, s7, success       # is complete, with this one kl.mgmt
+  j         handle_errors         # new Error State (e.g., invalid Metadata)
 2:
   addi      t4, t6, 16            # first byte after the MDH
 
   kl.load   0(t4), x0             # load rest of SCC into the locker
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors
+  check_state restart
   kl.mgmt   KLNL, #kl_cfg_management_end, s5:s4 # decrypt and auth locker,
                                   # if necessary complete it
-  kl.getst  t2, KLNL
-  beqz      t2, restart           # locker cleared means force restart
-  andi      t2, t2, 0x38
-  beq       t3, t2, handle_errors # catches `kl_state_mgmt_auth`
+  check_state restart             # catches `kl_stateext_mgmt_auth`
 
 success:
   kl.setnl  s8                    # restore the caller's value
@@ -621,10 +589,8 @@ The following listing encrypts data with an ECB CC.
 # a multiple of 16
 
   import_scc 0, a0                # import the SCC into locker K0
-  li        t3, 0x30              # to determine Error States
   kl.getst  t1, K0
-  andi      t2, t1, 0x38
-  beq       t2, t3, error         # Error State: the import failed
+  beqz      t1, error             # State 0: the import failed
 
   kl.setst  K0, #kl_state_encrypt # configure the locker to encrypt
   kl.getst  t1, K0

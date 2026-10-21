@@ -4,11 +4,11 @@ Error-State transfer, on a model unit implementing only AES256_ECB. Primitives a
 and RFC 8452 (length block restored); the procedures by self-consistency and regression vectors."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, cat, bin_, montmul, mulx_polyval, aes_encrypt, aes_decrypt, MASK128,
-                    selftest, MDH_FIELDS, MDH_FIELD, IllegalInstruction, KL_STATE_UNCONFIGURED as UNCONF,
+from common import (mdh_get, mdh_put, b2v, v2b, sl, cat, bin_, montmul, mulx_polyval, aes_encrypt, aes_decrypt, MASK128,
+                    selftest, MDH_FIELDS, MDH_FIELD, IllegalInstruction, KL_STATE_INERT as UNCONF,
                     KL_STATE_READY as READY, KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
-                    KL_STATE_SUCCESS, KL_STATE_INVALID as INVALID, KL_STATE_MGMT_AUTH as AUTH,
-                    KL_STATE_EXPIRED as EXPIRED, ERROR_STATES, KL_CFG_PROVISIONING,
+                    KL_STATE_SUCCESS, KL_STATEEXT_INVALID as INVALID, KL_STATEEXT_MGMT_AUTH as AUTH,
+                    KL_STATEEXT_EXPIRED as EXPIRED, ERROR_STATES, KL_CFG_PROVISIONING,
                     KL_CFG_EXPORTING as EXPORTING, KL_CFG_IMPORTING as IMPORTING, KL_CFG_PPI_EXPORTING,
                     KL_CFG_PPI_IMPORTING,
                     section, check, control, info, raises, done)
@@ -56,23 +56,20 @@ def SCC_Decrypt(AD, N, sep, SIV, C, K, length_block=None, clear_ads=True):
     return ok, P if ok else [0] * len(C)
 
 # ---------------------------------------------------------------- MDH, States, Localities
-fld = lambda m, name: sl(m, *MDH_FIELD[name])
+fld = mdh_get
 RESERVED = [(hi, lo) for n, hi, lo in MDH_FIELDS if n is None]
 
-def put(m, name, x):
-    hi, lo = MDH_FIELD[name]
-    assert 0 <= x < 1 << (hi - lo + 1), (name, x)
-    return m & ~(((1 << (hi - lo + 1)) - 1) << lo) | x << lo
+put = mdh_put
 
 def field_at(bit):
     return next((n or 'Reserved', hi, lo) for n, hi, lo in MDH_FIELDS if lo <= bit <= hi)
 
 AES256_ECB = cat((2, 8), (0, 4))              # <<KLE-exec-encodings>>: Type 2, Mode 0
 ECB_STATES = (READY, ENCRYPT, DECRYPT)        # <<KLE-ECB-mode>>
-ERR_NAME = {48: 'kl_state_unsupported', 49: 'kl_state_invalid', 50: 'kl_state_out_of_memory',
-            51: 'kl_state_mgmt_auth', 52: 'kl_state_priv_violation', 53: 'kl_state_expired'}
-is_valid = lambda st: 1 <= st <= 47
-is_complete = lambda st: 1 <= st <= 55
+ERR_NAME = dict(zip(ERROR_STATES, ('kl_stateext_unsupported', 'kl_stateext_invalid', 'kl_stateext_out_of_memory',
+                                   'kl_stateext_mgmt_auth', 'kl_stateext_priv_violation', 'kl_stateext_expired')))
+is_valid = lambda st: 1 <= st <= 55
+is_complete = lambda st: is_valid(st) or st in ERROR_STATES
 base_type = lambda st: ('pi' if st in (KL_CFG_PROVISIONING, KL_CFG_PPI_EXPORTING, KL_CFG_PPI_IMPORTING)
                         else 'scc' if st in (EXPORTING, IMPORTING) else None)
 
@@ -197,7 +194,7 @@ class Unit:
         invalid = (any(sl(M, hi, lo) for hi, lo in RESERVED if hi < 64) or fld(M, 'AuxDataLen') == 1
                    or base == 'pi' and (fld(M, 'ADSDropped') or fld(M, 'AuxDataLen'))
                    or fld(M, 'MachinePolicy') == 0 or fld(M, 'KeyType') >= 2 or fld(M, 'SCProtection') == 3
-                   or fld(M, 'Version') not in self.VERSIONS or st in (54, 55)
+                   or fld(M, 'Version') not in self.VERSIONS
                    or is_valid(st) and (st not in ECB_STATES or fld(M, 'StateExtension'))   # ECB uses none
                    or at_import and st in (0, 61, 62, 63))
         if not low_only:
@@ -212,10 +209,11 @@ class Unit:
         st = fld(mdh, 'State')
         if form == 'A' and st == UNCONF:
             return 0
-        if form != 'A' and st not in ERROR_STATES and (st in (61, 62, 63) or self.metadata_check(
+        err = sl(mdh, *MDH_FIELD['State']) == 0 and st                 # an Error State, reserved codes included
+        if form != 'A' and not err and (st in (61, 62, 63) or self.metadata_check(
                 mdh, 'pi' if st == 0 or base_type(st) == 'pi' else 'scc', low_only=form == 'B')):
             return 0
-        if st in ERROR_STATES:
+        if err:
             return 16
         if is_valid(st) or st in (IMPORTING, EXPORTING):
             return (64 + content2_size(mdh) if fld(mdh, 'AuxDataLen') else 32) + self.content1_size(mdh)
@@ -232,8 +230,9 @@ class Unit:
     def _open_import(self, cl, ml):
         cl.__init__(idx=cl.idx)                # step 2: clear
         st = fld(ml, 'State')
-        if st in ERROR_STATES:                 # <<KLE-error-state-transfer>>; Expired without Zklexpire: read
-            st = INVALID if st in (54, 55) or st == EXPIRED and not self.zklexpire else st
+        if sl(ml, *MDH_FIELD['State']) == 0 and st:   # <<KLE-error-state-transfer>>; a reserved code, or
+            st = INVALID if st not in ERROR_STATES or st == EXPIRED and not self.zklexpire else st   # Expired
+            # without Zklexpire, reads as Invalid
             cl.mdh = err_mdh(ml, st)
             return
         chk = self.metadata_check(ml, base_type(st) or 'scc', at_import=True)
@@ -458,7 +457,7 @@ REGRESSION_ADS = {  # AuxDataLen = 4, LOC_SETS[2]
     'SIV2': '0710ba75b06702fa4d986a7b8756db59',
     'C2[0]': '85e6a5e475dbd8fbd8fcf8e2c7238c69',
 }
-REGRESSION_ERROR_IMAGE = '2010cc0000000000403b000000000000'   # after a failed import: State 51
+REGRESSION_ERROR_IMAGE = '2010000400000000403b000000000000'   # after a failed import: State 0, StateExtension 4
 
 # ---------------------------------------------------------------- checks
 def eq(name, got, want):
@@ -534,7 +533,7 @@ image_len = lambda m: 16 + content_offset(m) + unit.content1_size(m) + content2_
 check("image_size = kl.size - 16 (<<KLE-instruction-mv>>)", all(image_len(m) == unit.kl_size(m) for m in (
       base, make_mdh(), put(base, 'ADSDropped', 1), put(base, 'AuxDataLen', 2), make_mdh(KeyType=1))))
 eq("the SCC length does not depend on State (Valid and scc Configuration States)",
-   len({image_len(put(base, 'State', st)) for st in list(range(1, 48)) + [EXPORTING, IMPORTING]}), 1)
+   len({image_len(put(base, 'State', st)) for st in list(range(1, 56)) + [EXPORTING, IMPORTING]}), 1)
 check("no field outside the length rule changes the SCC length", all(
       image_len(base ^ x << MDH_FIELD[f][1]) == image_len(base) for f, x in (
           ('SCProtection', 2), ('UsagePolicy', 0b10101), ('Locality', 0b1_01_11_11), ('MachineUse', 0x2EEF),
@@ -837,18 +836,18 @@ dirty = make_mdh(Machine=0xFFF, MachinePolicy=0, KeyType=3, AuxDataLen=5, ADSDro
                  ExpirationDate=0xFFFFF, Version=2) | 0x1FF << 69
 dirty |= sum(((1 << (hi - lo + 1)) - 1) << lo for hi, lo in RESERVED)
 bad = []
-for st in ERROR_STATES:
-    m = put(dirty, 'State', st)
+for st in ERROR_STATES + tuple(c << 7 for c in range(7, 16)):   # with the reserved codes 7-15
+    m = put(put(dirty, 'State', 0), 'StateExtension', st >> 7)
     unit.reg_SIV, unit.reg_IMPQUAL, unit.reg_SIV2 = 1, 2, 3
     cl_d = Locker()
     unit.mgmt_open_import(cl_d, m)
-    want = err_mdh(m, INVALID if st > 53 else st)
+    want = err_mdh(m, st if st in ERROR_STATES else INVALID)
     regs = unit.reg_SIV, unit.reg_IMPQUAL, unit.reg_SIV2
     if ((cl_d.snapshot(), unit.kl_size(m), export_cl(unit, cl_d), regs)
             != ((want, (), None), 16, v2b(want, 16), (1, 2, 3))):
         bad.append(st)
-eq("Error States 48-55: the short import installs the whole MDH unchecked, AuxDataLen and ADSDropped 0, "
-   "54 and 55 as Invalid, registers untouched", bad, [])
+eq("Error States (State 0, StateExtension 1-15): the short import installs the whole MDH unchecked, AuxDataLen "
+   "and ADSDropped 0, the reserved 7-15 as Invalid, registers untouched", bad, [])
 cl_v = Locker()
 unit.mgmt_open_import(cl_v, put(put(dirty, 'State', INVALID), 'Version', 3))
 eq("the short import of an Error-State MDH with Version 3 installs Version 0 (GR29)",

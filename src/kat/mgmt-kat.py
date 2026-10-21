@@ -11,13 +11,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from common import (b2v, v2b, sl, cat, bin_, montmul, bxor, MASK128, MDH_FIELDS, MDH_FIELD,  # noqa: E402
+from common import (from_fields, state_fields, b2v, v2b, sl, cat, bin_, montmul, bxor, MASK128, MDH_FIELDS, MDH_FIELD,  # noqa: E402
                     mdh_pack, mdh_unpack, ERROR_STATES, section, check, control, info, done,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE,
-                    KL_STATE_UNSUPPORTED as UNSUP, KL_STATE_INVALID as INVALID,
-                    KL_STATE_OUT_OF_MEMORY as OOM, KL_STATE_MGMT_AUTH as AUTH,
-                    KL_STATE_PRIV_VIOLATION as PRIV, KL_STATE_EXPIRED as EXPIRED,
+                    KL_STATEEXT_UNSUPPORTED as UNSUP, KL_STATEEXT_INVALID as INVALID,
+                    KL_STATEEXT_OUT_OF_MEMORY as OOM, KL_STATEEXT_MGMT_AUTH as AUTH,
+                    KL_STATEEXT_PRIV_VIOLATION as PRIV, KL_STATEEXT_EXPIRED as EXPIRED,
                     KL_CFG_PROVISIONING as PROV, KL_CFG_EXPORTING as EXP, KL_CFG_IMPORTING as IMP,
                     KL_CFG_PPI_EXPORTING as PPI_EXP, KL_CFG_PPI_IMPORTING as PPI_IMP,
                     KL_CFG_MANAGEMENT_END as END)
@@ -28,7 +28,9 @@ CLEARALL = 65                                # kl_cfg_clearall
 NONE = 32                                    # klnamedlocker: no locker managed
 KLV_SEWS = (8, 16, 32, 64)                   # <<KLE-KLV>>: SEW values, ELEN = 64; others set vtype.vill
 MAX_RESTARTS = 2                             # GR40 option 5: this model's documented bound for memory instructions
-VALID, COMPLETE, PARTIAL, CONFIG = range(1, 48), range(1, 56), range(56, 64), range(56, 61)
+VALID, PARTIAL, CONFIG = tuple(range(1, 56)), range(56, 64), range(56, 61)
+COMPLETE = VALID + ERROR_STATES
+raw_state = lambda st: 0 if st in ERROR_STATES or st > 63 else st   # the _State_ field of a model State
 BASE_TYPE = {PROV: 'pi', EXP: 'scc', IMP: 'scc', PPI_EXP: 'pi', PPI_IMP: 'pi'}
 EXC_STATE = {'unsupported': UNSUP, 'out_of_memory': OOM, 'privilege_violation': PRIV, 'clock_unavailable': EXPIRED}
 RES_MASK = sum(((1 << hi - lo + 1) - 1) << lo for n, hi, lo in MDH_FIELDS if n is None)
@@ -43,6 +45,10 @@ def md(**kw):
     m['res'] = 0
     assert set(kw) <= set(m), kw
     m.update(kw)
+    if m['State'] > 63:       # normal form: a model Error State in 'State', its code in 'StateExtension'
+        m['StateExtension'] = m['State'] >> 7
+    elif m['State'] == 0 and m['StateExtension']:
+        m['State'] = from_fields(0, m['StateExtension'])
     return m
 
 def pack(m):
@@ -122,7 +128,10 @@ def decode(w):
         return (('kl.clone', 'kl.rename', 'kl.swap')[T], lk(R & 1, rd, km=True), lk(R >> 1, rs1, km=True))
     if op == 0x0F and f3 == 3:                                      # kl.setst, kl.mgmt
         r, F, imm = b(20, 20), b(22, 21), b(31, 25)
-        if b(24, 23) or (F == 0 and rs1): raise Trap('illegal', 1)
+        if b(24, 24) or (F == 0 and rs1): raise Trap('illegal', 1)
+        if b(23, 23):                                               # kl.setste: Form A, #immed7 an Error code
+            if F or not 1 <= imm <= 6: raise Trap('illegal', 1)
+            return ('kl.setste', 'A', lk(r, rd, km=True), imm << 7)   # the model Error State (ERROR_STATES)
         if imm == CLEARALL:                                         # kl.clearall: Form A, Kd = 0, r = 0
             if F == 0 and not r and rd == 0: return ('kl.clearall',)
             raise Trap('illegal', 1)
@@ -130,8 +139,6 @@ def decode(w):
         if imm >> 3 == 0b0111:
             if 59 <= imm <= 62 or F == 1: raise Trap('illegal', 1)
             return ('kl.mgmt', 'ABCD'[F], k, imm)
-        if imm in (54, 55):                                         # reserved Error States
-            raise Trap('illegal', 1)
         return ({0: 'kl.clear', CLEAR_ADS: 'kl.clearads'}.get(imm, 'kl.setst'), 'ABCD'[F], k, imm)
     # kl.load / kl.input and kl.store / kl.output share one encoding each; klnamedlocker selects the target (GR4)
     return {(0x03, 7): ('kl.load', f'X{rd}'), (0x23, 5): ('kl.store', f'X{rs2}')}.get((op, f3))
@@ -142,8 +149,8 @@ def decoded(w):
 def enc_r(f2, hi5, rs2=0, rs1=0, rd=0):
     return (f2 << 30) | (hi5 << 25) | (rs2 << 20) | (rs1 << 15) | (4 << 12) | (rd << 7) | 0x0F
 
-def enc_setst(imm, F=0, r=0, rs1=0, rd=0):
-    return (imm << 25) | (F << 21) | (r << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | 0x0F
+def enc_setst(imm, F=0, r=0, rs1=0, rd=0, e=0):
+    return (imm << 25) | (e << 23) | (F << 21) | (r << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | 0x0F
 
 def enc_ls(store, xl=0, rs1=2, f3=None):
     f3 = (5 if store else 7) if f3 is None else f3
@@ -494,8 +501,8 @@ class Unit:
                mach and mach.kind == 'ops' and m['MachinePolicy'] == 0,
                m['KeyType'] == 3 or m['KeyType'] == 2 and not pi,              # <<KLE-KeyType-field>>
                mach and not mach.key_len and m['KeyType'] in (1, 2),            # no key field
-               ctx == 'provision' and st != UNCONF, ctx == 'import' and (st == UNCONF or st > 60),
-               st in (54, 55) or (mach and 2 <= st <= 45 and st not in mach.states),
+               ctx == 'provision' and (raw_state(st) != UNCONF or m['StateExtension']), ctx == 'import' and (st == UNCONF or st > 60),
+               mach and 2 <= st <= 53 and st not in mach.states,
                mach and st in VALID and not mach.stx_ok(st, m['StateExtension']),
                m['Version'] not in VERSIONS, m['SCProtection'] == 3]                  # reserved level
         if not low:
@@ -587,11 +594,11 @@ class Unit:
         self._pre()
         if k == NONE: return md()                                   # GR26: KLNL at 32 reads as Unconfigured
         self._off(k)
-        return dict(self.lockers[k].mdh)
+        return md(**self.lockers[k].mdh)
     def getmdl(self, k):
         return pack(self.getmd(k)) & MASK64
-    def getst(self, k):                                             # kl.getmdl; srli 18; andi 0x3F
-        return self.getmdl(k) >> 18 & 0x3F
+    def getst(self, k):                                             # kl.getst, then kl.getstx at _State_ 0
+        return from_fields(self.getmdl(k) >> 18 & 0x3F, self.getstx(k))
     def getstx(self, k):                                            # kl.getmdl; srli 24; andi 0x0F
         return self.getmdl(k) >> 24 & 0x0F
     def _md_operand(self, form, k, lo, m, vec_bits):
@@ -611,7 +618,7 @@ class Unit:
     def size_of(self, m, supplied, low=False):
         st = m['State']
         if not supplied and st == UNCONF: return 0
-        if st in ERROR_STATES: return 16
+        if st > 63: return 16                                       # State 0, StateExtension non-zero
         if supplied and (st > 60 or self.unsupported(m) or self.invalid(m, 'size', low)): return 0
         mach = MACHINES[m['Machine']]
         if st in VALID or st in (IMP, EXP):
@@ -677,11 +684,12 @@ class Unit:
             raise Trap('illegal', 2)
         return unpack(b2v(bytes(self.kliobuf[:16])))
     def _open_in(self, k, imm, ml):
+        ml = md(**ml)
         self._zeroize(k)
         cl = self.lockers[k]
-        if imm == IMP and ml['State'] in ERROR_STATES:              # short import
+        if imm == IMP and raw_state(ml['State']) == 0 and ml['StateExtension']:   # short import
             cl.mdh = dict(ml, AuxDataLen=0, ADSDropped=0, Version=0 if ml['Version'] == 3 else ml['Version'])
-            if ml['State'] in (54, 55) or (ml['State'] == EXPIRED and not self.zklexpire):
+            if ml['State'] not in ERROR_STATES or (ml['State'] == EXPIRED and not self.zklexpire):
                 cl.mdh['State'] = INVALID
             self._after_mgmt(k)
             return 'short import'
@@ -693,7 +701,7 @@ class Unit:
         if need > self.clf_free(): return self._fail_open(k, 'out_of_memory')
         m = dict(ml)
         if imm == PROV:
-            m.update(StateExtension=0, MachineUse=0, State=PROV)
+            m.update(MachineUse=0, State=PROV)
         else:                                                       # steps 6-8 of <<KLE-SCC-import>>
             adl = m['AuxDataLen']
             m['ADSDropped'] = int(adl >= 2 and bool(ml['ADSDropped'] or adl > MAX_ADL))
@@ -794,7 +802,7 @@ class Unit:
 
     # -- kl.setst family  <<KLE-instruction-setst>>
     def setst(self, k, imm, aux=None, form='A', vec_bits=128):
-        if imm in (54, 55) or imm == EXPIRED and not self.zklexpire:   # reserved Error States
+        if imm == EXPIRED and not self.zklexpire:                   # reserved (kl.setste: GR18)
             raise Trap('illegal', 1)
         if 56 <= imm <= 63: return self.mgmt(k, imm, aux, form=form, vec_bits=vec_bits)
         if imm == CLEARALL:                                         # kl.clearall: Form A, locker 0, r = 0
@@ -806,8 +814,7 @@ class Unit:
         if k == NONE: return 'noop'                                 # GR26: KLNL at 32, as on an Unconfigured locker
         if imm == UNCONF: return self.clear(k)
         self._off(k)
-        if imm in ERROR_STATES:
-            if self.lockers[k].mdh['State'] == UNCONF: return 'noop'
+        if imm in ERROR_STATES:                                     # kl.setste, in every State (GR30)
             self._enter_error(k, imm)
             return 'error state'
         g = self._usage_gate(k)
@@ -1526,7 +1533,7 @@ def t_mdh():
     u = fresh()
     u.mgmt(4, IMP, dict(ones, State=INVALID))
     eq('kl.getst / kl.getstx expansions; kl.getmdl is MDH[63:0]', (u.getst(4), u.getstx(4), u.getmdl(4)),
-       (INVALID, 0xF, pack(u.getmd(4)) & MASK64))
+       (INVALID, 2, pack(u.getmd(4)) & MASK64))
     eq('identifier [15:0], ADSDropped 47, Version [63:62], UsagePolicy and Locality widths',
        (MDH_FIELD['MachineExtension'][0], MDH_FIELD['ADSDropped'], MDH_FIELD['Version'], w('UsagePolicy'),
         w('Locality')), (15, (47, 47), (63, 62), 5, 9))
@@ -1542,26 +1549,31 @@ def t_mdh():
 
 def t_states():
     section('States  <<KLE-State-field>>, <<KLE-SC-sealing-status>>')
-    parts = [{0}, set(VALID), set(ERROR_STATES), set(PARTIAL)]
-    eq('Unconfigured, Valid, Error, Configuration (56-63) partition State; Complete = Valid + Error; 56-60 used, 61-63 reserved',
-       (sum(map(len, parts)), set().union(*parts), set(COMPLETE), set(CONFIG) <= parts[3]),
-       (64, set(range(64)), parts[1] | parts[2], True))
-    eq('Ready, Success, Failure, Error States 48-53, Configuration base types',
-       (READY, SUCCESS, FAILURE, [UNSUP, INVALID, OOM, AUTH, PRIV, EXPIRED], [BASE_TYPE[s] for s in CONFIG]),
-       (1, 46, 47, list(range(48, 54)), ['pi', 'scc', 'scc', 'pi', 'pi']))
+    parts = [{0}, set(VALID), set(PARTIAL)]
+    eq('Empty (0), Valid (1-55), Configuration (56-63) partition State; '
+       'Complete = Valid + Error; 56-60 used, 61-63 reserved',
+       (sum(map(len, parts)), set().union(*parts), set(COMPLETE), set(CONFIG) <= parts[2]),
+       (64, set(range(64)), parts[1] | set(ERROR_STATES), True))
+    eq('Ready, Success, Failure; Error States: State 0, StateExtension 1-6; Configuration base types',
+       (READY, SUCCESS, FAILURE, [state_fields(s) for s in (UNSUP, INVALID, OOM, AUTH, PRIV, EXPIRED)],
+        [BASE_TYPE[s] for s in CONFIG]),
+       (1, 54, 55, [{'State': 0, 'StateExtension': c} for c in range(1, 7)], ['pi', 'scc', 'scc', 'pi', 'pi']))
     eq('kl.mgmt immediates 56, 57, 58, 63; 59-62 reserved',
        [i for i in range(56, 64) if trap_of(fresh().mgmt, 0, i, md()) != 'illegal/1'], [56, 57, 58, 63])
     def st_46_47(u, i):
         return attempt(u.setst, 0, i), u.getst(0)
-    eq('kl.setst #46, #47 (GR19): Ready, Encrypt, Success, Failure -> Invalid (MR1); Unconfigured, Error State: '
+    eq('kl.setst #54, #55 (GR19): Ready, Encrypt, Success, Failure -> Invalid (MR1); Unconfigured, Error State: '
        'no operation (GR26); Provisioning: as any usage instruction, an exception, State kept (GR15)',
-       [st_46_47(mk(), i) for i in (46, 47) for mk in (lambda: pv(fresh(), 0, cipher()), rc,
+       [st_46_47(mk(), i) for i in (SUCCESS, FAILURE) for mk in (lambda: pv(fresh(), 0, cipher()), rc,
         lambda: final_cipher(SUCCESS), lambda: final_cipher(FAILURE), fresh,
         lambda: (lambda u: (u.setst(0, OOM), u)[1])(pv(fresh(), 0, cipher())), opened)],
        [('invalid', INVALID)] * 4 + [('noop', UNCONF), ('noop', OOM), ('privilege_violation', PROV)]
        + [('invalid', INVALID)] * 4 + [('noop', UNCONF), ('noop', OOM), ('privilege_violation', PROV)])
-    eq("'andi 0x38; beq 0x30' is true exactly on the Error States", {s for s in range(64) if s & 0x38 == 0x30},
-       set(ERROR_STATES))
+    macro = lambda st, x: 'other' if st else 'unconfigured' if x == 0 else 'error'     # check_state
+    model = lambda t: 'unconfigured' if t == 0 else 'error' if t > 63 else 'other'
+    eq("check_state (kl.getst, then kl.getstx at State 0) tells Unconfigured, Error States and the others apart",
+       [macro(s, x) for s in range(64) for x in range(16)],
+       [model(from_fields(s, x)) for s in range(64) for x in range(16)])
 
 def t_validity():
     section('Metadata validity  <<KLE-Metadata-validity>>, <<KLE-MVR-open>>')
@@ -1611,10 +1623,10 @@ def t_validity():
        [('unsupported', 0, 0)] * 4)
     eq('import of unsupported Metadata -> kl_exc_unsupported',
        trap_of(fresh().mgmt, 0, IMP, md(Machine=M_ABSENT, State=2)), 'unsupported')
-    got = {st: fresh().mgmt(0, IMP, cipher(State=st)) for st in (0, 61, 62, 63, 4, 7, 45, 1, 2, 3, 46, 47, 56, 57, 58,
+    got = {st: fresh().mgmt(0, IMP, cipher(State=st)) for st in (0, 61, 62, 63, 4, 7, 45, 48, 53, 1, 2, 3, 54, 55, 56, 57, 58,
                                                                  59, 60)}
     eq('import ml.State 0, 61-63, undefined -> Invalid; Valid and Configuration open', got,
-       {st: 'invalid' if st in (0, 61, 62, 63, 4, 7, 45) else 'opened' for st in got})
+       {st: 'invalid' if st in (0, 61, 62, 63, 4, 7, 45, 48, 53) else 'opened' for st in got})
     eq('SCC MDH may carry AuxDataLen >= 2 and ADSDropped; a pi-base PCCC may not',
        [fresh().mgmt(0, IMP, cipher(State=2, AuxDataLen=4, ADSDropped=1)),
         fresh().mgmt(0, IMP, cipher(State=PROV, AuxDataLen=2)), fresh().mgmt(0, IMP, cipher(State=PROV, ADSDropped=1))],
@@ -1627,10 +1639,10 @@ def t_validity():
        'opens; any other is invalid (also bit 0 in Ready, where no state block is held)',
        [(fresh().mgmt(0, IMP, m), fresh().size('B', lo=pack(m) & MASK64) > 0) for m in stx],
        [('opened', True)] * 4 + [('invalid', False)] * 4)
-    u = opened(m=cipher(StateExtension=0xF, MachineUse=0xBEEF))
-    eq('a PI StateExtension is ignored (not examined for validity, kl.size > 0); provisioning zeroes it and MachineUse',
+    u = opened(m=cipher(MachineUse=0xBEEF))
+    eq('a PI MachineUse is ignored and zeroed by provisioning; a PI with a non-zero StateExtension is an Error State, invalid',
        (u.getmd(0)['StateExtension'], u.getmd(0)['MachineUse'], u.getst(0),
-        fresh().size('B', lo=pack(cipher(StateExtension=0xF)) & MASK64) > 0), (0, 0, PROV, True))
+        fresh().mgmt(0, PROV, cipher(StateExtension=0xF))), (0, 0, PROV, 'invalid'))
     need = MACHINES[M_CIPHER].clf_capacity(cipher())
     u = fresh(clf_total=need - 1).csrs(klnamedlocker=0)
     eq('no KLF capacity: kl_exc_out_of_memory, Unconfigured, klnamedlocker names the locker',
@@ -1697,7 +1709,7 @@ def t_lengths():
     em = [md(Machine=M_ABSENT, State=s, res=1 << 46, AuxDataLen=1 + 8 * (s & 1), ADSDropped=s & 1)
           for s in ERROR_STATES]
     eq('kl.size 16 for any Error-State MDH, even invalid or unsupported; AuxDataLen, ADSDropped ignored (B, C)',
-       [u.size('C', m=x) for x in em] + [u.size('B', lo=pack(x)) for x in em], [16] * 16)
+       [u.size('C', m=x) for x in em] + [u.size('B', lo=pack(x)) for x in em], [16] * 2 * len(em))
     eq('kl.size: Valid 32+c1 / 64+c1+c2 (ADSDropped keeps 64); 57, 58 SCC; 56, 59, 60, PI',
        [S(State=2, StateExtension=1), S(State=2, StateExtension=1, AuxDataLen=4),
         S(State=2, StateExtension=1, AuxDataLen=4, ADSDropped=1), S(State=57, AuxDataLen=4), S(State=58, AuxDataLen=4),
@@ -2105,14 +2117,14 @@ def t_mgmt():
        [('cleared', NONE), ('error state', 0), ('cloned', NONE), ('unsupported', 0), ('ok', 0)])
     u, absent = fresh().csrs(klnamedlocker=6), md(Machine=M_ABSENT, MachinePolicy=1)
     r = [trap_of(u.mgmt, 'KLNL', PROV, absent), u.getst(6), u.klnamedlocker]
-    r += [u.mgmt(u.klnamedlocker, IMP, dict(absent, State=UNSUP)), u.getst('KLNL')]
+    r += [u.setst(u.klnamedlocker, UNSUP), u.getst('KLNL')]
     eq('a KLNL opening that raises after zeroizing leaves klnamedlocker naming the locker, so the handler can '
-       'short-import the Error State onto it and the routine reads it through KLNL', r,
-       ['unsupported', 0, 6, 'short import', UNSUP])
+       'set the Error State on it with kl.setste (GR30) and the routine reads it through KLNL', r,
+       ['unsupported', 0, 6, 'error state', UNSUP])
 
 def t_nested():
     section('Nested management and PCCCs  <<KLE-management-formats-and-states>>')
-    table = {st: [s for s in range(64) if trap_of(white_box(st, bytearray(32) if BASE_TYPE[st] == 'pi' else None).mgmt,
+    table = {st: [s for s in (*range(64), *ERROR_STATES) if trap_of(white_box(st, bytearray(32) if BASE_TYPE[st] == 'pi' else None).mgmt,
                                                   0, END, md(State=s)) is None] for st in (EXP, IMP, PPI_EXP, PPI_IMP)}
     scc_ok = sorted(set(COMPLETE) | {57, 58})
     eq('completion base-type rule: scc takes Complete, 57, 58; pi takes 56, 59, 60', table,
@@ -2188,7 +2200,7 @@ def t_nested():
 def t_error_states():
     section('Lockers in an Error State  <<KLE-error-state-transfer>>, <<KLE-insn-outcomes-inert>>')
     rows, want = [], []
-    for st in range(INVALID, EXPIRED + 1):
+    for st in ERROR_STATES[1:]:
         u = pv(fresh(), 0, cipher(SCProtection=1, ExpirationDate=77, UsagePolicy=2))
         u.setst(0, ToyCipher.ENCRYPT, 5)
         r = u.csrs(klstart=32).setst(0, st)
@@ -2196,19 +2208,23 @@ def t_error_states():
         rows.append((r, m['State'], u.lockers[0].c1, m['AuxDataLen'], m['ExpirationDate'], m['StateExtension'],
                      u.lockers[0].alloc, u.klstart, u.size(k=0), img == mdh_bytes(m), v.mgmt(3, IMP, unpack(b2v(img))),
                      v.getmd(3) == m, v.klstart, v.klnamedlocker, v.siv, v.mgmt(3, END, m)))
-        want.append(('error state', st, b'', 0, 77, 1, 0, 32, 16, True, 'short import', True,
+        want.append(('error state', st, b'', 0, 77, st >> 7, 0, 32, 16, True, 'short import', True,
                      0, 3, 5, 'noop'))
-    eq('kl.setst #48-#53 then export and short import (6 States, 16 properties each; end is then a no-op)', rows, want)
-    u = rc()
-    eq('kl.setst #54, #55, and #53 without Zklexpire, are reserved: illegal/1, the locker unchanged',
-       [trap_of(u.setst, 0, 54), trap_of(u.setst, 0, 55), trap_of(rc(0, fresh(zklexpire=False)).setst, 0, EXPIRED),
-        u.getst(0)], ['illegal/1'] * 3 + [ToyCipher.ENCRYPT])
+    eq('kl.setste #2-#6 then export and short import (5 States, 16 properties each; the code overwrites '
+       'StateExtension; end is then a no-op)', rows, want)
+    u = rc(0, fresh(zklexpire=False))
+    eq('kl.setst #48, #53, which the Machine does not define -> Invalid; kl.setste #6 without Zklexpire is reserved: '
+       'illegal/1, the locker unchanged',
+       [(trap_of(c.setst, 0, i), c.getst(0)) for i in (48, 53) for c in [rc()]] + [trap_of(u.setst, 0, EXPIRED),
+        u.getst(0)], [(None, INVALID)] * 2 + ['illegal/1', ToyCipher.ENCRYPT])
     u = fresh()
-    eq('short import: 54, 55 -> Invalid; ADS fields zeroed; no capacity; kl.setst #49 on Unconfigured no-op',
-       [(u.mgmt(k, IMP, cipher(State=s)), u.getst(k), u.csrs(klnamedlocker=NONE))[:2] for k, s in ((0, 54), (1, 55))]
+    eq('short import: reserved StateExtension 7, 15 -> Invalid; ADS fields zeroed; no capacity; kl.setste #2 on '
+       'Unconfigured records it (GR30)',
+       [(u.mgmt(k, IMP, cipher(State=0, StateExtension=x)), u.getst(k), u.csrs(klnamedlocker=NONE))[:2]
+        for k, x in ((0, 7), (1, 15))]
        + [(u.mgmt(2, IMP, cipher(State=EXPIRED, AuxDataLen=4, ADSDropped=1)), u.getmd(2)['AuxDataLen'],
            u.getmd(2)['ADSDropped'], u.lockers[2].alloc), (u.setst(3, INVALID), u.getst(3))],
-       [('short import', INVALID)] * 2 + [('short import', 0, 0, 0), ('noop', 0)])
+       [('short import', INVALID)] * 2 + [('short import', 0, 0, 0), ('error state', INVALID)])
     u = pv(fresh(), 0, cipher())
     u.setst(0, EXPIRED)
     provision(u, 1, cipher())
@@ -2289,11 +2305,11 @@ def t_ads():
 def t_transfers():
     section('kl.load, kl.store, kl.mvin, kl.mvout  <<KLE-instruction-load>>, <<KLE-instruction-mv>>, '
             '<<KLE-instructions-memory>>')
-    eq('kl.mvin into the named locker only in 56, 58, 60 (GR22), kl.mvout only in 57, 59 (GR22); no trap in 0, '
-       '48-55 (GR26)',
-       ([s for s in range(64) if trap_of(white_box(s).csrs(klnamedlocker=0).mv_in, 1) is None],
-        [s for s in range(64) if trap_of(white_box(s).csrs(klnamedlocker=0).mv_out) is None]),
-       ([0, *range(48, 56), 56, 58, 60], [0, *range(48, 56), 57, 59]))
+    eq('kl.mvin into the named locker only in 56, 58, 60 (GR22), kl.mvout only in 57, 59 (GR22); no trap in '
+       'Unconfigured or an Error State (GR26)',
+       ([s for s in (*range(64), *ERROR_STATES) if trap_of(white_box(s).csrs(klnamedlocker=0).mv_in, 1) is None],
+        [s for s in (*range(64), *ERROR_STATES) if trap_of(white_box(s).csrs(klnamedlocker=0).mv_out) is None]),
+       ([0, 56, 58, 60, *ERROR_STATES], [0, 57, 59, *ERROR_STATES]))
     u, v = opened(), rc()
     r = [trap_of(u.store, Memory(), BASE), u.mgmt(0, EXP), trap_of(u.load, Memory(), BASE), v.mgmt(0, EXP),
          v.csrs(klnamedlocker=32).store(Memory(), BASE), v.mv_out(),
@@ -2868,10 +2884,11 @@ def t_errors():
        'and the export completes and imports', r, ['privilege_violation', EXP, 'completed', READY, READY])
     u, ml, v = fresh(), md(Machine=M_ABSENT, MachinePolicy=1, UsagePolicy=3), rc(UsagePolicy=8)
     b0 = snapshot(v)
-    eq('handler: kl.setst no-op on Unconfigured, short import installs its MDH; exceptions change no state',
+    eq('handler: kl.setste records the Error State on Unconfigured (GR30), and so does a short import, which '
+       'installs its MDH; exceptions change no state',
        (trap_of(u.mgmt, 7, PROV, ml), u.setst(7, UNSUP), u.getst(7), u.mgmt(7, IMP, dict(ml, State=UNSUP)), u.getmd(7),
         trap_of(ex, v, 0), snapshot(v) == b0),
-       ('unsupported', 'noop', 0, 'short import', dict(ml, State=UNSUP), 'privilege_violation', True))
+       ('unsupported', 'error state', UNSUP, 'short import', md(**dict(ml, State=UNSUP)), 'privilege_violation', True))
     u, k = fresh(csk=0), fresh(kls_off=True)
     eq('no CSK: kl_exc_no_csk; KLS Off: illegal/1; identification CSRs exempt from both',
        ([trap_of(u.getmd, 0), trap_of(u.clearall), trap_of(u.csr_read, 'klstart'),
@@ -2884,7 +2901,7 @@ def t_errors():
     eq('Off locker: each access traps; first group precedes; precedes the second group; source never exempt',
        [trap_of(u.getmd, 0), trap_of(u.size, k=0), trap_of(u.exec_, 0, 'D'), trap_of(u.restrict, 0, 0, 'h'),
         trap_of(u.clone, 1, 0), trap_of(u.mgmt, 0, EXP), trap_of(u.csrs(klnamedlocker=0).load, Memory(), BASE),
-        trap_of(u.mv_in, 1), trap_of(u.setst, 0, 54), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
+        trap_of(u.mv_in, 1), trap_of(u.setst, 0, 61), trap_of(u.clone, 1, 5), trap_of(u.clone, 5, 0)],
        ['locker_off'] * 8 + ['illegal/1', 'locker_off', 'locker_off'])
     u.csrs(klnamedlocker=32)
     u.llstatus.update({0: 'clean', 6: 'off', 7: 'clean', 8: 'off', 9: 'off'})
@@ -3024,14 +3041,14 @@ def t_encodings():
         [decoded(enc_ls(st, 6)) for st in (False, True)], [decoded(enc_ls(st, f3=6)) for st in (False, True)]),
        ({n: 'illegal/1' for n in words}, [('kl.load', 'X6'), ('kl.store', 'X6')], [None, None]))
     eq('GR3: KLNL (r = 1, X0) on every instruction that names a locker: kl.clear, kl.setst (any #immed7, kl.clearads '
-       'included), kl.mgmt, kl.exec, kl.getmd*, kl.size/kl.avail Form A, kl.restrict*; kl.clearall is #immed7 65 with '
+       'included), kl.setste, kl.mgmt, kl.exec, kl.getmd*, kl.size/kl.avail Form A, kl.restrict*; kl.clearall is #immed7 65 with '
        'Kd = 0, r = 0, its other forms reserved',
-       [decoded(enc_setst(0, r=1)), decoded(enc_setst(INVALID, r=1)), decoded(enc_setst(PROV, F=3, r=1, rs1=4)),
+       [decoded(enc_setst(0, r=1)), decoded(enc_setst(2, r=1, e=1)), decoded(enc_setst(PROV, F=3, r=1, rs1=4)),
         decoded(enc_r(3, 2, rs1=0, rd=3)), decoded(enc_r(0, 6, rs1=0, rd=3)), decoded(enc_setst(CLEARALL)),
         decoded(enc_setst(CLEARALL, rd=3)), decoded(enc_setst(CLEARALL, r=1)), decoded(enc_setst(CLEARALL, F=1, rs1=2)),
         decoded(enc_r(0, 2, rs1=0)), decoded(enc_r(1, 2, rs1=4)), d(3, rs1=0, rd=7),
         decoded(enc_setst(1, r=1)), decoded(enc_setst(CLEAR_ADS, r=1))],
-       [('kl.clear', 'A', 'KLNL', 0), ('kl.setst', 'A', 'KLNL', INVALID), ('kl.mgmt', 'D', 'KLNL', PROV),
+       [('kl.clear', 'A', 'KLNL', 0), ('kl.setste', 'A', 'KLNL', INVALID), ('kl.mgmt', 'D', 'KLNL', PROV),
         ('kl.getmdl', 'KLNL'),
         ('kl.size', 'A', 'KLNL'), ('kl.clearall',)] + ['illegal/1'] * 3 + [('kl.exec', 'A', 'KLNL')]
        + [('kl.restrictl', 'KLNL'), 'illegal/1', ('kl.setst', 'A', 'KLNL', 1), ('kl.clearads', 'A', 'KLNL', CLEAR_ADS)])
@@ -3106,12 +3123,12 @@ def t_encodings():
        [('kl.mvin', 'I', 'X9'), ('kl.mvin', 'II', 'V9'), ('kl.mvin', 'III', 'KLIOBUF'), ('kl.mvout', 'IV', 'X9'),
         ('kl.mvout', 'V', 'V9'), ('kl.mvout', 'VI', 'KLIOBUF'), ('kl.exec', 'D', 'K6')] + ['illegal/1'] * 5)
     names = [decoded(enc_setst(i, F=3, rs1=4, rd=6)) for i in range(128)]
-    eq('#immed7: 0111xxx kl.mgmt (59-62, Form B reserved); 54, 55 reserved; 46, 47 kl.setst (GR19); 0, 64; '
+    eq('#immed7: 0111xxx kl.mgmt (59-62, Form B reserved); 48-55 kl.setst (GR19); 0, 64; '
        '65 only as kl.clearall; '
        '66-127',
        ([i for i in range(128) if names[i][0] == 'kl.mgmt'], [i for i in range(128) if names[i] == 'illegal/1'],
         decoded(enc_setst(56, F=1, rs1=4, rd=6)), names[0][0], names[64][0], {names[i][0] for i in range(66, 128)}),
-       ([56, 57, 58, 63], [54, 55, 59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
+       ([56, 57, 58, 63], [59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
 
 def t_klnl_pairs():
     section('KLNL in kl.clone, kl.rename, kl.swap and kl.derive  (GR3, GR26)')
@@ -3220,10 +3237,11 @@ def t_controls():
        scc_decrypt(AD, 0, 0, siv, c1, DEFAULT_CSK)[0], True)
     control('authentication over an uncleared bit 47 rejects a toggled ADSDropped',
             not scc_decrypt(AD, 0, 0, siv, c1, DEFAULT_CSK, clear47=False)[0])
-    m = md(State=EXPIRED, StateExtension=0xF, KeyType=1)
-    eq('the MDH layout satisfies the kl.getst expansion', pack(m) >> 18 & 0x3F, EXPIRED)
+    m = md(State=EXP, StateExtension=0xF, KeyType=1)
+    eq('the MDH layout satisfies the kl.getst and kl.getstx expansions', (pack(m) >> 18 & 0x3F, pack(m) >> 24 & 0xF),
+       (EXP, 0xF))
     control('a layout with State at [26:21] fails the kl.getst expansion',
-            (m['State'] << 21 | m['StateExtension'] << 27 | m['KeyType'] << 18) >> 18 & 0x3F != EXPIRED)
+            (m['State'] << 21 | m['StateExtension'] << 27 | m['KeyType'] << 18) >> 18 & 0x3F != EXP)
     u = fresh()
     src, ml, mem = build_context(u)
     ctx = save_context(u)

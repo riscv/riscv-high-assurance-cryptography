@@ -4,14 +4,13 @@ SP 800-38A F.5 and the google/hctr2 XCTR reference vectors; also the general rul
 PI/SCC layout and kl.derive.  (n, j) = (96, 32) in CTR, (b, 64) in XCTR."""
 import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
+from common import (state_fields, mdh_get, mdh_put, install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_HASH_ABSORB, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
-                    KL_STATE_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, done)
+                    KL_STATEEXT_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 B, ONES64 = 128, (1 << 64) - 1
-RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATE_INVALID
+RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL_STATEEXT_INVALID
 HA = KL_STATE_HASH_ABSORB
 CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
 MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <<KLE-exec-encodings>>
@@ -19,11 +18,9 @@ MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <
 KIND = {v: k for k, v in MACHINE.items()}
 NJ = {'CTR': (96, 32), 'XCTR': (B, 64)}                                       # (n, j)
 
-fld = lambda m, name: sl(m, *MDH_FIELD[name])
+fld = mdh_get
 
-def put(m, name, x):
-    hi, lo = MDH_FIELD[name]
-    return m & ~(((1 << (hi - lo + 1)) - 1) << lo) | x << lo
+put = mdh_put
 
 pad16 = lambda bits: -(-bits // 128) * 16
 
@@ -97,8 +94,6 @@ class KsLocker:
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
         """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
-        if immed in RESERVED_IMMED:           # checked before any State
-            raise IllegalInstruction(immed)
         if self.state in ERROR_STATES:
             return
         _, _, n, j = self.params()
@@ -321,7 +316,8 @@ eq("CTR and XCTR keystreams differ",
    kl_ctr(key, b2v(iv[:12]), m64) != kl_xctr(key, b2v(iv[:12] + bytes(4)), m64), True)
 
 section("States, transitions and general rules (F.5.1)")
-eq("State values Ready 1, Operate 2, Set_Aux_Value 13, Invalid 49", (RDY, OP, AUX, INV), (1, 2, 13, 49))
+eq("State values Ready 1, Operate 2, Set_Aux_Value 13; Invalid: State 0, StateExtension 2",
+   (RDY, OP, AUX, state_fields(INV)), (1, 2, 13, {'State': 0, 'StateExtension': 2}))
 cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
 eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR17)",
@@ -459,10 +455,8 @@ cl, h = ctr_cl(key), HashLocker()
 derive_to_hash(cl, h)
 eq("keystream with the source in Ready (no source endpoint, GR32 item 1) -> only the source Invalid",
    (cl.state, h.state), (INV, HA))
-cl = ctr_cl(key)
-st = cl.state
-check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
-      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
+eq("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)",
+   [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [ctr_cl(key)]], [(False, INV)] * 6)
 eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)",
-   [(raises(c.setst, i), c.state) for i in (46, 47) for c in [ctr_cl(key)]], [(False, INV)] * 2)
+   [(raises(c.setst, i), c.state) for i in (54, 55) for c in [ctr_cl(key)]], [(False, INV)] * 2)
 done()

@@ -7,8 +7,8 @@ from common import (b2v, v2b, sl, cat, bxor, aes_encrypt, tdea_encrypt, update_m
                     KL_STATE_READY as READY, KL_STATE_HASH_ABSORB as ABSORB,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY,
                     KL_STATE_HASH_OUTPUT as OUTPUT, KL_STATE_SUCCESS as SUCCESS,
-                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID, ERROR_STATES,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_PRIV_VIOLATION as PRIV, inert, IllegalInstruction,
+                    KL_STATE_FAILURE as FAILURE, KL_STATEEXT_INVALID as INVALID, ERROR_STATES,
+                    KL_STATE_INERT as UNCONF, KL_STATEEXT_PRIV_VIOLATION as PRIV, inert, IllegalInstruction,
                     section, check, control, info, raises, done)
 
 B = 128
@@ -86,10 +86,8 @@ class Cmac:
     SETST = {(ABSORB, 'A'): (READY,), (LAST, 'B'): (ABSORB,),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
-        if immed in (54, 55):
-            raise IllegalInstruction('reserved #immed7')  # GR18
         if immed == UNCONF or immed in ERROR_STATES:  # kl.clear, GR30: in every State and Form
-            if s.state != UNCONF:
+            if s.state != UNCONF or immed:
                 s.state, s.key, s.skid = immed, None, None  # GR29
                 s._ready()
             return
@@ -545,9 +543,13 @@ c2 = Cmac(K128); c2.setst(PRIV); c3 = Kx(); c3.setst(OUTPUT); c3.setst(PRIV); c3
 check("kl.setst naming _Privilege Violation_ in _Ready_ and in _Hash_Output_ -> that State, Content cleared; a "
       "second Error-State kl.setst replaces it (GR30, GR29)", True,
       (c2.state, c2.key, c3.state, c3.hash), (PRIV, None, INVALID, 0))
-c4 = at_absorb()
-check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept (GR18)", True,
-      ([raises(c4.setst, i) for i in (54, 55)], c4.state), ([True] * 2, ABSORB))
+def after(i):
+    c = at_absorb()
+    try: c.setst(i)
+    except Invalid: pass
+    return c.state
+check("kl.setst naming 48 or 53, which the Machine does not define: -> _Invalid_ (<<KLE-instruction-setst>>)", True,
+      [after(i) for i in (48, 53)], [INVALID] * 2)
 
 section("negative controls")
 control("K2 for a full final block", all(tag(K, M, k2full=True) != W for _, K, M, W in VEC

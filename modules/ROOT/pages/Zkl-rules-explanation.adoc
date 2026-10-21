@@ -26,16 +26,16 @@ The Principles use only the instruction and state classes defined as follows.
 
 *State classes.*
 
-* _Unconfigured_: the locker holds no CC.
+* _Unconfigured_: the locker holds no CC; _State_ and _StateExtension_ are 0.
 * _Valid_ States: the locker holds a usable CC.
-* _Error_ States: the locker holds only an MDH, which records why its CC became unusable.
+* _Error_ States: the locker holds only an MDH, which records why its CC became unusable; _State_ is 0 and _StateExtension_ holds the code.
 * _Configuration_ States: the CC is in _transit_, i.e., being provisioned, imported or exported.
 * _Complete_ = Valid {cup} Error.
-* _Inert_ = Unconfigured {cup} Error, plus naming `KLNL` with `klnamedlocker` = 32 (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klnamedlocker>>).
+* _Inert_ = Unconfigured {cup} Error: _State_ 0, no Content. A locker named by `KLNL` with `klnamedlocker` = 32 is not there at all, and behaves as inert (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klnamedlocker>>).
 
 *Instruction classes.*
 
-* _Usage_ instructions operate on the CC through the Machine; _UsagePolicy_ gates them. They are `kl.exec`, `kl.setst` (except when it encodes `kl.clear`, `kl.clearall` or an Error State), `kl.clearads`, and `kl.derive`; `kl.derive` is gated on both lockers. `kl.mgmt` shares the encoding of `kl.setst` but is a separate instruction, not a _Usage_ one.
+* _Usage_ instructions operate on the CC through the Machine; _UsagePolicy_ gates them. They are `kl.exec`, `kl.setst` (except the encodings of `kl.clear` and `kl.clearall`), `kl.clearads`, and `kl.derive`; `kl.derive` is gated on both lockers. `kl.mgmt` shares the encoding of `kl.setst` but is a separate instruction, not a _Usage_ one.
 
 * _Configuration_ instructions operate on the locker as a container; _UsagePolicy_ does not gate them. They are all instructions that are not _Usage_ instructions. They are of four kinds, which may overlap:
 ** _inspection_: read the MDH or a size, change nothing;
@@ -386,7 +386,7 @@ Secrets do not linger:
 It keeps only its result and values computed from a key field alone, masked shares included, which may stay in the ADS until that field changes, as FIPS 203 §3.3 and FIPS 204 §3.6.3 require (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>, <<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
 * The material that depended on a destroyed, invalidated or restarted CC is released or zeroized.
 * A destructive configuration instruction destroys the CC it replaces right after the state-independent checks and, for `kl.mgmt`, the check of an MDH operand in `Vs`.
-* A `kl.setst` that replaces an Error State overwrites the only information the locker holds, and `kl.swap` moves each CC into the other locker, so neither has anything to erase.
+* A `kl.setste` that replaces an Error State overwrites the only information the locker holds, and `kl.swap` moves each CC into the other locker, so neither has anything to erase.
 
 +
 *Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-narrowing>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-single-share>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-skid-resolution>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-policies>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>; <<Zkl-ISA-unpriv.adoc#KLE-GR-clear-locker-content-error-state>>, <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>> (zeroizing step) and <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>.
@@ -427,7 +427,7 @@ Its layout minimizes the lookahead to identify a locker (<<KLE-Principle-small-i
 
 Hence:
 
-* the _State_ field alone identifies the points software must recognize;
+* the _State_ field, with _StateExtension_ at _State_ 0, identifies the points software must recognize;
 * an Error-State locker _is_ its MDH (<<KLE-Decision-error-states>>);
 * an _Unconfigured_ locker reads as the one MDH value that is not an MDH;
 * a management operation restores the MDH it was given, up to prescribed normalizations;
@@ -487,7 +487,7 @@ A failure is recorded in the _State_ of the locker whose precondition failed.
 * A malformed encoding is a configuration error only where it is checked when the field is written.
 One that the standard detects only while decoding, such as an ML-DSA hint, is a data error, so that a forged signature cannot erase a verify-only CC.
 * A corrupted KLF, by contrast, can no longer be trusted for any locker: it is a fatal error of the KLE unit, not an Error State of one locker (<<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>).
-* An Error State is a value of the _State_ field, so an Error-State locker is its MDH alone (<<KLE-Decision-metadata>>):
+* An Error State is _State_ 0 with its code in _StateExtension_, so an Error-State locker is its MDH alone (<<KLE-Decision-metadata>>), and every locker that holds no Content has _State_ 0:
 ** its Content and ADS are released on entry (<<KLE-Principle-no-privilege-elevation>>);
 ** it is exported and imported as an MDH, without a management operation.
 * A handler that cannot resolve a condition records it by setting the Error State itself.
@@ -503,7 +503,8 @@ D3(b): _Exceptions are raised only for error conditions that the fall-through me
 ** a use of unconfigured infrastructure, as opposed to an inert locker;
 ** a policy violation, which the policy owner must see, not the caller (<<KLE-Principle-no-privilege-elevation>>).
 * Their state-independent checks precede every condition on the locker.
-Their other checks, _UsagePolicy_ included, come in the order of Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>: an inert locker falls through unchecked, while a Configuration State traps.
+Their other checks, _UsagePolicy_ included, come in the order of Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>: an inert locker falls through unchecked once the encoding checks have passed, while a Configuration State traps.
+The encoding checks apply to every instruction, so a malformed encoding traps whatever the locker, and software cannot probe the locker's _State_ with it.
 * The other exceptions name a condition that a more privileged handler may resolve, by emulating a Machine, freeing memory, granting a right, or supplying a clock or entropy.
 Rule <<Zkl-software.adoc#KLE-SR-handler-duty>> says what a handler must do with one it cannot.
 
@@ -562,7 +563,7 @@ The instructions that follow must neither trap nor act on something else, and th
 * `KLNL` with `klnamedlocker` = 32 names no locker and is treated as an inert one; <<Zkl-ISA-unpriv.adoc#KLE-insn-outcomes-inert>> lists what each instruction writes in the three cases.
 * Two kinds of instruction are excepted:
 ** a destructive instruction is issued to destroy the error, and `kl.swap` keeps it readable in the other locker;
-** a `kl.setst` that replaces an Error State is excepted likewise, since it overwrites essentially all the locker holds.
+** `kl.setste`, which sets an Error State, is excepted likewise: it overwrites essentially all an Error-State locker holds, and on an _Unconfigured_ locker it records an error that an opening `kl.mgmt` or a `kl.clone` raised after clearing it, so that a handler can report it (Rule <<Zkl-software.adoc#KLE-SR-handler-duty>>).
 * So a locker leaves an Error State for _Unconfigured_ only through:
 ** `kl.clear` or `kl.clearall`;
 ** a `kl.rename` naming it as source;
@@ -933,7 +934,7 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>
 | <<KLE-Principle-scalable>>, <<KLE-Decision-exceptions>>
-|
+| A transfer of zero bytes is a no-operation, so `Xl` = 0 needs neither `Zklio` nor a KLIOBUF: hardware tests `Xl` first, and an M-mode emulator needs no KLIOBUF access to emulate it.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-image-length>>
 | <<KLE-Decision-metadata>>
 
@@ -973,8 +974,9 @@ The choices below are constrained by the Principles and Design Decisions but not
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>> | _ChipFamScrt_ is the weakest binding admitted for custom Metadata. | <<KLE-Principle-confidentiality-integrity>> asks only for a binding.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>> | A same-State `kl.setst` is not admitted, except in _Ready_, in a loading State, where it restarts the load, and where the Machine explicitly allows it. | <<KLE-Principle-no-misuse>>: a default ban removes a class of errors in which re-entry repeats operations, such as `finalize()`, and replaces many per-State prohibitions with one rule.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>> | A `kl.restrictl` or `kl.restrictv` invalidates the locker by itself only if it leaves a _MachinePolicy_ that the Machine forbids, such as zero where a set bit is required. Otherwise the locker is invalidated by the first `kl.exec`, `kl.derive` or usage `kl.setst` that is issued in a State that performs a disabled operation or leads only to disabled operations, or that enters a State whose operation is disabled. The narrowing does not affect an instruction issued in a State that performs no disabled operation and still leads to an enabled one, nor, wherever it is issued, `kl.clearads` or a `kl.setst` that names _Ready_ or such a State. | Invalidating at the first instruction in the disabled operation satisfies <<KLE-Principle-no-privilege-elevation>> and <<KLE-Decision-misuse>>, and lets software narrow a locker that keeps a useful function, also in the middle of loading its inputs, without returning it to _Ready_.
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>> | An Error-State image is the MDH alone, neither encrypted nor authenticated, and its import checks only the _State_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>). | <<KLE-Principle-confidentiality-integrity>> protects secrets and policies, and an Error-State locker has neither. Such a locker is easy to create. Hence, authentication is superfluous.
-| <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-operands>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> | The address-misaligned exception is raised on an empty window, but not when `klnamedlocker` = 32; order of the state-independent checks. | RISC-V conventions (<<KLE-Decision-invisible-asynchrony>>); <<KLE-Decision-exceptions>> requires only that the state-independent checks come first.
+| <<Zkl-ISA-unpriv.adoc#KLE-State-field>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-success-failure-cannot-be-set-directly>> | An Error State is _State_ 0 with its code, 1–6, in _StateExtension_; _Success_ and _Failure_ are States 54 and 55, and the Machine defines States 2–53. _State_ 0 is _Inert_. `kl.setste`, the `kl.setst` encoding with bit 23 set, writes the code to _StateExtension_; the `kl.setst` immediates 2–53 name Machine States, and 54 and 55 name _Success_ and _Failure_. | <<KLE-Decision-error-states>> requires only that the error be recorded in the MDH. _State_ 0 makes "holds no Content" one test for both inert States, and `kl.setste` then needs no exception for an _Unconfigured_ locker. A _State_ immediate cannot name a _StateExtension_ value, so a separate instruction, parallel to `kl.getstx`, sets it; bit 23 was a fixed zero of the `kl.setst` encoding. Moving _Success_ and _Failure_ to the top of the Valid States leaves the contiguous range 2–53 to the Machines.
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>> | An Error-State image is the MDH alone, neither encrypted nor authenticated, and its import checks only the _State_ and _StateExtension_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>). A `kl.setste` also configures an _Unconfigured_ locker into an Error State. | <<KLE-Principle-confidentiality-integrity>> protects secrets and policies, and an Error-State locker has neither. Such a locker is easy to create. Hence, authentication is superfluous. An unsupported-Metadata or out-of-memory exception of an opening `kl.mgmt`, and one of `kl.clone`, is raised after the locker has been cleared; without the second choice, a handler could record it only through the short import of <<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>.
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-fall-through-operands>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> | The address-misaligned exception is raised on an empty window, but not when `klnamedlocker` = 32; order of the state-independent checks, with the alignment check last among them, so an inert locker traps on a misaligned address; open for hardware implementers (<<Zkl-introduction.adoc#KLE-open-points>>). | RISC-V conventions (<<KLE-Decision-invisible-asynchrony>>); <<KLE-Decision-exceptions>> requires only that the state-independent checks come first.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>> | On a Valid locker, with `Zklio`, an unconfigured KLIOBUF is checked before the _UsagePolicy_ for a substitution of a native Form that the State admits. Any other substitution, and every substitution without `Zklio`, is a wrong Form: it invalidates the locker unless the _UsagePolicy_ or the _ExpirationDate_ has decided the outcome first. | <<KLE-Decision-exceptions>> puts only the state-independent checks first, and <<KLE-Principle-no-privilege-elevation>> the _UsagePolicy_ before the _ExpirationDate_, so that an excluded mode cannot expire the locker. This ground (<<KLE-Principle-scalable>>) follows the priority of <<Zkl-ISA-priv.adoc#KLE-exception-codes>>, after the Configuration State, since a substitution exists only for a State with an operation.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>> | A `kl.setst` naming _Ready_ is of Form A unless the Machine defines another Form, as the ECC Machines do; any other Form is a wrong Form. | A convention of the protocol (<<KLE-Decision-machine-protocol>>): a return to _Ready_ needs no operand, and a fixed native Form lets two implementations agree on whether the locker survives.
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>> | Provisioning and the base import of a system-specific format (completed with `ml`._State_ = _Unconfigured_) end in _Ready_, with _MachineUse_ zero and _StateExtension_ zero except for the flags of the fields that the format configures. A nested import of a _Version_ 3 PCCC, like any other nested operation, only restores the Configuration State of `ml`. | A convention of the protocol (<<KLE-Decision-machine-protocol>>).

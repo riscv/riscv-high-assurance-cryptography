@@ -3,8 +3,8 @@
 The core is from scratch; hashlib 'sm3', where present, is only a labeled reference oracle."""
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK,
-                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, section, check,
+from common import (KL_STATE_INERT, KL_STATE_READY, KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK,
+                    KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS, KL_STATE_FAILURE, KL_STATEEXT_INVALID, KL_STATEEXT_UNSUPPORTED, section, check,
                     control, raises, done, hash_run, hash_msgs, check_hash)
 from sha2_sm3_common import HART, MdHash, MdPort, KeyDest, Source, kl_derive, A, O, R, B, C, run
 
@@ -138,14 +138,14 @@ check('bit-length messages of 1, 5, 447, 448, 449, 511 and 1000 bits: the final 
 r = [hash_run(Port(), b'abc', 24, x // 8, end=('B', x))[:2] for x in (8, 248, 256)]
 check('bound: Form B Xs = 8, t - 8, t gives that prefix and _Success_; Xs = 264 -> _Invalid_', None,
       (r, (lambda c: (c.setst(KL_STATE_HASH_OUTPUT, 'B', 264), c.st)[1])(absorbing(b'abc'))),
-      ([(DIG_ABC[:x // 8], KL_STATE_SUCCESS) for x in (8, 248, 256)], KL_STATE_INVALID))
+      ([(DIG_ABC[:x // 8], KL_STATE_SUCCESS) for x in (8, 248, 256)], KL_STATEEXT_INVALID))
 control('caller-padded message: the digest differs', digest(b'abc' + pad(3)) != DIG_ABC)
 
 check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
       '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
       '<<KLE-instruction-restrict>>)',
       None, (Sm3().provision(1).st, absorbing(data=b'abc').restrictl(1).st, absorbing(data=b'abc').restrictl(0).st),
-      (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_HASH_ABSORB))
+      (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB))
 
 section('Serialized Content')
 check('Content1 = n+16+16+32+64+b bits, padded to 128', None, len(absorbing(bytes(8)).export()), 112)
@@ -167,7 +167,7 @@ for label, ops in [
         ('kl.exec in _Success_ (MR1, GR28), output zeroed', (A, B(b'abc'), O, C(32), C(32)))]:
     cl = Sm3().provision()
     r = run(cl, *ops)
-    check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID and not any(r[1] if r else b''))
+    check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID and not any(r[1] if r else b''))
 res = []
 for d, ks in ((b'', 0), (b'a', 2)):
     cl = Sm3().provision()
@@ -175,9 +175,9 @@ for d, ks in ((b'', 0), (b'a', 2)):
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
-      'window, _Invalid_ (MR2, GR44)', None, res, [('invalid', KL_STATE_INVALID, 0)] * 2)
+      'window, _Invalid_ (MR2, GR44)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 check('kl.exec in _Invalid_: no operation, output zeroed (GR26, GR28)',
-      C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATE_INVALID)
+      C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATEEXT_INVALID)
 cl = outputting()
 HART.klstart = 4
 check('Form C, klstart = 4 at the start of _Hash_Output_ (block_base = 0): the first 28 digest bytes in [4, 31]',
@@ -190,18 +190,18 @@ for ks in (32, 40, 4):
         C(1)(cl)                                  # block_base = 8: klstart = 4 is no interruption point
 check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klstart = 4 with block_base != 0 '
       '(no interruption point): _Invalid_, [4, 31] zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
-      + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATE_INVALID, 0)])
+      + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATEEXT_INVALID, 0)])
 cl = absorbing()
 check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',
-      (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATE_INVALID))
-cl.setst(KL_STATE_UNCONFIGURED)
+      (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATEEXT_INVALID))
+cl.setst(KL_STATE_INERT)
 check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
       (cl.exec('C', nbytes=8), cl.setst(KL_STATE_READY), cl.st, cl.state)
-      == (('noop', bytes(8)), None, KL_STATE_UNCONFIGURED, 0))
+      == (('noop', bytes(8)), None, KL_STATE_INERT, 0))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26)',
-      (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
-check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
-      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
+      (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_INERT))
+check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR26)',
+      (raises(cl.setst, 48), raises(cl.setst, 53), cl.st) == (False, False, KL_STATE_INERT))
 cl = outputting()
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(40)(cl)[1], cl.st),
       (DIG_ABC + bytes(8), KL_STATE_SUCCESS))
@@ -225,7 +225,7 @@ for ks in (59, 4):
     HART.klstart = ks
     res.append((cl.exec('B', MP[5:69] if ks == 59 else MP[:64], resume=True)[0], cl.st))
 check('a resumption at klstart = 59 with block_base != 0 (GR44) -> _Invalid_; at klstart = 4 with block_base = 0 '
-      '-> admitted', None, res, [('invalid', KL_STATE_INVALID), ('retired', KL_STATE_HASH_ABSORB)])
+      '-> admitted', None, res, [('invalid', KL_STATEEXT_INVALID), ('retired', KL_STATE_HASH_ABSORB)])
 
 section('kl.derive')
 SEC = bytes(range(0x40, 0x60))  # a 32-byte shared secret
@@ -239,32 +239,32 @@ check('shared secret (30 B), length 30 -> SM3 absorb: exactly the secret (GR32 i
       kl_derive(dst, src, 30) == 'done' and run(dst, O, C(32))[1] == sm3_ref(SEC[:30]))
 src, dst = outputting(), absorbing()
 check('SM3 digest in _Hash_Output_ as a source (GR32 item 1): refused, source _Invalid_, destination untouched',
-      kl_derive(dst, src, 32) == 'refused' and src.st == KL_STATE_INVALID
+      kl_derive(dst, src, 32) == 'refused' and src.st == KL_STATEEXT_INVALID
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0))
 src, dst = Source(bytes(range(16)), secret=False), absorbing()
 check('a CMAC (16 B) -> SM3 absorb: pair not admitted (GR32 item 3), both _Invalid_',
-      kl_derive(dst, src, 16) == 'refused' and (src.st, dst.st) == (KL_STATE_INVALID, KL_STATE_INVALID))
+      kl_derive(dst, src, 16) == 'refused' and (src.st, dst.st) == (KL_STATEEXT_INVALID, KL_STATEEXT_INVALID))
 src, dst = Source(SEC), Sm3().provision()
 check('destination in _Ready_ (GR32 item 2): refused, destination _Invalid_, source untouched',
-      kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATE_INVALID and src.st == KL_STATE_HASH_OUTPUT)
+      kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATEEXT_INVALID and src.st == KL_STATE_HASH_OUTPUT)
 res = []
 for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 32), (SEC[:30], 33)):
     dst = absorbing()
     res.append((kl_derive(dst, Source(s), length), dst.st))
 check('shared secret into SM3 absorb: 32 B with length 0, 31 or 36, 30 B with length 32 or 33 (GR32 item 5: '
-      'exactly the secret length): destination _Invalid_', None, res, [('refused', KL_STATE_INVALID)] * 5)
+      'exactly the secret length): destination _Invalid_', None, res, [('refused', KL_STATEEXT_INVALID)] * 5)
 dst, dst2 = absorbing(b'abc'), absorbing(b'abc')
 dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
 check('shared secret into SM3 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_; '
       'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret', None,
       (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),
-      ('refused', KL_STATE_INVALID, 'done', sm3_ref(b'abc' + SEC)))
+      ('refused', KL_STATEEXT_INVALID, 'done', sm3_ref(b'abc' + SEC)))
 
 src, dst, h, dh = Source(SEC), KeyDest(16), outputting(), KeyDest(16)
 check('shared secret -> an SM4 `key` in _Ready_, length 32: its first 16 bytes; SM3("abc") -> a key (GR32 item 1): '
       'source _Invalid_, key untouched', None,
       (kl_derive(dst, src, 32), dst.key, kl_derive(dh, h, 32), h.st, dh.st),
-      ('done', SEC[:16], 'refused', KL_STATE_INVALID, KL_STATE_READY))
+      ('done', SEC[:16], 'refused', KL_STATEEXT_INVALID, KL_STATE_READY))
 
 section('Negative controls')
 control('message words without bswap', digest(b'abc', bswap_words=False) != DIG_ABC)

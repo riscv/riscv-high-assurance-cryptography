@@ -8,14 +8,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bxor, mdh_pack, mdh_unpack, ERROR_STATES,
-                    KL_STATE_OUT_OF_MEMORY, IllegalInstruction, raises,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_UNSUPPORTED as UNSUP,
+                    KL_STATEEXT_OUT_OF_MEMORY, IllegalInstruction, raises,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY, KL_STATEEXT_UNSUPPORTED as UNSUP,
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_LAST_BLOCK as HLAST,
                     KL_STATE_HASH_VERIFY as VERIFY, KL_STATE_HASH_OUTPUT as OUTPUT,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT,
                     KL_STATE_ENC_LAST_BLOCK as ENC_LAST, KL_STATE_DEC_LAST_BLOCK as DEC_LAST,
                     KL_STATE_SET_AUX_VALUE as SET_AUX, KL_STATE_SUCCESS as SUCCESS,
-                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID,
+                    KL_STATE_FAILURE as FAILURE, KL_STATEEXT_INVALID as INVALID,
                     section, check, control, info, done, HashPort, hash_msgs, check_hash)
 
 M64, M128, ONES = (1 << 64) - 1, (1 << 128) - 1, (1 << 1024) - 1
@@ -144,9 +144,8 @@ class Locker:
     def setst(self, immed, form='A', Xs=None, INPUT=0, KLLEN=0):
         if immed == UNCONF:                                       # kl.clear, in any State and Form
             self.invalidate(); self.st, self.policy, self.machine_use, self.key_type = UNCONF, 0, 0, 0
-        elif immed in (54, 55): raise IllegalInstruction('reserved #immed7')   # GR18
-        elif immed in ERROR_STATES:                               # GR30; _Unconfigured_ is left unchanged
-            if self.st != UNCONF: self.invalidate(); self.st = immed
+        elif immed in ERROR_STATES:                               # GR30: in every State
+            self.invalidate(); self.st = immed
         elif self.in_error() or self.st == UNCONF: pass           # GR26
         elif immed == READY and form == 'A': self._enter_ready()  # GR16
         elif self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:
@@ -1366,17 +1365,17 @@ check('Ascon-Hash256, XOF128, CXOF128: a PI with a non-zero _MachinePolicy_ is u
 
 got = []
 for Cls in (Hash256, XOF, CXOF):
-    for imm in (UNCONF, KL_STATE_OUT_OF_MEMORY):
+    for imm in (UNCONF, KL_STATEEXT_OUT_OF_MEMORY):
         c = Cls(); c.setst(ABSORB, 'A'); c.exec('B', INPUT=0x636261, KLLEN=24); c.setst(imm)
         got.append(c.st)
         c.setst(READY, 'A'); c.exec('B', INPUT=0x61, KLLEN=8); kl_restrictl(c, 0b01)
         got.append(c.st)
-    c = Cls(); c.setst(ABSORB, 'A')
-    got += [raises(c.setst, 54), raises(c.setst, 55), c.st]
+    for imm in (48, 53):
+        c = Cls(); c.setst(ABSORB, 'A'); c.setst(imm); got.append(c.st)
 check('Ascon-Hash256, XOF128, CXOF128: kl.clear in _Hash_Absorb_ -> _Unconfigured_, a kl.setst naming _Out_of_Memory_ '
       '-> that State; then a kl.setst, a kl.exec and a kl.restrictl change nothing (<<KLE-instruction-setst>>, GR26, '
-      'GR30); a reserved 54 or 55 raises illegal-instruction (GR18)', True, got,
-      [UNCONF, UNCONF, KL_STATE_OUT_OF_MEMORY, KL_STATE_OUT_OF_MEMORY, True, True, ABSORB] * 3)
+      'GR30); 48 or 53, which the Machine does not define, -> _Invalid_', True, got,
+      [UNCONF, UNCONF, KL_STATEEXT_OUT_OF_MEMORY, KL_STATEEXT_OUT_OF_MEMORY, INVALID, INVALID] * 3)
 
 check('MR11: an Ascon-AEAD128, set-Nonce or Nonce-Masking PI with _MachinePolicy_ = 0 is invalid Metadata '
       '(<<KLE-Metadata-validity>>) -> _Invalid_', True,

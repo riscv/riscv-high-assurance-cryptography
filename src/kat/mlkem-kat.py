@@ -5,11 +5,11 @@ vectors (ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 internalProjection.
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips203 as K  # noqa: E402
-from common import (ERROR_STATES, inert, MDH_FIELD, MDH_FIELDS, IllegalInstruction, LoopBound, check, control,  # noqa: E402
+from common import (mdh_get, mdh_put, ERROR_STATES, inert, MDH_FIELD, MDH_FIELDS, IllegalInstruction, LoopBound, check, control,  # noqa: E402
                     done, mdh_pack, raises, section, sl, spec_note,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
-                    KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID, KL_STATE_UNSUPPORTED as UNSUP,
-                    KL_STATE_PRIV_VIOLATION as PRIV_VIOLATION, KL_STATE_EXPIRED as EXPIRED,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY, KL_STATE_SUCCESS as SUCCESS,
+                    KL_STATE_FAILURE as FAILURE, KL_STATEEXT_INVALID as INVALID, KL_STATEEXT_UNSUPPORTED as UNSUP,
+                    KL_STATEEXT_PRIV_VIOLATION as PRIV_VIOLATION, KL_STATEEXT_EXPIRED as EXPIRED,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_HASH_ABSORB as HASH_ABSORB,
                     KL_STATE_SET_AUX_VALUE as SET_AUX, KL_STATE_SET_KEY as SET_KEY)
 
@@ -18,7 +18,7 @@ GEN, ENC, DEC, EK_IN, DK_IN, EK_OUT, CT_IN, CT_OUT, SK_OUT = range(2, 11)
 NAME = dict(zip(range(2, 11), ('GenerateKeyPair', 'Encapsulate', 'Decapsulate', 'encapsk_Input', 'decapsk_Input',
                                'encapsk_Output', 'ciphertext_Input', 'ciphertext_Output', 'sharedkey_Output')))
 NAME.update({READY: 'Ready', SUCCESS: 'Success', FAILURE: 'Failure', INVALID: 'Invalid'})
-LISTED_GLOBAL = [('Ready', 1), ('Failure', 47)]                    # the ML-KEM State list, verbatim: no _Success_
+LISTED_GLOBAL = [('Ready', 1), ('Failure', 55)]                    # the ML-KEM State list, verbatim: no _Success_
 LONG = (GEN, ENC, DEC)
 STEPS = {GEN: K.keygen_internal_steps, ENC: K.encaps_internal_steps, DEC: K.decaps_internal_steps}
 IN_F = {EK_IN: 'encapsk', DK_IN: 'decapsk', CT_IN: 'ciphertext'}
@@ -57,12 +57,9 @@ h = bytes.fromhex
 
 class PrivilegeViolation(Exception): pass
 
-def fget(mdh, f): return sl(mdh, *MDH_FIELD[f])
+fget = mdh_get
 
-def fset(mdh, f, v):
-    hi, lo = MDH_FIELD[f]
-    m = ((1 << hi - lo + 1) - 1) << lo
-    return mdh & ~m | v << lo & m
+fset = mdh_put
 
 class RBG:
     """<<KLE-Prerequisites>>, scripted: each draw returns the next value; None is a failure."""
@@ -80,10 +77,10 @@ class Locker:
     def barred(self): return self.get('UsagePolicy') >> USAGE_BIT[HART['mode']] & 1
     def expired(self): return 0 != self.get('ExpirationDate') <= HART['now']   # <<KLE-Metadata-expiration-date>>
 
-    def enter_error(self, st):                     # GR29
+    def enter_error(self, st):                     # GR29; then _StateExtension_ holds the code
+        self.clear_content()
         for f, v in (('State', st), ('AuxDataLen', 0), ('ADSDropped', 0)):
             self.put(f, v)
-        self.clear_content()
 
     def gate(self):
         """<<KLE-GR-management-check-order>> (GR24) for one locker; True when the Machine's rules are reached."""
@@ -180,9 +177,8 @@ class MLKEMLocker(Locker):
         if imm == UNCONF:
             self.mdh = 0
             self.clear_content()
-        elif imm in ERROR_STATES:
-            if self.state != UNCONF:
-                self.enter_error(INVALID if imm >= 54 else imm)
+        elif imm in ERROR_STATES:                  # kl.setste, in every State (GR30)
+            self.enter_error(imm)
         elif self.gate():
             if imm == CLEAR_ADS:                   # State kept; MachineUse is P only in a long-running State
                 self.discard(self.state in LONG)
@@ -193,7 +189,7 @@ class MLKEMLocker(Locker):
                     self.zero('ciphertext' if name == 'ciphertext' else 'decapsk')   # no State keeps a partial field
                 self.transition(imm)
             else:                                  # _sharedkey_Output_ is entered only on completion
-                self.enter_error(INVALID)          # MR1; #46, #47: GR18
+                self.enter_error(INVALID)          # MR1; #54, #55: GR19
 
     def exec_B(self, data):                        # Form B in a loading State (MR9)
         if not self.gate():
@@ -455,7 +451,7 @@ def t_mdh():
     cc = MLKEMLocker(768, pi_extra=mdh_pack(StateExtension=0b1010, MachineUse=0x1234, AuxInfo=0x5A5A))
     check('PI State _Unconfigured_; kl.mgmt sets _Ready_, zeroes StateExtension and MachineUse; '
           'AuxInfo, unused by ML-KEM, is not checked (<<KLE-MachineUse>>)',
-          fget(cc.pi, 'State') == UNCONF and cc.state == READY and cc.se == 0 and cc.use == 0 and zero(*cc.fields()))
+          sl(cc.pi, *MDH_FIELD['State']) == UNCONF and cc.state == READY and cc.se == 0 and cc.use == 0 and zero(*cc.fields()))
 
 def t_fips203():
     section('FIPS 203 Algorithms 16-21 vs ACVP')
@@ -522,7 +518,7 @@ def t_input_checks():
             moves = [moved(c0, t) for t in (nxt, READY, PRIV_VIOLATION)]
             check(f'_{NAME[st]}_ left with {n} B loaded by kl.setst _{NAME[nxt]}_ / _Ready_ / an Error State: '
                   'the field zeroed, flags clear (MR9); _Encapsulate_ needs HasEncapsk, _Decapsulate_ HasDecapsk and HasCiphertext (MR11)',
-                  None, [(m.state, zero(getattr(m, IN_F[st])), m.se & 7) for m in moves[:2]] + [moves[2].state],
+                  None, [(m.state, zero(getattr(m, IN_F[st])), 0 if inert(m.state) else m.se & 7) for m in moves[:2]] + [moves[2].state],
                   [(got_to, True, 0), (READY, True, 0), PRIV_VIOLATION])
         f, end = IN_F[st], READY if st == CT_IN else st     # c0 holds the first 16 B
         c1, c2 = moved(c0, st), moved(c0, CLEAR_ADS)
@@ -721,12 +717,14 @@ def t_state_machine():
         c1 = to(MLKEMLocker(ps), UNCONF)
         check(f'kl.setst #{imm} on an Unconfigured locker: no operation (GR18, GR26)',
               (raises(c1.setst, imm), c1.state) == (False, UNCONF))
-    for imm in (11, 45, 65):
+    for imm in (11, 45, 48, 53, 65):
         check(f'kl.setst #{imm} (undefined): _Invalid_', to(MLKEMLocker(ps), imm).state == INVALID)
     cc.setst(PRIV_VIOLATION)
     check('kl.setst to an Error State: no exception, Content cleared (GR29)', voided(cc, PRIV_VIOLATION) and cc.use == 0)
-    cc.setst(54)
-    check('kl.setst #54 (reserved Error State): _Invalid_', cc.state == INVALID)
+    check('kl.setst #48 in an Error State: no operation (GR26)',
+          (raises(cc.setst, 48), cc.state) == (False, PRIV_VIOLATION))
+    cc.setst(INVALID)
+    check('kl.setste in an Error State: the new Error State replaces it (GR30)', cc.state == INVALID)
     load(cc, EK_IN, ek)
     got = cc.exec_C(16)
     cc.exec_D()

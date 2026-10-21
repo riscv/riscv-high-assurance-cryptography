@@ -8,12 +8,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, KL_CFG_PROVISIONING,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_OUTPUT as OUTPUT,
                     KL_STATE_HASH_LAST_BLOCK as LAST, KL_STATE_HASH_VERIFY as VERIFY, KL_STATE_FAILURE as FAILURE,
-                    KL_STATE_SUCCESS as SUCCESS, KL_STATE_INVALID as INVALID, KL_STATE_UNSUPPORTED as UNSUP,
+                    KL_STATE_SUCCESS as SUCCESS, KL_STATEEXT_INVALID as INVALID, KL_STATEEXT_UNSUPPORTED as UNSUP,
                     section, check, control, done, HashPort, hash_run, hash_msgs, check_hash,
-                    KL_STATE_OUT_OF_MEMORY, IllegalInstruction, raises)
+                    KL_STATEEXT_OUT_OF_MEMORY, IllegalInstruction, raises)
 
 # ------------------------------------------------------------------ Keccak-f[1600]
 RC = [
@@ -301,12 +301,9 @@ class Kmac:
     def setst(self, immed, form='A', aux=None):
         if immed == UNCONF:                                              # kl.clear, in any State and Form
             return self.__init__(self.hart, self.bad)
-        if immed in (54, 55):
-            raise IllegalInstruction('reserved #immed7')                 # GR18
-        if immed in ERROR_STATES:                                        # GR30; _Unconfigured_ is left unchanged
-            if self.st != UNCONF:
-                self.invalidate()
-                self.st = immed
+        if immed in ERROR_STATES:                                        # GR30: in every State
+            self.invalidate()
+            self.st = immed
             return
         if self.st == UNCONF or self.st in ERROR_STATES:                 # GR26
             return
@@ -1042,18 +1039,18 @@ check('kl.restrictl clearing bit 0 in _Hash_Output_: the output kl.exec -> _Inva
 section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR26, GR30)')
 got = []
 for xof in (False, True):
-    for imm in (UNCONF, KL_STATE_OUT_OF_MEMORY):
+    for imm in (UNCONF, KL_STATEEXT_OUT_OF_MEMORY):
         c = absorbing(128, DATA4, xof=xof)
         c.setst(imm)
         got.append(c.st)
         c.setst(READY); c.setst(ABSORB); c.exec(inp=DATA4); c.restrictl(3)
         got.append(c.st)
-    c = absorbing(128, DATA4, xof=xof)
-    got += [raises(c.setst, 54), raises(c.setst, 55), c.st]
+    for imm in (48, 53):
+        c = absorbing(128, DATA4, xof=xof); c.setst(imm); got.append(c.st)
 check('KMAC128 and KMACXOF128: kl.clear in _Hash_Absorb_ -> _Unconfigured_, a kl.setst naming _Out_of_Memory_ -> '
-      'that State; then a kl.setst, a kl.exec and a kl.restrictl change nothing; a reserved 54 or 55 raises '
-      'illegal-instruction (GR18)', True, got,
-      [UNCONF, UNCONF, KL_STATE_OUT_OF_MEMORY, KL_STATE_OUT_OF_MEMORY, True, True, ABSORB] * 2)
+      'that State; then a kl.setst, a kl.exec and a kl.restrictl change nothing; 48 or 53, which the Machine does '
+      'not define, -> _Invalid_', True, got,
+      [UNCONF, UNCONF, KL_STATEEXT_OUT_OF_MEMORY, KL_STATEEXT_OUT_OF_MEMORY, INVALID, INVALID] * 2)
 
 section('Negative controls')
 control('left_encode(L) in place of right_encode(L) (#2, #6)',

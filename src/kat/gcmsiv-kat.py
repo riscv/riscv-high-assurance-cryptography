@@ -5,13 +5,13 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, bin_, bxor, MASK128, montmul, aes_encrypt, selftest,
                     ERROR_STATES, inert, IllegalInstruction, raises, section, check, control, done,
-                    KL_STATE_UNCONFIGURED as UNCONF, KL_STATE_READY as READY,
+                    KL_STATE_INERT as UNCONF, KL_STATE_READY as READY,
                     KL_STATE_HASH_ABSORB as HA, KL_STATE_ENCRYPT as ENC, KL_STATE_DECRYPT as DEC,
                     KL_STATE_ENC_LAST_BLOCK as ELB, KL_STATE_DEC_LAST_BLOCK as DLB,
                     KL_STATE_ENC_TAG_FINALIZE as ETF, KL_STATE_DEC_TAG_FINALIZE as DTF,
                     KL_STATE_SET_AUX_VALUE as SAV, KL_STATE_SET_AUX_VALUE_2 as SAV2,
-                    KL_STATE_SUCCESS as SUCC, KL_STATE_FAILURE as FAIL, KL_STATE_INVALID as INV,
-                    KL_STATE_EXPIRED as EXPIRED)
+                    KL_STATE_SUCCESS as SUCC, KL_STATE_FAILURE as FAIL, KL_STATEEXT_INVALID as INV,
+                    KL_STATEEXT_EXPIRED as EXPIRED)
 
 M32 = 2**32 - 1
 
@@ -164,10 +164,8 @@ class Siv:
     def setst(s, immed, form='A', aux=0, klen=128):
         """klen: KLLEN of a Form C operand."""
         st = s.state
-        if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR30
-            if immed >= 54:
-                raise IllegalInstruction('reserved #immed7')   # GR18
-            return None if st == UNCONF else s._error(immed)   # GR30: Unconfigured unchanged
+        if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR30: in every State
+            return s._error(immed)
         if inert(st):
             return                                       # GR26
         if immed == READY and form == 'A':               # GR16
@@ -685,11 +683,11 @@ out = m.exec('A', 0x1234, 128)
 m.setst(READY)
 check('GR30/GR26: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
 m = Siv()
-check('GR26/GR30: an Unconfigured locker ignores kl.setst and kl.exec; kl.setst naming Expired leaves it Unconfigured',
-      (m.setst(SAV, 'C', 0), m.setst(READY), m.exec('B', 1), m.setst(EXPIRED), m.state) == (None, None, 0, None, UNCONF))
-m = at('ha')
-check('GR18: kl.setst naming reserved 54 or 55 raises illegal-instruction, State kept',
-      (raises(m.setst, 54), raises(m.setst, 55), m.state) == (True, True, HA))
+check('GR26/GR30: an Unconfigured locker ignores kl.setst and kl.exec; kl.setste naming Expired records Expired',
+      (m.setst(SAV, 'C', 0), m.setst(READY), m.exec('B', 1), m.state, m.setst(EXPIRED), m.state)
+      == (None, None, 0, UNCONF, 0, EXPIRED))
+check('kl.setst naming 48 or 53, which the Machine does not define -> _Invalid_ (<<KLE-instruction-setst>>)',
+      [(raises(c.setst, i), c.state) for i in (48, 53) for c in [at('ha')]] == [(False, INV)] * 2)
 m, m2 = at('ha'), at('ha')
 m.setst(HA)
 absorb(m2, a5)

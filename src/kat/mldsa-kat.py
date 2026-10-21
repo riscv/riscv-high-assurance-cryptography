@@ -5,13 +5,13 @@ record), including the external-mu interface the unit exposes, and a model of an
 import copy, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fips204 as D  # noqa: E402
-from common import (ERROR_STATES, MDH_FIELD, LoopBound, check, control, done,  # noqa: E402
+from common import (mdh_get, mdh_put, ERROR_STATES, MDH_FIELD, LoopBound, check, control, done,  # noqa: E402
                     mdh_pack, raises, section, sl, spec_note, KL_STATE_READY as READY,
-                    KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE, KL_STATE_INVALID as INVALID)
+                    KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE, KL_STATEEXT_INVALID as INVALID)
 
 (GEN, PK_OUT, PK_IN, UNUSED5, MU_IN, UNUSED7, SIGN_GEN, SIGN_OUT, SIGN_VERIFY, SIGN_IN, SK_IN,
  COMPUTE_PK) = range(2, 14)                         # States 5 and 7 are not used (external mu)
-LISTED_GLOBAL = [('Ready', 1), ('Success', 46), ('Failure', 47)]   # the ML-DSA State list, verbatim
+LISTED_GLOBAL = [('Ready', 1), ('Success', 54), ('Failure', 55)]   # the ML-DSA State list, verbatim
 FORM_B = (SIGN_GEN,)                               # every other State is entered with Form A
 IN_F = {PK_IN: 'pubkey', MU_IN: 'mu', SIGN_IN: 'signature', SK_IN: 'privkey'}
 OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
@@ -44,12 +44,10 @@ class MLDSALocker:
         self.signature, self.mu, self.rnd, self.kappa = b'', b'', bytes(32), 0
         self.sign_bound = D.SIGN_LOOP_BOUND        # the implementation's limit on the signing loop
 
-    def get(self, f): return sl(self.mdh, *MDH_FIELD[f])
+    def get(self, f): return mdh_get(self.mdh, f)
 
     def put(self, f, v):
-        hi, lo = MDH_FIELD[f]
-        m = ((1 << hi - lo + 1) - 1) << lo
-        self.mdh = self.mdh & ~m | v << lo & m
+        self.mdh = mdh_put(self.mdh, f, v)
 
     state = property(lambda self: self.get('State'))
     use = property(lambda self: self.get('MachineUse'), lambda self, v: self.put('MachineUse', v))

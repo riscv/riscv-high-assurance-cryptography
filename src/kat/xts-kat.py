@@ -3,15 +3,14 @@
 against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
 import os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decrypt,
+from common import (state_fields, mdh_get, mdh_put, install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decrypt,
                     b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
                     MASK128, MDH_FIELD, mdh_pack,
-                    KL_STATE_UNCONFIGURED as UNCONFIGURED, KL_STATE_READY as READY,
+                    KL_STATE_INERT as UNCONFIGURED, KL_STATE_READY as READY,
                     KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT, KL_STATE_OPERATE as OPERATE,
-                    KL_STATE_INVALID as INVALID, KL_STATE_SUCCESS as SUCCESS, ERROR_STATES,
+                    KL_STATEEXT_INVALID as INVALID, KL_STATE_SUCCESS as SUCCESS, ERROR_STATES,
                     IllegalInstruction, raises, section, check, control, done)
 
-RESERVED_IMMED = (54, 55)    # reserved kl.setst #immed7 (also 53 without Zklexpire); 46, 47: Invalid (GR19, GR18)
 
 B = 128
 STEAL = 66                                        # kl_xex_state_steal, Form A, in Decrypt only
@@ -21,12 +20,10 @@ CIPHERS = {'AES-128': 128, 'AES-256': 256, 'SM4': 128}   # XTS-AES: 128- and 256
 XEX_MACHINES = {0x03: 'AES-128', 0x23: 'AES-256', 0x33: 'SM4'}   # <<KLE-exec-encodings>> Mode 3; Type 1 has none
 BLOCK = {'AES-128': (aes_encrypt, aes_decrypt), 'AES-256': (aes_encrypt, aes_decrypt), 'SM4': (sm4_encrypt, sm4_decrypt)}
 XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
-fget = lambda v, f: sl(v, *MDH_FIELD[f])
+fget = mdh_get
 padded = lambda bits: -(-bits // 128) * 16
 
-def fset(v, f, x):
-    hi, lo = MDH_FIELD[f]
-    return (v & ~(((1 << (hi - lo + 1)) - 1) << lo)) | (x << lo)
+fset = mdh_put
 
 def kl_size(mdh, c1_size, pi_size):
     """<<KLE-instruction-size>> from an MDH, AuxDataLen = 0."""
@@ -146,8 +143,6 @@ class XexLocker:
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
         """form 'A' (no operand), 'A/iobuf' (substituted Form C, operand = KLIOBUF bytes) or 'C'."""
-        if immed in RESERVED_IMMED:               # checked before any State
-            raise IllegalInstruction(immed)
         if s.state in ERROR_STATES:               # GR26
             return
         pol = fget(s.mdh, 'MachinePolicy')
@@ -585,8 +580,8 @@ check("kl.clear: Unconfigured, no key material", True,
 section("States, transitions and general rules (vector 2)")
 name, k1, k2, i, data, c = FULL[1]
 tw = lambda cl, st=ENCRYPT, t=i: cl.setst(st, 'C', bin_(t, B), 128) or cl
-check("state constants: Ready 1, Encrypt 7, Decrypt 8, Invalid 49", True,
-      (READY, ENCRYPT, DECRYPT, INVALID), (1, 7, 8, 49))
+check("state constants: Ready 1, Encrypt 7, Decrypt 8; Invalid: State 0, StateExtension 2", True,
+      (READY, ENCRYPT, DECRYPT, state_fields(INVALID)), (1, 7, 8, {'State': 0, 'StateExtension': 2}))
 cl = new_xex(k1, k2)
 check("provisioning completes in Ready with mask = 0", True, (cl.state, cl.mask), (READY, 0))
 res = cl.exec(b2v(data), 256)[0]
@@ -750,12 +745,10 @@ for length in list(range(16, 80)) + [128, 129, 255, 256]:
                and kl_xts(k41, k42, seq, ref, False) == payload == ref_xts(k41, k42, seq, ref, False))
 check("KLE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
 
-cl = new_xex(k1, k2)
-st = cl.state
-check("kl.setst with a reserved #immed7 (54, 55): illegal-instruction exception, the State kept", True,
-      ([raises(cl.setst, i) for i in RESERVED_IMMED], cl.state), ([True] * 2, st))
+check("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)", True,
+      [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 6)
 check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)", True,
-      [(raises(c.setst, i), c.state) for i in (46, 47) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
+      [(raises(c.setst, i), c.state) for i in (54, 55) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
 
 section("negative controls")
 control("OCB3 big-endian `double` for update_mask",

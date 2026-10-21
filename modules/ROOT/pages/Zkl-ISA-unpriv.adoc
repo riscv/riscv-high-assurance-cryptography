@@ -178,11 +178,11 @@ This convention lets CCs migrate between harts of different endianness.
 KLE comprises several sub-extensions. Those that define ISA features follow; those that define cryptographic algorithms are listed in <<Zkl-ISA-machines.adoc#KLE-exec-encodings>>.
 
 .Extensions defining KLE ISA features
-[,%header,cols="<18%,<64%,<18%"]
+[,%header,cols="<14%,<56%,<30%"]
 |===
 | Extension       | Features                                                                | Defined in:
 | `Zklv`          | Support for vector registers.                                           | <<KLE-instructions-detailed>>
-| `Zklio`         | Support for streaming instructions and the KLIOBUF input/output buffer. | <<KLE-KLIOBUF>>, <<KLE-usage-input-output>>
+| `Zklio`         | Support for streaming instructions and the KLIOBUF.                     | <<KLE-KLIOBUF>>, <<KLE-usage-input-output>>
 | `Zklmem`        | Dedicated memory instructions.                                          | <<KLE-instruction-load>>, <<KLE-instruction-store>>
 | `Zklmv`         | Dedicated move instructions.                                            | <<KLE-instruction-mv>>
 | `Zklexpire`     | Support for the _ExpirationDate_ metadata field.                        | <<KLE-Metadata-expiration-date>>
@@ -226,6 +226,7 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D; Forms A–C via the substitutions of <<KLE-usage-input-output>>
 | `kl.mvin`, `kl.mvout`    | `Zklmv`         2+<| When `Zklmv` is implemented; mandatory in hardware if `Zklmem` is emulated
 | `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D; Form C via substitution
+| `kl.setste`              | `Zkl` common    2+<| Available
 | `kl.mgmt`                | `Zkl` common       | Forms A, C and D | Forms A and D; Form C via substitution
 | `kl.getmdl`, `kl.getmd` (and the pseudo-instructions `kl.getst`,
 `kl.getstx`)               | `Zkl` common    2+<| Available
@@ -442,22 +443,29 @@ A CC provider that sends its keys to a secure receiver, such as a TEE applet tha
 _State_ tracks the state of a locker and its Machine: _Unconfigured_, encrypting or decrypting, initializing, absorbing into or finalizing a hash, computing point multiples, signing or verifying, or in an error state, for instance.
 _StateExtension_ lets a Machine keep further state information, usually orthogonal to _State_, such as whether certain values have been provisioned or computed.
 
-State 0 is _Unconfigured_: every other field of the MDH then reads zero and has no meaning, and the locker has no Usage Policy, Expiration Date or Key Type.
+State 0 is _Inert_: the locker holds no Content, only an MDH.
+An _Inert_ locker is either _Unconfigured_ or in an Error State.
 
-States 1–55 are the _Complete_ States: the _Valid_ States 1–47, State 1 being _Ready_, and
+A locker is _Unconfigured_ when _State_ and _StateExtension_ are 0: every other field of the MDH then reads zero and has no meaning, and the locker has no Usage Policy, Expiration Date or Key Type.
+
 (((KLE, Machine, error states)))
-the _Error States_ 48–55, which report KLE errors.
+A locker is in an _Error State_, which reports a KLE error, when _State_ is 0 and _StateExtension_ is not: _StateExtension_ holds the code of the Error State (<<KLE-stateexts-error>>).
+An Error State holds no Content beyond the MDH, whose other fields keep their values.
+Entering an Error State overwrites _StateExtension_ with its code, and no Machine defines a _StateExtension_ @ _State_ 0.
 
-(((KLE, Machine, configuration states)))States 56–63, used during management operations, are the _Configuration States_, exactly the States that are neither _Unconfigured_ nor Complete; 61–63 are reserved (<<KLE-SC-sealing-status>>).
+The _Valid_ States are States 1–55: State 1 is _Ready_, States 54 and 55 are _Success_ and _Failure_, and the Machine defines States 2–53.
+The Valid States and the Error States are the _Complete_ States.
+
+(((KLE, Machine, configuration states)))States 56–63, used during management operations, are the _Configuration States_; 61–63 are reserved (<<KLE-SC-sealing-status>>).
 
 The following tables give the values of _State_ common to all Machines, including that of a locker with no Machine, and those used for management.
 
 [[KLE-state-off]]
-.Global CC State Numbers: Unconfigured State
+.Global CC State Numbers: Inert State
 [float="center",align="center",width="100%",cols="^7%,<27%,<16%,<50%",options="header"]
 |===
 | Value | Mnemonic                 | State Name     | Description
-|   0   | `kl_state_unconfigured`  | _Unconfigured_ | The locker holds no valid CC.
+|   0   | `kl_state_inert`         | _Inert_        | The locker holds no Content: it is _Unconfigured_ or in an Error State (<<KLE-stateexts-error>>).
 |===
 
 [[KLE-states-valid]]
@@ -466,23 +474,24 @@ The following tables give the values of _State_ common to all Machines, includin
 |===
 | Value | Mnemonic                 | State Name     | Description
 |   1   | `kl_state_ready`         | _Ready_        | Ready for operation; also the state of a newly provisioned CC.
-| 2-45  3+| Defined by the Machine encoded in _Machine_.
-|  46   | `kl_state_success`       | _Success_      | The Machine completed successfully. No further cryptographic operation may be performed until the locker is reconfigured or returned to _Ready_ (Rule <<KLE-GR-to-ready>>).
-|  47   | `kl_state_failure`       | _Failure_      | The Machine completed with a negative result; otherwise as in State _Success_.
+| 2-53  3+| Defined by the Machine encoded in _Machine_.
+|  54   | `kl_state_success`       | _Success_      | The Machine completed successfully. No further cryptographic operation may be performed until the locker is reconfigured or returned to _Ready_ (Rule <<KLE-GR-to-ready>>).
+|  55   | `kl_state_failure`       | _Failure_      | The Machine completed with a negative result; otherwise as in State _Success_.
 |===
 
-[[KLE-states-error]]
-.Global CC State Numbers: Error States
+[[KLE-stateexts-error]]
+.Global _StateExtension_ Codes at _State_ 0: Unconfigured and Error States
 [float="center",align="center",width="100%",cols="^7%,<27%,<16%,<50%",options="header"]
 |===
-| Value  | Mnemonic                       | State Name              | Description
-|  48    | `kl_state_unsupported`         | _Unsupported_           | Unsupported Machine, or an unsupported variant, _KeyType_, protection level or field value of it (<<KLE-Metadata-validity>>).
-|  49    | `kl_state_invalid`             | _Invalid_               | The locker has been invalidated by invalid Metadata, by an operation not permitted in its current State, or by another error that the architecture or the Machine reports as _Invalid_ (<<KLE-error-architecture>>).
-|  50    | `kl_state_out_of_memory`       | _Out of Memory_         | Insufficient KLF memory for a configuration instruction. Privileged code that does not handle, or fails to handle, locker allocation may set it to return an error.
-|  51    | `kl_state_mgmt_auth`           | _Authentication Failed_ | Authentication failure while completing an SCC import or a locker export, or a failed check that a system-specific format defines, when the format authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
-|  52    | `kl_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies, including a failed narrowing of them, or a transfer to a lower _SCProtection_ (Rules <<KLE-GR-narrowing>> and <<KLE-GR-sysfmt-completion>>).
-|  53    | `kl_state_expired`             | _Expired_               | The locker has expired. Not in effect without `Zklexpire`.
-| 54, 55 | (Reserved)                     | {empty}                 | Reserved.
+| _StateExtension_ | Mnemonic             | State Name              | Description
+|  0     | `kl_stateext_unconfigured`     | _Unconfigured_          | Not an Error State: the locker holds no valid CC.
+|  1     | `kl_stateext_unsupported`         | _Unsupported_           | Unsupported Machine, or an unsupported variant, _KeyType_, protection level or field value of it (<<KLE-Metadata-validity>>).
+|  2     | `kl_stateext_invalid`             | _Invalid_               | The locker has been invalidated by invalid Metadata, by an operation not permitted in its current State, or by another error that the architecture or the Machine reports as _Invalid_ (<<KLE-error-architecture>>).
+|  3     | `kl_stateext_out_of_memory`       | _Out of Memory_         | Insufficient KLF memory for a configuration instruction. Privileged code that does not handle, or fails to handle, locker allocation may set it to return an error.
+|  4     | `kl_stateext_mgmt_auth`           | _Authentication Failed_ | Authentication failure while completing an SCC import or a locker export, or a failed check that a system-specific format defines, when the format authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
+|  5     | `kl_stateext_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies, including a failed narrowing of them, or a transfer to a lower _SCProtection_ (Rules <<KLE-GR-narrowing>> and <<KLE-GR-sysfmt-completion>>).
+|  6     | `kl_stateext_expired`             | _Expired_               | The locker has expired. Not in effect without `Zklexpire`.
+| 7-15   | (Reserved)                     | {empty}                 | Reserved.
 |===
 
 Without `Zklexpire`, no locker can be in State _Expired_, and a PI, SCC or PCCC whose MDH carries it is invalid.
@@ -637,17 +646,17 @@ _ExpirationDate_ is evaluated only:
 Each execution reads the clock once, before any component operation, and a passed check covers the rest of it, even if the date passes meanwhile.
 An unavailable clock on resumption leaves the prefix committed before the halt in place (Rule <<KLE-exception-state-change>>).
 
-The _ExpirationDate_ of a locker that is not in a Valid State is not evaluated: only an expired locker in active use transitions to Error State `kl_state_expired`, and expired contexts can still be managed cleanly.
+The _ExpirationDate_ of a locker that is not in a Valid State is not evaluated: only an expired locker in active use transitions to Error State `kl_stateext_expired`, and expired contexts can still be managed cleanly.
 
 The evaluation proceeds as follows:
 
 . If _ExpirationDate_ is zero, the instruction proceeds.
 . If the secure clock cannot be read, the instruction raises a KLE clock-unavailable exception (<<Zkl-ISA-priv.adoc#KLE-exception-codes>>) and leaves the _State_ unchanged.
 . The secure clock's date is converted to the _ExpirationDate_ format, in whole hours rounded down; a reading before the epoch converts to 0, and one at or after 2^20^ − 1 hours converts to 2^20^ − 1.
-. If the converted value is at least _ExpirationDate_, the locker transitions to Error State `kl_state_expired`; otherwise the instruction proceeds.
+. If the converted value is at least _ExpirationDate_, the locker transitions to Error State `kl_stateext_expired`; otherwise the instruction proceeds.
 
 An unreadable secure clock traps, rather than making the instruction a silent no-op, so that M-mode can handle the failure, which may also be induced by glitching the clock.
-The instruction keeps the _State_, so that a handler that restores the clock can re-execute it; if the handler cannot restore the clock, it must set the _State_ to `kl_state_expired`.
+The instruction keeps the _State_, so that a handler that restores the clock can re-execute it; if the handler cannot restore the clock, it must set the _State_ to `kl_stateext_expired`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -694,8 +703,8 @@ Software keeps all _reserved_ bits, and all bits that the Machine does not use, 
 
 * in a Reserved bit, it makes the Metadata invalid (see below);
 * in _MachinePolicy_ or _MachineExtension_, a value that the implementation does not implement for the Machine makes it unsupported;
-* the _StateExtension_ and _MachineUse_ of a PI are ignored, and zeroed upon provisioning (<<KLE-locker-management>>);
-* outside a PI, a _StateExtension_ @ _State_ value that the Machine does not support makes it invalid (see below); and
+* the _MachineUse_ of a PI is ignored, and zeroed upon provisioning (<<KLE-locker-management>>);
+* in an SCC or PCCC, a _StateExtension_ @ _State_ value that the Machine does not support makes it invalid (see below); and
 * otherwise, _MachineUse_ and _AuxInfo_ are checked by the rules of the Machine and by their use in the implementation (<<KLE-MachineUse>>); the conditions below check only that _MachineUse_ is zero at a system-specific import (Rule <<KLE-GR-sysfmt-mdh>>).
 
 Metadata is _unsupported_ when the combination of _Machine_, _MachinePolicy_, _MachineExtension_ and an _SCProtection_ value of 0 to 2 (Levels A to C) is not implemented; when _KeyType_ is 1, resp. 2, and the implementation does not support System Key Identifiers, resp. random key generation, for the Machine (<<KLE-KeyType-field>>, <<KLE-system-keys>>); or when it holds a value that a Machine specification declares unsupported if not implemented, such as the _AuxInfo_ of EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>). A _MachinePolicy_ that the conditions below reject makes it invalid, not unsupported.
@@ -709,9 +718,9 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _SCProtection_ is 3, a reserved value (<<KLE-SCProtection-field>>);
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret without a configured substitute (<<KLE-Localities>>);
 * the MDH carries a custom _Machine_ or a system-specific _Version_ without naming _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<KLE-GR-custom-locality>>);
-* _State_ is not _Unconfigured_ at provisioning;
+* _State_ is not 0, or _StateExtension_ is non-zero (an Error State), at provisioning;
 * _State_ is 61–63 at import, or _Unconfigured_ at an import whose _Version_ is not 3 (<<KLE-State-management>>);
-* _State_ is 54 or 55, or _StateExtension_ @ _State_ is a value that the Machine does not support; for this condition, every Machine supports the Configuration States 56–60 with any _StateExtension_, and the _StateExtension_ in a PI is ignored and zeroed upon provisioning;
+* _StateExtension_ @ _State_ is a value that the Machine does not support; for this condition, every Machine supports _State_ 0 with a _StateExtension_ of 1–6, and the Configuration States 56–60 with any _StateExtension_;
 * _State_ is _Expired_ in a PI, SCC or PCCC when `Zklexpire` is not implemented;
 * _ExpirationDate_ is non-zero and `Zklexpire` is not implemented;
 * _AuxDataLen_ = 1 and _Version_ is not 3;
@@ -1051,8 +1060,8 @@ Form B examines only bits [63:0]: no field in bits [127:64] affects the size of 
 
 . Form A: 0 if the locker is _Unconfigured_;
 . Forms B and C: 0 if the supplied MDH is not in an Error State and is unsupported or invalid Metadata (<<KLE-Metadata-validity>>), or its _State_ is 61–63; validity is evaluated as at provisioning when the supplied _State_ is _Unconfigured_ and its _Version_ is not 3, and as at import otherwise.
-. 16 + 16 {times} _AuxDataLen_ if MDH._Version_ is 3 and MDH._State_ is not an Error State (<<KLE-system-specific-import>>);
-. 16 if MDH._State_ is an Error State;
+. 16 + 16 {times} _AuxDataLen_ if MDH._Version_ is 3 and the MDH is not in an Error State (<<KLE-system-specific-import>>);
+. 16 if the MDH is in an Error State;
 . if MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`, and MDH._Version_ is not 3:
   .. 32 + `content1_size` if _AuxDataLen_ = 0;
   .. 64 + `content1_size` + `content2_size` if _AuxDataLen_ {ge} 2, the 64-byte fixed part including `IMPQUAL` and `SIV2` even when _ADSDropped_ = 1;
@@ -1205,7 +1214,7 @@ Their window is the KLIOBUF up to `kliobuftop`, so they need no element position
 Exceptions and no-operation cases::
 For a vector variant, the check that the vector extension is enabled precedes all other checks.
 +
-On an _Unconfigured_ or Error-State locker, and when `klnamedlocker` = 32, every variant performs no operation, whatever `klstart` is, and raises no exception (Rules <<KLE-GR-outcome-inert>>, <<KLE-GR-fall-through-operands>>); `kl.mvout` writes zeros to its destination.
+On an _Unconfigured_ or Error-State locker, and when `klnamedlocker` = 32, every variant that passes the first-group checks performs no operation, whatever `klstart` is, and raises no exception (Rules <<KLE-GR-outcome-inert>>, <<KLE-GR-fall-through-operands>>); `kl.mvout` writes zeros to its destination.
 +
 Otherwise, besides the Locker Checks above, an illegal-instruction exception is raised if:
 +
@@ -1237,7 +1246,7 @@ Mnemonic::
 
 Encoding::
 `kl.setst` is an R-type instruction.
-The encodings with bit 24 = 1 belong to `kl.setnl` and `kl.setnli` (<<KLE-instruction-get-set-nl>>); of the others, those with `#immed7`[6:3] = `0b0111` belong to `kl.mgmt` (<<KLE-instruction-mgmt>>); these are separate instructions, and all remaining encodings are `kl.setst`.
+The encodings with bit 24 = 1 belong to `kl.setnl` and `kl.setnli` (<<KLE-instruction-get-set-nl>>); of the others, those with `e` = 1 are `kl.setste` (<<KLE-instruction-setste>>), and those with `e` = 0 and `#immed7`[6:3] = `0b0111` belong to `kl.mgmt` (<<KLE-instruction-mgmt>>); these are separate instructions, and all remaining encodings are `kl.setst`.
 +
 --
 [wavedrom, ,svg]
@@ -1249,7 +1258,7 @@ The encodings with bit 24 = 1 belong to `kl.setnl` and `kl.setnli` (<<KLE-instru
     { bits:  5, name: 'rs1' },
     { bits:  1, name: 'r', attr: ['KLNL']   },
     { bits:  2, name: 'F' },
-    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'e', attr: ['kl.setste'] },
     { bits:  1, name: 'nl', attr: ['kl.setnl*'] },
     { bits:  7, name: 'immed7' },
 ]}
@@ -1277,18 +1286,17 @@ It normally reaches the State that `#immed7` names, but some States transition a
 
 For all Machines, `#immed7` takes these values:
 
-* 0 (`kl_state_unconfigured`) clears the locker, in any Form, ignoring any auxiliary operand.
-* 1–47 name the _Valid_ States (<<KLE-states-valid>>). 46 and 47, _Success_ and _Failure_ of the Machine, cannot be set directly: on a locker that is not inert, a `kl.setst` naming them transitions the locker to Error State _Invalid_ (Rule <<KLE-GR-success-failure-cannot-be-set-directly>>); _Failure_ is an outcome, not an error.
-* 48–55 name the Error States (<<KLE-states-error>>); 54 and 55 are reserved, and so is 53 without `Zklexpire`.
-   A `kl.setst` naming one is admitted in every State (Rule <<KLE-GR-error-state-can-be-reconfigured>>); only the short import of <<KLE-error-state-transfer>> configures an _Unconfigured_ locker directly into an Error State.
+* 0 (`kl_state_inert`) clears the locker, in any Form, ignoring any auxiliary operand.
+* 1–53 name the _Valid_ States that _Ready_ and the Machine define (<<KLE-states-valid>>).
+* 54 and 55 name _Success_ and _Failure_ of the Machine, which cannot be set directly: on a locker that is not inert, a `kl.setst` naming them transitions the locker to Error State _Invalid_ (Rule <<KLE-GR-success-failure-cannot-be-set-directly>>); _Failure_ is an outcome, not an error.
 * 56–63, whose top four bits are `0b0111`, encode `kl.mgmt` (<<KLE-instruction-mgmt>>).
 * 64 encodes `kl_cfg_clear_ads` (<<KLE-instruction-clearads>>).
 * 65 encodes `kl_cfg_clearall` (<<KLE-instruction-clearall>>), in Form A with locker 0 and `r` = 0 only.
 * 66–127 are Machine-defined, and may change other state information, such as _StateExtension_.
 
-A value in 1–45 or 66–127 that the current Machine does not support transitions the locker to Error State _Invalid_.
-On an _Unconfigured_ locker, every immediate in 1–53, 64 and 66–127 performs no operation (Rule <<KLE-GR-outcome-inert>>).
-The immediates 54 and 55, and 53 without `Zklexpire`, are reserved in every State (<<KLE-illegal-instruction-grounds>>); 46 and 47 are not reserved, but no State allows them, since _Success_ and _Failure_ cannot be set directly (Rule <<KLE-GR-success-failure-cannot-be-set-directly>>); 0 and 65 encode `kl.clear` and `kl.clearall`, and 56–63 encode `kl.mgmt`.
+A value in 2–53 or 66–127 that the current Machine does not support transitions the locker to Error State _Invalid_.
+On an _Unconfigured_ locker, every immediate in 1–55, 64 and 66–127 performs no operation (Rule <<KLE-GR-outcome-inert>>).
+No State allows the immediates 54 and 55, since _Success_ and _Failure_ cannot be set directly (Rule <<KLE-GR-success-failure-cannot-be-set-directly>>); 0 and 65 encode `kl.clear` and `kl.clearall`, and 56–63 encode `kl.mgmt`.
 Some values require a 64- or 128-bit auxiliary operand, in one or more GPRs or in a vector register (group) `Vs`.
 
 `Kd` may be `KLNL`, except for `kl.clearall` (Rules <<KLE-GR-klnamedlocker-override>> and <<KLE-GR-outcome-inert>>).
@@ -1296,10 +1304,31 @@ Some values require a 64- or 128-bit auxiliary operand, in one or more GPRs or i
 
 // ////////////////////////////////////////////////////////////////////
 
+[[KLE-instruction-setste]]
+==== kl.setste
+
+Synopsis::
+Set a locker to _Inert_, with an Error State or none.
+
+Mnemonic::
+(((KLE, instruction, kl.setste)))
+`kl.setste Kd, #immed7`
+
+Encoding::
+`kl.setste` is the encoding of `kl.setst` (<<KLE-instruction-setst>>) with `e` = 1, valid only with `F` = `0b00`, `rs1` = `0b00000` and `#immed7` in 1–6.
+Every other encoding with `e` = 1 is reserved, and so is `#immed7` = 6 without `Zklexpire`.
+
+Description::
+`kl.setste` sets _State_ to 0 (_Inert_) and _StateExtension_ to `#immed7`, which is the code of an Error State (<<KLE-stateexts-error>>).
+The "e" stands for empty and error.
+It always sets _State_ to 0, so that software sets an Error State with one instruction, whatever the locker's State.
+It is a configuration instruction, admitted in every State (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
+It differs from the Machine-defined immediates 66–127 of `kl.setst`, which set or clear bits of _StateExtension_ and leave _State_ unchanged.
+
 [[KLE-instruction-clear]]
 ==== kl.clear
 
-`kl.clear Kd` is `kl.setst` (<<KLE-instruction-setst>>) with no auxiliary operand and `#immed7` = `kl_state_unconfigured` (<<KLE-State-field>>).
+`kl.clear Kd` is `kl.setst` (<<KLE-instruction-setst>>) with no auxiliary operand and `#immed7` = `kl_state_inert` (<<KLE-State-field>>).
 It sets the locker's _State_ to _Unconfigured_ and releases its KLF resources.
 It is a configuration instruction, not a usage instruction: the _UsagePolicy_ does not restrict it, nor can the Machine (<<KLE-instruction-properties>>).
 
@@ -1368,7 +1397,7 @@ it is a distinct instruction.
 //
 
 Encoding::
-`kl.mgmt` is an R-type instruction with the encoding of `kl.setst` (<<KLE-instruction-setst>>) and `#immed7`[6:3] = `0b0111`, that is, `#immed7` in 56–63.
+`kl.mgmt` is an R-type instruction with the encoding of `kl.setst` (<<KLE-instruction-setst>>), `e` = 0 and `#immed7`[6:3] = `0b0111`, that is, `#immed7` in 56–63.
 
 Description::
 +
@@ -1777,9 +1806,10 @@ With `klnamedlocker` < 32, the effective address of a `kl.load` or `kl.store` mu
 A misaligned address transfers no data and raises a load, resp. store, address-misaligned exception on that address; the check applies even when the transfer window is empty.
 With `klnamedlocker` < 32, `kl.load` and `kl.store` evaluate their conditions in this order:
 
-. the illegal-instruction grounds of both groups and the KLE exceptions, in the order of <<Zkl-ISA-priv.adoc#KLE-exception-codes>>;
+. the checks of Rule <<KLE-GR-management-check-order>> up to its item 6;
 . the address breakpoint of the first component access, if any;
-. address-misaligned, on the effective address; and
+. address-misaligned, on the effective address (item 7 of that Rule), whatever the locker and its _State_;
+. the grounds and exceptions that depend on the _State_ of the locker, in the order of <<Zkl-ISA-priv.adoc#KLE-exception-codes>>; and
 . for each component access, in offset order, the address breakpoint, then page, guest-page and access faults, as ordered by the Privileged Specification.
 
 With `klnamedlocker` = 32, whether written `kl.load`, `kl.input`, `kl.store` or `kl.output`, the instruction is byte-granular and imposes no alignment constraint: a misaligned effective address behaves as for an ordinary load, resp. store, on the implementation.
@@ -1916,8 +1946,8 @@ The first set of Rules determines when certain classes of instructions may be is
 | `kl.size`, `kl.avail`       | No                    | Yes                   | No                | Admitted whatever the State of the locker; no Machine may restrict it.
 | `kl.exec`                   | Yes                   | Yes                   | Yes               | {empty}
 | `kl.mvin`, `kl.mvout`       | Yes                   | Yes                   | No^*^             | The direction determines which state changes. Both advance `klstart` by the bytes transferred.
-| `kl.setst`                  | Yes                   | Yes, vector forms reset `vstart` on retirement  2+<| Yes, except when the immediate is `kl_state_unconfigured` (`kl.clear`), `kl_cfg_clearall` (`kl.clearall`) or an Error State, in which case it is not a usage instruction.
-| `kl.setst` naming a non-reserved Error State | Yes | No                    | No                | Admitted whatever the State of the locker; no Machine may restrict it.
+| `kl.setst`                  | Yes                   | Yes, vector forms reset `vstart` on retirement  2+<| Yes, except the immediates `kl_state_inert` (`kl.clear`) and `kl_cfg_clearall` (`kl.clearall`), which are not usage instructions.
+| `kl.setste`                | Yes | No                    | No                | Admitted whatever the State of the locker; no Machine may restrict it.
 | `kl.clear{all}`             | Yes                   | No                    | No                | Encodings of `kl.setst`; see its row. Admitted whatever the State of the locker; no Machine may restrict it.
 | `kl.clearads`               | Yes                   | No                    | Yes               | Encoding of `kl.setst`; see its row.
 | `kl.mgmt`                   | Yes                   | Yes +
@@ -1960,10 +1990,10 @@ The first set of Rules determines when certain classes of instructions may be is
 
 (((KLE, Machine, invalid state)))
 (((Cryptographic Locker, invalidation)))
-A locker is _invalidated_ when it transitions to Error State `kl_state_invalid`.
+A locker is _invalidated_ when it transitions to Error State `kl_stateext_invalid`.
 <<Zkl-ISA-priv.adoc#KLE-exceptions>> treats the error conditions that raise exceptions.
 
-_State_ encodes up to 47 Valid States, _Ready_, _Success_ and _Failure_ included.
+_State_ encodes up to 55 Valid States: _Ready_, _Success_, _Failure_ and 52 States that the Machine defines.
 A Machine may store additional state information in _AuxInfo_, _MachineUse_ or the Content, in a Machine-specific format.
 
 The immediate of `kl.setst` (<<KLE-instruction-setst>>) has 7 bits, one more than the _State_ field, so that it can encode further state-change operations: the architected `kl_cfg_clear_ads` (64, <<KLE-instruction-clearads>>) and `kl_cfg_clearall` (65, <<KLE-instruction-clearall>>), and the values 66–127, available to Machines.
@@ -2017,7 +2047,7 @@ The legend of the graph is:
 The following rules apply to all Machines:
 
 [horizontal]
-[[KLE-GR-state-identifies-cc,GR13]]GR13:: When the CC is in _Ready_, _Success_, _Failure_ or an Error State, the _State_ field of the MDH holds that State, so that _State_ identifies it without inspecting other fields or the Content.
+[[KLE-GR-state-identifies-cc,GR13]]GR13:: When the CC is in _Ready_, _Success_, _Failure_ or an Error State, the _State_ field of the MDH holds that State, and _StateExtension_ too for an Error State, so that they identify it without inspecting other fields or the Content.
 
 [[KLE-GR-transition-triggers,GR14]]GR14:: A transition allowed by a Machine is triggered by an explicit `kl.setst` or under conditions stated by the Machine's specification. The State reached need not be the one that a `kl.setst` names: besides Error State transitions, an operation may determine the next State, as a verification determines _Success_ or _Failure_.
 Transitions to and between Configuration States use `kl.mgmt`, `kl.rename` or `kl.swap`.
@@ -2031,7 +2061,7 @@ A usage instruction meets these conditions in order, the first that applies deci
 --
 . with `Zklio`, the substitution of a native Form that the State admits, while the KLIOBUF is unconfigured: illegal-instruction exception (Rule <<KLE-GR-iobuf-configured>>);
 . a _UsagePolicy_ that forbids the instruction: KLE privilege-violation exception (Rule <<KLE-GR-usage-policy>>);
-. a passed _ExpirationDate_: transition to Error State `kl_state_expired`, and no operation; if the secure clock cannot be read, KLE clock-unavailable exception, the _State_ unchanged (<<KLE-Metadata-expiration-date>>);
+. a passed _ExpirationDate_: transition to Error State `kl_stateext_expired`, and no operation; if the secure clock cannot be read, KLE clock-unavailable exception, the _State_ unchanged (<<KLE-Metadata-expiration-date>>);
 . an instruction that the Machine, the State or _MachinePolicy_ does not admit, a wrong Form included: no operation, and transition to Error State _Invalid_ (Rules <<KLE-GR-same-state>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-to-ready>>, <<KLE-GR-form-mismatch>>, <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
 . otherwise, the instruction performs its operation.
 --
@@ -2049,9 +2079,9 @@ Unless the Machine defines another Form for it, a `kl.setst` naming _Ready_ is o
 . a `kl.setst` naming the current State, except in _Ready_ (Rule <<KLE-GR-to-ready>>) and in a State that loads a field, where it restarts the load (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
 --
 
-[[KLE-GR-setst-not-admitted,GR18]]GR18:: A `kl.setst` whose `#immed7` neither the architecture nor the Machine admits in the current State transitions a locker in a Valid State to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>). A reserved `#immed7` raises an illegal-instruction exception (<<KLE-illegal-instruction-grounds>>).
+[[KLE-GR-setst-not-admitted,GR18]]GR18:: A `kl.setst` whose `#immed7` neither the architecture nor the Machine admits in the current State transitions a locker in a Valid State to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-not-allowed-instructions>>). A reserved `#immed7` of `kl.setst` or `kl.setste` raises an illegal-instruction exception (<<KLE-illegal-instruction-grounds>>).
 
-[[KLE-GR-success-failure-cannot-be-set-directly,GR19]]GR19:: No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 46 or 47). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
+[[KLE-GR-success-failure-cannot-be-set-directly,GR19]]GR19:: No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 54 or 55). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
 
 [[KLE-GR-policy-narrowing-state,GR20]]GR20:: A `kl.restrictl` or `kl.restrictv` (<<KLE-instruction-restrict>>) that narrows _MachinePolicy_ to a value that the Machine forbids, such as zero where a set bit is required (<<KLE-Metadata-validity>>), transitions the locker to Error State _Invalid_.
 Any other narrowing changes no State; from the next instruction on, Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> checks each `kl.exec`, `kl.derive` and usage `kl.setst` against the narrowed _MachinePolicy_, at issue and on entering a State.
@@ -2094,6 +2124,7 @@ The image transferred out is an SCC, whose Content is encrypted and authenticate
 The outcome then depends on the class of the locker's State: Rule <<KLE-GR-outcome-inert>> for an inert locker, Rule <<KLE-GR-outcome-config-state>> for a Configuration State, and Rule <<KLE-GR-outcome-valid-state>> for a Valid State.
 
 [[KLE-GR-iobuf-configured,GR25]]GR25:: `kl.input`, `kl.output`, the KLIOBUF variants of `kl.mvin` and `kl.mvout`, and, with `Zklio`, the substitution of a native Form that the locker's State admits (<<KLE-usage-input-output>>, Rule <<KLE-GR-form-mismatch>>) access the KLIOBUF and require it to be configured, with a non-zero `kliobuflen`, even for an empty transfer window.
+A `kl.input` or `kl.output` with `Xl` = 0 is the exception: it performs no operation and writes 0 to `klstart`, whatever `Zklio` and the KLIOBUF (<<KLE-instruction-load>>).
 Otherwise such an instruction raises an illegal-instruction exception, a ground of the second group of <<KLE-illegal-instruction-grounds>>: a usage instruction at item 1 of Rule <<KLE-GR-outcome-valid-state>>, any other instruction after the checks of Rule <<KLE-GR-management-check-order>>.
 A provisioning- or import-opening `kl.mgmt` of Form A is the exception: it zeroizes the locker and transitions it to Error State _Invalid_ (Rule <<KLE-GR-vector-MDH-operand>>, <<KLE-MVR-open>>).
 
@@ -2101,18 +2132,18 @@ A provisioning- or import-opening `kl.mgmt` of Form A is the exception: it zeroi
 === Rules Governing Inert Lockers
 
 [horizontal]
-[[KLE-GR-outcome-inert,GR26]]GR26:: On an inert locker, every instruction performs no operation and raises no exception, except a destructive configuration instruction, which acts as on any locker, and a `kl.setst` naming an Error State (Rule <<KLE-GR-error-state-can-be-reconfigured>>); the _State_ is unchanged, and the instruction writes only what <<KLE-insn-outcomes-inert>> gives.
+[[KLE-GR-outcome-inert,GR26]]GR26:: Every instruction first undergoes the checks of the first group of <<KLE-illegal-instruction-grounds>> (Rule <<KLE-GR-management-check-order>>), whatever the locker, `klnamedlocker` and _State_. After them, on an inert locker, an instruction performs no operation and raises no exception, except a destructive configuration instruction, which acts as on any locker, and a `kl.setste` (Rule <<KLE-GR-error-state-can-be-reconfigured>>); the _State_ is unchanged, and the instruction writes only what <<KLE-insn-outcomes-inert>> gives.
 A `kl.derive` with an inert endpoint falls through likewise.
 With `klnamedlocker` = 32, an instruction that names `KLNL`, or a management transfer (Rule <<KLE-GR-locker-less-transfers>>), finds no locker and falls through, a destructive one included (<<KLE-instruction-load>> and <<KLE-instruction-store>> for `kl.load` and `kl.store`).
 
-[[KLE-GR-fall-through-operands,GR27]]GR27:: An instruction that falls through reads no operand other than its locker designators and checks none: it accesses no memory and needs neither a configured KLIOBUF nor `Zklio`.
+[[KLE-GR-fall-through-operands,GR27]]GR27:: After the checks of the first group of <<KLE-illegal-instruction-grounds>>, an instruction that falls through reads no operand other than its locker designators and checks none: it accesses no memory and needs neither a configured KLIOBUF nor `Zklio`.
 A Form D `kl.exec` is the exception: it takes a configured KLIOBUF as its output window, whatever its former native Form and with no length or granularity check, and accesses no buffer if none is configured (Rule <<KLE-GR-zero-unwritten-output>>).
 
 [[KLE-GR-zero-unwritten-output,GR28]]GR28:: A usage instruction with an output operand that performs no operation under Rule <<KLE-GR-outcome-inert>> or <<KLE-GR-outcome-valid-state>> (inert locker or expiration), or that transitions its locker to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output.
 
 [[KLE-GR-clear-locker-content-error-state,GR29]]GR29:: On transitioning to an Error State, a locker clears its Content beyond the MDH, and releases the internal resources that held that Content, any ADS included; _AuxDataLen_ and _ADSDropped_ are set to 0, and a _Version_ of 3 to 0 (<<KLE-system-specific-import>>).
 
-[[KLE-GR-error-state-can-be-reconfigured,GR30]]GR30:: A `kl.setst` naming a non-reserved Error State is a configuration instruction (<<KLE-instruction-properties>>): a locker in a Valid, Configuration or Error State transitions to that Error State without raising an exception, even where reaching it implicitly would raise one, and an _Unconfigured_ locker is left unchanged.
+[[KLE-GR-error-state-can-be-reconfigured,GR30]]GR30:: A `kl.setste` (<<KLE-instruction-setste>>) is a configuration instruction (<<KLE-instruction-properties>>): a locker in any State, _Unconfigured_ included, transitions to the Error State that it names without raising an exception, even where reaching it implicitly would raise one.
 A locker in an Error State is exported as its MDH alone, 16 bytes (<<KLE-instruction-size>>), with all its fields and without `kl.mgmt`, and a single `kl.mgmt` re-imports the image (<<KLE-error-state-transfer>>).
 
 [NOTE]
@@ -2158,9 +2189,9 @@ For `kl.derive`, an inert endpoint on either side suffices.
 | <<KLE-instruction-restrict,kl.restrict*>>
 3+| Writes nothing.
 
-| <<KLE-instruction-setst,kl.setst>> with an Error-State immediate
-| Writes the _State_ of the locker.
-2+| Writes nothing.
+| <<KLE-instruction-setste,kl.setste>>
+2+| Writes the code of the Error State to the _StateExtension_ of the locker (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
+| Writes nothing.
 
 | <<KLE-instruction-mv,kl.mvin>>
 3+| Writes nothing; `klstart` is unchanged.
@@ -2174,7 +2205,7 @@ For `kl.derive`, an inert endpoint on either side suffices.
 
 | <<KLE-instruction-load,kl.input>>, <<KLE-instruction-store,kl.output>>
 2+| Not applicable: `klnamedlocker` is 32, and no locker is named.
-| With `Xl` = 0, writes nothing except `klstart` <- 0. Otherwise, the instruction transfers to or from the KLIOBUF if `Zklio` is implemented, and raises an illegal-instruction exception otherwise.
+| With `Xl` = 0, writes nothing except `klstart` <- 0, whatever `Zklio` and the KLIOBUF. Otherwise, the instruction transfers to or from the KLIOBUF if `Zklio` is implemented and the KLIOBUF is configured (Rule <<KLE-GR-iobuf-configured>>), and raises an illegal-instruction exception otherwise.
 
 | <<KLE-instruction-mgmt,kl.mgmt>> opening a provisioning or an import
 2+| Zeroizes and configures the locker, as any <<KLE-destructive-config,destructive configuration instruction>>; `klnamedlocker` <- locker number, `klstart` <- 0.
@@ -2506,7 +2537,7 @@ The second group depends on the state of the KLE unit:
 . An MDH operand of `kl.mgmt` in `Vs` shorter than 128 bits, or, for a completing `kl.mgmt`, a KLIOBUF that cannot supply the MDH (Rules <<KLE-GR-vector-MDH-operand>>, <<KLE-instruction-mgmt>>).
 . A Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW` / 8 (Rule <<KLE-GR-klstart-vstart>>).
 . A non-zero `Xl` where <<KLE-instruction-load>> or <<KLE-instruction-store>> forbids it.
-. `kl.input` or `kl.output` without `Zklio`, or an unconfigured KLIOBUF (Rule <<KLE-GR-iobuf-configured>>).
+. `kl.input` or `kl.output` with a non-zero `Xl`, without `Zklio`, and any of these instructions with an unconfigured KLIOBUF (Rule <<KLE-GR-iobuf-configured>>).
 . A `kl.derive` whose `KLNL` operand names its other locker (<<KLE-instruction-derive>>).
 . A `kl.avail` or `kl.size` of Form B or C while `mstatus.kleemulation` is 1, if the KLE unit does not natively implement the combination of the MDH fields that `kl.avail` examines, except a `kl.size` of an MDH in an Error State (<<KLE-instruction-size>>, <<Zkl-ISA-priv.adoc#KLE-kleemulation>>).
 --
@@ -2527,7 +2558,7 @@ KLE missing-CSK:: No CSK is active (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>); raise
 KLE locker-Off:: An access to a locker marked _Off_ (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
 
 KLE unsupported-Metadata:: Unsupported Metadata at a provisioning- or import-opening `kl.mgmt`, which leaves the locker _Unconfigured_ (<<KLE-MVR-open>>); only an M-mode handler can resolve it, by emulating the Machine (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>).
-Accessing or using a locker in State `kl_state_unsupported` raises no such exception.
+Accessing or using a locker in State `kl_stateext_unsupported` raises no such exception.
 
 KLE privilege-violation:: A usage instruction that the _UsagePolicy_ denies (Rule <<KLE-GR-outcome-valid-state>>), or any use, clone or restriction of a locker in a Configuration State (Rule <<KLE-GR-outcome-config-state>>).
 
@@ -2556,7 +2587,7 @@ These conditions set an Error State without an exception:
 * _Expired_: an _ExpirationDate_ that has passed (<<KLE-Metadata-expiration-date>>).
 * _Privilege Violation_: a failed narrowing (<<KLE-Metadata-narrowing>>, <<KLE-instruction-restrict>>, Rule <<KLE-GR-narrowing>>), a restricted `kl.derive` into a destination of lower _SCProtection_ (Rule <<KLE-GR-narrowing>>), or a system-specific import whose format requires a higher side-channel protection level than the declared _SCProtection_ (Rule <<KLE-GR-sysfmt-completion>>).
 * _Authentication Failed_: a failed SCC authentication, at the completion of an import (<<KLE-SCC-import>>) or of an export (<<KLE-mgmt-completes-export>>), so software checks the _State_ after both; and a failed check that a system-specific format defines, when the format authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
-* Any Error State: the one that a `kl.setst` names (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
+* Any Error State: the one that a `kl.setste` names (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
 
 Two outcomes are not Error States: a Machine enters _Failure_ on a data error (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>) or on a failed verification of an AEAD tag or a signature, which is a result, not an error; and an ADS that fails its check at import is dropped, the SCC accepted (<<KLE-SCC-import>>).
 
@@ -2797,14 +2828,14 @@ The instruction:
 //     no `kl.mgmt` with `#immed7` = `kl_cfg_management_end` follows.
 //     This is the _short import path_ of <<KLE-error-state-transfer>>;
 
-.. if `#immed7` = `kl_cfg_importing` and `ml`._State_ is an Error State, instead takes the _short import path_ of <<KLE-error-state-transfer>>: it configures the locker immediately and fully in that Error State, skips the steps below, and opens no management operation;
+.. if `#immed7` = `kl_cfg_importing` and `ml` is in an Error State, instead takes the _short import path_ of <<KLE-error-state-transfer>>: it configures the locker immediately and fully in that Error State, skips the steps below, and opens no management operation;
 .. for an import, zeroizes the authentication registers `SIV`, `IMPQUAL` and `SIV2` (<<KLE-KLF>>);
-.. copies `ml` into `M`, zeroing _StateExtension_ and _MachineUse_ for a provisioning; the checks below are made on `M`, the locker's MDH staying zero;
+.. copies `ml` into `M`, zeroing _MachineUse_ for a provisioning; the checks below are made on `M`, the locker's MDH staying zero;
 .. raises a KLE unsupported-Metadata exception if `M` is unsupported Metadata (<<KLE-Metadata-validity>>);
 .. for a *provisioning*:
-... requires `ml`._State_ to be _Unconfigured_, else the Metadata is invalid; the locker's _State_ stays _Unconfigured_ during the checks below, until successful configuration;
+... requires `ml`._State_ to be 0, else the Metadata is invalid; the locker's _State_ stays _Unconfigured_ during the checks below, until successful configuration;
 ... requires `M`._AuxDataLen_ and `M`._ADSDropped_ to be 0: if either is non-zero, the locker transitions to Error State _Invalid_, a Complete State, and the instruction terminates;
-.. transitions the locker to Error State _Invalid_ if `M` is invalid Metadata (<<KLE-Metadata-validity>>), an _Unconfigured_ `ml`._State_ being invalid for an import unless `ml`._Version_ is 3;
+.. transitions the locker to Error State _Invalid_ if `M` is invalid Metadata (<<KLE-Metadata-validity>>), an _Unconfigured_ `ml` being invalid for an import unless `ml`._Version_ is 3;
 .. attempts to allocate the KLF capacity that the fields _Machine_, _MachinePolicy_, _SCProtection_ and _KeyType_ of `M` require (<<KLE-length-rule>>) and, if `M`._Version_ is 3, the capacity for 16 {times} `M`._AuxDataLen_ bytes of data (Rule <<KLE-GR-sysfmt-as-received>>), and raises a KLE out-of-memory exception if it cannot;
 .. for a *provisioning*, installs `M` as the locker's MDH, with _State_ `kl_cfg_provisioning`;
 .. for an *import*:
@@ -2812,7 +2843,7 @@ The instruction:
 ... sets the locker's _State_ to `kl_cfg_importing` if `ml`._State_ is a Valid State, `kl_cfg_importing` or `kl_cfg_exporting`, or `ml`._Version_ is 3;
 ... sets it to `kl_cfg_ppi_importing` if the base type of `ml`._State_ is `pi` (<<KLE-management-formats-and-states>>).
 
-Whenever a check above fails, raising a KLE exception or transitioning the locker to Error State _Invalid_, every MDH field other than _State_ remains zero and no KLF capacity is allocated; after a KLE out-of-memory exception, the locker remains _Unconfigured_.
+Whenever a check above fails, raising a KLE exception or transitioning the locker to Error State _Invalid_, every MDH field other than _State_ and _StateExtension_ remains zero and no KLF capacity is allocated; after a KLE out-of-memory exception, the locker remains _Unconfigured_ until a handler sets Error State _Out of Memory_ (<<Zkl-software.adoc#KLE-SR-handler-duty>>).
 This does not apply to configuring a locker directly into an Error State from `ml`, which installs the entire MDH.
 
 [NOTE]
@@ -3210,7 +3241,7 @@ For an SCC whose MDH is in an Error State, use the method of <<KLE-error-state-t
 . `len_PC` <- the number of 128-bit blocks of `Content1`.
 . `correct`, ``K(i)``.`Content1` <- +
 `SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1, CSK, len_AD, len_PC)`.
-. If `correct` {ne} `true`, the SCC is rejected: ``K(i)`` transitions to Error State `kl_state_mgmt_auth` (_Authentication Failed_, Rule <<KLE-GR-clear-locker-content-error-state>>), and the remaining steps are skipped.
+. If `correct` {ne} `true`, the SCC is rejected: ``K(i)`` transitions to Error State `kl_stateext_mgmt_auth` (_Authentication Failed_, Rule <<KLE-GR-clear-locker-content-error-state>>), and the remaining steps are skipped.
 . If ``K(i)``.MDH._AuxDataLen_ {ge} 2 and ``K(i)``.MDH._ADSDropped_ = 0, process the implementation-specific content:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. If ``K(i)``.`IMPQUAL` = `zeros(32) @ klmimpid @ klmarchid @ klmvendorid` then:
@@ -3248,15 +3279,15 @@ Bit 127 separates tag inputs from keystream inputs, as in AES-GCM-SIV; bit 126 s
 === Export and Import of a Locker in an Error State
 
 A locker in an Error State is only an MDH (Rule <<KLE-GR-clear-locker-content-error-state>>) and uses no KLF capacity.
-Only the _State_ field of that MDH is checked, in the locker and in its image; the other fields are not validated (<<KLE-Metadata-validity>>).
-There is no Content to encrypt, and KLE does not authenticate the MDH: any software in the current environment can produce any Error State, by provisioning a locker and issuing `kl.setst` with an Error-State immediate, so authentication would prove nothing.
+Only the _State_ and _StateExtension_ fields of that MDH are checked, in the locker and in its image; the other fields are not validated (<<KLE-Metadata-validity>>).
+There is no Content to encrypt, and KLE does not authenticate the MDH: any software in the current environment can produce any Error State, by issuing `kl.setste`, so authentication would prove nothing.
 Neither direction produces an SCC or a PCCC, opens a management operation, uses `SIV`, `SIV2` or `IMPQUAL`, or takes part in resumption.
 
 *Exporting* such a locker needs no `kl.mgmt`: `kl.getst` (<<KLE-instruction-getst>>) finds an Error State, and `kl.getmd` or `kl.getmdv` (<<KLE-instruction-getmd>>) reads the MDH, which software stores; `kl.size` reports 16.
 A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on such a locker is permitted but useless: it leaves the locker unchanged and opens no management operation, and only its common steps take effect, `klnamedlocker` naming the locker and `klstart` becoming 0 (<<KLE-locker-management>>).
 
 *Importing* the image takes one uninterruptible `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand, carried whole by Form C or D, or by a Form A from the KLIOBUF.
-It zeroizes the locker that it names and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0, and a _Version_ of 3 to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>), replaces a _State_ of 54 or 55, or of 53 without `Zklexpire`, by _Invalid_, and transfers nothing else.
+It zeroizes the locker that it names and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0, and a _Version_ of 3 to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>), replaces a reserved _StateExtension_, or 6 without `Zklexpire`, by the code of _Invalid_, and transfers nothing else.
 A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and performs no operation (Rule <<KLE-GR-outcome-inert>>).
 
 // ////////////////////////////////////////////////////////////////////

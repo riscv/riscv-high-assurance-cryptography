@@ -5,9 +5,9 @@ the KATs."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
-                    KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
+                    KL_STATE_INERT, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
-                    KL_STATE_INVALID, KL_STATE_UNSUPPORTED, md_pad, HashPort, IllegalInstruction)
+                    KL_STATEEXT_INVALID, KL_STATEEXT_UNSUPPORTED, md_pad, HashPort, IllegalInstruction)
 
 class Hart:
     klstart = 0  # bytes, <<KLE-CSR-klstart>>
@@ -32,7 +32,7 @@ class MdHash:
     def __init__(s, name, w, b, n, t, iv, compress, bswap_words=True, klstart_bits=False):
         s.name, s.w, s.b, s.n, s.t, s.iv, s.compress = name, w, b, n, t, iv, compress
         s.bswap_words, s.klstart_bits = bswap_words, klstart_bits
-        s.reset(KL_STATE_UNCONFIGURED)
+        s.reset(KL_STATE_INERT)
 
     def to_state(s, H):
         """Words H into `state`: word i in bits [w*i, w*i + w-1], byte-swapped."""
@@ -42,7 +42,7 @@ class MdHash:
     def iv_state(s):
         return s.to_state(s.iv)
 
-    def reset(s, st=KL_STATE_INVALID):  # GR29 for an Error State
+    def reset(s, st=KL_STATEEXT_INVALID):  # GR29 for an Error State
         s.st, s.state, s.block, s.block_base = st, 0, 0, 0
         s.cumul_len = s.last_block_len = s.out_len = 0
         if st == KL_STATE_READY:
@@ -51,7 +51,7 @@ class MdHash:
 
     def provision(s, policy=0):  # PI = MDH only
         if policy:  # unsupported Metadata (<<KLE-hash-functions-MACs-XOFs>>, MDH: MachinePolicy)
-            return s.reset(KL_STATE_UNSUPPORTED)
+            return s.reset(KL_STATEEXT_UNSUPPORTED)
         return s.reset(KL_STATE_READY)
 
     def restrictl(s, clear):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use
@@ -82,10 +82,8 @@ class MdHash:
         return s
 
     def setst(s, immed, form='A', xs=None):  # <<KLE-instruction-setst>>
-        if immed in (54, 55):
-            raise IllegalInstruction('reserved #immed7')  # GR18
-        if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
-            if s.st != KL_STATE_UNCONFIGURED:
+        if immed == KL_STATE_INERT or immed in ERROR_STATES:  # in any State
+            if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
             pass  # GR26
@@ -200,14 +198,14 @@ class MdPort(HashPort):
 class KeyDest:
     """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLE-derive-endpoints>>); only the key is modelled."""
     def __init__(s, n): s.st, s.n, s.key = KL_STATE_READY, n, None
-    def reset(s): s.st, s.key = KL_STATE_INVALID, None
+    def reset(s): s.st, s.key = KL_STATEEXT_INVALID, None
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
     ML-KEM `sharedkey`, GR34) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR35).  A hash in
     _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
-    def reset(s): s.st = KL_STATE_INVALID
+    def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
     """A Source -> the _Hash_Absorb_ kl.exec input (GR34: a shared secret only) or a KeyDest (GR34, GR35);

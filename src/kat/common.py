@@ -310,28 +310,49 @@ MDH_FIELDS = [
 ]
 MDH_FIELD = {n: (hi, lo) for n, hi, lo in MDH_FIELDS if n}
 
+def mdh_put(v: int, n: str, x: int) -> int:
+    """Write field n; a model Error State (code << 7, see ERROR_STATES) written to 'State' sets _State_ 0 and
+    the code in _StateExtension_."""
+    if n == 'State' and x > 63:           # also a reserved code (7-15)
+        n, x, v = 'StateExtension', x >> 7, mdh_put(v, 'State', 0)
+    hi, lo = MDH_FIELD[n]
+    assert 0 <= x < 1 << (hi - lo + 1), (n, x)
+    return v & ~(((1 << (hi - lo + 1)) - 1) << lo) | x << lo
+
+def mdh_get(v: int, n: str) -> int:
+    """Read field n; 'State' reads a model Error State when _State_ is 0 and _StateExtension_ is not."""
+    return from_fields(sl(v, 23, 18), sl(v, 27, 24)) if n == 'State' else sl(v, *MDH_FIELD[n])
+
 def mdh_pack(**f) -> int:
     v = 0
-    for n, x in f.items():
-        hi, lo = MDH_FIELD[n]
-        assert 0 <= x < 1 << (hi - lo + 1), (n, x)
-        v |= x << lo
+    for n, x in sorted(f.items(), key=lambda i: i[0] == 'State'):   # an Error State overrides StateExtension
+        v = mdh_put(v, n, x)
     return v
 
 def mdh_unpack(v: int) -> dict:
-    return {n: sl(v, hi, lo) for n, (hi, lo) in MDH_FIELD.items()}
+    return {n: mdh_get(v, n) for n in MDH_FIELD}
 
 # <<KLE-State-field>>, <<KLE-state-constants-symmetric>>
-KL_STATE_UNCONFIGURED, KL_STATE_READY = 0, 1
+KL_STATE_INERT, KL_STATE_READY = 0, 1
 KL_STATE_OPERATE = KL_STATE_HASH_ABSORB = 2
 (KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_FINALIZE, KL_STATE_HASH_VERIFY,
  KL_STATE_HASH_OUTPUT, KL_STATE_ENCRYPT, KL_STATE_DECRYPT, KL_STATE_ENC_LAST_BLOCK,
  KL_STATE_DEC_LAST_BLOCK, KL_STATE_ENC_TAG_FINALIZE, KL_STATE_DEC_TAG_FINALIZE,
  KL_STATE_SET_AUX_VALUE, KL_STATE_SET_AUX_VALUE_2, KL_STATE_SET_KEY) = range(3, 16)
-KL_STATE_SUCCESS, KL_STATE_FAILURE = 46, 47
-(KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_OUT_OF_MEMORY, KL_STATE_MGMT_AUTH,
- KL_STATE_PRIV_VIOLATION, KL_STATE_EXPIRED) = range(48, 54)
-ERROR_STATES = range(48, 56)
+KL_STATE_SUCCESS, KL_STATE_FAILURE = 54, 55
+# <<KLE-stateexts-error>>: an Error State is _State_ 0 with its code in _StateExtension_.  The models hold
+# it as code << 7, a value that no #immed7 takes: setst(KL_STATEEXT_x) models `kl.setste` with
+# #immed7 = the code (GR30).
+(KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATEEXT_OUT_OF_MEMORY, KL_STATEEXT_MGMT_AUTH,
+ KL_STATEEXT_PRIV_VIOLATION, KL_STATEEXT_EXPIRED) = ERROR_STATES = tuple(c << 7 for c in range(1, 7))
+
+def state_fields(st) -> dict:
+    """The _State_ and _StateExtension_ of a model State: an Error State is _State_ 0, code in _StateExtension_."""
+    return {'State': 0, 'StateExtension': st >> 7} if st in ERROR_STATES else {'State': st}
+
+def from_fields(state, stateext=0):
+    """The model State of an MDH whose _State_ and _StateExtension_ are given."""
+    return stateext << 7 if state == 0 and stateext else state
 (KL_CFG_PROVISIONING, KL_CFG_EXPORTING, KL_CFG_IMPORTING, KL_CFG_PPI_EXPORTING,
  KL_CFG_PPI_IMPORTING) = range(56, 61)
 KL_CFG_MANAGEMENT_END = 63
@@ -339,7 +360,7 @@ KL_CFG_MANAGEMENT_END = 63
 def inert(state) -> bool:
     """GR26: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
     performs no operation and raises no exception, its unwritten output zeroed (GR28)."""
-    return state == KL_STATE_UNCONFIGURED or state in ERROR_STATES
+    return state == KL_STATE_INERT or state in ERROR_STATES
 
 class IllegalInstruction(Exception):
     pass
@@ -551,7 +572,7 @@ def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_pla
         p.setst(KL_STATE_READY, form, 8)
         wrong.append(p.st)
     check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR16, GR65)', None, wrong,
-          [KL_STATE_INVALID] * 2)
+          [KL_STATEEXT_INVALID] * 2)
 
 # ---------------------------------------------------------------- self-tests
 

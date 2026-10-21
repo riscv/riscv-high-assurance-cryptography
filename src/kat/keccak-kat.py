@@ -4,9 +4,9 @@ Keccak-f[1600] and a bit-level FIPS 202 reference sponge from scratch; hashlib i
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert,
-                    KL_STATE_UNCONFIGURED, KL_STATE_READY, KL_STATE_HASH_ABSORB,
+                    KL_STATE_INERT, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
-                    KL_STATE_FAILURE, KL_STATE_INVALID, KL_STATE_UNSUPPORTED, KL_CFG_PROVISIONING, section, check,
+                    KL_STATE_FAILURE, KL_STATEEXT_INVALID, KL_STATEEXT_UNSUPPORTED, KL_CFG_PROVISIONING, section, check,
                     control, info, raises, done, HashPort, hash_run, hash_msgs, check_hash, IllegalInstruction)
 
 # ---------------------------------------------------------------- FIPS 202
@@ -188,10 +188,10 @@ C1_BITS = -(-(N + 64) // 128) * 128  # Serialized Content: state, block_base, la
 
 def kl_size(st):
     """<<KLE-instruction-size>>, AuxDataLen = 0; a supplied PI MDH is _Unconfigured_."""
-    return 16 if st in ERROR_STATES or st in (KL_STATE_UNCONFIGURED, KL_CFG_PROVISIONING) else 32 + C1_BITS // 8
+    return 16 if st in ERROR_STATES or st in (KL_STATE_INERT, KL_CFG_PROVISIONING) else 32 + C1_BITS // 8
 
 def make_pi(name):  # the MDH only
-    return v2b(mdh_pack(Machine=MACHINE[name], State=KL_STATE_UNCONFIGURED), 16)
+    return v2b(mdh_pack(Machine=MACHINE[name], State=KL_STATE_INERT), 16)
 
 class Sha3:
     wrong_suffix = False  # negative control
@@ -199,9 +199,9 @@ class Sha3:
     pad_case = None       # which padding clause fired
 
     def __init__(s):
-        s.reset(KL_STATE_UNCONFIGURED)
+        s.reset(KL_STATE_INERT)
 
-    def reset(s, st=KL_STATE_INVALID):  # GR29 for an Error State
+    def reset(s, st=KL_STATEEXT_INVALID):  # GR29 for an Error State
         s.st, s.state, s.block_base, s.last_block_len, s.out_len = st, 0, 0, 0, 0
 
     def set_machine(s, machine):
@@ -210,10 +210,10 @@ class Sha3:
 
     def provision(s, pi):
         f = mdh_unpack(b2v(pi[:16]))
-        assert f['State'] == KL_STATE_UNCONFIGURED and len(pi) == 16
+        assert f['State'] == KL_STATE_INERT and len(pi) == 16
         s.set_machine(f['Machine'])
         if f['MachinePolicy']:  # unsupported Metadata (<<KLE-hash-functions-MACs-XOFs>>, MDH: MachinePolicy)
-            s.reset(KL_STATE_UNSUPPORTED)
+            s.reset(KL_STATEEXT_UNSUPPORTED)
             return s
         s.reset(KL_STATE_READY)  # `state` zeroed
         return s
@@ -260,10 +260,8 @@ class Sha3:
         s.out_len = s.bound or (0 if s.xof else s.t)  # <<KLE-hash-functions-MACs-XOFs>>: the output bound
 
     def setst(s, immed, form='A', xs=None):
-        if immed in (54, 55):
-            raise IllegalInstruction('reserved #immed7')  # GR18
-        if immed == KL_STATE_UNCONFIGURED or immed in ERROR_STATES:  # in any State
-            if s.st != KL_STATE_UNCONFIGURED or not immed:
+        if immed == KL_STATE_INERT or immed in ERROR_STATES:  # in any State
+            if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
             pass  # GR30, GR26
@@ -399,14 +397,14 @@ class Port(HashPort):
 class KeyDest:
     """A symmetric `key` of n bytes, a destination in _Ready_ (<<KLE-derive-endpoints>>); only the key is modelled."""
     def __init__(s, n): s.st, s.n, s.key = KL_STATE_READY, n, None
-    def reset(s): s.st, s.key = KL_STATE_INVALID, None
+    def reset(s): s.st, s.key = KL_STATEEXT_INVALID, None
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
     ML-KEM `sharedkey`, GR34) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR35).  A SHA-3 or
     SHAKE _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
-    def reset(s): s.st = KL_STATE_INVALID
+    def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
     """A Source -> the _Hash_Absorb_ kl.exec input (GR34: a shared secret only) or a KeyDest (GR34, GR35);
@@ -529,7 +527,7 @@ check('SHA3-256 a3_200 after interrupt/resume', None, squeeze(cl, 32)[1], V('SHA
 cl = absorbing('SHA3-384', MSG_A3[:12])
 r = cl.exec('B', inp=MSG_A3[12:], interrupt_at=1)
 saved = (cl.mdh(), cl.export(), HART.klstart)
-cl.setst(KL_STATE_UNCONFIGURED)
+cl.setst(KL_STATE_INERT)
 HART.klstart = 0  # other software runs
 cl = Sha3.load(*saved[:2])
 HART.klstart = saved[2]
@@ -554,11 +552,11 @@ check('input operand, klstart = 250 > KLLEN/8: empty window, only klstart = 0',
       (cl.exec('B', inp=MSG_A3), (cl.state, cl.block_base), HART.klstart) == ('empty', snap, 0))
 HART.klstart = 100
 check('input klstart = 100, block_base = 32 (no interruption point): _Invalid_, klstart = 0',
-      (cl.exec('B', inp=MSG_A3), cl.st, HART.klstart) == ('invalid', KL_STATE_INVALID, 0))
+      (cl.exec('B', inp=MSG_A3), cl.st, HART.klstart) == ('invalid', KL_STATEEXT_INVALID, 0))
 check('the invalidated locker retains only its MDH (GR29)', (cl.state, cl.block_base) == (0, 0))
-check('kl.setst on the Error State locker: no operation (GR26)', cl.setst(KL_STATE_HASH_OUTPUT) == KL_STATE_INVALID)
+check('kl.setst on the Error State locker: no operation (GR26)', cl.setst(KL_STATE_HASH_OUTPUT) == KL_STATEEXT_INVALID)
 check('Form C kl.exec on it: no operation, output window zeroed (GR26, GR28)', None,
-      (squeeze(cl, 32, 0xee), cl.st), (('noop', bytes(32)), KL_STATE_INVALID))
+      (squeeze(cl, 32, 0xee), cl.st), (('noop', bytes(32)), KL_STATEEXT_INVALID))
 
 section('Suffix and padding')
 pat = bytes((7 * i + 3) & 0xff for i in range(256))
@@ -616,7 +614,7 @@ check('output only, klstart = 65 > KLLEN/8: empty window, only klstart = 0', Non
       (squeeze(cl, 64, 0xee), (cl.st, cl.state, cl.block_base), HART.klstart), (('empty', b'\xee' * 64), snap, 0))
 HART.klstart = 5
 check('output only, klstart = 5, block_base > 0 (no interruption point): _Invalid_, [5, 63] zeroed', None,
-      (squeeze(cl, 64, 0xee), cl.st, HART.klstart), (('invalid', b'\xee' * 5 + bytes(59)), KL_STATE_INVALID, 0))
+      (squeeze(cl, 64, 0xee), cl.st, HART.klstart), (('invalid', b'\xee' * 5 + bytes(59)), KL_STATEEXT_INVALID, 0))
 
 section('SHA3-n: _Success_ after t bits')
 cl = squeezing('SHA3-256', MSG_ABC)
@@ -637,7 +635,7 @@ check('64-B read of SHA3-384: returns at _Success_, bytes [48, 63] cleared', Non
 cl = squeezing('SHA3-256', MSG_ABC)
 squeeze(cl, 32)
 check('kl.exec in _Success_ -> _Invalid_, output zeroed (MR1, GR28)', None,
-      (squeeze(cl, 32, 0xee), cl.st), (('invalid', bytes(32)), KL_STATE_INVALID))
+      (squeeze(cl, 32, 0xee), cl.st), (('invalid', bytes(32)), KL_STATEEXT_INVALID))
 cl = squeezing('SHA3-256', b'')
 squeeze(cl, 32)
 ok = cl.setst(KL_STATE_READY) == KL_STATE_READY and (cl.state, cl.block_base) == (0, 0)
@@ -667,19 +665,19 @@ for label, name, prep, act in [
          lambda c: (squeeze(c, 28), c.setst(KL_STATE_HASH_ABSORB)))]:
     cl = prep(name)
     act(cl)
-    check(f'_Invalid_: {label}', cl.st == KL_STATE_INVALID)
+    check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID)
 cl = squeezing('SHA3-224', MSG_ABC)
 check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',
-      (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATE_INVALID))
-cl.setst(KL_STATE_UNCONFIGURED)
+      (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATEEXT_INVALID))
+cl.setst(KL_STATE_INERT)
 out = bytearray(b'\xaa' * 8)
 check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
       (cl.exec('C', out=out, sew=8), bytes(out), cl.setst(KL_STATE_READY))
-      == ('noop', bytes(8), KL_STATE_UNCONFIGURED))
+      == ('noop', bytes(8), KL_STATE_INERT))
 check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR18, GR26)',
-      (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_UNCONFIGURED))
-check('a reserved #immed7 (54, 55) raises illegal-instruction and changes nothing, also on an Unconfigured locker '
-      '(GR18)', (raises(cl.setst, 54), raises(cl.setst, 55), cl.st) == (True, True, KL_STATE_UNCONFIGURED))
+      (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_INERT))
+check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR26)',
+      (raises(cl.setst, 48), raises(cl.setst, 53), cl.st) == (False, False, KL_STATE_INERT))
 for mid in ('_Hash_Absorb_', '_Hash_Output_'):
     cl = absorbing('SHAKE128', MSG_A3[:50])
     if mid == '_Hash_Output_':
@@ -693,9 +691,9 @@ for mid in ('_Hash_Absorb_', '_Hash_Output_'):
 
 section('Provisioning Input and Serialized Content')
 check('PI = MDH only; kl.size of a PI MDH = 16',
-      len(make_pi('SHA3-256')) == 16 and kl_size(KL_STATE_UNCONFIGURED) == 16)
+      len(make_pi('SHA3-256')) == 16 and kl_size(KL_STATE_INERT) == 16)
 check('Serialized Content 1600 + 16 + 16 + 32 bits (out_len in Position iv) = 1664; kl.size 32 + 208; Error State 16',
-      (C1_BITS, kl_size(KL_STATE_HASH_ABSORB), kl_size(KL_STATE_INVALID)) == (1664, 240, 16))
+      (C1_BITS, kl_size(KL_STATE_HASH_ABSORB), kl_size(KL_STATEEXT_INVALID)) == (1664, 240, 16))
 cl = absorbing('SHA3-256', MSG_A3[:100])
 c1 = cl.export()
 check('layout: [0,199] state, [200,201] block_base = 800, [202,203] last_block_len = b = 1088, [204,207] out_len = 0',
@@ -726,7 +724,7 @@ check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of th
       '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
       '<<KLE-instruction-restrict>>)',
       None, (pol, absorbing('SHAKE128', MSG_ABC).restrictl(1).st, absorbing('SHAKE128', MSG_ABC).restrictl(0).st),
-      (KL_STATE_UNSUPPORTED, KL_STATE_INVALID, KL_STATE_HASH_ABSORB))
+      (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB))
 
 section('kl.derive')
 SEC, SEC66 = bytes(range(0x40, 0x60)), bytes(range(0x80, 0xc2))  # shared secrets: ML-KEM, P-521 sizes
@@ -746,31 +744,31 @@ src, dst = squeezing('SHAKE128', MSG_ABC), absorbing('SHA3-256', MSG_A3[:10])
 snap = (dst.state, dst.block_base)
 r = kl_derive(dst, src, 336)
 check('SHAKE128 output in _Hash_Output_ as a source (GR32 item 1): source _Invalid_, destination untouched',
-      (r, src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_ABSORB)
+      (r, src.st, dst.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB)
       and snap == (dst.state, dst.block_base))
 dst = absorbing('SHA3-256', MSG_ABC)
 dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
 check('shared secret into SHA3-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
-      (kl_derive(dst, Source(SEC), 32), dst.st) == ('invalid', KL_STATE_INVALID))
+      (kl_derive(dst, Source(SEC), 32), dst.st) == ('invalid', KL_STATEEXT_INVALID))
 src, dst = Source(bytes(range(16)), secret=False), absorbing('SHA3-256')
 check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR32 item 3), both _Invalid_',
-      (kl_derive(dst, src, 16), src.st, dst.st) == ('invalid', KL_STATE_INVALID, KL_STATE_INVALID))
+      (kl_derive(dst, src, 16), src.st, dst.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATEEXT_INVALID))
 src, dst = Source(SEC), absorbing('SHA3-512')
 HART.klstart = 8
 r = kl_derive(dst, src, 32)
 check('uninterruptible: klstart = 8 at issue (no resumption, GR32 item 5): destination _Invalid_, klstart = 0',
-      (r, dst.st, src.st, HART.klstart) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 0))
+      (r, dst.st, src.st, HART.klstart) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 0))
 res = []
 for length in (0, 31, 33):
     dst = absorbing('SHA3-224', MSG_ABC)
     res.append((kl_derive(dst, Source(SEC), length), dst.st))
 check('a 32-byte shared secret with length 0, 31 or 33 (GR32 item 5: exactly the secret, granularity 8 bits): '
-      'destination _Invalid_', None, res, [('invalid', KL_STATE_INVALID)] * 3)
+      'destination _Invalid_', None, res, [('invalid', KL_STATEEXT_INVALID)] * 3)
 src, dst = Source(SEC), squeezing('SHA3-224', MSG_ABC)
 squeeze(dst, 28)
 r = kl_derive(dst, src, 32)
 check('destination in _Success_ (GR32 item 2): _Invalid_, the source untouched',
-      (r, dst.st, src.st) == ('invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT))
+      (r, dst.st, src.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT))
 
 src, dst, s28, d28 = Source(SEC), KeyDest(16), Source(SEC[:28]), KeyDest(32)
 h, dh, cm, dc = squeezing('SHAKE128', MSG_ABC), KeyDest(16), Source(SEC[16:], secret=False), KeyDest(16)
@@ -779,7 +777,7 @@ check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte 
       'untouched; a CMAC -> a key (GR35): the CMAC', None,
       (kl_derive(dst, src, 32), dst.key, kl_derive(d28, s28, 32), d28.st, s28.st, kl_derive(dh, h, 16), h.st, dh.st,
        kl_derive(dc, cm, 16), dc.key),
-      ('done', SEC[:16], 'invalid', KL_STATE_INVALID, KL_STATE_HASH_OUTPUT, 'invalid', KL_STATE_INVALID,
+      ('done', SEC[:16], 'invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 'invalid', KL_STATEEXT_INVALID,
        KL_STATE_READY, 'done', SEC[16:]))
 
 section('Final piece of any bit length: _Hash_Absorb_Last_Block_ (NIST CAVP bit-oriented vectors)')
@@ -831,7 +829,7 @@ for label, prep, act in [
          lambda c: (setattr(HART, 'klstart', 1), c.exec('B', inp=b'\x01\x02')))]:
     cl = prep()
     act(cl)
-    check(f'_Invalid_: _Hash_Absorb_Last_Block_, {label}', cl.st == KL_STATE_INVALID)
+    check(f'_Invalid_: _Hash_Absorb_Last_Block_, {label}', cl.st == KL_STATEEXT_INVALID)
     HART.klstart = 0
 cl = last()
 check('_Hash_Absorb_Last_Block_ -> _Ready_ with the piece pending: restarts (abc)', None,
@@ -886,7 +884,7 @@ res = []
 for name, xs in (('SHA3-256', 264), ('SHA3-256', 12), ('SHAKE128', 12), ('SHAKE128', 1 << 32)):
     cl = absorbing(name, MSG_ABC)
     res.append(cl.setst(KL_STATE_HASH_OUTPUT, 'B', xs))
-check('bound: SHA3-256 Xs = t + 8 or 12, SHAKE128 Xs = 12 or 2^32 -> _Invalid_', None, res, [KL_STATE_INVALID] * 4)
+check('bound: SHA3-256 Xs = t + 8 or 12, SHAKE128 Xs = 12 or 2^32 -> _Invalid_', None, res, [KL_STATEEXT_INVALID] * 4)
 cl = absorbing('SHAKE256', MSG_ABC)
 cl.setst(KL_STATE_HASH_OUTPUT, 'B', 8 * 150)
 o1 = squeeze(cl, 100)[1]

@@ -11,7 +11,7 @@ from common import (b2v, v2b, sl, cat, bswap, bin_, bxor, aes_encrypt, aes_decry
                     KL_STATE_ENC_LAST_BLOCK as ENC_LAST, KL_STATE_DEC_LAST_BLOCK as DEC_LAST,
                     KL_STATE_ENC_TAG_FINALIZE as TAG_FIN, KL_STATE_SET_AUX_VALUE as SET_AUX,
                     KL_STATE_SUCCESS as SUCCESS, KL_STATE_FAILURE as FAILURE,
-                    KL_STATE_INVALID as INVALID, KL_STATE_EXPIRED as EXPIRED, ERROR_STATES,
+                    KL_STATEEXT_INVALID as INVALID, KL_STATEEXT_EXPIRED as EXPIRED, ERROR_STATES,
                     IllegalInstruction, raises,
                     section, check, control, info, done)
 
@@ -130,8 +130,6 @@ class Ocb:
         return s.L[i]
     def setst(s, immed, form='A', aux=0):
         if immed in ERROR_STATES:                      # GR30
-            if immed >= 54:
-                raise IllegalInstruction('reserved #immed7')   # GR18
             s._invalid()                               # GR29: Content cleared
             s.state = immed
             return
@@ -563,8 +561,8 @@ check("kl.exec in Ready -> Invalid (GR17); Content cleared (GR29); then no opera
 cl = Ocb(K128)
 cl.setst(EXPIRED)
 cx = Ocb(K128)
-check("kl.setst naming Expired -> Expired, Content cleared (GR30, GR29); reserved 54 raises illegal-instruction "
-      "(GR18)", True, (cl.state, cl.key, raises(cx.setst, 54), cx.state), (EXPIRED, None, True, READY))
+check("kl.setst naming Expired -> Expired, Content cleared (GR30, GR29); 48, which the Machine does not define, "
+      "-> Invalid", True, (cl.state, cl.key, raises(cx.setst, 48, exc=Invalid), cx.state), (EXPIRED, None, True, INVALID))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
     check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR65, MR1)",
