@@ -630,7 +630,8 @@ class Unit:
     def size_of(self, m, supplied, low=False):
         st = m['State']
         if not supplied and st == UNCONF: return 0
-        if st > 63: return 16                                       # State 0, StateExtension non-zero
+        if st > 63:                                                 # State 0, StateExtension non-zero
+            return 0 if supplied and 7 <= m['StateExtension'] <= 15 else 16
         if supplied and (st > 60 or self.unsupported(m) or self.invalid(m, 'size', low)): return 0
         mach = MACHINES[m['Machine']]
         if st in VALID or st in (IMP, EXP):
