@@ -387,7 +387,7 @@ class Memory:
     def read(self, a, n):
         return bytes(self.buf[a:a + n])
     def fault(self, a, n, kind):
-        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR54
+        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR55
             for lo, hi in rng:
                 if a < hi and a + n > lo: return f'{kind}_{what}_fault', max(a, lo)
 
@@ -410,7 +410,10 @@ class Locker:
 
 class Unit:
     IDS = (0xA11, 0x42, 0x7)                     # klmvendorid, klmarchid, klmimpid
-    RO_ID = ('klmvendorid', 'klmarchid', 'klmimpid', 'klmaxiobuflen')
+    RO_ID = ('klmvendorid', 'klmarchid', 'klmimpid', 'klmaxiobuflen')     # URO aliases of the M-mode registers
+    M_ID = {'mklmvendorid': 'vendorid', 'mklmarchid': 'archid', 'mklmimpid': 'impid',
+            'mklmaxiobuflen': 'klmaxiobuflen'}                             # MRW registers holding the values
+    MIN_IOBUF = 16                                                         # lower bound of klmaxiobuflen
     def __init__(self, zklv=True, zklio=True, zklmv=True, zklexpire=True, zklmem_hw=True,
                  priv=True, h_ext=True, maxiobuflen=256, clf_total=1 << 20, clock=0, csk=DEFAULT_CSK,
                  ids=None, hw_missing=(), **attrs):
@@ -566,11 +569,12 @@ class Unit:
     # -- CSRs
     def _csr(self, name):
         if name in ('kliobuflen', 'kliobuftop') and not self.zklio: raise Trap('illegal', 1)
+        if name in self.M_ID and self.mode != 'M': raise Trap('illegal', 1)
         self._pre(ro_id=name in self.RO_ID)
     def csr_read(self, name):
         self._csr(name)
         return {'klmvendorid': self.vendorid, 'klmarchid': self.archid, 'klmimpid': self.impid}.get(
-            name, getattr(self, name, None))
+            name, getattr(self, self.M_ID.get(name, name), None))
     def csrs(self, **kv):
         for name, v in kv.items():
             self.csr_write(name, v)
@@ -578,7 +582,15 @@ class Unit:
     def csr_write(self, name, v):
         self._csr(name)
         if name in self.RO_ID: raise Trap('illegal', 1)
-        if name == 'kliobuflen':
+        if name == 'mklmaxiobuflen':                                # WARL; no effect without Zklio
+            if self.zklio:
+                self.klmaxiobuflen = max(self.MIN_IOBUF, v)
+                if self.kliobuflen > self.klmaxiobuflen:
+                    self.kliobuflen = self.kliobuftop = self.klmaxiobuflen
+                    self.kliobuf = bytearray(self.kliobuflen)
+        elif name in self.M_ID:
+            setattr(self, self.M_ID[name], v)
+        elif name == 'kliobuflen':
             self.kliobuflen = self.kliobuftop = min(v, self.klmaxiobuflen)       # WARL; zeroes the buffer
             self.kliobuf = bytearray(self.kliobuflen)
         elif name == 'kliobuftop':
@@ -822,7 +834,7 @@ class Unit:
         cl = self.lockers[k]
         m = cl.mdh
         if imm == CLEAR_ADS:                                        # GR16: in every Valid State
-            if form != 'A':                                         # GR16: Form A only (GR65, MR1)
+            if form != 'A':                                         # GR16: Form A only (GR66, MR1)
                 self._enter_error(k, INVALID)
                 return 'invalid'
             m.update(AuxDataLen=0, ADSDropped=0)
@@ -836,7 +848,7 @@ class Unit:
             self._enter_error(k, INVALID)
             return 'invalid'
         mach = MACHINES[m['Machine']]
-        if imm == READY and form != 'A':                            # GR16: Form A (GR65)
+        if imm == READY and form != 'A':                            # GR16: Form A (GR66)
             self._enter_error(k, INVALID)
             return 'invalid'
         if imm == READY:                                            # GR16
@@ -861,7 +873,7 @@ class Unit:
         self.klnamedlocker = NONE
         return 'cleared all'
     def _usage_gate(self, k, needs_buf=False):
-        """GR24, GR26, GR15 items 1-5; a wrong Form is one of the Machine's rules (GR65)."""
+        """GR24, GR26, GR15 items 1-5; a wrong Form is one of the Machine's rules (GR66)."""
         m = self.lockers[k].mdh
         if m['State'] == UNCONF or m['State'] in ERROR_STATES: return 'noop'          # GR26
         if m['State'] in PARTIAL: return self._exc_config(k)
@@ -892,10 +904,10 @@ class Unit:
         m = cl.mdh
         mach = MACHINES.get(m['Machine'])
         want = mach.exec_form(m) if mach and m['State'] in VALID else None
-        sub = form == 'D' and want in ('A', 'B', 'C') and self.zklio   # without Zklio a wrong Form (GR66)
+        sub = form == 'D' and want in ('A', 'B', 'C') and self.zklio   # without Zklio a wrong Form (GR67)
         g = self._usage_gate(k, sub)
         if g: return stop(g)
-        if want is None or not (form == want or sub):              # GR17, GR16; a wrong Form (GR65, MR1)
+        if want is None or not (form == want or sub):              # GR17, GR16; a wrong Form (GR66, MR1)
             self._enter_error(k, INVALID)
             return stop('invalid')
         if m['State'] in mach.op_states and not m['MachinePolicy'] & mach.op_states[m['State']]:
@@ -1055,7 +1067,7 @@ class Unit:
                 return 'invalid'
         S, D = self.lockers[ks].mdh, self.lockers[kd].mdh
         se, de = SRC_EP.get(S['Machine']), DST_EP.get(D['Machine'])
-        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR32 items 1-2, GR71
+        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR32 items 1-2, GR72
               (kd, bool(de) and D['State'] in de[1] and not (de[0] == 'key' and D['KeyType'] == 1)))
         bad = [e for e, good in ok if not good] or ([] if de[0] in ADMITTED[se[1]] else [ks, kd])   # GR32 item 3
         if bad:
@@ -2375,7 +2387,7 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR54: access fault at the byte, prefix committed; restart option for interrupts only (GR40)',
+    eq('GR55: access fault at the byte, prefix committed; restart option for interrupts only (GR40)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()
@@ -2453,6 +2465,21 @@ def t_kliobuf():
             trap_of(u.csr_write, 'klmaxiobuflen', 5)],
        [[0, 0, 0, 32], 'illegal/2', 64, bytes(64), 64, 128, 128, b'\1\2\3\4', 0, 'illegal/1', 'illegal/1',
         'illegal/2', 'illegal/1'])
+    m, s_, n2 = Unit(), Unit(), Unit(zklio=False)
+    s_.mode = 'S'
+    v = [m.csr_read('mklmvendorid'), m.csr_read('mklmarchid'), m.csr_read('mklmimpid'), m.csr_read('mklmaxiobuflen')]
+    m.csr_write('mklmvendorid', 0x55); m.csr_write('mklmarchid', 0x66); m.csr_write('mklmimpid', 0x77)
+    m.csrs(kliobuflen=200)
+    m.csr_write('mklmaxiobuflen', 100)
+    w = [m.csr_read(c) for c in Unit.RO_ID] + [m.kliobuflen, m.kliobuftop]
+    m.csr_write('mklmaxiobuflen', 4)
+    w += [m.csr_read('klmaxiobuflen')]
+    n2.csr_write('mklmaxiobuflen', 64)
+    eq('mkl* registers: M-mode read/write, klm* aliases follow, WARL maxiobuflen, reduction clips kliobuflen, '
+       'illegal below M-mode, no effect without Zklio',
+       v + w + [trap_of(s_.csr_read, 'mklmimpid'), trap_of(s_.csr_write, 'mklmaxiobuflen', 32),
+                s_.csr_read('klmimpid'), n2.csr_read('mklmaxiobuflen'), n2.csr_read('klmaxiobuflen')],
+       [0xA11, 0x42, 0x7, 256, 0x55, 0x66, 0x77, 100, 100, 100, 16, 'illegal/1', 'illegal/1', 0x7, 0, 0])
     src = bytes(0x10 + 3 * i & 0xFF for i in range(64))
     u, mem = fresh().csrs(kliobuflen=64, kliobuftop=48), Memory(src)
     u.input_(mem, BASE, 64)
@@ -2546,7 +2573,7 @@ def t_sgr():
     w9, w10 = gated(), gated(mode='S')                    # KLIOBUF unconfigured: checked before UsagePolicy and expiry
     w1.setst(0, INVALID)
     eq('GR24, GR26, GR15: Error State > Configuration > KLIOBUF > UsagePolicy > expiry > Machine; a wrong Form, '
-       'a substitution without Zklio included, is one of the Machine\'s rules (GR66, GR65)',
+       'a substitution without Zklio included, is one of the Machine\'s rules (GR67, GR66)',
        [(ex(w1, 0), w1.getst(0)), trap_of(w2.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w3.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w4.exec_, 0, 'D'), (trap_of(ex, w5, 0), w5.getst(0)), (w6.exec_(0, 'D'), w6.getst(0)),
@@ -2558,15 +2585,15 @@ def t_sgr():
         'illegal/2', ('illegal/2', ToyCipher.ENCRYPT)])
     wf = [rc(), rc(), rc(unit=fresh(zklio=False))]
     eq('a wrong Form invalidates the locker, no exception: Form B or C kl.exec where Form A is native; a Form D '
-       'substitution without Zklio (GR66, GR65, MR1)',
+       'substitution without Zklio (GR67, GR66, MR1)',
        [(wf[0].exec_(0, 'B', vin=bytearray(16)), wf[0].getst(0)), (wf[1].exec_(0, 'C', vout=bytearray(16)),
          wf[1].getst(0)), (wf[2].exec_(0, 'D'), wf[2].getst(0))], [('invalid', INVALID)] * 3)
     wr = [rc(), rc()]
-    eq('GR16: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR65, MR1)',
+    eq('GR16: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR66, MR1)',
        [(wr[0].setst(0, READY, 1, form='B'), wr[0].getst(0)), (wr[1].setst(0, READY, form='C'), wr[1].getst(0))],
        [('invalid', INVALID)] * 2)
     wc = [rc(), rc()]
-    eq('GR16: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR65, MR1)',
+    eq('GR16: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR66, MR1)',
        [(wc[0].setst(0, CLEAR_ADS, 1, form='B'), wc[0].getst(0)), (wc[1].setst(0, CLEAR_ADS, form='C'),
          wc[1].getst(0))], [('invalid', INVALID)] * 2)
     rows = []

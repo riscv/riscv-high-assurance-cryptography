@@ -12,7 +12,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw past the bound of GR56
+TIMEOUT = object()                                  # an RBG draw past the bound of GR57
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -30,7 +30,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLE RBG-unavailable exception (GR56): random bits unavailable past the bound; State unchanged."""
+    """KLE RBG-unavailable exception (GR57): random bits unavailable past the bound; State unchanged."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
     """kl.setst targets (<<KLE-ECC>>, <<KLE-EdDSA>>, <<KLE-X25519-X448>>, GR16, GR17). A same-State kl.setst is
@@ -130,12 +130,12 @@ class Locker:
         if t != READY and not self._leads_enabled(t, xs):
             self._policy_gate()                                         # MR11 item 1.a, before the State is left
         if form == 'C':
-            raise Invalid('wrong Form: no Form C kl.setst is native')       # GR65
+            raise Invalid('wrong Form: no Form C kl.setst is native')       # GR66
         if form == 'A' and t in (SET_CTX, MSG_ABSORB):
-            raise Invalid('wrong Form: only Form B is native')         # GR65
+            raise Invalid('wrong Form: only Form B is native')         # GR66
         if (form or ('B' if xs or t in (SET_CTX, MSG_ABSORB) else 'A')) == 'B' and t not in (
                 SET_GEN, SET_SCALAR, READY, SET_CTX, MSG_ABSORB):
-            raise Invalid('wrong Form: only Form A is native')         # GR65
+            raise Invalid('wrong Form: only Form A is native')         # GR66
         if t == SET_HASH and not any(self.policy):
             raise Invalid('Hash exists only if signing or verification is allowed')   # MR11
         if t == SET_SIG and not self.policy[1]:
@@ -327,19 +327,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR56)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR57)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR56: KLE RBG-unavailable exception, State unchanged
+            if k is TIMEOUT:                        # GR57: KLE RBG-unavailable exception, State unchanged
                 self.rnd = entry[0]
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR56: RBG failure
+            if k is None:                           # GR57: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -812,13 +812,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR56)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR57)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR56)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR57)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))
@@ -860,10 +860,10 @@ check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR17, GR18)',
 check('MR20: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
       bool(invalid(locker(P256, (SET_SCALAR, D256), to=POINT_MUL).setst, OUTPUT)) and bool(invalid(armed().setst, OUTPUT)))
 check('a Form B kl.setst into _Set_Hash_, _Set_SecondPt_, _Sign_Input_ or _Point_Mul_ is a wrong Form '
-      '(only Form A is native): _Invalid_ (GR65)', True,
+      '(only Form A is native): _Invalid_ (GR66)', True,
       [invalid(locker(P256, (SET_SCALAR, D256)).setst, t, form='B') for t in (SET_HASH, SET_SECONDPT, SET_SIG, POINT_MUL)],
       [True] * 4)
-check('a Form C kl.setst naming _Ready_ is a wrong Form (Form A or B is native): _Invalid_ (GR16, GR65)',
+check('a Form C kl.setst naming _Ready_ is a wrong Form (Form A or B is native): _Invalid_ (GR16, GR66)',
       bool(invalid(locker(P256, (SET_SCALAR, D256)).setst, READY, form='C')))
 cr = Locker(P256)
 cr.setst(SET_GEN, 1)
@@ -1269,7 +1269,7 @@ fa = [invalid(locker(EC.ED25519, (SET_SCALAR, seed)).setst, SET_CTX, 0, form='A'
       invalid(locker(EC.ED25519, (SET_SCALAR, seed), (SET_CTX, b'', None, 0)).setst, MSG_ABSORB, 0, form='A')]
 fb = locker(EC.ED25519, (SET_SCALAR, seed))
 fb.setst(SET_CTX, 0, form='B'); fb.setst(MSG_ABSORB, 0, form='B')
-check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR65); Form B admitted', None,
+check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR66); Form B admitted', None,
       fa + [fb.state], [True, True, MSG_ABSORB])
 check('EdDSA: _MachinePolicy_ = 0 is invalid, at provisioning and as the result of kl.restrictl', None,
       [invalid(Locker, EC.ED25519, sign=False, verify=False),
@@ -1362,7 +1362,7 @@ def kl_derive(dest, src, length):
     if isinstance(dest, Locker) or dest.kind == 'none' \
             or dest.state != {'key': READY, 'k0': SET_KEY}.get(dest.kind, HASH_ABSORB) \
             or dest.kind != 'hash' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='destination')                            # GR32 item 2; GR71
+        raise Invalid(who='destination')                            # GR32 item 2; GR72
     sh = src.shared()                                               # GR32 item 3: every destination is admitted
     if dest.kind == 'hash':                                         # the whole secret, exactly (GR32 item 5)
         ok = length == len(sh)
@@ -1519,8 +1519,8 @@ for label, dest, src, n, who in (
         ('key destination outside _Ready_ (GR32 item 2)', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
         ('HMAC `K0` outside _Set_Key_ (GR32 item 2)', Dest('k0', READY, size=64), ecdh()[0], 32, 'destination'),
         ('key with length < key size (GR32 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
-        ('key of KeyType 1 (GR71)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
-        ('HMAC `K0` of KeyType 1 (GR71)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
+        ('key of KeyType 1 (GR72)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('HMAC `K0` of KeyType 1 (GR72)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
         ('ECC `Scalar` with length b/8 (GR32 item 2)', scalar_dest(), ecdh()[0], 32, 'destination'),
         ('ECC destination in _Ready_ (GR32 item 2)', scalar_dest(READY), ecdh()[0], 64, 'destination'),
         ('Machine without a destination endpoint (GR32 item 2)', Dest('none'), ecdh()[0], 64, 'destination')):

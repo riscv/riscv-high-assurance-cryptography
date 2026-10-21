@@ -215,7 +215,7 @@ class AEAD(Locker):
         Locker.__init__(self)
         self.__dict__.update(flags)
         self.policy, self.key = policy, key & M128
-        if skid is not None: self.key_type, self.skid = 1, skid  # GR71
+        if skid is not None: self.key_type, self.skid = 1, skid  # GR72
         self._enter_ready()
     def _clear(self): self.key, self.skid, self.s, self.tag_len, self.last_block_len = 0, None, [0] * 5, 0, 0
     def _layout(self):
@@ -330,7 +330,7 @@ class AEADMask(AEAD):
     def __init__(self, K1, K2, policy=0b11, skid=None): super().__init__(K1, policy, skid, K2=K2 & M128)
     def _clear(self): super()._clear(); self.K2 = 0
     def _nonce(self, N): return N ^ self.K2
-    def _system_keys(self, ent): self.key, self.K2 = ent          # GR71
+    def _system_keys(self, ent): self.key, self.K2 = ent          # GR72
     def derive_dest(self, data): self.key, self.K2 = b2v(data[:16]), b2v(data[16:]); self._enter_ready()
     def _layout(self):
         f = [('skid', 64), ('K2', 0)] if self.key_type else [('key', 128), ('K2', 128)]
@@ -480,7 +480,7 @@ def kl_derive(dst, src, length):
     states, n = dst.DST or ((), None)                             # no endpoint: offending locker only
     bad = [c for c, ok in ((src, src.st in (src.SRC or ())), (dst, dst.st in states and not (n and dst.key_type)))
            if not ok]
-    for c in bad: c.invalidate()                                  # GR32 items 1-2, GR71
+    for c in bad: c.invalidate()                                  # GR32 items 1-2, GR72
     if bad: return
     if not n and not src.SECRET or src.restricted and getattr(dst, 'NO_RESTRICTED', False):
         src.invalidate(); return dst.invalidate()                 # GR32 item 3: pair not admitted (endpoint table)
@@ -517,7 +517,7 @@ def provision(pi, sks=None):
         if pol:                                                   # unsupported Metadata (<<KLE-MVR-open>>):
             cc.invalidate(); cc.st = UNSUP                        # the handler sets _Unsupported_
         return cc
-    kw = 64 if kt else 128                                        # GR71
+    kw = 64 if kt else 128                                        # GR72
     k = sl(v, 127 + kw, 128)
     skid, ent = (k, (sks or {}).get(k)) if kt else (None, None)
     if mode == 0: cc = AEAD((ent or 0) if kt else k, pol, skid)
@@ -965,7 +965,7 @@ cc, ref_c = aead_to(ABSORB), aead_to(ABSORB)
 cc.exec('B', a, 256, halt_after=1); cc.exec('B', a, 256); ref_c.exec('B', a, 256)
 check('Form B over 2 AD blocks halted and resumed == uninterrupted', True, cc.s, ref_c.s)
 
-section('Serialized Content and provisioning (GR71)')
+section('Serialized Content and provisioning (GR72)')
 pi = build_pi(0, [(K, 128)], policy=0b11)
 res = [(ct + tag, cc.st) for cc, ct, tag in (aead_run(provision(pi), False, KAT_NONCE, h(ad), h(pt),
                                                       after=migrate(AEAD)) for _, ad, pt, _, _ in AEAD_KAT)]
@@ -978,7 +978,7 @@ check('Content1: key, state[0..4], last_block_len, tag_len; 480 bits padded to 6
 pi_s = build_pi(0, [(SKID_A, 64)], policy=0b11, key_type=1)
 img = provision(pi_s, SKS).export(); c1 = b2v(img[1])
 check('SKID: PI = MDH, SKID (256 bits); Content1 SKID in 64 bits, then a zero state in _Ready_: no system key in the '
-      'SCC (GR71) (416 bits, 64 bytes); migrated: Count=579', True, (len(pi_s), len(img[1]), sl(c1, 63, 0), sl(c1, 383, 64),
+      'SCC (GR72) (416 bits, 64 bytes); migrated: Count=579', True, (len(pi_s), len(img[1]), sl(c1, 63, 0), sl(c1, 383, 64),
                                     seal(provision(pi_s, SKS), after=migrate(AEAD, SKS))),
       (32, 64, SKID_A, 0, blob579))
 check('an unresolved SKID -> _Invalid_ on import and on provisioning (<<KLE-MVR-open>>)', True,
@@ -1024,7 +1024,7 @@ check('Content1: K1, K2, state[0..4], last_block_len, tag_len; 608 bits padded t
 pi_s = build_pi(2, [(SKID_M, 64)], policy=0b11, key_type=1)
 cc = provision(pi_s, SKS)
 img = cc.export()[1]; c1 = b2v(img)
-check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR71: '
+check('SKID: PI = MDH, SKID (256 bits); Content1 = SKID, state, lengths (64 bytes), state[0] at bit 64; GR72: '
       'one SKID yields K1 and K2, migrated', True,
       (len(pi_s), len(img), sl(c1, 63, 0), sl(c1, 127, 64), seal(cc, after=migrate(AEADMask, SKS))),
       (32, 64, SKID_M, provision(pi_s, SKS).s[0], ref579(K1, Nm)))
@@ -1293,7 +1293,7 @@ for dst, src, length in ((aead_to(ABSORB), sec, 16), (AEAD(K, skid=SKID_A), sec,
                          (provision(build_pi(2, [(SKID_M, 64)], policy=0b11, key_type=1), SKS), sec, 32)):
     kl_derive(dst, Secret(src, restricted=not isinstance(dst, AEADMask)), length)
     res.append((dst.st, dst.key, dst.s))
-check('key destination not in _Ready_ (GR32 item 2), _KeyType_ = 1 (GR71), length 8, 15, 0 < 16, 12-byte source, '
+check('key destination not in _Ready_ (GR32 item 2), _KeyType_ = 1 (GR72), length 8, 15, 0 < 16, 12-byte source, '
       '16 B into the 32-byte `K1 || K2` (GR32 item 5): destination _Invalid_, no key', True, res,
       [(INVALID, 0, [0] * 5)] * 10)
 res = []

@@ -187,7 +187,7 @@ def provision_blocks(sec, K, S):
 
 
 def make_pi(sec, xof, K, S, skid=None, keytype=None, policy=None):
-    """PI; with a SKID (_KeyType_ = 1, GR71) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
+    """PI; with a SKID (_KeyType_ = 1, GR72) Pos. iii is the 64-bit SKID (b/8 + 8 is a multiple of 16); with
     _KeyType_ = 2 it has the layout of _KeyType_ = 0, and the unit replaces its key_block."""
     policy = (0 if xof else 0b11) if policy is None else policy     # KMACXOF: no _MachinePolicy_
     kt = int(skid is not None) if keytype is None else keytype
@@ -285,7 +285,7 @@ class Kmac:
             v >>= w
         self.state, self.block_base, self.last_block_len, self.L, self.cb, key = vals
         if self.keytype:
-            self._resolve(key)                                           # GR72: SKID resolved after import
+            self._resolve(key)                                           # GR73: SKID resolved after import
         else:
             self.kb = key
         bad_base = self.block_base > (self.t if self.st == SUCCESS else self.b - 1)

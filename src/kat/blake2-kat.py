@@ -539,7 +539,7 @@ for v in VARIANTS:
           sizes == [-(-(n + 128 + b) // 128) * 16, -(-(64 + n + 128 + b) // 128) * 16]
           and img[:8] == v2b(SKID, 8) and img[8 + n // 8 + 4:8 + n // 8 + 8] == v2b(nnmax, 2) + v2b(9, 2))
     part = Blake2(v, sks=sks).provision(1, SKID).setst(ABSORB).exec(b'ab').export()[1]
-    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR71)',
+    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR72)',
           img[8 + n // 8 + 16:][:b // 8] == bytes(b // 8)
           and part[8 + n // 8 + 16:][:b // 8] == b'ab' + bytes(b // 8 - 2))
 
@@ -604,7 +604,7 @@ for v in VARIANTS:
                 [sk[:8] in c.export()[1][8:] for c in (new(), c1, c2, c3, c4)]))
 check('system key: no Content holds a system-key byte, with the key block pending (after the kl.setst into '
       '_Hash_Absorb_, after an empty window, in _Hash_Absorb_Last_Block_ before its piece; cumul_len = 0), after a '
-      'halt of the first absorbing kl.exec, or after 2 B (<<KLE-BLAKE2>>, GR71)', None, res,
+      'halt of the first absorbing kl.exec, or after 2 B (<<KLE-BLAKE2>>, GR72)', None, res,
       [(True, 0, 0, [False] * 5)] * 2)
 res = []
 for v in VARIANTS:
