@@ -110,12 +110,12 @@ class Locker:
     def machine_use(self):              # <<KLE-ECC-MachineUse>>
         return self.out_type | self.progress << 2
 
-    def discard(self):                  # MR6; also kl.clearads, an import without Content2, a kl.clone copy (GR52)
+    def discard(self):                  # MR6; also kl.clearads, an import without Content2, a kl.clone copy (GR49)
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR50)."""
+        """Precise halt of the current long-running kl.exec (GR48)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':

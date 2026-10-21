@@ -212,7 +212,7 @@ class MLDSALocker:
             setattr(new, f, getattr(self, f))
         new.kappa = self.kappa if content2 else 0
         if not content2:
-            new.use, new.rnd = 0, bytes(32)        # GR52, MR6: a restart zeroes P and destroys rnd
+            new.use, new.rnd = 0, bytes(32)        # GR49, MR6: a restart zeroes P and destroys rnd
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
             new.invalid()                          # MR13: the privkey check on import
         return new
@@ -643,12 +643,12 @@ def t_progress():
     cc.exec_D(halt_after=2)
     a, b = cc.export_import(), cc.export_import()
     check('export/import with Content2 of a halted _Sign_Generate_, into two lockers: both resume to the same '
-          'signature, one draw (GR52)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
+          'signature, one draw (GR48)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
           and rbg.draws == 1)
     cc, rbg = armed()
     cc.exec_D(halt_after=2)
     r = cc.export_import(content2=False)
-    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR52, MR6)',
+    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR49, MR6)',
           r.state == SIGN_GEN and r.use == 0 and r.rnd == bytes(32) and r.kappa == 0)
     finish(r)
     check('the restarted operation draws a fresh rnd and signs with it', rbg.draws == 2 and r.signature
