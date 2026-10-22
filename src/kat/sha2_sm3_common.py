@@ -42,7 +42,7 @@ class MdHash:
     def iv_state(s):
         return s.to_state(s.iv)
 
-    def reset(s, st=KL_STATEEXT_INVALID):  # GR29 for an Error State
+    def reset(s, st=KL_STATEEXT_INVALID):  # GR35 for an Error State
         s.st, s.state, s.block, s.block_base = st, 0, 0, 0
         s.cumul_len = s.last_block_len = s.out_len = 0
         if st == KL_STATE_READY:
@@ -86,14 +86,14 @@ class MdHash:
             if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
-            pass  # GR26
-        elif immed == KL_STATE_READY and form == 'A':  # GR14: Form A
+            pass  # GR32
+        elif immed == KL_STATE_READY and form == 'A':  # GR22: Form A
             s.reset(KL_STATE_READY)
         elif (s.st, immed, form) == (KL_STATE_READY, KL_STATE_HASH_ABSORB, 'A'):
             s.st, s.last_block_len = immed, s.b  # Form A; last_block_len <- b (<<KLE-hash-functions-MACs-XOFs>>)
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
                 form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # any bit length, MSB-first (MR16, second bullet); Form A keeps b
+            s.st = immed  # any bit length, MSB-first (MR14, second bullet); Form A keeps b
             if form == 'B':
                 s.last_block_len = xs
         elif immed == KL_STATE_HASH_OUTPUT and form in 'AB' and (
@@ -104,12 +104,12 @@ class MdHash:
             s.finalize()
             s.st, s.block_base, s.last_block_len, s.out_len = immed, 0, 0, x or s.t
         else:
-            s.reset()  # MR1; no same-State kl.setst (GR12); _Ready_ -> _Hash_Output_
+            s.reset()  # GR21; no same-State kl.setst (GR20); _Ready_ -> _Hash_Output_
 
     def exec(s, form, data=b'', nbytes=0, halt=False, resume=False, prior=None):
         """kl.exec Form B (data) or C (nbytes); returns (status, output)."""
         if inert(s.st):
-            return 'noop', bytes(nbytes)  # GR26, GR28
+            return 'noop', bytes(nbytes)  # GR32, GR34
         if s.st == KL_STATE_HASH_OUTPUT and form == 'C':
             p, prior = HART.klstart, prior or bytes(nbytes)
             if p >= nbytes:
@@ -118,18 +118,18 @@ class MdHash:
             if p and s.block_base:  # not an interruption point (<<KLE-hash-functions-MACs-XOFs>>)
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR28
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR34
             return 'retired', s.output(nbytes, prior)
         if s.st == KL_STATE_HASH_LAST_BLOCK and form == 'B':
             L, p = s.last_block_len, HART.klstart if resume else 0
-            if 8 * len(data) < L:  # MR2 / GR45 item 1: length first
+            if 8 * len(data) < L:  # MR1 / GR51 item 1: length first
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)
             if p >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR45 item 2
-            if p or not L:  # interruption point 0 only (MR3, GR45 item 3); MR10
+                return 'empty', bytes(nbytes)  # GR51 item 2
+            if p or not L:  # interruption point 0 only (MR2, GR51 item 3); MR8
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)
@@ -143,12 +143,12 @@ class MdHash:
             return 'retired', bytes(nbytes)
         if resume and s.st == KL_STATE_HASH_ABSORB and form == 'B' and HART.klstart >= len(data):
             HART.klstart = 0
-            return 'empty', bytes(nbytes)  # GR45 item 2, before item 3
+            return 'empty', bytes(nbytes)  # GR51 item 2, before item 3
         if resume and HART.klstart and s.block_base:
             r, HART.klstart = 'invalid', 0  # not an interruption point (<<KLE-process-VLI>>)
         else:
             r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
-                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR12 item 1, MR1
+                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR20 item 1, GR21
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -202,36 +202,36 @@ class KeyDest:
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
-    ML-KEM `sharedkey`, GR35) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR36).  A hash in
+    ML-KEM `sharedkey`, GR41) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR42).  A hash in
     _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
     def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
-    """A Source -> the _Hash_Absorb_ kl.exec input (GR35: a shared secret only) or a KeyDest (GR35, GR36);
-    uninterruptible (GR39)."""
+    """A Source -> the _Hash_Absorb_ kl.exec input (GR41: a shared secret only) or a KeyDest (GR41, GR42);
+    uninterruptible (GR45)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
-        return 'noop'  # GR26: an inert endpoint
+        return 'noop'  # GR32: an inert endpoint
     key = isinstance(dst, KeyDest)
     bad = [c for c, ok in ((src, isinstance(src, Source)),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # GR33 items 1-2
-    pos, HART.klstart = HART.klstart, 0  # uninterruptible (GR39): no resumption
+        c.reset()  # GR39 items 1-2
+    pos, HART.klstart = HART.klstart, 0  # uninterruptible (GR45): no resumption
     if bad:
         return 'refused'
     if not (key or src.secret):
-        src.reset()  # GR33 item 3: both
+        src.reset()  # GR39 item 3: both
         dst.reset()
         return 'refused'
     n = len(src.data)
-    if pos or (min(length, n) < dst.n if key else length != n):  # GR33 item 5: the whole secret, exactly
+    if pos or (min(length, n) < dst.n if key else length != n):  # GR39 item 5: the whole secret, exactly
         dst.reset()
         return 'refused'
     if key:
         dst.key = src.data[:dst.n]
     else:
-        dst.exec('B', src.data)  # GR35: the whole secret (GR33 item 5)
+        dst.exec('B', src.data)  # GR41: the whole secret (GR39 item 5)
     return 'done'
 
 # ---------------------------------------------------------------- drivers

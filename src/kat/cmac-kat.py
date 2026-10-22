@@ -71,7 +71,7 @@ class Cmac:
         s.hash = s.last_block_len = s.tag_len = 0
         s.absorbed_any = s.absorbed_all = False
     def _invalid(s, why=None):
-        s.state, s.key, s.skid = INVALID, None, None   # GR29
+        s.state, s.key, s.skid = INVALID, None, None   # GR35
         s._ready()
         if why:
             raise Invalid(why)
@@ -82,22 +82,22 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L, s.b)
         return L, K1, s.nc['dbl'](K1, s.b)
-    # (immed, Form) -> States it is allowed from; no same-State kl.setst (GR12): no State loads a field (MR9)
+    # (immed, Form) -> States it is allowed from; no same-State kl.setst (GR20): no State loads a field (MR7)
     SETST = {(ABSORB, 'A'): (READY,), (LAST, 'B'): (ABSORB,),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
-        if immed == UNCONF or immed in ERROR_STATES:  # kl.clear, GR30: in every State and Form
+        if immed == UNCONF or immed in ERROR_STATES:  # kl.clear, GR36: in every State and Form
             if s.state != UNCONF or immed:
-                s.state, s.key, s.skid = immed, None, None  # GR29
+                s.state, s.key, s.skid = immed, None, None  # GR35
                 s._ready()
             return
-        if inert(s.state):                        # GR26
+        if inert(s.state):                        # GR32
             return
-        if immed == READY and form == 'A':        # GR14: Form A
+        if immed == READY and form == 'A':        # GR22: Form A
             s.state = READY
             return s._ready()
         if s.state not in s.SETST.get((immed, form), ()):
-            s._invalid('transition')              # MR1, GR14
+            s._invalid('transition')              # GR21, GR22
         if immed == LAST:
             if aux > s.b or aux % 8:
                 s._invalid('Xs')
@@ -107,7 +107,7 @@ class Cmac:
                     s._invalid('Xs = 0 after a block')  # whole blocks end with a full last block
                 s.hash, s.absorbed_all = s.enc(s.hash ^ cat((0, s.b - 8), (0x80, 8)) ^ s.gen_subkeys()[2]), True
         elif immed in (OUTPUT, VERIFY) and not s.policy & (1 if immed == OUTPUT else 2):
-            s._invalid('MachinePolicy')           # MR11: generation, resp. verification, not permitted
+            s._invalid('MachinePolicy')           # MR9: generation, resp. verification, not permitted
         elif immed in (OUTPUT, VERIFY) and not s.absorbed_all:
             s._invalid('last block not absorbed')  # entering _Hash_Output_ or _Hash_Verify_
         elif immed == VERIFY:
@@ -115,54 +115,54 @@ class Cmac:
                 s._invalid('tag_len')
             s.tag_len = min(aux, s.b)
         s.state = immed
-    def restrictl(s, clear):                      # kl.restrictl clearing _MachinePolicy_ bits (GR17)
+    def restrictl(s, clear):                      # kl.restrictl clearing _MachinePolicy_ bits (GR25)
         if inert(s.state):
             return
         s.policy &= ~clear
         if not s.policy:
-            s._invalid('GR17: _MachinePolicy_ = 0, which the Machine forbids')
+            s._invalid('GR25: _MachinePolicy_ = 0, which the Machine forbids')
     def exec(s, form, INPUT=0, klen=None, klstart=0):
         klen = s.b if klen is None else klen
         st = s.state
-        if inert(st):                             # GR26, GR28
+        if inert(st):                             # GR32, GR34
             return 0
         if (st, s.policy & (1 if st == OUTPUT else 2)) in ((OUTPUT, 0), (VERIFY, 0)):
-            s._invalid('MR11, GR17: the operation of the State is disabled')
+            s._invalid('MR9, GR25: the operation of the State is disabled')
         if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD', VERIFY: 'BD'}.get(st) or ''):
-            s._invalid('Form')                    # MR1, GR12, GR14
+            s._invalid('Form')                    # GR21, GR20, GR22
         short = (st == ABSORB and klen % s.b or st == LAST and klen < s.last_block_len
                  or st == OUTPUT and klen < 64 or st == VERIFY and klen < s.tag_len)
         if not short and 8 * klstart >= klen:
-            return 0                              # GR45 item 2: an empty window does not reach the Machine
+            return 0                              # GR51 item 2: an empty window does not reach the Machine
         if not short and klstart and (st != ABSORB or 8 * klstart % s.b):
-            s._invalid('GR45 item 3')             # MR3: block offsets in _Hash_Absorb_, 0 elsewhere
+            s._invalid('GR51 item 3')             # MR2: block offsets in _Hash_Absorb_, 0 elsewhere
         if st == ABSORB:
             if klen % s.b:
-                s._invalid('MR2')
-            pos = range(8 * klstart, klen, s.b)     # MR3: a resumption skips the blocks done
+                s._invalid('MR1')
+            pos = range(8 * klstart, klen, s.b)     # MR2: a resumption skips the blocks done
             for i in (reversed(pos) if s.nc['msb_first'] else pos):
                 s.hash = s.enc(s.hash ^ sl(INPUT, i + s.b - 1, i))
                 s.absorbed_any = True
             return 0
         if st == OUTPUT:
             if klen < 64:
-                s._invalid('MR2: a tag of fewer than 64 bits')
+                s._invalid('MR1: a tag of fewer than 64 bits')
             s.state = SUCCESS
-            return s.hash & ((1 << klen) - 1)     # MR8: the bits beyond b are cleared
-        if st == VERIFY:                          # MR14: constant-time compare of the first tag_len bits
+            return s.hash & ((1 << klen) - 1)     # MR6: the bits beyond b are cleared
+        if st == VERIFY:                          # MR12: constant-time compare of the first tag_len bits
             n = s.tag_len
             if klen < n:
-                s._invalid('KLLEN < tag_len')     # MR2
+                s._invalid('KLLEN < tag_len')     # MR1
             s.state = SUCCESS if sl(INPUT, n - 1, 0) == sl(s.hash, n - 1, 0) else FAILURE
             return 0
         n = s.last_block_len
         if klen < n:
-            s._invalid('KLLEN < last_block_len')  # MR2, GR45 item 1
+            s._invalid('KLLEN < last_block_len')  # MR1, GR51 item 1
         if klen == 0:
-            return 0                              # GR45 item 2: an empty window does not reach the Machine
+            return 0                              # GR51 item 2: an empty window does not reach the Machine
         if s.absorbed_all:
             s._invalid('second last block')
-        INPUT = sl(INPUT, s.b - 1, 0)               # MR7
+        INPUT = sl(INPUT, s.b - 1, 0)               # MR5
         _, K1, K2 = s.gen_subkeys()
         if n == s.b:
             tmp = INPUT ^ (K2 if s.nc['k2full'] else K1)
@@ -187,24 +187,24 @@ class Cmac:
         return new
 
 class Keystream(bytes):
-    """The keystream that a Keystream generation locker in _Operate_ supplies (GR36)."""
+    """The keystream that a Keystream generation locker in _Operate_ supplies (GR42)."""
 
 def derive(src, dst, length):
-    """kl.derive; src is a Cmac locker, a Keystream, or the bytes of a GR35/GR36 source.
-    Endpoints: `hash` in Hash_Output (GR36 source, b/8 bytes); `key` in Ready (destination)."""
+    """kl.derive; src is a Cmac locker, a Keystream, or the bytes of a GR41/GR42 source.
+    Endpoints: `hash` in Hash_Output (GR42 source, b/8 bytes); `key` in Ready (destination)."""
     lockers = [c for c in (src, dst) if isinstance(c, Cmac)]
     if any(inert(c.state) for c in lockers):
-        return                                    # GR26: an inert endpoint
+        return                                    # GR32: an inert endpoint
     if isinstance(src, Cmac) and src.state == OUTPUT and not src.policy & 1:
-        src._invalid('MR11: generation disabled')
+        src._invalid('MR9: generation disabled')
     if isinstance(src, Cmac) and src.state != OUTPUT:
-        src._invalid('GR33 item 1')
+        src._invalid('GR39 item 1')
     if dst.state != READY or dst.skid is not None:
-        dst._invalid('GR33 item 2')               # the kl.exec input is no destination; GR72
-    # GR33 item 3 holds: GR35-GR36 admit every source here into a key
+        dst._invalid('GR39 item 2')               # the kl.exec input is no destination; GR74
+    # GR39 item 3 holds: GR41-GR42 admit every source here into a key
     avail = src.b // 8 if isinstance(src, Cmac) else len(src)
     if length < len(dst.key) or avail < len(dst.key):
-        dst._invalid('GR33 item 5')
+        dst._invalid('GR39 item 5')
     data = v2b(src.exec('C'), avail) if isinstance(src, Cmac) else src
     dst.key = data[:len(dst.key)]
 
@@ -285,7 +285,7 @@ def verified(K, M, t, tag_len=B, form='B'):
 for lab, K, M, W in VEC:
     for name, got, want in (
             ("REF", ref_cmac(K, M)[0], W), ("one block per kl.exec", tag(K, M), W),
-            ("multi-block kl.exec, KLLEN 2b, filler ignored (MR3, MR7, MR8)",
+            ("multi-block kl.exec, KLLEN 2b, filler ignored (MR2, MR5, MR6)",
              v2b(run(K, M, per_exec=0, junk=True).exec('C', klen=2 * B), 32), W + bytes(16)),
             ("#hash_verify: Success, filler ignored; tampered: Failure",
              [verified(K, M, b2v(W) | junk_above(B)), verified(K, M, b2v(W) ^ 1 << 7)],
@@ -313,7 +313,7 @@ for lab, K, M, W in (v for v in VEC if not v[2]):
         pass
     st = ce.state
     check(f"{lab}: after Xs = 0, a kl.exec with KLLEN = 0 is an empty window that does not reach the Machine "
-          "(GR45 item 2): _Hash_Absorb_Last_Block_ kept, the tag unchanged", True,
+          "(GR51 item 2): _Hash_Absorb_Last_Block_ kept, the tag unchanged", True,
           (st, st == LAST and (ce.setst(OUTPUT) or v2b(ce.exec('C'), 16))), (LAST, W))
 
 section("Form B kl.setst #hash_last_block: Xs")
@@ -356,7 +356,7 @@ def last_set():
 at_last = lambda: run(K128, MSG[:40], to=None)
 at_verify = lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(at_last())
 INVALID_CASES = [
-    ("kl.exec in Ready (GR12)", lambda: Cmac(K128), lambda c: c.exec('B')),
+    ("kl.exec in Ready (GR20)", lambda: Cmac(K128), lambda c: c.exec('B')),
     ("kl.setst #hash_last_block from Ready", lambda: Cmac(K128), lambda c: c.setst(LAST, 'B', 0)),
     ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'B', B)),
     ("kl.setst #hash_output before the last block is absorbed", last_set, lambda c: c.setst(OUTPUT)),
@@ -367,36 +367,36 @@ INVALID_CASES = [
     ("kl.setst #hash_verify of Form C", at_last, lambda c: c.setst(VERIFY, 'C', B)),
     ("Xs = 0 after a block was absorbed: not a CMAC of any message", lambda: (lambda c: (c.exec('B', 0), c)[1])(at_absorb()),
      lambda c: c.setst(LAST, 'B', 0)),
-    ("same-State kl.setst #hash_verify (GR12)", at_verify, lambda c: c.setst(VERIFY, 'B', 64)),
-    ("kl.setst #hash_output with MachinePolicy = 2 (verify only, MR11)",
+    ("same-State kl.setst #hash_verify (GR20)", at_verify, lambda c: c.setst(VERIFY, 'B', 64)),
+    ("kl.setst #hash_output with MachinePolicy = 2 (verify only, MR9)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=2)), lambda c: c.setst(OUTPUT)),
-    ("kl.setst #hash_verify with MachinePolicy = 1 (generate only, MR11)",
+    ("kl.setst #hash_verify with MachinePolicy = 1 (generate only, MR9)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=1)), lambda c: c.setst(VERIFY, 'B', B)),
-    ("same-State kl.setst #hash_last_block after the last block (GR12)", at_last, lambda c: c.setst(LAST, 'B', 0)),
-    ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR12)", last_set,
+    ("same-State kl.setst #hash_last_block after the last block (GR20)", at_last, lambda c: c.setst(LAST, 'B', 0)),
+    ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR20)", last_set,
      lambda c: c.setst(LAST, 'B', 64)),
-    ("same-State kl.setst #hash_absorb (GR12)", at_absorb, lambda c: c.setst(ABSORB)),
-    ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR2)", at_verify, lambda c: c.exec('B', 0, 64)),
+    ("same-State kl.setst #hash_absorb (GR20)", at_absorb, lambda c: c.setst(ABSORB)),
+    ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR1)", at_verify, lambda c: c.exec('B', 0, 64)),
     ("kl.exec Form C in Hash_Verify", at_verify, lambda c: c.exec('C')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.exec Form C in Hash_Absorb", at_absorb, lambda c: c.exec('C')),
-    ("KLLEN = 64 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 64)),
-    ("KLLEN = 136 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 136)),
-    ("KLLEN = 200 in Hash_Absorb (MR2)", at_absorb, lambda c: c.exec('B', 0, 200)),
+    ("KLLEN = 64 in Hash_Absorb (MR1)", at_absorb, lambda c: c.exec('B', 0, 64)),
+    ("KLLEN = 136 in Hash_Absorb (MR1)", at_absorb, lambda c: c.exec('B', 0, 136)),
+    ("KLLEN = 200 in Hash_Absorb (MR1)", at_absorb, lambda c: c.exec('B', 0, 200)),
     ("KLLEN = 56 < last_block_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
     ("second kl.exec after the last block", at_last, lambda c: c.exec('B', 0, 64)),
-    ("second tag kl.exec, in Success (GR14)", done_ok, lambda c: c.exec('C')),
-    ("kl.setst #hash_absorb in Success (GR14)", done_ok, lambda c: c.setst(ABSORB)),
-    ("kl.setst #hash_absorb in Failure (GR14)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
-    ("same-State kl.setst #hash_output (GR12)", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
-    ("Form B kl.setst naming Ready (GR14, GR66)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
+    ("second tag kl.exec, in Success (GR22)", done_ok, lambda c: c.exec('C')),
+    ("kl.setst #hash_absorb in Success (GR22)", done_ok, lambda c: c.setst(ABSORB)),
+    ("kl.setst #hash_absorb in Failure (GR22)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
+    ("same-State kl.setst #hash_output (GR20)", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("Form B kl.setst naming Ready (GR22, GR12)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
 ]
 for name, mk, act in INVALID_CASES:
     cl = mk()
     check(f"{name} -> Invalid", raises(act, cl, exc=Invalid) and cl.state == INVALID)
 cl = Cmac(K128)
 raises(cl.exec, 'B', exc=Invalid)
-check("Error State: Content cleared (GR29); kl.exec no operation, OUTPUT 0 (GR26, GR28)", True,
+check("Error State: Content cleared (GR35); kl.exec no operation, OUTPUT 0 (GR32, GR34)", True,
       (cl.key, cl.hash, cl.exec('C'), cl.state), (None, 0, 0, INVALID))
 subst = all(tag(K, M, subst=True) == W for _, K, M, W in VEC)
 check("Form D kl.exec substitutions, verification included: all vectors",
@@ -420,13 +420,13 @@ check("truncated tags (SP 800-38B MSB_Tlen = the first bytes): 64 and 96 bits ve
 check("_Hash_Output_ with KLLEN 64 and 96 emits the first 8, resp. 12, bytes (SP 800-38B MSB_Tlen)", True,
       [v2b(run(K128, MSG[:40]).exec('C', klen=n), n // 8) for n in (64, 96)], [W4[:8], W4[:12]])
 cl = run(K128, MSG[:40])
-check("_Hash_Output_ with KLLEN = 32 < 64 (MR2) -> Invalid", True, (raises(cl.exec, 'C', 0, 32, exc=Invalid), cl.state),
+check("_Hash_Output_ with KLLEN = 32 < 64 (MR1) -> Invalid", True, (raises(cl.exec, 'C', 0, 32, exc=Invalid), cl.state),
       (True, INVALID))
 for name, mk in (("Success", done_ok), ("Failure", lambda: done_ok(0)),
                  ("Hash_Absorb", at_absorb)):
     cl = mk()
     cl.setst(READY)
-    check(f"kl.setst #ready from {name}, then ex4 (GR14)", True, tag(None, MSG[:40], cl=cl), W4)
+    check(f"kl.setst #ready from {name}, then ex4 (GR22)", True, tag(None, MSG[:40], cl=cl), W4)
 
 cl = run(K128, MSG[:40]); cl.restrictl(1)
 src, dst = run(K128, MSG[:40]), Cmac(bytes(16)); src.restrictl(1)
@@ -434,7 +434,7 @@ cv = run(K128, MSG[:40], to=None); cv.restrictl(1); cv.setst(VERIFY, 'B', B); cv
 cz = run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=2)); raises(cz.restrictl, 2, exc=Invalid)
 check("kl.restrictl clearing bit 0 (3 -> 2) in _Hash_Output_: the tag kl.exec -> Invalid, OUTPUT 0; as a kl.derive "
       "source -> only the source Invalid; in _Hash_Absorb_Last_Block_ verification still succeeds; clearing the only "
-      "set bit -> _MachinePolicy_ = 0 -> Invalid at once (GR17, MR11)", True,
+      "set bit -> _MachinePolicy_ = 0 -> Invalid at once (GR25, MR9)", True,
       (raises(cl.exec, 'C', exc=Invalid), cl.state, raises(derive, src, dst, 16, exc=Invalid), src.state, dst.state,
        cv.state, cz.state), (True, INVALID, True, INVALID, READY, SUCCESS, INVALID))
 
@@ -446,15 +446,15 @@ cd = last_set(); raises(cd.exec, 'B', b2v(MSG[:16]), B, 1, exc=Invalid)
 ce = Kx(); ce.setst(OUTPUT); e = ce.exec('C', klen=B, klstart=16)
 cf = Kx(); cf.setst(OUTPUT); raises(cf.exec, 'C', 0, B, 1, exc=Invalid)
 cg = Kx(); cg.setst(VERIFY, 'B', B); raises(cg.exec, 'B', b2v(W4), B, 1, exc=Invalid)
-check("klstart: a resumption in _Hash_Absorb_ at a block offset skips the blocks done (MR3); klstart = 1 in "
+check("klstart: a resumption in _Hash_Absorb_ at a block offset skips the blocks done (MR2); klstart = 1 in "
       "_Hash_Absorb_, and klstart != 0 in _Hash_Absorb_Last_Block_, _Hash_Output_ and _Hash_Verify_, is no "
-      "interruption point (MR3, GR45 item 3) -> Invalid; klstart = KLLEN/8 is an empty window (GR45 item 2)", True,
+      "interruption point (MR2, GR51 item 3) -> Invalid; klstart = KLLEN/8 is an empty window (GR51 item 2)", True,
       (v2b(cb.exec('C'), 16), cc.state, cd.state,
        (e, ce.state), cf.state, cg.state),
       (W4, INVALID, INVALID, (0, OUTPUT), INVALID, INVALID))
 ch = Kx(); ch.setst(OUTPUT)
 check("klstart = b/8 in _Hash_Output_ with KLLEN = 2b: the State processes a single block, so 16 is no "
-      "interruption point (MR3, GR45 item 3) -> Invalid", True,
+      "interruption point (MR2, GR51 item 3) -> Invalid", True,
       (raises(ch.exec, 'C', 0, 2 * B, 16, exc=Invalid), ch.state), (True, INVALID))
 
 section("kl.derive")
@@ -462,45 +462,45 @@ secret = K128 + bytes(range(0xF0, 0x100))
 for length in (16, 32):
     cl = Cmac(bytes(16))
     derive(secret, cl, length)
-    check(f"shared secret (GR35) into `key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
+    check(f"shared secret (GR41) into `key` in Ready, length {length}, then ex4", True, tag(None, MSG[:40], cl=cl), W4)
 new16 = lambda: Cmac(bytes(16))
 for name, mk, src, n in [
-        ("length 8 into the 16-byte key, no zero-fill (GR33 item 5)", new16, secret, 8),
-        ("length 0 into the key (GR33 item 5)", new16, secret, 0),
-        ("12-byte source into the 16-byte key (GR33 item 5)", new16, K128[:12], 16),
-        ("into a locker in Hash_Absorb_Last_Block (GR33 item 2)", last_set, secret, 16),
-        ("into a locker in Success (GR33 item 2)", done_ok, secret, 16),
-        ("into the key of a KeyType 1 locker (GR72, GR33 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
-        ("keystream into Hash_Absorb: the kl.exec input is no destination (GR33 item 2)", at_absorb,
+        ("length 8 into the 16-byte key, no zero-fill (GR39 item 5)", new16, secret, 8),
+        ("length 0 into the key (GR39 item 5)", new16, secret, 0),
+        ("12-byte source into the 16-byte key (GR39 item 5)", new16, K128[:12], 16),
+        ("into a locker in Hash_Absorb_Last_Block (GR39 item 2)", last_set, secret, 16),
+        ("into a locker in Success (GR39 item 2)", done_ok, secret, 16),
+        ("into the key of a KeyType 1 locker (GR74, GR39 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
+        ("keystream into Hash_Absorb: the kl.exec input is no destination (GR39 item 2)", at_absorb,
          Keystream(MSG[:32]), 32),
-        ("a shared secret into Hash_Absorb (no destination; GR33 item 2)", at_absorb, secret, 32)]:
+        ("a shared secret into Hash_Absorb (no destination; GR39 item 2)", at_absorb, secret, 32)]:
     cl = mk()
     check(f"{name} -> Invalid", raises(derive, src, cl, n, exc=Invalid) and cl.key is None)
 cl = Cmac(bytes(16))
 derive(Keystream(MSG[:32]), cl, 32)
-check("32 keystream bytes (GR36) into the 16-byte `key` in Ready: its first 16 bytes, then MSG[:40]: REF", True,
+check("32 keystream bytes (GR42) into the 16-byte `key` in Ready: its first 16 bytes, then MSG[:40]: REF", True,
       (cl.key, tag(None, MSG[:40], cl=cl)), (MSG[:16], ref_cmac(MSG[:16], MSG[:40])[0]))
 src, dst = run(K128, MSG[:16]), at_absorb(K256)
-check("CMAC (Hash_Output) into another CMAC's Hash_Absorb (no destination, GR33 item 2) -> only the destination "
+check("CMAC (Hash_Output) into another CMAC's Hash_Absorb (no destination, GR39 item 2) -> only the destination "
       "Invalid", raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 for n in (16, 32):
     src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
     derive(src, dst, n)
-    check(f"CMAC (Hash_Output, b/8 = 16 bytes) into another CMAC's `key` in Ready (GR36, unrestricted), length {n}, "
+    check(f"CMAC (Hash_Output, b/8 = 16 bytes) into another CMAC's `key` in Ready (GR42, unrestricted), length {n}, "
           "then MSG[:40]: REF", True, (src.state, dst.state, dst.key, tag(None, MSG[:40], cl=dst)),
           (SUCCESS, READY, VEC[1][3], ref_cmac(VEC[1][3], MSG[:40])[0]))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(16))
-check("CMAC as a source with length 8 < 16 (GR33 item 5; the source supplies all b/8 bytes, never a truncated tag) "
+check("CMAC as a source with length 8 < 16 (GR39 item 5; the source supplies all b/8 bytes, never a truncated tag) "
       "-> only the destination Invalid",
       raises(derive, src, dst, 8, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = run(K128, MSG[:16]), Cmac(bytes(32))
-check("16-byte CMAC into a 32-byte `key` (GR33 item 5) -> only the destination Invalid",
+check("16-byte CMAC into a 32-byte `key` (GR39 item 5) -> only the destination Invalid",
       raises(derive, src, dst, 32, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 src, dst = at_absorb(), Cmac(bytes(16))
-check("CMAC in Hash_Absorb as a source (no source endpoint, GR33 item 1) -> only the source Invalid",
+check("CMAC in Hash_Absorb as a source (no source endpoint, GR39 item 1) -> only the source Invalid",
       raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, READY))
 src, dst = at_absorb(), at_absorb(K256)
-check("neither endpoint valid: GR33 item 1 fails first -> only the source Invalid",
+check("neither endpoint valid: GR39 item 1 fails first -> only the source Invalid",
       raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (INVALID, ABSORB))
 
 section("b = 64: CMAC-TDES (NIST CMAC examples, SP 800-38B R_64)")
@@ -529,7 +529,7 @@ cv.exec('B', b2v(bytes.fromhex("99429BD0BF7904E4")), 64)
 check("CMAC-TDES _Hash_Verify_: tag_len = 64 = b matches -> Success; Xs = 128 clamped to b, last bit flipped -> Failure",
       True, (cl.state, cv.tag_len, cv.state), (SUCCESS, 64, FAILURE))
 src, dst = run64(TK3, TM[:32]), Cmac(bytes(16))
-check("CMAC-TDES as a kl.derive source supplies b/8 = 8 bytes: into a 16-byte `key` (GR33 item 5) -> only the "
+check("CMAC-TDES as a kl.derive source supplies b/8 = 8 bytes: into a 16-byte `key` (GR39 item 5) -> only the "
       "destination Invalid", raises(derive, src, dst, 16, exc=Invalid) and (src.state, dst.state) == (OUTPUT, INVALID))
 check("CMAC-TDES: Serialized Content holds a 64-bit `hash`", True,
       [w for f, w in Cmac(TK3, cipher='tdea').lay() if f == 'hash'], [64])
@@ -537,11 +537,11 @@ check("CMAC-TDES: Serialized Content holds a 64-bit `hash`", True,
 section("kl.clear, Error-State kl.setst, reserved #immed7")
 c1 = at_absorb(); c1.exec('B', b2v(MSG[:16])); c1.setst(UNCONF)
 check("kl.clear in _Hash_Absorb_ -> _Unconfigured_, Content cleared; a later kl.exec or kl.setst performs no "
-      "operation, OUTPUT zeroed (GR26, GR28)", True,
+      "operation, OUTPUT zeroed (GR32, GR34)", True,
       (c1.state, c1.key, c1.hash, c1.exec('C'), c1.setst(READY), c1.state), (UNCONF, None, 0, 0, None, UNCONF))
 c2 = Cmac(K128); c2.setst(PRIV); c3 = Kx(); c3.setst(OUTPUT); c3.setst(PRIV); c3.setst(INVALID)
 check("kl.setst naming _Privilege Violation_ in _Ready_ and in _Hash_Output_ -> that State, Content cleared; a "
-      "second Error-State kl.setst replaces it (GR30, GR29)", True,
+      "second Error-State kl.setst replaces it (GR36, GR35)", True,
       (c2.state, c2.key, c3.state, c3.hash), (PRIV, None, INVALID, 0))
 def after(i):
     c = at_absorb()
