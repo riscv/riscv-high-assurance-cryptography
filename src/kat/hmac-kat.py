@@ -204,7 +204,7 @@ class Hmac:
         s.keep_cumul, s.keep_base, s.max_len = keep_cumul, keep_base, 0  # max_len: none enforced
         s.reset(KL_STATE_INERT)
 
-    def reset(s, st=KL_STATEEXT_INVALID):  # GR28 for an Error State
+    def reset(s, st=KL_STATEEXT_INVALID):  # GR29 for an Error State
         s.st, s.K0, s.has_key, s.tag_len = st, 0, False, 0
         s.h.ready()
         s.h.state = 0
@@ -247,15 +247,15 @@ class Hmac:
         h = s.h
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
-                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR16: restarts the load
+                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR12: restarts the load
                    (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key,  # MR11: K0 loaded
-                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): s.policy & 1}  # MR11; none from _Hash_Output_ (GR16)
+                   (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT): s.policy & 1}  # MR11; none from _Hash_Output_ (GR12)
         if immed == KL_STATE_INERT or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
-            pass  # GR25
-        elif immed == KL_STATE_READY and form == 'A':  # GR15: Form A; K0 kept, unless its load was left incomplete (MR9)
+            pass  # GR26
+        elif immed == KL_STATE_READY and form == 'A':  # GR14: Form A; K0 kept, unless its load was left incomplete (MR9)
             if s.st == KL_STATE_SET_KEY and h.cumul_len < s.b:
                 s.K0 = 0
             h.ready()
@@ -307,19 +307,19 @@ class Hmac:
         h.finalize(s.b + h.cumul_len)
         h.block_base = h.last_block_len = 0
 
-    def restrictl(s, clear):  # kl.restrictl clearing _MachinePolicy_ bits (GR19)
+    def restrictl(s, clear):  # kl.restrictl clearing _MachinePolicy_ bits (GR17)
         if not inert(s.st):
             s.policy &= ~clear
             if not s.policy & 3:
-                s.reset()  # GR19: _MachinePolicy_ = 0, which the Machine forbids
+                s.reset()  # GR17: _MachinePolicy_ = 0, which the Machine forbids
 
     def exec(s, form, data=b'', nbytes=0, halt=False, resume=False, prior=None):
         """kl.exec Form B (data) or C (nbytes); returns (status, output)."""
         if inert(s.st):
-            return 'noop', bytes(nbytes)  # GR25, GR27
+            return 'noop', bytes(nbytes)  # GR26, GR28
         if s.st in (KL_STATE_HASH_OUTPUT, KL_STATE_HASH_VERIFY) and not s.policy & (
                 1 if s.st == KL_STATE_HASH_OUTPUT else 2):
-            s.reset()  # MR11 1.a, GR19: the operation of the State is disabled
+            s.reset()  # MR11 1.a, GR17: the operation of the State is disabled
             HART.klstart = 0
             return 'invalid', bytes(nbytes)
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
@@ -327,7 +327,7 @@ class Hmac:
             p = HART.klstart if resume else 0
             if p >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR43 item 2: also after a complete load
+                return 'empty', bytes(nbytes)  # GR45 item 2: also after a complete load
             if p and h.block_base:
                 r, HART.klstart = 'invalid', 0       # not an interruption point (<<KLE-process-VLI>>)
             else:
@@ -336,7 +336,7 @@ class Hmac:
         elif form == 'B' and s.st == KL_STATE_HASH_ABSORB:
             if resume and HART.klstart >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR43 item 2
+                return 'empty', bytes(nbytes)  # GR45 item 2
             if resume and HART.klstart and h.block_base:
                 r, HART.klstart = 'invalid', 0       # not an interruption point (<<KLE-process-VLI>>)
             else:
@@ -344,10 +344,10 @@ class Hmac:
         elif form == 'B' and s.st == KL_STATE_HASH_LAST_BLOCK:
             L, p = h.last_block_len, HART.klstart if resume else 0
             if 8 * len(data) < L:
-                r = 'invalid'  # MR2, GR43 item 1: the length first
+                r = 'invalid'  # MR2, GR45 item 1: the length first
             elif p >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR43 item 2, also after Xs = 0
+                return 'empty', bytes(nbytes)  # GR45 item 2, also after Xs = 0
             elif p or not L:
                 r = 'invalid'  # interruption point 0 only (MR3); MR10
             elif h.w:  # one atomic kl.exec (MR10). SHA-2/SM3: ceil(L/8) bytes, the last MSB-first, stored with
@@ -363,10 +363,10 @@ class Hmac:
         elif form == 'B' and s.st == KL_STATE_HASH_VERIFY:
             t, p = s.tag_len, HART.klstart if resume else 0
             if 8 * len(data) < t:
-                r = 'invalid'  # MR2, GR43 item 1
+                r = 'invalid'  # MR2, GR45 item 1
             elif p >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR43 item 2
+                return 'empty', bytes(nbytes)  # GR45 item 2
             elif p:
                 r = 'invalid'  # interruption point 0 only (MR3)
             else:  # MR14: constant-time compare of the first tag_len/8 bytes of the HMAC
@@ -380,10 +380,10 @@ class Hmac:
             if p and s.h.block_base:  # not an interruption point (<<KLE-hash-functions-MACs-XOFs>>)
                 s.reset()
                 HART.klstart = 0
-                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR27
+                return 'invalid', prior[:p] + bytes(nbytes - p)  # GR28
             return 'retired', s.output(nbytes, prior)
         else:
-            r = 'invalid'  # GR16 item 1, MR1
+            r = 'invalid'  # GR12 item 1, MR1
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -408,47 +408,47 @@ class XofSrc:
         s.st = KL_STATEEXT_INVALID
 
 class CmacSrc(XofSrc):
-    """A CMAC in _Hash_Output_ (<<KLE-derive-endpoints>>, GR34): its b/8 bytes of `hash`, then _Success_."""
+    """A CMAC in _Hash_Output_ (<<KLE-derive-endpoints>>, GR36): its b/8 bytes of `hash`, then _Success_."""
     def __init__(s, mac):
         s.mac = mac
 
 class KeystreamSrc(XofSrc):
-    """The keystream of a keystream Machine in _Operate_ (<<KLE-derive-endpoints>>, GR34): unbounded output."""
+    """The keystream of a keystream Machine in _Operate_ (<<KLE-derive-endpoints>>, GR36): unbounded output."""
     st = KL_STATE_OPERATE
 
 class FieldSrc(bytes):
-    """A shared-secret field (ECC _Output_ or ML-KEM `sharedkey`, GR33) that does not advance (GR30)."""
+    """A shared-secret field (ECC _Output_ or ML-KEM `sharedkey`, GR35) that does not advance (GR32)."""
     st = KL_STATE_HASH_OUTPUT
 
 def kl_derive(dst, src, length):
-    """A shared-secret field or a CMAC -> NIK `K0` in _Set_Key_, which the transfer replaces whole (GR31 item 5);
-    a shared-secret field -> the _Hash_Absorb_ kl.exec input (<<KLE-derive-endpoints>>, GR33).
-    Uninterruptible (GR37)."""
+    """A shared-secret field or a CMAC -> NIK `K0` in _Set_Key_, which the transfer replaces whole (GR33 item 5);
+    a shared-secret field -> the _Hash_Absorb_ kl.exec input (<<KLE-derive-endpoints>>, GR35).
+    Uninterruptible (GR39)."""
     field, cmac, ks = isinstance(src, FieldSrc), isinstance(src, CmacSrc), isinstance(src, KeystreamSrc)
     if (not field and src.st in ERROR_STATES) or dst.st in ERROR_STATES:
-        return 'noop'  # GR25: an inert endpoint
+        return 'noop'  # GR26: an inert endpoint
     if not (field or cmac and src.st == KL_STATE_HASH_OUTPUT or ks and src.st == KL_STATE_OPERATE):
-        src.reset()  # GR31 item 1: no HMAC, XOF or other _Hash_Output_ is a source
+        src.reset()  # GR33 item 1: no HMAC, XOF or other _Hash_Output_ is a source
         return 'refused'
     key = dst.st == KL_STATE_SET_KEY
     if not (key or dst.st == KL_STATE_HASH_ABSORB):
-        dst.reset()  # GR31 item 2
+        dst.reset()  # GR33 item 2
         return 'refused'
     if not (key or field):
-        src.reset(), dst.reset()  # GR31 item 3: a message input takes only a shared secret
+        src.reset(), dst.reset()  # GR33 item 3: a message input takes only a shared secret
         return 'refused'
-    eff = min(length, dst.b // 8) if key else length  # GR30
+    eff = min(length, dst.b // 8) if key else length  # GR32
     n = len(src) if field else None if ks else len(src.mac)   # a keystream has no length of its own
     if HART.klstart or n != eff:
-        dst.reset()  # GR31 item 5: K0 takes a whole source of eff_length bytes; the input, the whole secret
+        dst.reset()  # GR33 item 5: K0 takes a whole source of eff_length bytes; the input, the whole secret
         return 'refused'
-    K = bytes(src) if field else src.mac  # GR30: a field source does not advance
+    K = bytes(src) if field else src.mac  # GR32: a field source does not advance
     if cmac:
         src.st = KL_STATE_SUCCESS
     if key:  # replaces all of K0, whatever a kl.exec loaded: K zero-filled (FIPS 198-1 Step 3)
         dst.K0, dst.h.block_base, dst.h.cumul_len, dst.has_key = b2v(K + bytes(dst.b // 8 - eff)), 0, dst.b, True
     else:
-        dst.exec('B', K)  # GR33: the whole secret (GR31 item 5)
+        dst.exec('B', K)  # GR35: the whole secret (GR33 item 5)
     return 'done'
 
 # ---------------------------------------------------------------- provisioner, references, drivers
@@ -588,14 +588,14 @@ for label, variant, ops in [
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
         ('NIK kl.exec after K0 is complete (MR9)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
-        ('kl.exec in _Ready_ (GR16)', 'KIP', (B(data7),)),
+        ('kl.exec in _Ready_ (GR12)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (GR16)', 'KIP', (A, B(data7), O, O)),
-        ('kl.exec in _Success_ (MR1, GR27), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
+        ('same-State kl.setst to _Hash_Output_ (GR12)', 'KIP', (A, B(data7), O, O)),
+        ('kl.exec in _Success_ (MR1, GR28), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (GR25, GR27)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR26, GR28)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATEEXT_INVALID)
 full = C(32)(fresh(key=key7, ops=(A, B(data7), O)))[1]
 cl = fresh(key=key7, ops=(A, B(data7), O))
@@ -612,14 +612,14 @@ check('Form C, klstart >= KLLEN/8 (32, 40): empty window, only klstart = 0; klst
       '(no interruption point): _Invalid_, [4, 31] zeroed', None, res, [(('empty', b'\xa5' * 32), KL_STATE_HASH_OUTPUT, 0)] * 2
       + [(('invalid', b'\xa5' * 4 + bytes(28)), KL_STATEEXT_INVALID, 0)])
 cl = fresh(key=key7, ops=(A,))
-check('kl.setst #kl_state_success -> Invalid (GR18, GR17)',
+check('kl.setst #kl_state_success -> Invalid (GR16, GR15)',
       (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATEEXT_INVALID))
 cl.setst(KL_STATE_INERT)
-check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR25, GR27)',
+check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
       (cl.exec('C', nbytes=8), cl.setst(KL_STATE_READY), cl.st) == (('noop', bytes(8)), None, KL_STATE_INERT))
-check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR17, GR25)',
+check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR15, GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_INERT))
-check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR25)',
+check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, 48), raises(cl.setst, 53), cl.st) == (False, False, KL_STATE_INERT))
 cl = fresh(variant='NIK', key=None)
 r = run(cl, SK, B(K0_7 + b'\xde\xad\xbe\xef' * 4))[0]
@@ -635,7 +635,7 @@ for name in ('SHA-256', 'SHA3-256'):
     HART.klstart = 3
     r = cp.exec('B', bytes(range(10, 30)), resume=True)[0]
     res.append((e, cl.st, cl.has_key, r, cp.st))
-check('_Set_Key_: an empty window after a complete K0 load keeps the State and HasKey (GR43 item 2); a resumption at '
+check('_Set_Key_: an empty window after a complete K0 load keeps the State and HasKey (GR45 item 2); a resumption at '
       'klstart = 3 after a 10-byte load is no interruption point -> _Invalid_ (<<KLE-process-VLI>>)', None, res,
       [('empty', KL_STATE_SET_KEY, True, 'invalid', KL_STATEEXT_INVALID)] * 2)
 cl = fresh(variant='NIK', key=b'first key', ops=(A, B(b'ignored'), R))
@@ -655,13 +655,13 @@ cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
 check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MR9)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
 run(cl, SK)
-check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR16): K0 and cumul_len zeroed',
+check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR12): K0 and cumul_len zeroed',
       (cl.st, cl.K0, cl.h.cumul_len) == (KL_STATE_SET_KEY, 0, 0))
 check('... and a full reload gives the RFC 4231 tag', None, run(cl, B(K0_7), A, B(data7), O, C(32))[1], TAG7)
 cl = fresh(key=key7)
 check('KLLEN > d: tag, excess bits cleared, _Success_', None,
       (run(cl, A, B(data7), O, C(40))[1], cl.st), (TAG7 + bytes(8), KL_STATE_SUCCESS))
-check('KIP _Success_ -> _Ready_ keeps K0: second tag (GR15)', None, run(cl, R, A, B(data7), O, C(32))[1], TAG7)
+check('KIP _Success_ -> _Ready_ keeps K0: second tag (GR14)', None, run(cl, R, A, B(data7), O, C(32))[1], TAG7)
 
 res = []
 for name, n in (('SHA-256', 3), ('SHA-256', 4), ('SHA3-256', 3)):
@@ -711,7 +711,7 @@ TAG2_512 = ref_hmac('SHA-512', k2, m2)
 S32 = bytes(range(0xa0, 0xc0))
 src, dst = fresh(key=k2, ops=(A, B(m2), O)), fresh('SHA-512', 'NIK', key7, (A, B(b'prefix')))
 r = kl_derive(dst, src, 32)
-check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb: no _Hash_Output_ of HMAC is a source (GR31 item 1): source '
+check('HMAC-SHA-256 tag -> NIK HMAC-SHA-512 absorb: no _Hash_Output_ of HMAC is a source (GR33 item 1): source '
       '_Invalid_, destination unchanged', r == 'refused' and src.st == KL_STATEEXT_INVALID and run(dst, B(b'suffix'), O,
       C(64))[1] == ref_hmac('SHA-512', key7, b'prefixsuffix'))
 res = []
@@ -721,31 +721,31 @@ for name, secret, length in [('SHA-512', S32, 32), ('SHA-512', S32[:30], 30), ('
     res.append((r, run(dst, B(b'suffix'), O, C(32))[1]
                 == ref_hmac(name, key7, b'prefix' + secret + bytes(length - len(secret)) + b'suffix')[:32]))
 check('shared secret (32 B, length 32; 30 B, length 30) -> NIK HMAC-SHA-512 absorb, between "prefix" and "suffix" '
-      '(GR33: the whole secret, GR31 item 5); 30 B, length 30 -> HMAC-SHA3-256', None, res, [('done', True)] * 3)
+      '(GR35: the whole secret, GR33 item 5); 30 B, length 30 -> HMAC-SHA3-256', None, res, [('done', True)] * 3)
 res = []
 for name, n, length in [('SHA-512', 30, 29), ('SHA-512', 30, 31), ('SHA-512', 30, 32), ('SHA-512', 32, 1 << 60),
                         ('SHA3-256', 30, 31), ('SHA-512', 32, 0)]:
     dst = fresh(name, 'NIK', key7, (A,))
     res.append((kl_derive(dst, FieldSrc(S32[:n]), length), dst.st))
 check('shared secret into _Hash_Absorb_ with length 29, 31 or 32 for 30 B (SHA-512), 2^60 or 0 for 32 B, 31 for 30 B '
-      '(SHA3-256) -> destination _Invalid_ (GR31 item 5: exactly the secret length)', None, res,
+      '(SHA3-256) -> destination _Invalid_ (GR33 item 5: exactly the secret length)', None, res,
       [('refused', KL_STATEEXT_INVALID)] * 6)
 dst = fresh('SHA-512', 'NIK', key7, (A, B(b'abc')))
 dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
-check('shared secret into HMAC-SHA-512 _Hash_Absorb_Last_Block_ (not an endpoint, GR31 item 2): destination _Invalid_',
+check('shared secret into HMAC-SHA-512 _Hash_Absorb_Last_Block_ (not an endpoint, GR33 item 2): destination _Invalid_',
       (kl_derive(dst, FieldSrc(S32), 32), dst.st) == ('refused', KL_STATEEXT_INVALID))
 src, dst = CmacSrc(bytes(16)), fresh('SHA-256', 'NIK', key7, (A,))
-check('a CMAC -> HMAC _Hash_Absorb_: pair not admitted (GR31 item 3), both _Invalid_', None,
+check('a CMAC -> HMAC _Hash_Absorb_: pair not admitted (GR33 item 3), both _Invalid_', None,
       (kl_derive(dst, src, 16), src.st, dst.st), ('refused', KL_STATEEXT_INVALID, KL_STATEEXT_INVALID))
 for length in (64, 80):
     src, dst = FieldSrc(TAG2_512), fresh(variant='NIK', key=None, ops=(SK,))
     r = kl_derive(dst, src, length)
-    check(f'64-byte shared secret, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR33): b/8 = 64 B, '
+    check(f'64-byte shared secret, length {length} -> NIK HMAC-SHA-256 K0 in _Set_Key_ (GR35): b/8 = 64 B, '
           'load complete (cumul_len = b); then tags under K0 = the secret',
           (r, dst.h.cumul_len) == ('done', 512)
           and run(dst, A, B(data7), O, C(32))[1] == ref_hmac('SHA-256', TAG2_512, data7))
 src, dst = fresh('SHA-512', key=k2, ops=(A, B(m2), O)), fresh(variant='NIK', key=None, ops=(SK,))
-check('HMAC-SHA-512 tag -> NIK HMAC-SHA-256 K0: not a source (GR31 item 1): source _Invalid_, destination in '
+check('HMAC-SHA-512 tag -> NIK HMAC-SHA-256 K0: not a source (GR33 item 1): source _Invalid_, destination in '
       '_Set_Key_ without HasKey', None, (kl_derive(dst, src, 64), src.st, dst.st, dst.has_key),
       ('refused', KL_STATEEXT_INVALID, KL_STATE_SET_KEY, False))
 res = []
@@ -753,8 +753,8 @@ for n, variant, ops, length in [(64, 'NIK', (), 64), (64, 'KIP', (), 64), (64, '
                                (32, 'NIK', (SK,), 64)]:
     dst = fresh(variant=variant, key=key7 if variant == 'KIP' else None, ops=(R, *ops))
     res.append((kl_derive(dst, FieldSrc(TAG2_512[:n]), length), dst.st))
-check('K0 destination: NIK/KIP in _Ready_ (GR31 item 2), length 32 from a 64-byte field, length 64 from a '
-      '32-byte field (GR31 item 5): destination _Invalid_', None, res, [('refused', KL_STATEEXT_INVALID)] * 4)
+check('K0 destination: NIK/KIP in _Ready_ (GR33 item 2), length 32 from a 64-byte field, length 64 from a '
+      '32-byte field (GR33 item 5): destination _Invalid_', None, res, [('refused', KL_STATEEXT_INVALID)] * 4)
 
 # K0 from a CMAC (<<KLE-derive-endpoints>>): a stand-in in _Hash_Output_ with the tag of RFC 4493 Example 1
 # (AES-128, Mlen = 0) or of the NIST CMAC-TDES example (3-key, Mlen = 0)
@@ -767,13 +767,13 @@ for mac in (bytes.fromhex('bb1d6929e95937287fa37d129b756746'), bytes.fromhex('7d
                    == ref_hmac('SHA-256', mac, data7),) if r == 'done' else ()))
 check('CMAC (16 B, AES; 8 B, TDEA) -> NIK HMAC-SHA-256 K0 with length = b/8 of the CMAC: done, source _Success_, '
       'tags under K0 = the CMAC; length 16 more (eff_length != b/8 of the CMAC) -> destination _Invalid_ '
-      '(GR31 item 5), source untouched', None, res,
+      '(GR33 item 5), source untouched', None, res,
       [('done', KL_STATE_SUCCESS, KL_STATE_SET_KEY, True, True),
        ('refused', KL_STATE_HASH_OUTPUT, KL_STATEEXT_INVALID, False)] * 2)
 src, dst = CmacSrc(bytes(16)), fresh(variant='NIK', key=None, ops=(SK,))
 kl_derive(dst, src, 16)
 dst2 = fresh(variant='NIK', key=None, ops=(SK,))
-check('a CMAC already in _Success_ as a source: not a source endpoint (GR31 item 1) -> source _Invalid_', None,
+check('a CMAC already in _Success_ as a source: not a source endpoint (GR33 item 1) -> source _Invalid_', None,
       (kl_derive(dst2, src, 16), src.st, dst2.st), ('refused', KL_STATEEXT_INVALID, KL_STATE_SET_KEY))
 
 # A derive into K0 replaces it whole: no known kl.exec prefix can surround a secret prefix (byte-by-byte recovery)
@@ -789,13 +789,13 @@ dst = fresh(variant='NIK', key=None, ops=(SK, B(bytes(range(60)))))
 kl_derive(dst, FieldSrc(S32), 32)
 leak = run(dst, A, B(data7), O, C(32))[1]
 src, dst = XofSrc(), fresh(variant='NIK', key=None, ops=(SK,))
-check('K0 derive from the output of an XOF: not a source (GR31 item 1) -> source _Invalid_', None,
+check('K0 derive from the output of an XOF: not a source (GR33 item 1) -> source _Invalid_', None,
       (kl_derive(dst, src, 32), src.st, dst.st), ('refused', KL_STATEEXT_INVALID, KL_STATE_SET_KEY))
 res = []
 for length in (16, 32, 64):
     src, dst = KeystreamSrc(), fresh(variant='NIK', key=None, ops=(SK,))
     res.append((kl_derive(dst, src, length), src.st, dst.st))
-check('K0 derive from a keystream, any length: no exactly-eff_length source (GR31 item 5) -> destination _Invalid_, '
+check('K0 derive from a keystream, any length: no exactly-eff_length source (GR33 item 5) -> destination _Invalid_, '
       'source unchanged', None, res, [('refused', KL_STATE_OPERATE, KL_STATEEXT_INVALID)] * 3)
 check('the known-prefix attack: K0 is not known(60) || S[0:4], so the tag is that of K alone', True,
       (leak == ref_hmac('SHA-256', S32, data7), leak == ref_hmac('SHA-256', bytes(range(60)) + S32[:4], data7)), (True, False))
@@ -804,10 +804,10 @@ for ops in ((SK,), (A, B(b'prefix'))):
     dst, HART.klstart = fresh(variant='NIK', key=key7 if ops[0] is A else None, ops=ops), 4
     res.append((kl_derive(dst, FieldSrc(S32), 32), dst.st))
     HART.klstart = 0
-check('klstart = 4 into K0 or into the _Hash_Absorb_ input (every kl.derive is uninterruptible, GR37) -> '
-      'destination _Invalid_ (GR31 item 5)', None, res, [('refused', KL_STATEEXT_INVALID)] * 2)
+check('klstart = 4 into K0 or into the _Hash_Absorb_ input (every kl.derive is uninterruptible, GR39) -> '
+      'destination _Invalid_ (GR33 item 5)', None, res, [('refused', KL_STATEEXT_INVALID)] * 2)
 
-# RFC 5869 A.1: HKDF-Extract inside the KLE, IKM a shared secret derived into HMAC(salt) _Hash_Absorb_ (GR33)
+# RFC 5869 A.1: HKDF-Extract inside the KLE, IKM a shared secret derived into HMAC(salt) _Hash_Absorb_ (GR35)
 salt, ikm = bytes(range(13)), b'\x0b' * 22
 PRK = bytes.fromhex('077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5')
 src = fresh(key=salt, ops=(A,))
@@ -815,7 +815,7 @@ r = kl_derive(src, FieldSrc(ikm), 22)
 check('HKDF-SHA-256 (RFC 5869 A.1): IKM (22 B) as a shared secret, length 22 -> HMAC(salt) _Hash_Absorb_; '
       'PRK = HMAC(salt, IKM)', True, (r, run(src, O, C(32))[1]), ('done', PRK))
 src, dst = fresh(key=salt, ops=(A, B(ikm), O)), fresh(variant='NIK', key=None, ops=(SK,))
-check('HKDF-SHA-256 PRK (HMAC _Hash_Output_) -> NIK HMAC-SHA-256 K0: not a source (GR31 item 1), source '
+check('HKDF-SHA-256 PRK (HMAC _Hash_Output_) -> NIK HMAC-SHA-256 K0: not a source (GR33 item 1), source '
       '_Invalid_; destination in _Set_Key_, no HasKey', None, (kl_derive(dst, src, 32), src.st, dst.st, dst.has_key),
       ('refused', KL_STATEEXT_INVALID, KL_STATE_SET_KEY, False))
 
@@ -887,7 +887,7 @@ for label, ops in [('_Hash_Output_ before the piece', (A, B(pat[:3]), lambda c: 
 cl = fresh('SHA-256', ops=(A, B(b'abc'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)))
 r = cl.exec('B', b'')[0]
 st = cl.st
-check('HMAC-SHA-256: after Xs = 0, a kl.exec with KLLEN = 0 is an empty window (GR43 item 2): _Hash_Absorb_Last_Block_ '
+check('HMAC-SHA-256: after Xs = 0, a kl.exec with KLLEN = 0 is an empty window (GR45 item 2): _Hash_Absorb_Last_Block_ '
       'kept; then the tag of the message', None, (r, st, run(cl, O, C(32))[1]),
       ('empty', KL_STATE_HASH_LAST_BLOCK, ref_hmac('SHA-256', b'key', b'abc')))
 res = []
@@ -922,7 +922,7 @@ r = cv.exec('B', ref_hmac('SHA-256', b'key', b'abc'))[0]
 cz = fresh('SHA-256', policy=2, ops=(A,))
 cz.restrictl(2)
 check('kl.restrictl clearing bit 0 in _Hash_Output_: the tag kl.exec -> _Invalid_, OUTPUT zeroed; in _Hash_Absorb_ '
-      'verification still succeeds; clearing the only set bit -> _Invalid_ at once (GR19, MR11)', None,
+      'verification still succeeds; clearing the only set bit -> _Invalid_ at once (GR17, MR11)', None,
       (cg.exec('C', nbytes=32), cg.st, r, cv.st, cz.st),
       (('invalid', bytes(32)), KL_STATEEXT_INVALID, 'retired', KL_STATE_SUCCESS, KL_STATEEXT_INVALID))
 for name in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):

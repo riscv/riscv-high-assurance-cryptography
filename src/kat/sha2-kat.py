@@ -248,11 +248,11 @@ for d, ks in ((b'', 0), (b'a', 2)):
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
-      'window, _Invalid_ (MR2, GR43)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
+      'window, _Invalid_ (MR2, GR45)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 cl = Sha2().provision()
 run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0))
 r = B(b'')(cl)[0], cl.st
-check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR43)', None,
+check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR45)', None,
       (r, run(cl, O, C(32))[1]), (('empty', KL_STATE_HASH_LAST_BLOCK), hashlib.sha256(b'ab').digest()))
 m = bytes(range(70))
 cl = absorbing(data=m[:6])
@@ -268,7 +268,7 @@ cl = absorbing(data=b'abc')
 HART.klstart = 3
 r = cl.exec('B', b'xyz', resume=True)[0], cl.st, HART.klstart
 check('_Hash_Absorb_ with block_base = 24, a 3-byte kl.exec with klstart = 3: empty window, State kept, klstart = 0 '
-      '(GR43 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
+      '(GR45 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
       (('empty', KL_STATE_HASH_ABSORB, 0), DIG))
 
 check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
@@ -288,19 +288,19 @@ cl = Sha2().provision()
 check('"abc" unpadded, then the kl.setst into _Hash_Output_ with block_base != 0: the Machine pads, digest correct',
       run(cl, A, B(b'abc'), O, C(32))[1] == DIG_ABC and cl.st == KL_STATE_SUCCESS)
 for label, ops in [
-        ('kl.exec in _Ready_ (GR16)', (B(M_ABC),)),
+        ('kl.exec in _Ready_ (GR12)', (B(M_ABC),)),
         ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (GR16)', (A, B(M_ABC), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (GR12)', (A, B(M_ABC), O, O)),
         ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (MR1), output zeroed', (A, C(16))),
         ('Form B kl.exec in _Hash_Output_ (MR1)', (A, B(M_ABC), O, B(bytes(64)))),
-        ('kl.exec in _Success_ (MR1, GR27), output zeroed', (A, B(M_ABC), O, C(32), C(32)))]:
+        ('kl.exec in _Success_ (MR1, GR28), output zeroed', (A, B(M_ABC), O, C(32), C(32)))]:
     cl = Sha2().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID and not any(r[1] if r else b''))
-check('kl.exec in _Invalid_: no operation, output zeroed (GR25, GR27)',
+check('kl.exec in _Invalid_: no operation, output zeroed (GR26, GR28)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATEEXT_INVALID)
 cl = outputting()
 HART.klstart = 4
@@ -331,21 +331,21 @@ check('after a 5-byte transfer, a forged resumption at klstart = 59 or 4 (block_
       'not an interruption point, _Invalid_', None, res,
       [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 cl = absorbing()
-check('kl.setst #kl_state_success -> Invalid (GR18, GR17)',
+check('kl.setst #kl_state_success -> Invalid (GR16, GR15)',
       (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATEEXT_INVALID))
 cl.setst(KL_STATE_INERT)
-check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR25, GR27)',
+check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
       (cl.exec('C', nbytes=8), cl.setst(KL_STATE_READY), cl.st, cl.state)
       == (('noop', bytes(8)), None, KL_STATE_INERT, 0))
-check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR25)',
+check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_INERT))
-check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR25)',
+check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR26)',
       (raises(cl.setst, 48), raises(cl.setst, 53), cl.st) == (False, False, KL_STATE_INERT))
 cl = outputting('SHA-224')
 check('KLLEN > t: digest, excess bits cleared, _Success_', None, (C(32)(cl)[1], cl.st),
       (bytes.fromhex(VEC['SHA-224'][M_ABC]) + bytes(4), KL_STATE_SUCCESS))
 cl = outputting()
-check('_Success_ -> _Ready_ (GR15), second digest', None,
+check('_Success_ -> _Ready_ (GR14), second digest', None,
       run(cl, C(32), R, A, B(M_ABC), O, C(32))[1], DIG_ABC)
 cl, ready = absorbing('SHA-384', (M2_64 * 2)[:132]), Sha2('SHA-384').provision()
 dirty = cl.block_base and cl.state != ready.state
@@ -363,7 +363,7 @@ check('shared secret (32 B) -> SHA-256 absorb [hashlib oracle]; the field does n
       (r, run(dst, O, C(32))[1], run(dst2, O, C(32))[1]),
       (('done', 256, 'done'), hashlib.sha256(SEC).digest(), hashlib.sha256(SEC).digest()))
 src, dst = Source(SEC[:30]), absorbing()
-check('shared secret (30 B), length 30 -> SHA-256 absorb: exactly the secret (GR31 item 5) [hashlib]',
+check('shared secret (30 B), length 30 -> SHA-256 absorb: exactly the secret (GR33 item 5) [hashlib]',
       kl_derive(dst, src, 30) == 'done' and run(dst, O, C(32))[1] == hashlib.sha256(SEC[:30]).digest())
 src, dst = Source(SEC * 2), absorbing('SHA-224')
 r = kl_derive(dst, src, 64)
@@ -371,35 +371,35 @@ whole = r == 'done' and dst.block_base == 0 and dst.state != Sha2('SHA-224').pro
 check('shared secret (64 B) -> SHA-224 absorb (one block) [hashlib oracle]', whole and run(dst, O,
       C(28))[1] == hashlib.sha224(SEC * 2).digest())
 src, dst = outputting(msg=b'hello'), absorbing()
-check('SHA-256 digest in _Hash_Output_ as a source (GR31 item 1): refused, source _Invalid_, destination untouched; '
+check('SHA-256 digest in _Hash_Output_ as a source (GR33 item 1): refused, source _Invalid_, destination untouched; '
       'the same digest moved by kl.exec gives SHA-256(SHA-256("hello"))',
       kl_derive(dst, src, 32) == 'refused' and src.st == KL_STATEEXT_INVALID
       and (dst.st, dst.block_base) == (KL_STATE_HASH_ABSORB, 0)
       and run(dst, B(C(32)(outputting(msg=b'hello'))[1]), O, C(32))[1]
       == bytes.fromhex(SHA256D_HELLO))
 src, dst = Source(bytes(range(16)), secret=False), absorbing()
-check('a CMAC (16 B) -> SHA-256 absorb: pair not admitted (GR31 item 3), both _Invalid_',
+check('a CMAC (16 B) -> SHA-256 absorb: pair not admitted (GR33 item 3), both _Invalid_',
       kl_derive(dst, src, 16) == 'refused' and (src.st, dst.st) == (KL_STATEEXT_INVALID, KL_STATEEXT_INVALID))
 src, dst = Source(SEC), Sha2().provision()
-check('destination in _Ready_ (GR31 item 2): refused, destination _Invalid_, source untouched',
+check('destination in _Ready_ (GR33 item 2): refused, destination _Invalid_, source untouched',
       kl_derive(dst, src, 32) == 'refused' and dst.st == KL_STATEEXT_INVALID and src.st == KL_STATE_HASH_OUTPUT)
 res = []
 for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 29), (SEC[:30], 32), (SEC[:30], 33)):
     dst = absorbing()
     res.append((kl_derive(dst, Source(s), length), dst.st))
-check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B with length 29, 32 or 33 (GR31 item 5: '
+check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B with length 29, 32 or 33 (GR33 item 5: '
       'exactly the secret length): destination _Invalid_', None, res,
       [('refused', KL_STATEEXT_INVALID)] * 6)
 dst, dst2 = absorbing(data=b'abc'), absorbing(data=b'abc')
 dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
-check('shared secret into SHA-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR31 item 2): destination _Invalid_; '
+check('shared secret into SHA-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR33 item 2): destination _Invalid_; '
       'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret [hashlib]', None,
       (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),
       ('refused', KL_STATEEXT_INVALID, 'done', hashlib.sha256(b'abc' + SEC).digest()))
 
 src, dst, s28, d28, h, dh = Source(SEC), KeyDest(32), Source(SEC[:28]), KeyDest(32), outputting(), KeyDest(32)
 check('shared secret -> a 32-byte `key` in _Ready_, length 40: the secret; a 28-byte secret -> a 32-byte key '
-      '(GR31 item 5): destination _Invalid_, source untouched; SHA-256("abc") -> a key (GR31 item 1): source '
+      '(GR33 item 5): destination _Invalid_, source untouched; SHA-256("abc") -> a key (GR33 item 1): source '
       '_Invalid_, key untouched', None,
       (kl_derive(dst, src, 40), dst.key, kl_derive(d28, s28, 32), d28.st, s28.st, kl_derive(dh, h, 32), h.st, dh.st),
       ('done', SEC, 'refused', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 'refused', KL_STATEEXT_INVALID, KL_STATE_READY))
