@@ -85,10 +85,10 @@ class EcbLocker:
 
     def setst(self, immed, form='A'):
         if self.state in ERROR_STATES:
-            return                            # GR26
+            return                            # GR25
         pol = fld(self.mdh, 'MachinePolicy')
         if immed in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT) and form != 'A':
-            self.invalidate()                 # MR1, GR66: only Form A is native
+            self.invalidate()                 # MR1, GR65: only Form A is native
         elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
             self.mdh = put(self.mdh, 'State', immed)
@@ -102,10 +102,10 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR17, MR1; MR2 (length first: GR44)
+            self.invalidate()                 # GR16, MR1; MR2 (length first: GR43)
             return out & ~window, 0
         if not fld(self.mdh, 'MachinePolicy') & (POL_ENC if self.state == KL_STATE_ENCRYPT else POL_DEC):
-            self.invalidate()                 # MR11: issued in a State that MachinePolicy disables (GR20)
+            self.invalidate()                 # MR11: issued in a State that MachinePolicy disables (GR19)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
@@ -123,23 +123,23 @@ class EcbLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLE-derive-endpoints>>); `src` is an EcbLocker or (kind, bytes, MDH),
-        kind 'shared' (restricted, GR34) or 'keystream' (unrestricted, GR35)."""
-        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR32 item 1
+        kind 'shared' (restricted, GR33) or 'keystream' (unrestricted, GR34)."""
+        if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR31 item 1
             return src.invalidate()
         kind, data, src_mdh = src
         n = self.cipher[2] // 8
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # GR32 item 2 (GR72), item 5
-        if kind == 'shared':                  # only a restricted transfer narrows (GR33)
+            return self.invalidate()          # GR31 item 2 (GR71), item 5
+        if kind == 'shared':                  # only a restricted transfer narrows (GR32)
             if fld(self.mdh, 'SCProtection') < fld(src_mdh, 'SCProtection'):
-                return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # GR33: never to a weaker level
+                return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # GR32: never to a weaker level
             m = narrow(self.mdh, src_mdh)
             if m is None:
-                return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # failed narrowing (GR33)
+                return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # failed narrowing (GR32)
             self.mdh = m
-        self.key = b2v(data[:n])              # dest_length bytes (GR31, GR32 item 5)
+        self.key = b2v(data[:n])              # dest_length bytes (GR30, GR31 item 5)
         return True
 
 def blocks_value(data):                       # cat() lists the most significant block first
@@ -255,16 +255,16 @@ out = run(cl, pt)[0]
 cl.setst(DEC)
 eq("Encrypt -> Decrypt directly", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A_PT))
 cl.setst(RDY)
-eq("back to Ready (GR16)", cl.state, RDY)
+eq("back to Ready (GR15)", cl.state, RDY)
 cl.setst(RDY)
-eq("same-State kl.setst into Ready admitted (GR17)", cl.state, RDY)
+eq("same-State kl.setst into Ready admitted (GR16)", cl.state, RDY)
 c2 = new_cl(ci, k, state=DEC)
 c2.setst(DEC)
-eq("same-State kl.setst into Decrypt admitted, changes nothing (GR17)", (c2.state, c2.key), (DEC, b2v(H(k))))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR17, GR29, GR28)",
+eq("same-State kl.setst into Decrypt admitted, changes nothing (GR16)", (c2.state, c2.key), (DEC, b2v(H(k))))
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR16, GR28, GR27)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)
-eq("Invalid locker: kl.setst and kl.exec perform no operation (GR26)", (cl.state, cl.exec(v, 512)[0]),
+eq("Invalid locker: kl.setst and kl.exec perform no operation (GR25)", (cl.state, cl.exec(v, 512)[0]),
    (INV, 0))
 for pol, immed, want in ((POL_DEC, DEC, DEC), (POL_DEC, ENC, INV), (POL_ENC, DEC, INV),
                          (POL_BOTH, KL_STATE_OPERATE, INV)):
@@ -274,7 +274,7 @@ eq("decrypt-only locker decrypts F.1.2", run(new_cl(ci, k, POL_DEC, state=DEC), 
 src = new_cl(ci, k, state=ENC)
 cl = EcbLocker()
 cl.import_scc(put(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
-eq("SCC in Encrypt with MachinePolicy = 10b (GR20): kl.exec -> Invalid, window zeroed (MR11)",
+eq("SCC in Encrypt with MachinePolicy = 10b (GR19): kl.exec -> Invalid, window zeroed (MR11)",
    (cl.exec(b2v(pt[:16]), 128)[0], cl.state), (0, INV))
 cl = EcbLocker()
 cl.import_scc(put(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
@@ -285,7 +285,7 @@ eq("MR2: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[:
    (0, INV))
 eq("Form D substitution (kliobuftop = 64): output in place of input",
    v2b(new_cl(ci, k, state=ENC).exec(b2v(pt), 512)[0], 64).hex(), c)
-for q in (1, 2, 3):                           # GR41, MR3: precise halt, resumption
+for q in (1, 2, 3):                           # GR40, MR3: precise halt, resumption
     cl = new_cl(ci, k, state=ENC)
     part, ks = run(cl, pt, halt_after=q)
     res, ks2 = cl.exec(b2v(part), 512, klstart=ks)
@@ -337,7 +337,7 @@ eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, N
 cl.import_scc(put(put(put(m192, 'KeyType', 0), 'State', ENC), 'StateExtension', 1), H(SP38A_F1[1][2]))
 eq("SCC in Encrypt with a StateExtension ECB does not use -> Invalid", (cl.state, cl.key), (INV, None))
 
-section("kl.derive into `key` (destination in Ready; GR31-GR35)")
+section("kl.derive into `key` (destination in Ready; GR30-GR34)")
 _, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 secret = H(k) + H("a5" * 8)
 SRC = mdh_pack(UsagePolicy=0b00010, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
@@ -356,28 +356,28 @@ def derived(kind='shared', length=32, data=secret, state=None, keytype=0, src=SR
 for kind, length in (('shared', 32), ('shared', 24), ('keystream', 32)):
     eq(f"{kind}, length {length} >= 24: exactly 24 bytes become the key, F.1.3",
        derived(kind, length)[:3], (True, ENC, c))
-eq("shared secret (restricted, GR33): UsagePolicy, Locality, ExpirationDate narrowed",
+eq("shared secret (restricted, GR32): UsagePolicy, Locality, ExpirationDate narrowed",
    narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
-eq("keystream (unrestricted, GR35): destination MDH not narrowed",
+eq("keystream (unrestricted, GR34): destination MDH not narrowed",
    narrowed(derived('keystream')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
 ks = b''.join(aes_encrypt(H(SP38A_F1[0][2]), bytes(15) + bytes([i])) for i in range(2))   # two whole blocks
 r = derived('keystream', 32, data=ks, src=put(SRC, 'SCProtection', 2))
 eq("keystream of 2 whole blocks, length 32: its first 24 bytes become the key; no narrowing, "
-   "no SCProtection comparison (GR35)", (r[:3], narrowed(r[3])),
+   "no SCProtection comparison (GR34)", (r[:3], narrowed(r[3])),
    ((True, ENC, ref(aes_encrypt, ks[:24], pt).hex()), (DST['UsagePolicy'], DST['Locality'], 0)))
-eq("CMAC in Hash_Output (GR35) supplies b/8 = 16 bytes < 24 (GR32 item 5) -> destination Invalid, no key",
+eq("CMAC in Hash_Output (GR34) supplies b/8 = 16 bytes < 24 (GR31 item 5) -> destination Invalid, no key",
    derived('keystream', 32, data=ks[:16])[1:3], (INV, None))
-eq("source SCProtection above destination: Privilege Violation, no key (GR33); below it: key received, level kept",
+eq("source SCProtection above destination: Privilege Violation, no key (GR32); below it: key received, level kept",
    (derived(src=put(SRC, 'SCProtection', 2))[1:3], derived(src=put(SRC, 'SCProtection', 0))[:3],
     fld(derived(src=put(SRC, 'SCProtection', 0))[3], 'SCProtection')),
    ((KL_STATEEXT_PRIV_VIOLATION, None), (True, ENC, c), DST['SCProtection']))
-for label, kw in (("length 16 < 24 (GR32 item 5, no zero-fill)", dict(length=16)),
-                  ("length 0 (GR32 item 5)", dict(length=0)),
-                  ("source field of 16 bytes < 24 (GR32 item 5)", dict(data=secret[:16])),
-                  ("destination in Encrypt (GR32 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (GR72, GR32 item 2)", dict(keytype=1))):
+for label, kw in (("length 16 < 24 (GR31 item 5, no zero-fill)", dict(length=16)),
+                  ("length 0 (GR31 item 5)", dict(length=0)),
+                  ("source field of 16 bytes < 24 (GR31 item 5)", dict(data=secret[:16])),
+                  ("destination in Encrypt (GR31 item 2)", dict(state=ENC)),
+                  ("KeyType 1 destination (GR71, GR31 item 2)", dict(keytype=1))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
-eq("differing Boot Session entries (GR33, a failed narrowing) -> destination Privilege Violation, no key",
+eq("differing Boot Session entries (GR32, a failed narrowing) -> destination Privilege Violation, no key",
    derived(src=put(SRC, 'Locality', 0b0_10_00_00))[1:3], (KL_STATEEXT_PRIV_VIOLATION, None))
 src_cl, dst_cl = new_cl(ci, k), new_cl(ci, "00" * 24)
 dst_cl.derive_key(src_cl, 24)
@@ -386,16 +386,16 @@ eq("ECB locker as source (no source endpoint) -> only the source Invalid", (src_
 
 eq("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)",
    [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 6)
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR19, GR18, MR1)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR18, GR17, MR1)",
    [(raises(c.setst, i), c.state) for i in (54, 55) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 2)
 
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test; Forms of kl.setst")
 eq("'State = 0' passes every Valid State and catches every Error State",
    [s for s in [*range(1, 56), *ERROR_STATES] if state_fields(s)['State'] == 0], list(ERROR_STATES))
-eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (MR1, GR66)",
+eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (MR1, GR65)",
    ([new_cl(ci, k, state=st, form=f).state for f in 'BC' for st in (ENC, DEC)], new_cl(ci, k, state=ENC).state),
    ([INV] * 4, ENC))
-eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR16: Form A; GR66)",
+eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR15: Form A; GR65)",
    [(lambda c: (c.setst(RDY, f), c.state)[1])(new_cl(ci, k, state=ENC)) for f in 'BC'], [INV] * 2)
 
 done()

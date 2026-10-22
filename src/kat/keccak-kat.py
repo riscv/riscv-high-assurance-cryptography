@@ -201,7 +201,7 @@ class Sha3:
     def __init__(s):
         s.reset(KL_STATE_INERT)
 
-    def reset(s, st=KL_STATEEXT_INVALID):  # GR29 for an Error State
+    def reset(s, st=KL_STATEEXT_INVALID):  # GR28 for an Error State
         s.st, s.state, s.block_base, s.last_block_len, s.out_len = st, 0, 0, 0, 0
 
     def set_machine(s, machine):
@@ -264,8 +264,8 @@ class Sha3:
             if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
-            pass  # GR30, GR26
-        elif immed == KL_STATE_READY and form == 'A':  # GR16: Form A
+            pass  # GR29, GR25
+        elif immed == KL_STATE_READY and form == 'A':  # GR15: Form A
             s.reset(KL_STATE_READY)
         elif form == 'A' and (s.st, immed) == (KL_STATE_READY, KL_STATE_HASH_ABSORB):
             s.st, s.last_block_len = immed, s.b  # Form A: max_len is set by the Machine
@@ -282,11 +282,11 @@ class Sha3:
             else:
                 s.enter_output()
         else:
-            s.reset()  # MR1, GR16, GR17, <<KLE-process-VLI>> same-State rule
+            s.reset()  # MR1, GR15, GR16, <<KLE-process-VLI>> same-State rule
         return s.st
 
     def fail(s, out, status='invalid'):
-        """No operation or Error State: the unwritten output window [klstart, top-1] is zeroed (GR28)."""
+        """No operation or Error State: the unwritten output window [klstart, top-1] is zeroed (GR27)."""
         if status == 'invalid':
             s.reset()
         if out is not None:
@@ -305,7 +305,7 @@ class Sha3:
     def exec(s, form, inp=None, out=None, sew=None, interrupt_at=None, klstart_bits=False):
         """kl.exec; sew None = KLIOBUF; halts at the first point >= interrupt_at inside the window."""
         if inert(s.st):
-            return s.fail(out, 'noop')  # GR26, GR28
+            return s.fail(out, 'noop')  # GR25, GR27
         halt = (interrupt_at,)
         if s.st == KL_STATE_HASH_ABSORB and form in 'BD' and inp is not None and out is None:
             if sew is not None and sew < GRANULARITY:
@@ -319,7 +319,7 @@ class Sha3:
             if sew is not None and sew < GRANULARITY:
                 return s.fail(out)  # MR2
             if 8 * len(inp) < s.last_block_len:
-                return s.fail(out)  # MR2, GR44 item 1: the length first
+                return s.fail(out)  # MR2, GR43 item 1: the length first
             if s.empty(len(inp)):
                 return 'empty'
             if HART.klstart or s.last_block_len == 0:
@@ -333,7 +333,7 @@ class Sha3:
                 return s.fail(out)  # not an interruption point
             r = s.squeeze(out, 8 * HART.klstart, *halt)
         else:
-            return s.fail(out)  # MR1; GR17 item 1 in _Ready_
+            return s.fail(out)  # MR1; GR16 item 1 in _Ready_
         if r != 'interrupted':
             HART.klstart = 0
         return r
@@ -401,37 +401,37 @@ class KeyDest:
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
-    ML-KEM `sharedkey`, GR34) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR35).  A SHA-3 or
+    ML-KEM `sharedkey`, GR33) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR34).  A SHA-3 or
     SHAKE _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
     def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
-    """A Source -> the _Hash_Absorb_ kl.exec input (GR34: a shared secret only) or a KeyDest (GR34, GR35);
-    uninterruptible (GR38): it never halts, and retires with klstart = 0."""
-    if inert(src.st) or inert(dst.st):  # GR26: an inert endpoint makes it a no-op
+    """A Source -> the _Hash_Absorb_ kl.exec input (GR33: a shared secret only) or a KeyDest (GR33, GR34);
+    uninterruptible (GR37): it never halts, and retires with klstart = 0."""
+    if inert(src.st) or inert(dst.st):  # GR25: an inert endpoint makes it a no-op
         HART.klstart = 0
         return 'noop'
     key = isinstance(dst, KeyDest)
     bad = [c for c, ok in ((src, isinstance(src, Source)),
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
-        c.reset()  # GR32 items 1-2 (no endpoint in _Success_)
+        c.reset()  # GR31 items 1-2 (no endpoint in _Success_)
     pos, HART.klstart = HART.klstart, 0
     if bad:
         return 'invalid'
     if not (key or src.secret):
-        src.reset()  # GR32 item 3: both
+        src.reset()  # GR31 item 3: both
         dst.reset()
         return 'invalid'
     n = len(src.data)  # granularity 8 bits: a hash input receives exactly the secret
     if pos or (min(length, n) < dst.n if key else length != n):
-        dst.reset()  # GR32 item 5
+        dst.reset()  # GR31 item 5
         return 'invalid'
     if key:
         dst.key = src.data[:dst.n]
     else:
-        assert dst.exec('B', inp=src.data) == 'done'  # GR31: as kl.exec; the field does not advance
+        assert dst.exec('B', inp=src.data) == 'done'  # GR30: as kl.exec; the field does not advance
     return 'done'
 
 # ---------------------------------------------------------------- drivers
@@ -553,9 +553,9 @@ check('input operand, klstart = 250 > KLLEN/8: empty window, only klstart = 0',
 HART.klstart = 100
 check('input klstart = 100, block_base = 32 (no interruption point): _Invalid_, klstart = 0',
       (cl.exec('B', inp=MSG_A3), cl.st, HART.klstart) == ('invalid', KL_STATEEXT_INVALID, 0))
-check('the invalidated locker retains only its MDH (GR29)', (cl.state, cl.block_base) == (0, 0))
-check('kl.setst on the Error State locker: no operation (GR26)', cl.setst(KL_STATE_HASH_OUTPUT) == KL_STATEEXT_INVALID)
-check('Form C kl.exec on it: no operation, output window zeroed (GR26, GR28)', None,
+check('the invalidated locker retains only its MDH (GR28)', (cl.state, cl.block_base) == (0, 0))
+check('kl.setst on the Error State locker: no operation (GR25)', cl.setst(KL_STATE_HASH_OUTPUT) == KL_STATEEXT_INVALID)
+check('Form C kl.exec on it: no operation, output window zeroed (GR25, GR27)', None,
       (squeeze(cl, 32, 0xee), cl.st), (('noop', bytes(32)), KL_STATEEXT_INVALID))
 
 section('Suffix and padding')
@@ -586,7 +586,7 @@ check('[oracle] SHAKE128 512 B over kl.exec of 100+68+200+144 B; stays in _Hash_
 cl = squeezing('SHAKE128', MSG_ABC)
 out = bytearray(b'\xee' * 400)
 r = cl.exec('C', out=out, interrupt_at=1)
-check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR43, GR41)',
+check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR42, GR40)',
       (r, HART.klstart, bytes(out[168:])) == ('interrupted', 168, b'\xee' * 232))
 check('resumed squeeze retires with klstart = 0', (cl.exec('C', out=out), HART.klstart) == ('done', 0))
 check('[oracle] SHAKE128 400 B with interrupt/resume', None, bytes(out), oracle('SHAKE128', MSG_ABC, 400))
@@ -634,12 +634,12 @@ check('64-B read of SHA3-384: returns at _Success_, bytes [48, 63] cleared', Non
       squeeze(cl, 64, 0xee), ('success', V('SHA3-384', 'abc') + bytes(16)))
 cl = squeezing('SHA3-256', MSG_ABC)
 squeeze(cl, 32)
-check('kl.exec in _Success_ -> _Invalid_, output zeroed (MR1, GR28)', None,
+check('kl.exec in _Success_ -> _Invalid_, output zeroed (MR1, GR27)', None,
       (squeeze(cl, 32, 0xee), cl.st), (('invalid', bytes(32)), KL_STATEEXT_INVALID))
 cl = squeezing('SHA3-256', b'')
 squeeze(cl, 32)
 ok = cl.setst(KL_STATE_READY) == KL_STATE_READY and (cl.state, cl.block_base) == (0, 0)
-check('_Success_ -> _Ready_ (GR16) zeroes state and block_base', ok)
+check('_Success_ -> _Ready_ (GR15) zeroes state and block_base', ok)
 cl.setst(KL_STATE_HASH_ABSORB)
 cl.exec('B', inp=MSG_ABC)
 cl.setst(KL_STATE_HASH_OUTPUT)
@@ -648,7 +648,7 @@ check('SHA3-256 abc from the CC reused after _Ready_', None, squeeze(cl, 32)[1],
 section('States, transitions, Forms')
 ab, out_ = (lambda n: absorbing(n, MSG_ABC)), (lambda n: squeezing(n, MSG_ABC))
 for label, name, prep, act in [
-        ('kl.exec in _Ready_ (GR17)', 'SHA3-256', new, lambda c: c.exec('B', inp=MSG_ABC)),
+        ('kl.exec in _Ready_ (GR16)', 'SHA3-256', new, lambda c: c.exec('B', inp=MSG_ABC)),
         ('_Ready_ -> _Hash_Output_', 'SHA3-256', new, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('Form B kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
          lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B')),
@@ -659,24 +659,24 @@ for label, name, prep, act in [
         ('Form A kl.exec in _Hash_Absorb_ (MR1)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
         ('Form B kl.exec in _Hash_Output_ (MR1)', 'SHAKE256', out_, lambda c: c.exec('B', inp=MSG_ABC)),
-        ('same-State kl.setst to _Hash_Output_ (GR17)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
+        ('same-State kl.setst to _Hash_Output_ (GR16)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('_Hash_Output_ -> _Hash_Absorb_', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
-        ('_Success_ -> _Hash_Absorb_ (GR16)', 'SHA3-224', out_,
+        ('_Success_ -> _Hash_Absorb_ (GR15)', 'SHA3-224', out_,
          lambda c: (squeeze(c, 28), c.setst(KL_STATE_HASH_ABSORB)))]:
     cl = prep(name)
     act(cl)
     check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID)
 cl = squeezing('SHA3-224', MSG_ABC)
-check('kl.setst #kl_state_success -> Invalid (GR19, GR18)',
+check('kl.setst #kl_state_success -> Invalid (GR18, GR17)',
       (raises(cl.setst, KL_STATE_SUCCESS), cl.st) == (False, KL_STATEEXT_INVALID))
 cl.setst(KL_STATE_INERT)
 out = bytearray(b'\xaa' * 8)
-check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR26, GR28)',
+check('kl.clear; a later kl.exec or kl.setst performs no operation, output zeroed (GR25, GR27)',
       (cl.exec('C', out=out, sew=8), bytes(out), cl.setst(KL_STATE_READY))
       == ('noop', bytes(8), KL_STATE_INERT))
-check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR18, GR26)',
+check('kl.setst #kl_state_failure on an Unconfigured locker: no operation (GR17, GR25)',
       (raises(cl.setst, KL_STATE_FAILURE), cl.st) == (False, KL_STATE_INERT))
-check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR26)',
+check('kl.setst #48, #53 on an Unconfigured locker: no operation (GR25)',
       (raises(cl.setst, 48), raises(cl.setst, 53), cl.st) == (False, False, KL_STATE_INERT))
 for mid in ('_Hash_Absorb_', '_Hash_Output_'):
     cl = absorbing('SHAKE128', MSG_A3[:50])
@@ -743,38 +743,38 @@ check('[oracle] 66-byte shared secret -> SHAKE256: SHAKE256(secret), the field s
 src, dst = squeezing('SHAKE128', MSG_ABC), absorbing('SHA3-256', MSG_A3[:10])
 snap = (dst.state, dst.block_base)
 r = kl_derive(dst, src, 336)
-check('SHAKE128 output in _Hash_Output_ as a source (GR32 item 1): source _Invalid_, destination untouched',
+check('SHAKE128 output in _Hash_Output_ as a source (GR31 item 1): source _Invalid_, destination untouched',
       (r, src.st, dst.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB)
       and snap == (dst.state, dst.block_base))
 dst = absorbing('SHA3-256', MSG_ABC)
 dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
-check('shared secret into SHA3-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR32 item 2): destination _Invalid_',
+check('shared secret into SHA3-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR31 item 2): destination _Invalid_',
       (kl_derive(dst, Source(SEC), 32), dst.st) == ('invalid', KL_STATEEXT_INVALID))
 src, dst = Source(bytes(range(16)), secret=False), absorbing('SHA3-256')
-check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR32 item 3), both _Invalid_',
+check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR31 item 3), both _Invalid_',
       (kl_derive(dst, src, 16), src.st, dst.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATEEXT_INVALID))
 src, dst = Source(SEC), absorbing('SHA3-512')
 HART.klstart = 8
 r = kl_derive(dst, src, 32)
-check('uninterruptible: klstart = 8 at issue (no resumption, GR32 item 5): destination _Invalid_, klstart = 0',
+check('uninterruptible: klstart = 8 at issue (no resumption, GR31 item 5): destination _Invalid_, klstart = 0',
       (r, dst.st, src.st, HART.klstart) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 0))
 res = []
 for length in (0, 31, 33):
     dst = absorbing('SHA3-224', MSG_ABC)
     res.append((kl_derive(dst, Source(SEC), length), dst.st))
-check('a 32-byte shared secret with length 0, 31 or 33 (GR32 item 5: exactly the secret, granularity 8 bits): '
+check('a 32-byte shared secret with length 0, 31 or 33 (GR31 item 5: exactly the secret, granularity 8 bits): '
       'destination _Invalid_', None, res, [('invalid', KL_STATEEXT_INVALID)] * 3)
 src, dst = Source(SEC), squeezing('SHA3-224', MSG_ABC)
 squeeze(dst, 28)
 r = kl_derive(dst, src, 32)
-check('destination in _Success_ (GR32 item 2): _Invalid_, the source untouched',
+check('destination in _Success_ (GR31 item 2): _Invalid_, the source untouched',
       (r, dst.st, src.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT))
 
 src, dst, s28, d28 = Source(SEC), KeyDest(16), Source(SEC[:28]), KeyDest(32)
 h, dh, cm, dc = squeezing('SHAKE128', MSG_ABC), KeyDest(16), Source(SEC[16:], secret=False), KeyDest(16)
-check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte secret -> a 32-byte key (GR32 item 5): '
-      'destination _Invalid_, source untouched; SHAKE128(abc) -> a key (GR32 item 1): source _Invalid_, key '
-      'untouched; a CMAC -> a key (GR35): the CMAC', None,
+check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte secret -> a 32-byte key (GR31 item 5): '
+      'destination _Invalid_, source untouched; SHAKE128(abc) -> a key (GR31 item 1): source _Invalid_, key '
+      'untouched; a CMAC -> a key (GR34): the CMAC', None,
       (kl_derive(dst, src, 32), dst.key, kl_derive(d28, s28, 32), d28.st, s28.st, kl_derive(dh, h, 16), h.st, dh.st,
        kl_derive(dc, cm, 16), dc.key),
       ('done', SEC[:16], 'invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 'invalid', KL_STATEEXT_INVALID,
@@ -820,11 +820,11 @@ for label, prep, act in [
          lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089)),
         ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8)),
         ('KLLEN = 8 < last_block_len = 13 (MR2)', last, lambda c: c.exec('B', inp=b'\x01')),
-        ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR44 item 1)',
+        ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR43 item 1)',
          lambda: last(L=16), lambda c: c.exec('B', inp=b'')),
         ('a second kl.exec (MR10)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
         ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
-        ('same-State kl.setst (GR17)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
+        ('same-State kl.setst (GR16)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
         ('klstart = 1: not an interruption point', last,
          lambda c: (setattr(HART, 'klstart', 1), c.exec('B', inp=b'\x01\x02')))]:
     cl = prep()

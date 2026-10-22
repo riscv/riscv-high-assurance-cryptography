@@ -342,7 +342,7 @@ KL_STATE_OPERATE = KL_STATE_HASH_ABSORB = 2
 KL_STATE_SUCCESS, KL_STATE_FAILURE = 54, 55
 # <<KLE-stateexts-error>>: an Error State is _State_ 0 with its code in _StateExtension_.  The models hold
 # it as code << 7, a value that no #immed7 takes: setst(KL_STATEEXT_x) models `kl.setste` with
-# #immed7 = the code (GR30).
+# #immed7 = the code (GR29).
 (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATEEXT_OUT_OF_MEMORY, KL_STATEEXT_MGMT_AUTH,
  KL_STATEEXT_PRIV_VIOLATION, KL_STATEEXT_EXPIRED) = ERROR_STATES = tuple(c << 7 for c in range(1, 7))
 
@@ -358,8 +358,8 @@ def from_fields(state, stateext=0):
 KL_CFG_MANAGEMENT_END = 63
 
 def inert(state) -> bool:
-    """GR26: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
-    performs no operation and raises no exception, its unwritten output zeroed (GR28)."""
+    """GR25: an _Unconfigured_ or Error-State locker, on which a usage instruction of any Machine
+    performs no operation and raises no exception, its unwritten output zeroed (GR27)."""
     return state == KL_STATE_INERT or state in ERROR_STATES
 
 class IllegalInstruction(Exception):
@@ -571,7 +571,7 @@ def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_pla
         p.setst(KL_STATE_HASH_ABSORB)
         p.setst(KL_STATE_READY, form, 8)
         wrong.append(p.st)
-    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR16, GR66)', None, wrong,
+    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR15, GR65)', None, wrong,
           [KL_STATEEXT_INVALID] * 2)
 
 # ---------------------------------------------------------------- self-tests
