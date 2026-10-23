@@ -73,7 +73,7 @@ The intended value is the number of the target locker; 32 for a transfer to or f
 Any software that completes or abandons a management operation must then write 32 to `klnamedlocker`, or restore the value it saved.
 
 [[KLE-SR-nested-export-first,SR8]]SR8:: Before opening, on another locker, an export from a Valid State or an import other than the short import of an Error-State image (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>), while the locker that `klnamedlocker` names is in State `kl_cfg_exporting` or `kl_cfg_importing`, software must save that locker by a nested export and restore it before returning to the code that opened its operation, or terminate that code.
-While that locker is in such a State, software must not write another value to `klnamedlocker` before saving it this way, so that `klnamedlocker` names the owner of the authentication registers at every trap.
+While that locker is in such a State, software must not write another value to `klnamedlocker` before saving it this way, so that at every trap `klnamedlocker` names the locker with which the authentication registers are associated.
 Software may instead clear a locker in State `kl_cfg_importing`, whose import then restarts (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>).
 
 [[KLE-SR-no-interleaving,SR9]]SR9:: Software should complete or discard a management operation before it performs cryptographic operations or manages other lockers.
@@ -134,6 +134,14 @@ M-mode must not change the CSK of a hart until every export open on it, base or 
 
 [horizontal]
 [[KLE-SR-skid-usage-policy,SR17]]SR17:: A system that intends to protect a System Key (<<Zkl-ISA-unpriv.adoc#KLE-system-keys>>) associates at least a _UsagePolicy_ with its SKID in the SKS; a _UsagePolicy_ that admits every mode, as for a public signature-verification key, is a deliberate choice.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLE-SR-restrict-requests]]
+=== Requirements on Restriction Requests
+
+[horizontal]
+[[KLE-SR-restrict-request,SR18]]SR18:: A `kl.restricth` or `kl.restrictv` request (<<Zkl-ISA-unpriv.adoc#KLE-instruction-restrict>>) that is not meant to narrow _UsagePolicy_ sets all its bits, and a `kl.restrictl` or `kl.restrictv` request that is not meant to narrow _MachinePolicy_ sets all its bits: there a zero field narrows the CC to no mode, or to no function, whereas a zero _Locality_ or _ExpirationDate_ changes nothing.
 
 // ///////////////////////////////////////////////////////////////////
 
@@ -201,15 +209,15 @@ A handler that skips the trapping instruction applies its retirement effects to 
 
 . Save `klstart`.
 . Save `klnamedlocker`.
-. Let the _owner_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
-If there is an owner, save it first, with Form C or D `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
+. Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
+If there is a managed locker, save it first, with Form C or D `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is under management.
 . With `Zklio`:
 .. save `kliobuflen` and `kliobuftop`;
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`, then write 0 to `kliobuflen`.
-. Save every locker other than the owner that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
+. Save every locker other than the managed locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
 
@@ -223,12 +231,12 @@ A handler that passes `ml` through the KLIOBUF for the other lockers configures 
 === Context Restore Order
 
 . Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-restore-own-lockers>>).
-. Restore the lockers other than the owner (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
+. Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen`;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop`.
-. If an image was saved for the owner, restore it last, with Form C or D `kl.mgmt` and no KLIOBUF transfer.
+. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt` and no KLIOBUF transfer.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` last.
 
@@ -256,7 +264,7 @@ This section gives the instruction sequences for provisioning, import and export
 They show the operation and its error detection, not application-specific error handling, and can be packaged into libraries or OS APIs.
 
 Registers::
-GPR `t0` holds the number of the locker to be provisioned, imported or exported, or 32 for the locker that `klnamedlocker` names, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-instructions-memory>>).
+GPR `t0` holds the number of the locker to be provisioned, imported or exported, or 32 for the locker that `klnamedlocker` names, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-memory-check-order>>).
 The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 Selecting the locker::

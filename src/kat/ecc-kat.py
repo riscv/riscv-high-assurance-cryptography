@@ -12,7 +12,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw past the bound of GR64
+TIMEOUT = object()                                  # an RBG draw past the bound of GR65
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -30,7 +30,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLE RBG-unavailable exception (GR64): random bits unavailable past the bound; State unchanged."""
+    """KLE RBG-unavailable exception (GR65): random bits unavailable past the bound; State unchanged."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
     """kl.setst targets (<<KLE-ECC>>, <<KLE-EdDSA>>, <<KLE-X25519-X448>>, GR22, GR20). A same-State kl.setst is
@@ -110,12 +110,12 @@ class Locker:
     def machine_use(self):              # <<KLE-ECC-MachineUse>>
         return self.out_type | self.progress << 2
 
-    def discard(self):                  # GR55; also kl.clearads, an import without Content2, a kl.clone copy (GR56)
+    def discard(self):                  # GR56; also kl.clearads, an import without Content2, a kl.clone copy (GR57)
         self.progress, self.rnd = 0, None
         self.has.discard('rnd')
 
     def halt(self, progress=1, k=None):
-        """Precise halt of the current long-running kl.exec (GR54)."""
+        """Precise halt of the current long-running kl.exec (GR55)."""
         if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER) or not 0 < progress < 1 << 12:
             raise Invalid('no long-running operation / bad Progress')
         if self.state == SIGN_GEN and self.mode != 'eddsa':
@@ -191,13 +191,13 @@ class Locker:
             self._ready(xs)
         self.state = t
 
-    def restrictl_policy(self, clear_sign, clear_verify):
-        """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLE-instruction-restrict>>): a set bit removes its
-        function, a clear one changes nothing; clearing both bits erases Hash and Signature and their flags
-        (<<KLE-ECC>>), and is invalid for EdDSA (<<KLE-EdDSA>>)."""
-        if self.mode == 'xdh' and (clear_sign or clear_verify):   # a Machine that does not use the field
-            raise Invalid('x25519 / x448 use no _MachinePolicy_')   # <<KLE-instruction-restrict>>
-        sign, verify = self.policy[0] and not clear_sign, self.policy[1] and not clear_verify
+    def restrictl_policy(self, rq):
+        """kl.restrictl or kl.restrictv on _MachinePolicy_ (<<KLE-instruction-restrict>>): `rq` is AND-ed, a clear bit
+        removing its function and a set one changing nothing; clearing both bits erases Hash and Signature and their
+        flags (<<KLE-ECC>>), and is invalid for EdDSA (<<KLE-EdDSA>>)."""
+        if self.mode == 'xdh':                          # a Machine that does not use the field keeps it zero
+            return self                                 # <<KLE-instruction-restrict>>
+        sign, verify = self.policy[0] and bool(rq & 1), self.policy[1] and bool(rq & 2)
         if self.mode == 'eddsa' and not (sign or verify):
             raise Invalid('<<KLE-EdDSA>>: _MachinePolicy_ = 0 is invalid')   # a value the Machine forbids (GR25)
         self.policy = (sign, verify)                    # GR25: the State is kept; see _policy_gate
@@ -327,19 +327,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR64)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR65)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR64: KLE RBG-unavailable exception, State unchanged
+            if k is TIMEOUT:                        # GR65: KLE RBG-unavailable exception, State unchanged
                 self.rnd = entry[0]
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR64: RBG failure
+            if k is None:                           # GR65: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -812,13 +812,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR64)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR65)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR64)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR65)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))
@@ -1018,50 +1018,50 @@ res += [invalid(Locker(P256, sign=True, verify=False).setst, SET_SIG), Locker(P2
 check('_Set_Hash_ needs _MachinePolicy_ != 0 (either bit); _Sign_Input_ is gated by _MachinePolicy_[1] (MR9): '
       'sign-only -> Invalid, verify-only admitted', None, res, [True] * 6)
 
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, True)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(0b00)
 check('kl.restrictl clearing both _MachinePolicy_ bits erases Hash and Signature and clears their flags', None,
       (cr.hash, cr.sig, {'hash', 'sig'} & cr.has, cr.policy), (None, None, set(), (False, False)))
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(True, False)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(0b10)
 check('... clearing only _MachinePolicy_[0] keeps them', None, ({'hash', 'sig'} <= cr.has), True)
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, True)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(0b01)
 check('... clearing _MachinePolicy_[1] in _Sign_Input_ keeps the State; the next kl.exec there -> Invalid (GR25, MR9)',
       None, (cr.state, invalid(cr.exec_in, bytes(8))), (SET_SIG, True))
-sg = locker(P256, sc(7), hs(E0), to=SIGN_GEN).restrictl_policy(True, False)
-check('... a set bit of a disabled function changes nothing; clearing _MachinePolicy_[0] in _Sign_Generate_ keeps the '
+sg = locker(P256, sc(7), hs(E0), to=SIGN_GEN).restrictl_policy(0b10)
+check('... a clear bit of a disabled function changes nothing; clearing _MachinePolicy_[0] in _Sign_Generate_ keeps the '
       'State, and the next kl.exec there -> _Invalid_ (GR25)', None,
-      [Locker(P256, sign=False).restrictl_policy(True, False).policy, sg.state, invalid(sg.exec_run, [99])],
+      [Locker(P256, sign=False).restrictl_policy(0b10).policy, sg.state, invalid(sg.exec_run, [99])],
       [(False, True), SIGN_GEN, True])
 
 cr = locker(P256, sc(7), hs(E0), to=SIGN_GEN)
 cr.exec_run([99])
-cr.restrictl_policy(True, True)
+cr.restrictl_policy(0b00)
 c2 = locker(P256, sc(7), hs(E0), to=SIGN_GEN)
 c2.exec_run([99])
-c2.restrictl_policy(False, True)
+c2.restrictl_policy(0b01)
 check('clearing both _MachinePolicy_ bits in _Output_ with OutputType = signature keeps the State; the next kl.exec '
       'there -> _Invalid_ (GR25); clearing only bit 1 there lets the signature be emitted', None,
       (cr.state, invalid(cr.exec_out, 64), c2.exec_out(64) is not None, c2.state), (OUTPUT, True, True, SUCCESS))
 
-cr = locker(P256, sc(7), to=SET_HASH).restrictl_policy(True, True)
-c2 = locker(P256, sc(7), to=SET_HASH).restrictl_policy(True, True)
+cr = locker(P256, sc(7), to=SET_HASH).restrictl_policy(0b00)
+c2 = locker(P256, sc(7), to=SET_HASH).restrictl_policy(0b00)
 check('clearing both _MachinePolicy_ bits in _Set_Hash_ keeps the State; the next kl.exec there -> _Invalid_ (gated '
       'by either bit, MR9); a kl.setst into _Set_Scalar_, which leads to _Point_Mul_, is admitted', None,
       (cr.state, invalid(cr.exec_in, bytes(32)), c2.setst(SET_SCALAR), c2.state), (SET_HASH, True, None, SET_SCALAR))
 cr = armed()
 cr.halt(1, k=99)
 held = (cr.rnd is not None, 'rnd' in cr.has)
-cr.restrictl_policy(True, False)
+cr.restrictl_policy(0b10)
 check('halted _Sign_Generate_: kl.restrictl clearing only _MachinePolicy_[0] destroys RndNum and clears HasRndNum '
       '(<<KLE-ECC>>); the State is kept and the next kl.exec -> _Invalid_', None,
       (held, cr.rnd, 'rnd' in cr.has, cr.state, invalid(cr.exec_run, [99])),
       ((True, True), None, False, SIGN_GEN, True))
-cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, True)
-c2 = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(False, True)
+cr = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(0b01)
+c2 = locker(P256, hs(E0), (SET_SIG, SIG0)).restrictl_policy(0b01)
 check('_Sign_Input_ with _MachinePolicy_[1] cleared: a kl.setst into _Set_Scalar_ (leads to _Point_Mul_) or '
       '_Set_Hash_ (leads to _Sign_Generate_) is admitted (MR9 item 1.a); into _Sign_Verify_ -> _Invalid_ (item 1.b)',
       None, (cr.setst(SET_SCALAR), cr.state, c2.setst(SET_HASH), c2.state,
              invalid(locker(P256, sc(7), hs(E0), (SET_SECONDPT, pt(P256, P256.G)), (SET_SIG, SIG0))
-                     .restrictl_policy(False, True).setst, SIGN_VER)),
+                     .restrictl_policy(0b01).setst, SIGN_VER)),
       (None, SET_SCALAR, None, SET_HASH, True))
 
 section('Signing and verification over a custom `Generator`')
@@ -1254,14 +1254,14 @@ check("a verification pass re-entered with Xs = 2 after a completed one: k' <- 0
 
 r1 = locker(EC.ED25519, (SET_SCALAR, seed)); r1.setst(MSG_ABSORB, 0)
 r2 = locker(EC.ED25519, (SET_SCALAR, seed)); r2.setst(MSG_ABSORB, 0)
-r1.restrictl_policy(True, False)
-r2.restrictl_policy(False, True)
+r1.restrictl_policy(0b10)
+r2.restrictl_policy(0b01)
 r2.exec_in(b'm')
 check('EdDSA _Msg_Absorb_ in a signing pass: clearing _MachinePolicy_[0] keeps the State, and the next kl.exec of the '
       'pass -> Invalid (GR25); clearing [1] lets the pass continue', None,
       [r1.state, invalid(r1.exec_in, b'm'), r2.policy, r2.state], [MSG_ABSORB, True, (True, False), MSG_ABSORB])
 r3 = locker(EC.ED25519, (SET_SCALAR, seed), (SET_CTX, b'', None, 0)); r3.setst(MSG_ABSORB, 0); r3.exec_in(b'm')
-r3.restrictl_policy(True, False)
+r3.restrictl_policy(0b10)
 check('EdDSA signing pass 1 with _MachinePolicy_[0] cleared: the pass-2 kl.setst -> Invalid before pass 1 is '
       'finalized (MR9 item 1.a): no r, no R', None,
       (invalid(r3.setst, MSG_ABSORB, 1), r3.r, r3.msg_pass), (True, None, 0))
@@ -1273,10 +1273,10 @@ check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR12)
       fa + [fb.state], [True, True, MSG_ABSORB])
 check('EdDSA: _MachinePolicy_ = 0 is invalid, at provisioning and as the result of kl.restrictl', None,
       [invalid(Locker, EC.ED25519, sign=False, verify=False),
-       invalid(locker(EC.ED25519, (SET_SCALAR, seed)).restrictl_policy, True, True)], [True, True])
-check('x25519 / x448: a kl.restrictl that requests a _MachinePolicy_ bit -> Invalid (<<KLE-instruction-restrict>>)',
-      None, [invalid(Locker(c).restrictl_policy, cs, cv) for c in (EC.X25519, EC.X448)
-             for cs, cv in ((True, False), (False, True))], [True] * 4)
+       invalid(locker(EC.ED25519, (SET_SCALAR, seed)).restrictl_policy, 0b00)], [True, True])
+check('x25519 / x448: a kl.restrictl keeps the unused _MachinePolicy_ zero, no error (<<KLE-instruction-restrict>>)',
+      None, [invalid(Locker(c).restrictl_policy, rq) for c in (EC.X25519, EC.X448)
+             for rq in (0b10, 0b01, 0b00)], [False] * 6)
 ok_ed = locker(EC.ED25519, (SET_SCALAR, seed))
 ok_ed.setst(MSG_ABSORB, 0)
 bad_ed = copy.deepcopy(ok_ed, {id(ok_ed.c): ok_ed.c}); bad_ed.has.discard('hstate')
@@ -1355,14 +1355,14 @@ class HashSrc:
 
 def kl_derive(dest, src, length):
     """The only ECC endpoint (<<KLE-derive-endpoints>>): the shared secret in _Output_ with OutputType = shared
-    secret, which kl.exec also exports, hence unrestricted (GR41). No point, signature or hash output is a source;
+    secret, which kl.exec also exports, hence unrestricted (GR42). No point, signature or hash output is a source;
     no ECC field is a destination."""
     if isinstance(src, HashSrc) or src.state != OUTPUT or src.out_type != OUT_SHARED:
         raise Invalid(who='source')                                 # GR39 item 1: source first
     if isinstance(dest, Locker) or dest.kind == 'none' \
             or dest.state != {'key': READY, 'k0': SET_KEY}.get(dest.kind, HASH_ABSORB) \
             or dest.kind != 'hash' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='destination')                            # GR39 item 2; GR74
+        raise Invalid(who='destination')                            # GR39 item 2; GR75
     sh = src.shared()                                               # GR39 item 3: every destination is admitted
     if dest.kind == 'hash':                                         # the whole secret, exactly (GR39 item 5)
         ok = length == len(sh)
@@ -1372,9 +1372,9 @@ def kl_derive(dest, src, length):
         ok = length >= dest.size and len(sh) >= dest.size
     if not ok:
         raise Invalid(who='destination')                            # GR39 item 5
-    # unrestricted (GR41): no narrowing, no SCProtection check (GR40); the source does not advance (GR38)
+    # unrestricted (GR42): no narrowing, no SCProtection check (GR40); the source does not advance (GR38)
     if dest.kind == 'hash':
-        dest.data += sh                                            # GR41: the whole secret (GR39 item 5)
+        dest.data += sh                                            # GR42: the whole secret (GR39 item 5)
     else:
         dest.data = sh[:dest.size].ljust(dest.size, b'\0')          # GR38: eff_length bytes, zero-filled beyond
 
@@ -1466,23 +1466,23 @@ check('CAVP ECC CDH P-256 COUNT = 0: the emitted shared secret equals ZIUT, byte
 cr, _ = ecdh(UsagePolicy=0b00010, ExpirationDate=700)
 h = Dest('hash', UsagePolicy=0b10101, ExpirationDate=900)
 kl_derive(h, cr, 32)
-check('the shared secret into a hash is unrestricted (GR41): the hash locker is not narrowed', True,
+check('the shared secret into a hash is unrestricted (GR42): the hash locker is not narrowed', True,
       (h.mdh['UsagePolicy'], h.mdh['ExpirationDate'], h.data), (0b10101, 900, cr.shared()))
 cr, _ = ecdh(UsagePolicy=0b10011, ExpirationDate=900, SCProtection=1)
 k = Dest('key', UsagePolicy=0b10100, ExpirationDate=1200, SCProtection=2)
 kl_derive(k, cr, 64)
-check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH not narrowed (GR41)',
+check('SecondPt into an AES-256 `key` in _Ready_: first 32 bytes, MDH not narrowed (GR42)',
       (k.data, k.mdh['UsagePolicy'], k.mdh['ExpirationDate']) == (cr.shared(), 0b10100, 1200))
 cr, k = ecdh(SCProtection=1)[0], Dest('key')
 check('key with a lower SCProtection than the source: transferred: an unrestricted transfer is not '
-      'compared (GR40, GR41)', derive_who(k, cr, 64) is None and k.data == cr.shared())
+      'compared (GR40, GR42)', derive_who(k, cr, 64) is None and k.data == cr.shared())
 cr = ecdh(UsagePolicy=0b00011)[0]
 res = []
 for n in (32, 64, 16, 33):
     k0 = Dest('k0', size=64, UsagePolicy=0b00100)
     res.append((derive_who(k0, cr, n), k0.data, k0.mdh['UsagePolicy']))
 check('the 32-B shared secret into an HMAC-SHA-256 `K0` (64 B) in _Set_Key_: length 32 admitted, K0 = Z zero-filled '
-      'to 64 B, not narrowed (GR41); length 64, 16 or 33: eff_length is not the 32 B of the source, destination '
+      'to 64 B, not narrowed (GR42); length 64, 16 or 33: eff_length is not the 32 B of the source, destination '
       '_Invalid_ (GR39 item 5)', None, res,
       [(None, ZBE + bytes(32), 0b00100)] + [('destination', b'', 0b00100)] * 3)
 sm = locker(EC.SM2C, (SET_SCALAR, v2b(3, 32)), (SET_SECONDPT, pt(EC.SM2C, EC.SM2C.mul(5, EC.SM2C.G))), to=POINT_MUL)
@@ -1519,8 +1519,8 @@ for label, dest, src, n, who in (
         ('key destination outside _Ready_ (GR39 item 2)', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
         ('HMAC `K0` outside _Set_Key_ (GR39 item 2)', Dest('k0', READY, size=64), ecdh()[0], 32, 'destination'),
         ('key with length < key size (GR39 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
-        ('key of KeyType 1 (GR74)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
-        ('HMAC `K0` of KeyType 1 (GR74)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
+        ('key of KeyType 1 (GR75)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('HMAC `K0` of KeyType 1 (GR75)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
         ('ECC `Scalar` with length b/8 (GR39 item 2)', scalar_dest(), ecdh()[0], 32, 'destination'),
         ('ECC destination in _Ready_ (GR39 item 2)', scalar_dest(READY), ecdh()[0], 64, 'destination'),
         ('Machine without a destination endpoint (GR39 item 2)', Dest('none'), ecdh()[0], 64, 'destination')):
@@ -1533,8 +1533,8 @@ check('a hash in _Hash_Output_ is no source: its SHA-256 output into an ECC `Sca
       'so MR11 is never reached by a kl.derive', None,
       (derive_who(d, HashSrc(dg), 64), derive_who(k, HashSrc(dg), 40), derive_who(d521, ecdh()[0], 72),
        any(d.scalar), k.data, any(d521.scalar)), ('source', 'source', 'destination', False, b'', False))
-info('the shared secret is a field source (GR38), unrestricted (GR41); a hash takes the whole secret, with a '
-     'length equal to it (GR39 item 5); kl.derive is uninterruptible (GR45).')
+info('the shared secret is a field source (GR38), unrestricted (GR42); a hash takes the whole secret, with a '
+     'length equal to it (GR39 item 5); kl.derive is uninterruptible (GR46).')
 
 section('X25519 and X448 (<<KLE-X25519-X448>>, RFC 7748)')
 X25, X4 = EC.X25519, EC.X448
@@ -1618,7 +1618,7 @@ for name, c in EC.MONTGOMERY_CURVES.items():
           (ca.sec, kb, ca.out_type, 'sec' in ca.has), (K, K, OUT_SHARED, True))
     key = Dest('key', size=32)
     kl_derive(key, ca, n)
-    check(f'{name}: SecondPt (K) is an unrestricted kl.derive source in _Output_ (GR41): K not output', True,
+    check(f'{name}: SecondPt (K) is an unrestricted kl.derive source in _Output_ (GR42): K not output', True,
           (key.data, ca.state), (K[:32], OUTPUT))
     check(f'{name}: a zero Scalar is not a configured private key: the kl.setst into _Point_Mul_ -> _Invalid_ (MR9)',
           invalid(locker, c, to=POINT_MUL))

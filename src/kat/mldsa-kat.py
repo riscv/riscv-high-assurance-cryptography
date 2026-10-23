@@ -59,7 +59,7 @@ class MLDSALocker:
         self.put('State', INVALID)
         self.privkey = self.pubkey = b''
         self.clear()
-        self.use = 0                               # GR55: P zeroed on a transition to an Error State
+        self.use = 0                               # GR56: P zeroed on a transition to an Error State
 
     def setst(self, st, aux=None):
         """Form A (aux None) or Form B (aux = Xs)."""
@@ -81,7 +81,7 @@ class MLDSALocker:
         if name and st != self.state and self.use < self.size(name):     # MR7: a load left incomplete
             setattr(self, name, b'')                                      # leaves the field unconfigured
         self.put('State', st)
-        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR55; MR7 W
+        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR56; MR7 W
         if st == READY:
             self.clear()
         if st in (READY, MU_IN):
@@ -169,9 +169,9 @@ class MLDSALocker:
         elif st == SIGN_GEN:
             if not self.flag('HasPrivKey'):
                 return self.invalid()
-            if self.use == 0:                      # GR55: start, drawing rnd when Hedged
+            if self.use == 0:                      # GR56: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR64: RBG failure
+                if self.rnd is None:               # GR65: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after, self.sign_bound)
@@ -199,9 +199,8 @@ class MLDSALocker:
             self.clear()
             self.set_flag('HasMu', 0)
 
-    def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: a set bit removes a function,
-        if v:                                      # a zero field changes nothing
-            self.put('MachinePolicy', self.get('MachinePolicy') & ~v)
+    def restrictl_policy(self, v):                 # <<KLE-instruction-restrict>>: AND, a clear bit removes a function,
+        self.put('MachinePolicy', self.get('MachinePolicy') & v)   # all bits set change nothing
 
     def export_import(self, content2=True):
         """SCC round trip: the Serialized Content carries no tr, ctx or ctxlen (external mu); AuxInfo is carried
@@ -212,7 +211,7 @@ class MLDSALocker:
             setattr(new, f, getattr(self, f))
         new.kappa = self.kappa if content2 else 0
         if not content2:
-            new.use, new.rnd = 0, bytes(32)        # GR56, GR55: a restart zeroes P and destroys rnd
+            new.use, new.rnd = 0, bytes(32)        # GR57, GR56: a restart zeroes P and destroys rnd
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
             new.invalid()                          # MR11: the privkey check on import
         return new
@@ -325,13 +324,13 @@ def t_mdh():
           '_Sign_Verify_ -> _Invalid_', (cc.state, cc.flag('HasPrivKey'), sg.state, sv.state)
           == (PK_OUT, 1, INVALID, INVALID))
     cc = MLDSALocker(44)
-    cc.restrictl_policy(0b01)
+    cc.restrictl_policy(0b10)
     check('kl.restrictl narrows MachinePolicy to verify-only', cc.get('MachinePolicy') == 0b10)
-    cc.restrictl_policy(0b00)
-    check('kl.restrictl with a zero MachinePolicy field leaves it unchanged', (cc.get('MachinePolicy'), cc.state)
+    cc.restrictl_policy(0b11)
+    check('kl.restrictl with all MachinePolicy bits set leaves it unchanged', (cc.get('MachinePolicy'), cc.state)
           == (0b10, READY))
-    cc.restrictl_policy(0b01)
-    check('kl.restrictl: a set bit of a disabled function changes nothing', (cc.get('MachinePolicy'), cc.state)
+    cc.restrictl_policy(0b10)
+    check('kl.restrictl: a clear bit of a disabled function changes nothing', (cc.get('MachinePolicy'), cc.state)
           == (0b10, READY))
     for pol, st, name in ((0b10, SIGN_GEN, '_Sign_Generate_ with MachinePolicy[0]'),
                           (0b01, SIGN_VERIFY, '_Sign_Verify_ with MachinePolicy[1]')):
@@ -342,7 +341,7 @@ def t_mdh():
     cc.setst(SIGN_IN)
     so = generated()
     so.setst(MU_IN); so.exec_B(bytes(64)); so.setst(SIGN_GEN, 1); so.exec_D()
-    so.restrictl_policy(0b01)
+    so.restrictl_policy(0b10)
     kept = so.state
     so.exec_C(16)
     check('MR9: _Sign_Input_ gated by MachinePolicy[1] (sign-only -> _Invalid_); _Sign_Output_ by MachinePolicy[0]: '
@@ -530,7 +529,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR64)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR65)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -581,7 +580,7 @@ def t_sign_verify():
     check('deterministic signing is reproducible', c2.signature == sig)
 
 def t_progress():
-    section('Interrupted _Sign_Generate_: MachineUse as P (GR55)')
+    section('Interrupted _Sign_Generate_: MachineUse as P (GR56)')
     hed = mu_vec(True)
 
     def armed(aux=0):
@@ -630,7 +629,7 @@ def t_progress():
           cc.state == INVALID and cc.signature == b'')
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
-    cc.restrictl_policy(0b01)
+    cc.restrictl_policy(0b10)
     cc.exec_D()
     check('narrowed to verify-only during a halted _Sign_Generate_: the resuming kl.exec -> _Invalid_, no signature '
           '(GR25, MR9)', cc.state == INVALID and cc.signature == b'')
@@ -643,12 +642,12 @@ def t_progress():
     cc.exec_D(halt_after=2)
     a, b = cc.export_import(), cc.export_import()
     check('export/import with Content2 of a halted _Sign_Generate_, into two lockers: both resume to the same '
-          'signature, one draw (GR54)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
+          'signature, one draw (GR55)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
           and rbg.draws == 1)
     cc, rbg = armed()
     cc.exec_D(halt_after=2)
     r = cc.export_import(content2=False)
-    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR56, GR55)',
+    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR57, GR56)',
           r.state == SIGN_GEN and r.use == 0 and r.rnd == bytes(32) and r.kappa == 0)
     finish(r)
     check('the restarted operation draws a fresh rnd and signs with it', rbg.draws == 2 and r.signature

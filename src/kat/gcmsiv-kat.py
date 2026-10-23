@@ -154,10 +154,10 @@ class Siv:
     def _absorb(s, d): s.tmp = montmul(s.tmp ^ d, s.auth_key)
     def _ks(s): return s._enc(cat((1, 1), (sl(s.SIV, 126, 32), 95), ((sl(s.SIV, 31, 0) + s.ctr) % 2**32, 32)))
 
-    def restrictl(s, v):                                 # a set bit removes a function (<<KLE-instruction-restrict>>)
+    def restrictl(s, v):                                 # AND: a clear bit removes a function (<<KLE-instruction-restrict>>)
         if s.state in ERROR_STATES:
             return
-        s.policy &= ~v & 3
+        s.policy &= v
         if not s.policy:
             s._invalid()                                 # GR25: MR9 requires a set bit
 
@@ -231,7 +231,7 @@ class Siv:
         first, out = s.klstart // 16 if start is not None else 0, 0
         for j in range(first, KLLEN // 128):
             if stop is not None and j - first == stop:
-                s.klstart, s.halted = 16 * j, True       # GR48
+                s.klstart, s.halted = 16 * j, True       # GR49
                 return out
             blk = sl(INPUT, 128 * j + 127, 128 * j)
             if st == HA:
@@ -249,13 +249,13 @@ class Siv:
 
     def derive(s, src, length, klstart=0):
         """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready, from the bytes of a listed source
-        (a shared secret, a keystream or a CMAC); uninterruptible (GR45)."""
+        (a shared secret, a keystream or a CMAC); uninterruptible (GR46)."""
         if inert(s.state) or isinstance(src, Siv) and inert(src.state):
             return                                       # GR32: an inert endpoint
         if isinstance(src, Siv):                         # GR39 item 1: GCM-SIV is no source, its tag included
             return src._invalid()
         if s.key_type or s.state != READY:
-            return s._invalid()                          # GR74; Ready only (GR39 item 2)
+            return s._invalid()                          # GR75; Ready only (GR39 item 2)
         if klstart or length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR39 item 5: the key loaded in full
         s.key = src[:s.k // 8]
@@ -620,7 +620,7 @@ tag = m.exec('A', len_block(a10, p10), 128)
 o1 = m.exec('A', b2v(p10), 384, None, 1)
 h2 = (m.halted, m.klstart)
 o2 = m.exec('A', b2v(p10), 384, 16)
-check('GR48: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
+check('GR49: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed: C.2 #6',
       (h1, h2) == ((True, 32), (True, 16)) and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) + v2b(tag, 16) == w10)
 
 section('general rules')
@@ -671,7 +671,7 @@ m = at('enc')
 m.setst(ELB, 'B', 64)
 m.exec('A', 1, 64)
 snap = dict(vars(m))
-check('KLLEN = 0 in Enc_Last_Block after its kl.exec: empty window, no operation (GR51, MR8)',
+check('KLLEN = 0 in Enc_Last_Block after its kl.exec: empty window, no operation (GR52, MR8)',
       (m.exec('A', 1, 0), vars(m) == snap) == (0, True))
 m = at('enc')
 check('KLLEN = 120, klstart = 15 in Encrypt: invalid length first, Invalid', (m.exec('A', 1, 120, 15), m.state)
@@ -703,7 +703,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR74): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR75): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -741,7 +741,7 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR39, GR74; MR3)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR39, GR75; MR3)')
 src = bytes.fromhex(VECTORS[11]['key'])                 # the bytes of a listed source
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
@@ -752,12 +752,12 @@ P = Siv.provisioned
 for name, m, s_, n, ks in (('in Hash_Absorb (GR39 item 2)', at('ha'), src, 16, 0),
                            ('in Set_Aux_Value (nonce is no endpoint, GR39 item 2)', at('sav'), src, 12, 0),
                            ('in Success (GR39 item 2)', at('success'), src, 16, 0),
-                           ('into a key configured by a SKID (GR74, GR39 item 2)', P(skid=SKID), src, 16, 0),
+                           ('into a key configured by a SKID (GR75, GR39 item 2)', P(skid=SKID), src, 16, 0),
                            ('of 8 bytes into a 128-bit key (GR39 item 5)', P(K), src, 8, 0),
                            ('of 16 bytes into a 256-bit key (GR39 item 5)', P(K256), src, 16, 0),
                            ('of 0 bytes into a key (GR39 item 5)', P(K), src, 0, 0),
                            ('from a 12-byte source into a 128-bit key (GR39 item 5)', P(K), src[:12], 16, 0),
-                           ('with klstart = 8 (uninterruptible, GR45; GR39 item 5)', P(K), src, 16, 8)):
+                           ('with klstart = 8 (uninterruptible, GR46; GR39 item 5)', P(K), src, 16, 8)):
     m.derive(s_, n, ks)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
 for where in ('etf', 'success'):
@@ -768,23 +768,23 @@ for where in ('etf', 'success'):
 
 section('kl.restrictl (GR25, MR9), Form C KLLEN (MR5)')
 m = Siv.provisioned(K)
-m.restrictl(1)
+m.restrictl(2)
 check('GR25: narrowed to decrypt-only in Ready: decryption still succeeds (C.1 #1)', kl_decrypt(K, N, b'', W1, m=m)[0] == SUCC)
 m = at('ha')
-m.restrictl(2)
+m.restrictl(1)
 st = m.state
 m.setst(ETF)
 check('GR25: narrowed to encrypt-only in Hash_Absorb: the locker stays there, then encryption proceeds', (st, m.state) == (HA, ETF))
 m = at('enc')
-m.restrictl(1)
+m.restrictl(2)
 out = m.exec('A', 0x1234, 128)
 check('GR25, MR9: narrowed to decrypt-only in Encrypt: the next kl.exec -> Invalid, no output', (m.state, out) == (INV, 0))
 m = at('enc')
-m.restrictl(1)
+m.restrictl(2)
 m.setst(READY)
 check('GR25, GR22: narrowed in Encrypt, a kl.setst naming Ready is admitted', m.state == READY)
 m = at('ready')
-m.restrictl(3)
+m.restrictl(0)
 check('GR25: narrowed to MachinePolicy = 0 -> Invalid', m.state == INV)
 for imm, kl in ((SAV, 88), (SAV2, 120)):
     m = at('ready') if imm == SAV else at('sav')

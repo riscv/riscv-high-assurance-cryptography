@@ -77,12 +77,12 @@ class Gcm:
         return 0
 
     def _invalid(s): return s._error(INV)
-    def restrictl(s, v):                             # a set bit removes a function (<<KLE-instruction-restrict>>)
-        s.policy &= ~v                               # GR25: no transition by itself, unless the value is forbidden
+    def restrictl(s, v):                             # AND: a clear bit removes a function (<<KLE-instruction-restrict>>)
+        s.policy &= v                                # GR25: no transition by itself, unless the value is forbidden
         if s.state not in ERROR_STATES and s.policy == 0:
             s._invalid()                             # GCM requires a set bit
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR74)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR75)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -250,7 +250,7 @@ class Gcm:
         st, out = s.state, 0
         for i in range(first, KLLEN // 128):
             if stop is not None and i - first == stop:
-                s.klstart, s.halted = 16 * i, True       # GR48
+                s.klstart, s.halted = 16 * i, True       # GR49
                 return out
             blk = sl(INPUT, 128 * i + 127, 128 * i)
             if st == HA:
@@ -259,7 +259,7 @@ class Gcm:
             ctr = s._next_ctr()
             if ctr is None:
                 s._invalid()
-                return out                               # GR48
+                return out                               # GR49
             if st == DEC:
                 s._absorb(blk)
             s._set_ctr(ctr)
@@ -313,14 +313,14 @@ class Gcm:
         return 0
 
     def derive(s, src, length):
-        """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready, from a GR41-GR42 source (bytes).
+        """kl.derive destination (<<KLE-derive-endpoints>>): `key` in Ready, from a GR42-GR43 source (bytes).
         A Gcm is no source, its tag included; the IV (`kl.exec` input) in Set_Aux_Value is no destination."""
         if s.state in ERROR_STATES or isinstance(src, Gcm) and src.state in ERROR_STATES:
             return                                       # GR32: an inert endpoint
         if isinstance(src, Gcm):
             return src._invalid()                        # GR39 item 1
         if s.set_iv or s.key_type == 1 or s.state != READY:
-            return s._invalid()                          # Set IV, GR74, Set_Aux_Value: no endpoint (GR39 item 2)
+            return s._invalid()                          # Set IV, GR75, Set_Aux_Value: no endpoint (GR39 item 2)
         if length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR39 item 5
         s.key = src[:s.k // 8]
@@ -505,7 +505,7 @@ for label, *hx in VECTORS:
     if len(IVx) == 12:                                   # GCM with Set IV provisions only a 96-bit IV
         c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, iv=b2v(IVx)))
         check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR74): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR75): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 res = []
 for t in TAG_LENS:
     cl, bad = to_dtf(), to_dtf()
@@ -618,14 +618,14 @@ for last in (ELB, DLB):
     res.append((cl.exec('A', 0, 0), vars(cl) == snap))
 check('KLLEN = 0 in Enc_Last_Block / Dec_Last_Block after its kl.exec: empty window, no operation, State kept '
       '(<<KLE-GR-transfer-window-checks>>, MR8)', True, res, [(0, True)] * 2)
-section('multi-block kl.exec, GR48')
+section('multi-block kl.exec, GR49')
 for n in (2, 3):
     check(f'{n} blocks per kl.exec', kl_encrypt(K, IV, A, P, nblk=n)[:2] == (RC, RT))
 cl = at('enc')
 o1 = cl.exec('A', b2v(P[:48]), 384, None, 1)
 h = (cl.halted, cl.klstart)
 o2 = cl.exec('A', b2v(P[:48]), 384, 16)
-check('GR48: Encrypt halted after one block (klstart = 16) and resumed',
+check('GR49: Encrypt halted after one block (klstart = 16) and resumed',
       h == (True, 16) and cl.klstart == 0 and v2b(sl(o1, 127, 0) | o2 & ~MASK128, 48) == RC[:48])
 cl = at('ready')
 cl.setst(SAV, 'B', 96)
@@ -761,7 +761,7 @@ for c in (cl, ref):
     seed(c, -3)
     c.setst(ENC)
 want = ref.exec('A', b2v(P[:32]), 256)
-check('GR48/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
+check('GR49/GR34: limit hit at block 3 of 4: prefix kept, rest zeroed, Invalid',
       cl.exec('A', b2v(P[:48] + bytes(16)), 512) == want and cl.state == INV)
 check('GR35: the invalidated locker keeps only its MDH',
       cl.export() == (0, 0) and (cl.key, cl.tag, cl.J0) == (b'', 0, 0))
@@ -931,7 +931,7 @@ for ctl in (False, True):
 for mid in (16, 32, 48):
     check(f'export in Set_Aux_Value after {mid} of 60 IV bytes, import, resume: tc6', res[False, mid])
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR39, GR74, GR38; MR3)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR39, GR75, GR38; MR3)')
 stale = []
 for k, n in ((16, 16), (16, 32), (32, 32)):
     for ctl in (False, True):
@@ -955,7 +955,7 @@ check('GCM with Set IV is not a kl.derive destination (<<KLE-GCM-with-IV-mode>>,
       cl.state == INV)
 for name, cl, n in (('in Hash_Absorb (GR39 item 2)', at('ha'), 16),
                     ('in Success (GR39 item 2)', at('success'), 16),
-                    ('into a key configured by a SKID (GR74, GR39 item 2)', Gcm.provisioned(skid=SKID), 16),
+                    ('into a key configured by a SKID (GR75, GR39 item 2)', Gcm.provisioned(skid=SKID), 16),
                     ('of 8 bytes into a 128-bit key (GR39 item 5)', at('ready'), 8),
                     ('of 16 bytes into a 256-bit key (GR39 item 5)', Gcm.provisioned(bytes(32)), 16),
                     ('of 0 bytes into a key (GR39 item 5)', at('ready'), 0)):
@@ -991,16 +991,16 @@ control('Set IV: Ready keeps the running counter', kl_encrypt(None, None, A, P, 
 
 section('MachinePolicy narrowing (GR25, MR9): the Gated States')
 cl = to_etf()
-cl.restrictl(1)
+cl.restrictl(2)
 st0 = cl.state
 cl.exec('C', 0, 128)
 cl2 = to_dtf()
-cl2.restrictl(2)
+cl2.restrictl(1)
 cl2.setst(HV, 'C', b2v(RT))
 cl3 = at('ready')
 cl3.setst(SAV, 'B', 8 * len(IV))
 feed(cl3, IV)
-cl3.restrictl(2)
+cl3.restrictl(1)
 ct, tag, _ = finish(cl3, A, P)
 check('narrowing to encrypt-off in _Enc_Tag_Finalize_ keeps the State, the next kl.exec -> _Invalid_; '
       'decrypt-off in _Dec_Tag_Finalize_: kl.setst _Hash_Verify_ -> _Invalid_; decrypt-off in _Hash_Absorb_: '

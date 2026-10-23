@@ -93,10 +93,10 @@ class Ocb:
              (DEC_LAST, 'B'): (DECRYPT,), (ENCRYPT, 'A'): (LAST,),
              (DECRYPT, 'A'): (LAST,)}
     GATE = {ENCRYPT: 1, ENC_LAST: 1, TAG_FIN: 1, DECRYPT: 2, DEC_LAST: 2, VERIFY: 2}   # MR9
-    def restrictl(s, v):                               # a set bit removes a function (<<KLE-instruction-restrict>>)
+    def restrictl(s, v):                               # AND: a clear bit removes a function (<<KLE-instruction-restrict>>)
         if s.state in ERROR_STATES:
             return
-        s.policy &= ~v & 3
+        s.policy &= v
         if not s.policy:
             s._invalid('GR25: MachinePolicy = 0')      # MR9
     def __init__(s, key, policy=0b11, skid=None, **nc):
@@ -206,7 +206,7 @@ class Ocb:
         if klen < n:
             s._invalid('KLLEN < last_block_len')
         if klen == 0 and not (n == 0 and st in (ENC_LAST, DEC_LAST)):
-            return 0                                   # GR51 item 2: an empty window does not reach the Machine
+            return 0                                   # GR52 item 2: an empty window does not reach the Machine
         if st == LAST and not n:
             s._invalid('MR8: empty or already processed final block')
         if n and s.index > MAXB:
@@ -264,7 +264,7 @@ class Ocb:
 
 def derive(src, dst, length, klstart=0):
     """kl.derive into `key` (Ready) from a listed source's bytes; no OCB State is a source, the tag included,
-    and `N` is no destination (<<KLE-derive-endpoints>>).  Uninterruptible (GR45)."""
+    and `N` is no destination (<<KLE-derive-endpoints>>).  Uninterruptible (GR46)."""
     if dst.state in ERROR_STATES or isinstance(src, Ocb) and src.state in ERROR_STATES:
         return                                         # GR32: an inert endpoint
     if isinstance(src, Ocb):
@@ -272,7 +272,7 @@ def derive(src, dst, length, klstart=0):
     if dst.state != READY or isinstance(dst, OcbNonce):
         dst._invalid('GR39 item 2')                    # no endpoint in this State or Machine, `N` included
     if dst.skid is not None:
-        dst._invalid('GR74 (GR39 item 2)')
+        dst._invalid('GR75 (GR39 item 2)')
     if klstart or length < len(dst.key) or len(src) < len(dst.key):
         dst._invalid('GR39 item 5')                    # the key loaded in full
     dst.key = src[:len(dst.key)]
@@ -502,7 +502,7 @@ def last_set(n=64, absorb=False):
 last_done = lambda: last_set(absorb=True)
 cl = last_set(0)
 check("Hash_Absorb_Last_Block, last_block_len = 0: a kl.exec with KLLEN = 0 has an empty window, no operation "
-      "(GR51, MR8)", True, (cl.exec('B', 0, 0), cl.state), (0, LAST))
+      "(GR52, MR8)", True, (cl.exec('B', 0, 0), cl.state), (0, LAST))
 INVALID_CASES = [
     ("kl.setst #hash_absorb from Ready", lambda: Ocb(K128), lambda c: c.setst(ABSORB, 'B', 128)),
     ("kl.setst #set_aux_value Form A", lambda: Ocb(K128), lambda c: c.setst(SET_AUX, 'A')),
@@ -735,10 +735,10 @@ for name, mk, src, n, ks in [
         ("length 8 into the 16-byte key, no zero-fill (GR39 item 5)", lambda: Ocb(bytes(16)), secret, 8, 0),
         ("length 0 into the key (GR39 item 5)", lambda: Ocb(bytes(16)), secret, 0, 0),
         ("12-byte source into the 16-byte key (GR39 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16, 0),
-        ("klstart = 8 (uninterruptible, GR45; GR39 item 5)", lambda: Ocb(bytes(16)), secret, 16, 8),
+        ("klstart = 8 (uninterruptible, GR46; GR39 item 5)", lambda: Ocb(bytes(16)), secret, 16, 8),
         ("into a locker in Hash_Absorb (GR39 item 2)", at_absorb, secret, 16, 0),
         ("into a locker in Success (GR39 item 2)", at_end, secret, 16, 0),
-        ("into the key of a KeyType 1 locker (GR74, GR39 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
+        ("into the key of a KeyType 1 locker (GR75, GR39 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n, ks) and cl.key is None)
 res = []
@@ -791,21 +791,21 @@ check("N_len in {0, 5, 121, 128, 255} -> Invalid",
 
 section("kl.restrictl (GR25, MR9)")
 cl = at_absorb()
-cl.restrictl(1)
+cl.restrictl(2)
 cl.setst(LAST, 'B', 0)
 st = cl.state
 check("GR25: narrowed to decrypt-only in Hash_Absorb: the locker stays Valid; kl.setst #encrypt -> Invalid", True,
       (st, bool(inval(cl.setst, ENCRYPT, 'A')), cl.state), (LAST, True, INVALID))
 cl = at_crypt()
-cl.restrictl(1)
+cl.restrictl(2)
 check("GR25, MR9: narrowed to decrypt-only in Encrypt: the next kl.exec -> Invalid", True,
       (bool(inval(cl.exec, 'A', 0)), cl.state), (True, INVALID))
 cl = at_crypt()
-cl.restrictl(1)
+cl.restrictl(2)
 cl.setst(READY)
 check("GR25, GR22: narrowed in Encrypt, kl.setst naming Ready admitted", True, cl.state, READY)
 cl = Ocb(K128)
-check("GR25: narrowed to MachinePolicy = 0 -> Invalid", bool(inval(cl.restrictl, 3)) and cl.state == INVALID)
+check("GR25: narrowed to MachinePolicy = 0 -> Invalid", bool(inval(cl.restrictl, 0)) and cl.state == INVALID)
 
 section("negative controls")
 control("L-ladder via little-endian update_mask", run(*E7, dbl=update_mask) != VEC[7][5])

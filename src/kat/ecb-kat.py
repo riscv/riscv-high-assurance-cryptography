@@ -43,7 +43,7 @@ def narrow(dst, src):
     loc = (max(sl(lo, 1, 0), sl(ls, 1, 0)) | max(sl(lo, 3, 2), sl(ls, 3, 2)) << 2   # stricter entry
            | (sl(lo, 5, 4) | sl(ls, 5, 4)) << 4 | (sl(lo, 8, 6) | sl(ls, 8, 6)) << 6)
     e = [x for x in (fld(dst, 'ExpirationDate'), fld(src, 'ExpirationDate')) if x]
-    dst = put(put(dst, 'UsagePolicy', (u | us) & 15 | u & us & 16), 'Locality', loc)
+    dst = put(put(dst, 'UsagePolicy', u & us), 'Locality', loc)
     return put(dst, 'ExpirationDate', min(e) if e else 0)
 
 class EcbLocker:
@@ -102,7 +102,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR20, GR21; MR1 (length first: GR51)
+            self.invalidate()                 # GR20, GR21; MR1 (length first: GR52)
             return out & ~window, 0
         if not fld(self.mdh, 'MachinePolicy') & (POL_ENC if self.state == KL_STATE_ENCRYPT else POL_DEC):
             self.invalidate()                 # MR9: issued in a State that MachinePolicy disables (GR25)
@@ -123,7 +123,7 @@ class EcbLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLE-derive-endpoints>>); `src` is an EcbLocker or (kind, bytes, MDH),
-        kind 'shared' (restricted, GR41) or 'keystream' (unrestricted, GR42)."""
+        kind 'shared' (restricted, GR42) or 'keystream' (unrestricted, GR43)."""
         if isinstance(src, EcbLocker):        # ECB defines no source endpoint: GR39 item 1
             return src.invalidate()
         kind, data, src_mdh = src
@@ -131,7 +131,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # GR39 item 2 (GR74), item 5
+            return self.invalidate()          # GR39 item 2 (GR75), item 5
         if kind == 'shared':                  # only a restricted transfer narrows (GR40)
             if fld(self.mdh, 'SCProtection') < fld(src_mdh, 'SCProtection'):
                 return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # GR40: never to a weaker level
@@ -285,7 +285,7 @@ eq("MR1: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[:
    (0, INV))
 eq("Form D substitution (kliobuftop = 64): output in place of input",
    v2b(new_cl(ci, k, state=ENC).exec(b2v(pt), 512)[0], 64).hex(), c)
-for q in (1, 2, 3):                           # GR48, MR2: precise halt, resumption
+for q in (1, 2, 3):                           # GR49, MR2: precise halt, resumption
     cl = new_cl(ci, k, state=ENC)
     part, ks = run(cl, pt, halt_after=q)
     res, ks2 = cl.exec(b2v(part), 512, klstart=ks)
@@ -337,11 +337,11 @@ eq("SCC whose State ECB does not define -> Invalid", (cl.state, cl.key), (INV, N
 cl.import_scc(put(put(put(m192, 'KeyType', 0), 'State', ENC), 'StateExtension', 1), H(SP38A_F1[1][2]))
 eq("SCC in Encrypt with a StateExtension ECB does not use -> Invalid", (cl.state, cl.key), (INV, None))
 
-section("kl.derive into `key` (destination in Ready; GR38-GR42)")
+section("kl.derive into `key` (destination in Ready; GR38-GR43)")
 _, ci, k, c = SP38A_F1[1]                     # AES-192: dest_length = 24
 secret = H(k) + H("a5" * 8)
-SRC = mdh_pack(UsagePolicy=0b00010, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
-DST = dict(UsagePolicy=0b10001, Locality=0b0_01_00_10, SCProtection=1)
+SRC = mdh_pack(UsagePolicy=0b01101, Locality=0b1_00_01_11, ExpirationDate=500, SCProtection=1)
+DST = dict(UsagePolicy=0b11110, Locality=0b0_01_00_10, SCProtection=1)
 narrowed = lambda m: (fld(m, 'UsagePolicy'), fld(m, 'Locality'), fld(m, 'ExpirationDate'))
 
 def derived(kind='shared', length=32, data=secret, state=None, keytype=0, src=SRC):
@@ -357,15 +357,15 @@ for kind, length in (('shared', 32), ('shared', 24), ('keystream', 32)):
     eq(f"{kind}, length {length} >= 24: exactly 24 bytes become the key, F.1.3",
        derived(kind, length)[:3], (True, ENC, c))
 eq("shared secret (restricted, GR40): UsagePolicy, Locality, ExpirationDate narrowed",
-   narrowed(derived()[3]), (0b00011, 0b1_01_01_11, 500))
-eq("keystream (unrestricted, GR42): destination MDH not narrowed",
+   narrowed(derived()[3]), (0b01100, 0b1_01_01_11, 500))
+eq("keystream (unrestricted, GR43): destination MDH not narrowed",
    narrowed(derived('keystream')[3]), (DST['UsagePolicy'], DST['Locality'], 0))
 ks = b''.join(aes_encrypt(H(SP38A_F1[0][2]), bytes(15) + bytes([i])) for i in range(2))   # two whole blocks
 r = derived('keystream', 32, data=ks, src=put(SRC, 'SCProtection', 2))
 eq("keystream of 2 whole blocks, length 32: its first 24 bytes become the key; no narrowing, "
-   "no SCProtection comparison (GR42)", (r[:3], narrowed(r[3])),
+   "no SCProtection comparison (GR43)", (r[:3], narrowed(r[3])),
    ((True, ENC, ref(aes_encrypt, ks[:24], pt).hex()), (DST['UsagePolicy'], DST['Locality'], 0)))
-eq("CMAC in Hash_Output (GR42) supplies b/8 = 16 bytes < 24 (GR39 item 5) -> destination Invalid, no key",
+eq("CMAC in Hash_Output (GR43) supplies b/8 = 16 bytes < 24 (GR39 item 5) -> destination Invalid, no key",
    derived('keystream', 32, data=ks[:16])[1:3], (INV, None))
 eq("source SCProtection above destination: Privilege Violation, no key (GR40); below it: key received, level kept",
    (derived(src=put(SRC, 'SCProtection', 2))[1:3], derived(src=put(SRC, 'SCProtection', 0))[:3],
@@ -375,7 +375,7 @@ for label, kw in (("length 16 < 24 (GR39 item 5, no zero-fill)", dict(length=16)
                   ("length 0 (GR39 item 5)", dict(length=0)),
                   ("source field of 16 bytes < 24 (GR39 item 5)", dict(data=secret[:16])),
                   ("destination in Encrypt (GR39 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (GR74, GR39 item 2)", dict(keytype=1))):
+                  ("KeyType 1 destination (GR75, GR39 item 2)", dict(keytype=1))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
 eq("differing Boot Session entries (GR40, a failed narrowing) -> destination Privilege Violation, no key",
    derived(src=put(SRC, 'Locality', 0b0_10_00_00))[1:3], (KL_STATEEXT_PRIV_VIOLATION, None))

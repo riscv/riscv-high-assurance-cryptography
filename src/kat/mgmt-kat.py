@@ -43,6 +43,8 @@ def eq(name, got, want):
 def md(**kw):
     m = dict.fromkeys(MDH_FIELD, 0)
     m['res'] = 0
+    if 'Machine' in kw:                     # a CC: every mode allowed, Debug mode not, unless the caller says
+        m['UsagePolicy'] = 0b01111
     assert set(kw) <= set(m), kw
     m.update(kw)
     if m['State'] > 63:       # normal form: a model Error State in 'State', its code in 'StateExtension'
@@ -229,11 +231,8 @@ def loc_union(a, b):
         | (sl(a, 8, 6) | sl(b, 8, 6)) << 6
 
 def narrow_up(cur, req):
-    """kl.restricth _UsagePolicy_: bits 0-3 set denials, bit 4 withdraws the Debug grant."""
-    return (cur | req & 0b01111) & ~(req & 0b10000)
-
-def narrow_skid(up, kp):
-    return ((up | kp) & 0b01111) | (up & kp & 0b10000)
+    """<<KLE-Metadata-narrowing>> of _UsagePolicy_: a set bit allows a mode, so narrowing is the AND."""
+    return cur & req
 
 def custom_value(m):                                                # GR9
     return m['Machine'] >= 3072 or m['Version'] == 3
@@ -247,7 +246,7 @@ def sc_rank(v):
     return SC_ORDER.index(v) if v in SC_ORDER else -1
 
 class Machine:
-    kind, policies, sc_levels = 'ops', {1, 2, 3}, {0}       # kind: 'ops' mask, 'sig' mask, 'ext' extends _Machine_
+    kind, policies, sc_levels = 'ops', {1, 2, 3}, {0}       # kind: 'ops' mask, 'sig' mask, 'none' field unused (zero)
     key_len, state_len, clf_base, clf_both, gran = 32, 16, 64, 0, 16
     op_states, states, stx = {}, frozenset(), frozenset({0})   # stx: StateExtension values outside Ready
     def __init__(self, ident):
@@ -302,7 +301,7 @@ class ToyCipher(Machine):
         return bxor(blk, prf(b'keystream', u.key_of(cl), ctr)[:16])
 
 class ToyXof(Machine):
-    kind, policies, sc_levels, state_len, clf_base, gran = 'ext', {0, 1}, {0, 1}, 32, 96, 1
+    kind, policies, sc_levels, state_len, clf_base, gran = 'none', {0}, {0, 1}, 32, 96, 1
     ABSORB, FINAL, states, stx = 2, 3, frozenset({2, 3}), frozenset({0, 1})   # FINAL squeezes, as Hash_Output
     def exec_form(self, m):
         return {READY: 'B', self.ABSORB: 'B', self.FINAL: 'C'}.get(m['State'])
@@ -349,7 +348,7 @@ class ToyCustom(Machine):
 
 class ToyKex(Machine):
     """Key agreement: kl.setst SHARED computes an explicit shared secret into the state block."""
-    kind, policies, sc_levels, state_len, clf_base = 'ext', {0}, {0, 1, 2}, 64, 96
+    kind, policies, sc_levels, state_len, clf_base = 'none', {0}, {0, 1, 2}, 64, 96
     SHARED, states, stx = 2, frozenset({2}), frozenset({0, 1})
     def setst(self, u, cl, imm, aux):
         if imm == self.SHARED and cl.mdh['State'] == READY:
@@ -360,7 +359,7 @@ class ToyKex(Machine):
 
 class ToyHash(Machine):
     """A keyless Machine: its PI carries no key field, so _KeyType_ 1 or 2 is invalid (<<KLE-Metadata-validity>>)."""
-    kind, policies, sc_levels, key_len, state_len, clf_base = 'ext', {0}, {0}, 0, 32, 64
+    kind, policies, sc_levels, key_len, state_len, clf_base = 'none', {0}, {0}, 0, 32, 64
     states, stx = frozenset({2}), frozenset({0})
 
 MACHINES = {m.ident: m for m in (ToyCipher(M_CIPHER), ToyXof(M_XOF), ToySig(M_SIG), ToyCustom(M_CUSTOM),
@@ -369,7 +368,7 @@ MACHINES = {m.ident: m for m in (ToyCipher(M_CIPHER), ToyXof(M_XOF), ToySig(M_SI
 # output on zero blocks), SHARED for the restricted ML-KEM sharedkey field; XOF output and the signature key are none
 SRC_EP = {M_CIPHER: ({ToyCipher.ENCRYPT}, 'stream'), M_KEX: ({ToyKex.SHARED}, 'secret')}     # (States, kind)
 DST_EP = {M_CIPHER: ('key', {READY}), M_XOF: ('absorb', {READY, ToyXof.ABSORB})}
-ADMITTED = {'stream': {'key'}, 'secret': {'key', 'absorb'}}                  # <<KLE-admitted-pairs>>: GR41, GR42
+ADMITTED = {'stream': {'key'}, 'secret': {'key', 'absorb'}}                  # <<KLE-admitted-pairs>>: GR42, GR43
 
 def content2_size(m):
     return 16 * (m['AuxDataLen'] - 2) if m['AuxDataLen'] >= 2 and not m['ADSDropped'] else 0
@@ -387,7 +386,7 @@ class Memory:
     def read(self, a, n):
         return bytes(self.buf[a:a + n])
     def fault(self, a, n, kind):
-        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR62
+        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR63
             for lo, hi in rng:
                 if a < hi and a + n > lo: return f'{kind}_{what}_fault', max(a, lo)
 
@@ -398,10 +397,10 @@ DEFAULT_CSK = b2v(prf(b'CSK'))
 SKS_KEY = prf(b'SKS key') + prf(b'SKS key 2')
 SKID_A, SKID_B, SKID_C, SKID_D = 0x0123_4567_89AB_CDEF, 0x42, 0x43, 0x44
 DEFAULT_SKS = {
-    SKID_A: dict(key=SKS_KEY, allowed={M_CIPHER: 3, M_SIG: 1}, usage=0b00100, locality=loc(hw1=2)),
-    SKID_B: dict(key=SKS_KEY[::-1], allowed={M_CIPHER: 1}, usage=0b10000, locality=loc(boot=1)),
-    SKID_C: dict(key=SKS_KEY, allowed={M_CIPHER: 3}, usage=0, locality=loc(boot=2)),
-    SKID_D: dict(key=SKS_KEY, allowed={M_CIPHER: 3}, usage=0, locality=loc(sloc=1)),
+    SKID_A: dict(key=SKS_KEY, allowed={M_CIPHER: 3, M_SIG: 1}, usage=0b01011, locality=loc(hw1=2)),
+    SKID_B: dict(key=SKS_KEY[::-1], allowed={M_CIPHER: 1}, usage=0b11111, locality=loc(boot=1)),
+    SKID_C: dict(key=SKS_KEY, allowed={M_CIPHER: 3}, usage=0b01111, locality=loc(boot=2)),
+    SKID_D: dict(key=SKS_KEY, allowed={M_CIPHER: 3}, usage=0b01111, locality=loc(sloc=1)),
 }
 
 class Locker:
@@ -523,8 +522,8 @@ class Unit:
         bit = {'U': 0, 'VU': 0, 'VS': 1, 'HS': 2, 'S': 2, 'M': 3}
         if self.mode == 'D':                                        # outside authenticated Debug mode, bits 0-3
             dprv = getattr(self, 'debug_prv', 'M')                  # also apply to the mode Debug mode executes in
-            return bool(up & 0b10000) and (dprv == 'M' or not up >> bit[dprv] & 1)
-        return not up >> bit[self.mode] & 1
+            return bool(up & 0b10000) and (dprv == 'M' or bool(up >> bit[dprv] & 1))
+        return bool(up >> bit[self.mode] & 1)                       # a set bit allows its mode
     def expired(self, m):                                           # <<KLE-Metadata-expiration-date>>
         if not self.zklexpire or not m['ExpirationDate']: return False
         hours = min(max(0, self.clock), (1 << 20) - 1) if self.clock is not None else None   # 0 before the epoch,
@@ -623,22 +622,27 @@ class Unit:
         if form == 'A': return self.getmd(k), False
         self._pre()
         return (unpack(lo & MASK64), True) if form == 'B' else (as_md(m), True)
-    def _not_native(self, m, supplied, sizing):                    # <<KLE-kleemulation>>
-        if not supplied or (sizing and m['State'] in ERROR_STATES) or self.available(m): return False
-        if self.kleemulation: raise Trap('illegal', 2)               # second group of grounds
+    def _not_native(self, m, supplied):                            # <<KLE-size-avail-lookup>>
+        if not supplied or self.available(m): return False
+        if self.kleemulation: raise Trap('illegal', 2)               # <<KLE-kleemulation>>
         return True
     def size(self, form='A', k=None, lo=None, m=None, vec_bits=128):     # <<KLE-instruction-size>>
         m, supplied = self._md_operand(form, k, lo, m, vec_bits)
-        if self._not_native(m, supplied, True): return 0
+        if supplied:
+            st = m['State']
+            if 60 < st <= 63 or st > 63 and m['StateExtension'] >= 7: return 0      # item 2
+            if st > 63: return 16                                                     # item 3
+            if m['Version'] in (1, 2) or m['SCProtection'] == 3 or m['KeyType'] == 3: return 0   # item 4
+            if self._not_native(m, True): return 0                                    # item 5
         return self.size_of(m, supplied, low=form == 'B')
     def size_of(self, m, supplied, low=False):
         st = m['State']
         if not supplied and st == UNCONF: return 0
         if st > 63:                                                 # State 0, StateExtension non-zero
-            if supplied and (7 <= m['StateExtension'] <= 15 or m['Version'] == 3): return 0   # invalid
-            return 16
+            if supplied and 7 <= m['StateExtension'] <= 15: return 0   # invalid
+            return 16                                               # Error State, whatever its other fields
         if supplied and (st > 60 or self.unsupported(m) or self.invalid(m, 'size', low)): return 0
-        if m['Version'] == 3: return 16 + 16 * m['AuxDataLen']     # GR71, kl.size item 3
+        if m['Version'] == 3: return 16 + 16 * m['AuxDataLen']     # GR72, kl.size item 3
         mach = MACHINES[m['Machine']]
         if st in VALID or st in (IMP, EXP):
             c1 = mach.content1_size(m)
@@ -646,8 +650,9 @@ class Unit:
         return 16 + mach.pi_content_size(m)
     def avail(self, form='A', k=None, lo=None, m=None, vec_bits=128):
         m, supplied = self._md_operand(form, k, lo, m, vec_bits)
-        if self._not_native(m, supplied, False): return 0
-        return 0 if not supplied and m['State'] == UNCONF else self.available(m)
+        if not supplied: return 0 if m['State'] == UNCONF else self.available(m)  # item 1
+        if m['Version'] != 0 or m['SCProtection'] == 3 or m['KeyType'] == 3: return 0  # item 2
+        return 0 if self._not_native(m, True) else 1                                  # items 3-4
     def layout(self, m):
         """(ContentOffset, content_size, image_size, image_end) of <<KLE-serialized-image>>."""
         mach = MACHINES[m['Machine']]
@@ -806,12 +811,12 @@ class Unit:
         m, e = cl.mdh, self.sks.get(b2v(cl.c1[:8]))
         if e is None or m['Machine'] not in e['allowed']: return INVALID          # not resolved
         allowed = e['allowed'][m['Machine']]
-        if (m['MachinePolicy'] != allowed) if MACHINES[m['Machine']].kind == 'ext' else m['MachinePolicy'] & ~allowed:
+        if m['MachinePolicy'] & ~allowed:
             return INVALID
         new_loc = loc_union(m['Locality'], e['locality'])
         if new_loc is None or self.locality_problem(new_loc):        # failed narrowing (<<KLE-Metadata-narrowing>>)
             return PRIV
-        m.update(UsagePolicy=narrow_skid(m['UsagePolicy'], e['usage']), Locality=new_loc)
+        m.update(UsagePolicy=narrow_up(m['UsagePolicy'], e['usage']), Locality=new_loc)
         return None
 
     # -- kl.setst family  <<KLE-instruction-setst>>
@@ -960,11 +965,12 @@ class Unit:
         named = self.NAMED['l'] + self.NAMED['h'] if which == 'v' else self.NAMED[which]
         mach, new = MACHINES.get(m['Machine']), dict(m)
         bad = [n for n in MDH_FIELD if n not in named and xs[n]] + [xs['res']]
-        req = xs['MachinePolicy']
-        if req:                                                     # a set bit removes a function
-            mp = m['MachinePolicy'] & ~req
-            bad.append(mach is None or mach.kind == 'ext' or mp not in mach.policies)   # GR25: forbidden value
+        if which != 'h' and mach and mach.kind != 'none':          # a clear bit removes a function; an unused
+            mp = m['MachinePolicy'] & xs['MachinePolicy']          # field stays zero whatever rq holds
+            bad.append(mp not in mach.policies)                     # GR25: forbidden value
             new['MachinePolicy'] = mp
+        elif which != 'h' and mach is None:
+            bad.append(True)
         req, pv = xs['Locality'], []                                # pv: Usage Control failures (Privilege Violation)
         if req:
             for name, hi, lo in LOC_SUB:
@@ -976,7 +982,7 @@ class Unit:
             pv.append(new['Locality'] != m['Locality'] and self.locality_problem(new['Locality']))
         if new['Locality'] != m['Locality']:
             bad.append(custom_value(new) and sl(new['Locality'], 1, 0) < 2)          # GR9
-        if xs['UsagePolicy']:
+        if which != 'l':                                            # all ones leaves the field unchanged
             new['UsagePolicy'] = narrow_up(m['UsagePolicy'], xs['UsagePolicy'])
         req = xs['ExpirationDate']
         if req:
@@ -1035,10 +1041,10 @@ class Unit:
         self._dirty(kd)
         return 'swapped'
 
-    # -- kl.derive  <<KLE-instruction-derive>>, uninterruptible (GR45)
+    # -- kl.derive  <<KLE-instruction-derive>>, uninterruptible (GR46)
     def derive(self, kd, ks, length):
         r = self._derive(kd, ks, length)
-        self.klstart = 0                                            # GR50: written 0 on retirement, not on a trap
+        self.klstart = 0                                            # GR51: written 0 on retirement, not on a trap
         return r
     def _derive(self, kd, ks, length):
         km = 'KLNL' in (kd, ks)
@@ -1069,7 +1075,7 @@ class Unit:
                 return 'invalid'
         S, D = self.lockers[ks].mdh, self.lockers[kd].mdh
         se, de = SRC_EP.get(S['Machine']), DST_EP.get(D['Machine'])
-        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR39 items 1-2, GR74
+        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR39 items 1-2, GR75
               (kd, bool(de) and D['State'] in de[1] and not (de[0] == 'key' and D['KeyType'] == 1)))
         bad = [e for e, good in ok if not good] or ([] if de[0] in ADMITTED[se[1]] else [ks, kd])   # GR39 item 3
         if bad:
@@ -1078,11 +1084,11 @@ class Unit:
             return 'invalid'
         key, dlen, secret = de[0] == 'key', MACHINES[D['Machine']].key_len, se[1] == 'secret'
         slen = MACHINES[M_KEX].state_len if secret else 1 << 30     # a field, or the unbounded keystream
-        if self.klstart or (length < dlen or slen < dlen if key else length != slen):   # GR39 item 5, GR41
+        if self.klstart or (length < dlen or slen < dlen if key else length != slen):   # GR39 item 5, GR42
             self._enter_error(kd, INVALID)
             return 'invalid'
         # GR39 items 6-7 bind no toy pair: these destinations require klstart = 0, and both sources suffice
-        if secret:                                                  # GR41 restricted (GR40); GR42 unrestricted
+        if secret:                                                  # GR42 restricted (GR40); GR43 unrestricted
             if sc_rank(D['SCProtection']) < sc_rank(S['SCProtection']):   # GR40: never to a weaker level
                 self._enter_error(kd, PRIV)
                 return 'privilege_violation'
@@ -1090,7 +1096,7 @@ class Unit:
             if union is None or self.locality_problem(union):        # a failed narrowing (<<KLE-Metadata-narrowing>>)
                 self._enter_error(kd, PRIV)
                 return 'privilege_violation'
-            D.update(UsagePolicy=narrow_skid(D['UsagePolicy'], S['UsagePolicy']), Locality=union)
+            D.update(UsagePolicy=narrow_up(D['UsagePolicy'], S['UsagePolicy']), Locality=union)
             if self.zklexpire:
                 D['ExpirationDate'] = min([x for x in (D['ExpirationDate'], S['ExpirationDate']) if x] or [0])
         n = min(length, dlen) if key else length                    # GR38 eff_length
@@ -1275,6 +1281,10 @@ class Unit:
 # ---------------------------------------------------------------- software sequences
 
 fresh = Unit
+
+def rq(**kw):
+    """A kl.restrict* request: all-ones _MachinePolicy_ and _UsagePolicy_ leave the field unchanged."""
+    return md(**{'MachinePolicy': 0b11, 'UsagePolicy': 0b11111, **kw})
 
 def cipher(**kw):
     return md(**{'Machine': M_CIPHER, 'MachinePolicy': 3, **kw})
@@ -1480,11 +1490,11 @@ def snapshot(u):
 
 def ready_cipher(u, k, **kw):
     """A cipher locker in State ENCRYPT; a _UsagePolicy_ is applied afterwards with kl.restricth."""
-    up = kw.pop('UsagePolicy', 0)
+    up = kw.pop('UsagePolicy', None)
     provision(u, k, cipher(**kw))
     u.setst(k, ToyCipher.ENCRYPT, 0x77)
-    if up:
-        u.restrict(k, md(UsagePolicy=up), 'h')
+    if up is not None:                                          # narrowed from every mode, Debug excluded
+        u.restrict(k, rq(UsagePolicy=up), 'h')
     return u
 
 def rc(k=0, unit=None, **kw):
@@ -1537,7 +1547,8 @@ def t_mdh():
        (128, 0, MASK128))
     bits = [(n, lo + b, 1 << b) for n, (hi, lo) in MDH_FIELD.items() for b in range(hi - lo + 1)]
     check('walking ones: each field bit at its position, no bleed',
-          all(pack(md(**{n: v})) == 1 << p and unpack(1 << p) == md(**{n: v}) for n, p, v in bits))
+          all(pack(md(**{n: v}, **z)) == 1 << p and unpack(1 << p) == md(**{n: v}, **z)
+              for n, p, v in bits for z in [{'UsagePolicy': 0} if n == 'Machine' else {}]))
     ones = md(**{n: (1 << hi - lo + 1) - 1 for n, (hi, lo) in MDH_FIELD.items()}, res=RES_MASK)
     eq('all-ones MDH packs to ones(128) and round trips', (pack(ones), unpack(MASK128)), (MASK128, ones))
     eq('each reserved bit is detected; 116-127 lie above [63:0]',
@@ -1559,7 +1570,7 @@ def t_mdh():
     eq('ExpirationDate ~119 years 7 months; AuxDataLen max 262,128 bytes',
        (int(years), int(rem / (365.2425 / 12)), 16 * ((1 << w('AuxDataLen')) - 1)), (119, 7, 262128))
     eq('Unconfigured kl.getmd* all zero (GR32); MDH image little-endian; 6-bit State',
-       (pack(u.getmd(0)), mdh_bytes(md(Machine=0x123)), bin_(END + 1, w('State'))), (0, v2b(0x123, 16), 0))
+       (pack(u.getmd(0)), mdh_bytes(md(Machine=0x123, UsagePolicy=0)), bin_(END + 1, w('State'))), (0, v2b(0x123, 16), 0))
 
 def t_states():
     section('States  <<KLE-State-field>>, <<KLE-SC-sealing-status>>')
@@ -1674,8 +1685,10 @@ def t_validity():
     eq('the short import of an Error-State MDH with Version 3, invalid, installs Invalid and Version 0 (GR35)',
        (u.mgmt(0, IMP, dict(odd, Version=3)), u.getst(0), u.getmd(0)['Version']), ('short import', INVALID, 0))
     v3 = md(Machine=M_ABSENT, Version=3, State=AUTH, AuxDataLen=4)
-    eq('kl.size of a supplied Error-State MDH with Version 3 is 0: invalid, not sized 16 (B, C)',
-       [u.size('C', m=v3), u.size('B', lo=pack(v3) & MASK64)], [0, 0])
+    eq('kl.size of a supplied Error-State MDH with Version 3 is 16, as the short import reads (B, C; GR72)',
+       [u.size('C', m=v3), u.size('B', lo=pack(v3) & MASK64)], [16, 16])
+    eq('kl.size of a supplied, otherwise invalid Error-State MDH is 16 (B, C; GR72)',
+       [u.size('C', m=odd), u.size('B', lo=pack(odd) & MASK64)], [16, 16])
 
 def t_lengths():
     section('Length rule, kl.size, kl.avail  <<KLE-length-rule>>, <<KLE-instruction-size>>')
@@ -1683,13 +1696,13 @@ def t_lengths():
     same = lambda f, **kv: all(f(**{k: v}) == f() for k, v in kv.items())
     check('PI length independent of SCProtection, StateExtension, MachineUse, policies, AuxInfo, State, Version',
           same(lambda **kw: cm.pi_content_size(cipher(**kw)), SCProtection=1, StateExtension=1, MachineUse=9,
-               UsagePolicy=7, Locality=2, ExpirationDate=5, AuxInfo=3, State=5, Version=1))
+               UsagePolicy=0b01000, Locality=2, ExpirationDate=5, AuxInfo=3, State=5, Version=1))
     eq('PI length depends on KeyType, 2 as 0; Content1 on StateExtension',
        (cm.pi_content_size(base), cm.pi_content_size(cipher(KeyType=1)), cm.pi_content_size(cipher(KeyType=2)),
         cm.content1_size(cipher(StateExtension=1)) - cm.content1_size(base)), (32, 16, 32, 16))
     check('SCC length independent of SCProtection, MachineUse, AuxInfo, UsagePolicy, Locality, ExpirationDate, State',
           same(lambda **kw: u.size_of(cipher(**{'State': 2, 'AuxDataLen': 4, **kw}), True), SCProtection=1,
-               MachineUse=9, AuxInfo=5, UsagePolicy=7, Locality=2, ExpirationDate=5, State=3))
+               MachineUse=9, AuxInfo=5, UsagePolicy=0b01000, Locality=2, ExpirationDate=5, State=3))
     need, res = MACHINES[M_CIPHER].clf_capacity(cipher()), []
     for z in (True, False):
         u = fresh(clf_total=need, zero_alloc=z)
@@ -1711,7 +1724,7 @@ def t_lengths():
        bytes(u.klf[u.lockers[2].off:u.lockers[2].off + need]) == bytes(u.klf[:need])), ('cloned', need, True))
     check('KLF capacity depends only on SCProtection and MachinePolicy',
           same(lambda **kw: cm.clf_capacity(cipher(**kw)), KeyType=1, StateExtension=3, AuxDataLen=7, ADSDropped=1,
-               UsagePolicy=15, ExpirationDate=9)
+               UsagePolicy=0b00000, ExpirationDate=9)
           and cm.clf_capacity(cipher(SCProtection=1)) != cm.clf_capacity(base)
           != cm.clf_capacity(cipher(MachinePolicy=1)))
     c1 = cm.content1_size(cipher(StateExtension=1))
@@ -1746,7 +1759,7 @@ def t_lengths():
     before, g.vstart = g.getmd(0), 16
     eq('vstart != 0 on a vector form that produces no vstart value: illegal-instruction exception (GR6), no effect',
        [trap_of(g.size, 'C', m=base), trap_of(g.avail, 'C', m=base), trap_of(g.mgmt, 1, PROV, cipher(), form='C'),
-        trap_of(g.setst, 0, ToyCipher.ENCRYPT, 1, form='C'), trap_of(g.restrict, 0, md(UsagePolicy=1), 'v'),
+        trap_of(g.setst, 0, ToyCipher.ENCRYPT, 1, form='C'), trap_of(g.restrict, 0, rq(UsagePolicy=0b11110), 'v'),
         g.getmd(0) == before, g.getst(1), g.vstart], ['illegal/1'] * 5 + [True, 0, 16])
     ok = []
     for adl, drop in ((0, 0), (4, 0), (4, 1), (6, 0)):
@@ -1759,15 +1772,16 @@ def t_lengths():
     check('ContentOffset 0/16/48; image_size = kl.size - 16 = image_end within the maximum', all(ok))
     a = fresh()
     eq('kl.avail 1 for implemented combinations, else 0; 0 for an Unconfigured locker',
-       ([a.avail('C', m=m) for m in (base, cipher(KeyType=1), cipher(KeyType=2), xof(MachinePolicy=1),
+       ([a.avail('C', m=m) for m in (base, cipher(KeyType=1), cipher(KeyType=2), xof(),
                                      sig(MachinePolicy=0), cipher(SCProtection=2))],
         [a.avail('C', m=m) for m in (cipher(MachineExtension=2), cipher(KeyType=3), cipher(SCProtection=3),
                                      cipher(MachinePolicy=0), xof(MachinePolicy=3),
                                      md(Machine=M_ABSENT, MachinePolicy=1))],
         a.avail(k=0)), ([1] * 6, [0] * 6, 0))
-    eq('kl.avail examines no other field; Form B uses [63:0]',
-       (a.avail('C', m=cipher(State=63, res=3 << 116, Locality=loc(boot=3), Version=2)), a.avail('B', lo=pack(base))),
-       (1, 1))
+    eq('kl.avail examines no other field but Version; Form B uses [63:0]; Version 1-3 -> 0',
+       (a.avail('C', m=cipher(State=63, res=3 << 116, Locality=loc(boot=3))), a.avail('B', lo=pack(base)),
+        [a.avail('C', m=cipher(Version=v)) for v in (1, 2, 3)]),
+       (1, 1, [0, 0, 0]))
     em_ = fresh(kleemulation=True)
     rdy, uns = md(Machine=M_ABSENT, MachinePolicy=1, State=READY), md(Machine=M_ABSENT, MachinePolicy=1, State=UNSUP)
     eq('kleemulation: Forms B/C of kl.avail and kl.size trap on a non-native MDH; an Error-State MDH is sized 16; '
@@ -1776,6 +1790,11 @@ def t_lengths():
         trap_of(em_.avail, 'B', lo=pack(uns) & MASK64), em_.size('C', m=uns), em_.size('B', lo=pack(uns) & MASK64),
         em_.avail('C', m=base), em_.avail('A', 0), fresh().size('C', m=rdy), fresh().avail('C', m=rdy)],
        ['illegal/2'] * 4 + [16, 16, 1, 0, 0, 0])
+    odd_v = md(Machine=M_ABSENT, MachinePolicy=1, State=62, Version=1)
+    eq('kleemulation: the Machine-independent items precede the lookup: a non-native MDH with State 62 '
+       'and Version 1 returns 0 without trapping; with Version 0 and State Ready it traps',
+       [em_.size('C', m=odd_v), em_.avail('C', m=odd_v), trap_of(em_.size, 'C', m=dict(odd_v, State=READY, Version=0))],
+       [0, 0, 'illegal/2'])
     provision(a, 0, base)
     a.setst(0, EXPIRED)
     a.mgmt(1, PROV, cipher(KeyType=3))
@@ -1787,34 +1806,34 @@ def t_usage():
     bit, bad, u = {'U': 1, 'VU': 1, 'VS': 2, 'HS': 4, 'S': 4, 'M': 8}, [], fresh()
     for up in range(32):
         for u.mode in list(bit) + ['D']:
-            if u.usage_allowed(cipher(UsagePolicy=up)) != (bool(up & 16) if u.mode == 'D' else not up & bit[u.mode]):
+            if u.usage_allowed(cipher(UsagePolicy=up)) != (bool(up & 16) if u.mode == 'D' else bool(up & bit[u.mode])):
                 bad.append((up, u.mode))
     eq('enforcement matrix, 32 policies x 7 modes (Debug: bit 4 only)', bad, [])
     bad = []
     for up in range(32):
         for u.debug_prv in ('U', 'VS', 'S'):
             u.mode = 'D'
-            if u.usage_allowed(cipher(UsagePolicy=up)) != (bool(up & 16) and not up & bit[u.debug_prv]):
+            if u.usage_allowed(cipher(UsagePolicy=up)) != (bool(up & 16) and bool(up & bit[u.debug_prv])):
                 bad.append((up, u.debug_prv))
     del u.debug_prv
     eq('Debug mode authorized only below M-mode: bit 4 and the bit of the mode it executes in (KLE-UsagePolicy)', bad, [])
     u.mode = 'U'
-    fw = cipher(UsagePolicy=0b10111)                                # M-mode-only key with the Debug grant
+    fw = cipher(UsagePolicy=0b11000)                                # M-mode-only key with the Debug grant
     u.mode = 'D'; u.debug_prv = 'S'; s_only = u.usage_allowed(fw)
     u.debug_prv = 'M'; m_auth = u.usage_allowed(fw)
     del u.debug_prv; u.mode = 'U'
     eq('M-mode-only key with bit 4: denied to a debugger authorized only for S-mode, granted in authenticated Debug mode',
        (s_only, m_auth), (False, True))
-    u = rc(UsagePolicy=1)
+    u = rc(UsagePolicy=0b01110)
     u.mode = 'U'
     eq('denied mode: kl.exec, kl.setst, kl.clearads -> kl_exc_privilege_violation (GR18)',
        [trap_of(ex, u, 0), trap_of(u.setst, 0, READY), trap_of(u.setst, 0, CLEAR_ADS), u.getst(0)],
        ['privilege_violation'] * 3 + [ToyCipher.ENCRYPT])
     eq('not usage instructions: getmd, getst, size, avail, restrict, clone, error setst, mgmt, clear',
-       [u.getmd(0)['Machine'], u.getst(0), u.size(k=0), u.avail(k=0), u.restrict(0, md(UsagePolicy=2), 'h'),
+       [u.getmd(0)['Machine'], u.getst(0), u.size(k=0), u.avail(k=0), u.restrict(0, rq(UsagePolicy=0b11101), 'h'),
         u.getmd(0)['UsagePolicy'], u.clone(1, 0), u.setst(1, EXPIRED), export(u, 0)[:16] == mdh_bytes(u.getmd(0)),
         u.getst(0), u.setst(0, 0)],
-       [M_CIPHER, ToyCipher.ENCRYPT, 80, 1, 'ok', 3, 'cloned', 'error state', True, ToyCipher.ENCRYPT, 'cleared'])
+       [M_CIPHER, ToyCipher.ENCRYPT, 80, 1, 'ok', 0b01100, 'cloned', 'error state', True, ToyCipher.ENCRYPT, 'cleared'])
 
 def t_restrict():
     section('kl.restrict*  <<KLE-instruction-restrict>>')
@@ -1833,55 +1852,56 @@ def t_restrict():
             u.setst(0, ToyCipher.ENCRYPT, 1)
         return u.restrict(0, req, which), u.getmd(0), u
     rows = [  # (PI, request, which, enter ENCRYPT, unit kwargs, result, field, value)
-        (cipher(UsagePolicy=1), md(UsagePolicy=0b10100), 'v', 0, {}, 'ok', 'UsagePolicy', 0b101),
-        (cipher(UsagePolicy=16), md(UsagePolicy=16), 'v', 0, {}, 'ok', 'UsagePolicy', 0),
-        (cipher(ExpirationDate=1000), md(ExpirationDate=900), 'v', 0, {}, 'ok', 'ExpirationDate', 900),
-        (cipher(ExpirationDate=1000), md(ExpirationDate=2000), 'v', 0, {}, 'ok', 'ExpirationDate', 1000),
-        (cipher(), md(ExpirationDate=5), 'v', 0, {}, 'ok', 'ExpirationDate', 5),
-        (cipher(), md(ExpirationDate=5), 'v', 0, {'zklexpire': False}, 'invalid', 'State', INVALID),
-        (cipher(SCProtection=2), md(SCProtection=1), 'v', 0, {}, 'invalid', 'AuxDataLen', 0),
-        (cipher(SCProtection=1), md(SCProtection=1), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(SCProtection=3), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(SCProtection=1), md(SCProtection=2), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(MachinePolicy=2), 'v', 0, {}, 'ok', 'MachinePolicy', 1),     # a set bit removes a function
-        (cipher(MachinePolicy=1), md(MachinePolicy=2), 'v', 0, {}, 'ok', 'MachinePolicy', 1),  # already removed
-        (cipher(MachinePolicy=1), md(MachinePolicy=3), 'v', 0, {}, 'invalid', 'State', INVALID),  # 0: invalid here
-        (xof(MachinePolicy=1), md(MachinePolicy=1), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(MachinePolicy=1), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),     # GR25: the State is kept
-        (cipher(), md(MachinePolicy=2), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),
-        (sig(MachinePolicy=0), md(MachinePolicy=1), 'v', 0, {}, 'ok', 'MachinePolicy', 0),  # nothing to remove
-        (sig(), md(AuxInfo=1), 'h', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(MachineUse=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(Machine=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(State=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(AuxDataLen=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(Version=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(KeyType=1), 'v', 0, {}, 'invalid', 'State', INVALID),
-        (sig(), md(AuxInfo=1), 'l', 0, {}, 'ok', 'AuxInfo', 0),
-        (sig(), md(MachineUse=1), 'h', 0, {}, 'ok', 'MachineUse', 0),
-        (cipher(), md(SCProtection=1, UsagePolicy=1), 'l', 0, {}, 'invalid', 'State', INVALID),
-        (cipher(), md(SCProtection=1, UsagePolicy=1), 'h', 0, {}, 'ok', 'SCProtection', 0),
-        (cipher(SCProtection=2), md(SCProtection=1, UsagePolicy=1), 'v', 0, {}, 'invalid', 'UsagePolicy', 0),
+        (cipher(UsagePolicy=0b01110), rq(UsagePolicy=0b01011), 'v', 0, {}, 'ok', 'UsagePolicy', 0b01010),
+        (cipher(UsagePolicy=0b11111), rq(UsagePolicy=0b01111), 'v', 0, {}, 'ok', 'UsagePolicy', 0b01111),
+        (cipher(UsagePolicy=0b11111), rq(UsagePolicy=0), 'h', 0, {}, 'ok', 'UsagePolicy', 0),   # zero: no mode left
+        (cipher(ExpirationDate=1000), rq(ExpirationDate=900), 'v', 0, {}, 'ok', 'ExpirationDate', 900),
+        (cipher(ExpirationDate=1000), rq(ExpirationDate=2000), 'v', 0, {}, 'ok', 'ExpirationDate', 1000),
+        (cipher(), rq(ExpirationDate=5), 'v', 0, {}, 'ok', 'ExpirationDate', 5),
+        (cipher(), rq(ExpirationDate=5), 'v', 0, {'zklexpire': False}, 'invalid', 'State', INVALID),
+        (cipher(SCProtection=2), rq(SCProtection=1), 'v', 0, {}, 'invalid', 'AuxDataLen', 0),
+        (cipher(SCProtection=1), rq(SCProtection=1), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(), rq(SCProtection=3), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(SCProtection=1), rq(SCProtection=2), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(), rq(MachinePolicy=1), 'v', 0, {}, 'ok', 'MachinePolicy', 1),     # a clear bit removes a function
+        (cipher(MachinePolicy=1), rq(MachinePolicy=1), 'v', 0, {}, 'ok', 'MachinePolicy', 1),  # already removed
+        (cipher(MachinePolicy=1), rq(MachinePolicy=0), 'v', 0, {}, 'invalid', 'State', INVALID),  # 0: invalid here
+        (xof(), rq(MachinePolicy=0), 'v', 0, {}, 'ok', 'MachinePolicy', 0),   # field unused: stays zero, no error
+        (cipher(), rq(MachinePolicy=2), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),     # GR25: the State is kept
+        (cipher(), rq(MachinePolicy=1), 'v', 1, {}, 'ok', 'State', ToyCipher.ENCRYPT),
+        (sig(MachinePolicy=0), rq(MachinePolicy=2), 'v', 0, {}, 'ok', 'MachinePolicy', 0),  # nothing to remove
+        (sig(), rq(AuxInfo=1), 'h', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(MachineUse=1), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(Machine=1), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(State=1), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(AuxDataLen=1), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(Version=1), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(KeyType=1), 'v', 0, {}, 'invalid', 'State', INVALID),
+        (sig(), rq(AuxInfo=1), 'l', 0, {}, 'ok', 'AuxInfo', 0),
+        (sig(), rq(MachineUse=1), 'h', 0, {}, 'ok', 'MachineUse', 0),
+        (cipher(), rq(SCProtection=1, UsagePolicy=0b11110), 'l', 0, {}, 'invalid', 'State', INVALID),
+        (cipher(), rq(SCProtection=1, UsagePolicy=0b11110), 'h', 0, {}, 'ok', 'SCProtection', 0),
+        (cipher(SCProtection=2), rq(SCProtection=1, UsagePolicy=0b11110), 'v', 0, {}, 'invalid', 'UsagePolicy', 0b01111),
     ]
     got = [(r, m[f]) for pi, req, wh, enc, kw, _, f, _ in rows for r, m, _ in [run(pi, req, wh, enc, **kw)]]
     eq(f'per-field rules, unnamed fields, halves, atomicity ({len(rows)} cases)', got, [(r, v) for *_, r, f, v in rows])
-    r, m, u = run(cipher(), md(MachinePolicy=1), enc=True)
+    r, m, u = run(cipher(), rq(MachinePolicy=2), enc=True)
     out = bytearray(b'\xff' * 16)
     u2 = pv(fresh(), 0, cipher())
     u2.setst(0, ToyCipher.DECRYPT, 1)
-    u2.restrict(0, md(MachinePolicy=1))
+    u2.restrict(0, rq(MachinePolicy=2))
     u3 = pv(fresh(), 0, cipher())
     u3.setst(0, ToyCipher.ENCRYPT, 1)
-    u3.restrict(0, md(MachinePolicy=1))
+    u3.restrict(0, rq(MachinePolicy=2))
     eq('GR25: a narrowing that disables the current State keeps it; the next kl.exec there goes to Invalid, '
        'output zeroed; kl.setst into the disabled State goes to Invalid, one naming Ready (GR22) is admitted',
        (r, m['State'], u.exec_(0, 'A', vin=bytearray(16), vout=out), u.getst(0), bytes(out),
         u2.setst(0, ToyCipher.ENCRYPT, 1), u2.getst(0), u3.setst(0, READY), u3.getst(0),
         u3.setst(0, ToyCipher.ENCRYPT, 1), u3.getst(0)),
        ('ok', ToyCipher.ENCRYPT, 'invalid', INVALID, bytes(16), 'invalid', INVALID, 'ok', READY, 'invalid', INVALID))
-    r, m, u = run(cipher(SCProtection=1), md(SCProtection=2, UsagePolicy=1))
+    r, m, u = run(cipher(SCProtection=1), rq(SCProtection=2, UsagePolicy=0b11110))
     eq('kl.restrict* never changes SCProtection: a request is an unnamed field -> Invalid, nothing applied, '
-       'no KLF capacity allocated', (r, m['State'], m['UsagePolicy'], u.lockers[0].alloc), ('invalid', INVALID, 0, 0))
+       'no KLF capacity allocated', (r, m['State'], m['UsagePolicy'], u.lockers[0].alloc), ('invalid', INVALID, 0b01111, 0))
     cases = [(loc(hw1=1), loc(hw1=2), loc(hw1=2)), (loc(hw1=1), loc(hw1=3), loc(hw1=3)),
              (loc(hw1=2), loc(hw1=3), loc(hw1=3)), (loc(hw1=3), loc(hw1=2), None), (loc(hw2=1), loc(hw2=3), loc(hw2=3)),
              (loc(hw2=3), loc(hw2=1), None), (0, loc(hw1=1), loc(hw1=1)), (loc(boot=1), loc(boot=2), None),
@@ -1892,31 +1912,31 @@ def t_restrict():
     u.slocality = 0
     eq('Locality: fill zero subfields, HW Binding only stricter, others fixed; a weakening or an unconfigured entry '
        'is a Privilege Violation (a failed narrowing)',
-       [(lambda r, m, _: m['Locality'] if r == 'ok' else m['State'])(*run(cipher(Locality=c), md(Locality=q), 'h'))
-        for c, q, _ in cases] + [u.restrict(0, md(Locality=loc(sloc=1)), 'h')],
+       [(lambda r, m, _: m['Locality'] if r == 'ok' else m['State'])(*run(cipher(Locality=c), rq(Locality=q), 'h'))
+        for c, q, _ in cases] + [u.restrict(0, rq(Locality=loc(sloc=1)), 'h')],
        [w if w is not None else PRIV for _, _, w in cases] + ['privilege_violation'])
-    r, m, _ = run(cipher(), md(UsagePolicy=1, Locality=loc(hw1=1), ExpirationDate=9, MachinePolicy=2))
+    r, m, _ = run(cipher(), rq(UsagePolicy=0b11110, Locality=loc(hw1=1), ExpirationDate=9, MachinePolicy=1))
     eq('kl.restrictv applies both halves; needs VL*SEW >= 128 (GR5)',
        (r, [m[f] for f in ('UsagePolicy', 'Locality', 'ExpirationDate', 'MachinePolicy', 'State')],
-        trap_of(fresh().restrict, 0, 0, 'v', vec_bits=96)), ('ok', [1, loc(hw1=1), 9, 1, READY], 'illegal/1'))
+        trap_of(fresh().restrict, 0, 0, 'v', vec_bits=96)), ('ok', [0b01110, loc(hw1=1), 9, 1, READY], 'illegal/1'))
     u = fresh()
-    r0 = (u.restrict(0, md(UsagePolicy=1)), u.getst(0))
+    r0 = (u.restrict(0, rq(UsagePolicy=0b11110)), u.getst(0))
     u.mgmt(0, PROV, cipher())
     eq('Unconfigured: no operation; Configuration State: kl_exc_privilege_violation (GR29)',
-       (r0, trap_of(u.restrict, 0, md(UsagePolicy=1))), (('noop', 0), 'privilege_violation'))
+       (r0, trap_of(u.restrict, 0, rq(UsagePolicy=0b11110))), (('noop', 0), 'privilege_violation'))
     u = pv(fresh(), 0, cipher(ExpirationDate=10))
     u.setst(0, EXPIRED)
     eq('Error State: no operation, whatever the request, and the MDH keeps its fields and Error State (GR32)',
-       [u.restrict(0, md(UsagePolicy=8, ExpirationDate=9)), u.getmd(0)['UsagePolicy'], u.getmd(0)['ExpirationDate'],
-        u.getst(0), u.restrict(0, md(SCProtection=2)), u.restrict(0, md(MachineUse=1)), u.getst(0)],
-       ['noop', 0, 10, EXPIRED, 'noop', 'noop', EXPIRED])
+       [u.restrict(0, rq(UsagePolicy=0b10111, ExpirationDate=9)), u.getmd(0)['UsagePolicy'], u.getmd(0)['ExpirationDate'],
+        u.getst(0), u.restrict(0, rq(SCProtection=2)), u.restrict(0, rq(MachineUse=1)), u.getst(0)],
+       ['noop', 0b01111, 10, EXPIRED, 'noop', 'noop', EXPIRED])
     u = pv(fresh(clock=5000), 0, cipher(ExpirationDate=10))
-    eq('kl.restrict* is not an ExpirationDate evaluation point', (u.restrict(0, md(ExpirationDate=9)), u.getst(0)),
+    eq('kl.restrict* is not an ExpirationDate evaluation point', (u.restrict(0, rq(ExpirationDate=9)), u.getst(0)),
        ('ok', READY))
-    u = pv(fresh(), 0, cipher(UsagePolicy=0b10000))
-    eq('kl.restricth UsagePolicy is a request, not a narrowing: 0b00001 denies U, keeps the Debug grant; 0b10000 drops it',
-       [u.restrict(0, md(UsagePolicy=1), 'h'), u.getmd(0)['UsagePolicy'], u.restrict(0, md(UsagePolicy=0b10000), 'h'),
-        u.getmd(0)['UsagePolicy']], ['ok', 0b10001, 'ok', 0b00001])
+    u = pv(fresh(), 0, cipher(UsagePolicy=0b11111))
+    eq('kl.restricth UsagePolicy is AND-ed: 0b11110 removes U and keeps the Debug grant; 0b01111 then drops it',
+       [u.restrict(0, rq(UsagePolicy=0b11110), 'h'), u.getmd(0)['UsagePolicy'], u.restrict(0, rq(UsagePolicy=0b01111), 'h'),
+        u.getmd(0)['UsagePolicy']], ['ok', 0b11110, 'ok', 0b01110])
 
 def t_localities():
     section('Localities  <<KLE-Localities>>, <<KLE-system-keys>>')
@@ -1965,11 +1985,11 @@ def t_localities():
        'the same skllocality value', r + [import_(hv, 3, sl_img)], [READY, AUTH, READY, AUTH, READY])
     info('skllocality is one register in every mode: a hypervisor separates its own SLocality-bound CCs from a '
          'guest by loading the guest\'s value into skllocality before it runs the guest.')
-    u = pv(fresh(), 0, cipher(KeyType=1, UsagePolicy=0b10001, Locality=loc(hw1=1, mloc=1)), v2b(SKID_A, 16))
+    u = pv(fresh(), 0, cipher(KeyType=1, UsagePolicy=0b11110, Locality=loc(hw1=1, mloc=1)), v2b(SKID_A, 16))
     m, img, v = u.getmd(0), export(u, 0), fresh()
     eq('SKID resolution narrows UsagePolicy and Locality, keeps KeyType 1 and the SKID; re-resolved at import',
        (m['UsagePolicy'], m['Locality'], m['KeyType'], u.lockers[0].c1, len(img), import_(v, 1, img), v.getmd(1)),
-       (0b00101, loc(hw1=2, mloc=1), 1, v2b(SKID_A, 16), 48, READY, m))
+       (0b01010, loc(hw1=2, mloc=1), 1, v2b(SKID_A, 16), 48, READY, m))
     eq('SKID unknown, policy not a subset, Machine not allowed -> Invalid; a failed narrowing (Boot conflict, union '
        'unconfigured) -> Privilege Violation',
        [provision(fresh(slocality=0), 0, pi, v2b(skid, 16))
@@ -1988,7 +2008,7 @@ def t_localities():
 
 def t_mgmt():
     section('kl.mgmt: provisioning, import, export  <<KLE-locker-management>>')
-    m = cipher(UsagePolicy=1, Locality=loc(hw1=2), SCProtection=1)
+    m = cipher(UsagePolicy=0b01110, Locality=loc(hw1=2), SCProtection=1)
     content = pi_content(m)
     u = fresh(siv=1, impqual=2, siv2=3).csrs(kliobuflen=16, klstart=48)
     eq('opening provisioning: State 56, MDH, klnamedlocker, klstart 0, registers kept, PI size',
@@ -2025,7 +2045,7 @@ def t_mgmt():
        ([b2v(img[16 + 16 * i:32 + 16 * i]) for i in range(3)], img[64:96] != content, u.getst(0), u.klstart),
        ([u.siv, u.impqual, u.siv2], True, EXP, 0))
     eq('completion restores the locker; only ml.State is used; klnamedlocker kept until a write or another kl.mgmt',
-       (u.mgmt(0, END, dict(md0, UsagePolicy=0, Locality=0)), u.getmd(0), u.lockers[0].c1, u.klnamedlocker,
+       (u.mgmt(0, END, dict(md0, UsagePolicy=0b01111, Locality=0)), u.getmd(0), u.lockers[0].c1, u.klnamedlocker,
         u.mgmt(1, PROV, cipher()), u.klnamedlocker), ('completed', md0, content, 0, 'opened', 1))
     u.csrs(klnamedlocker=NONE)
     v = fresh(siv=7, impqual=7, siv2=7)
@@ -2070,7 +2090,7 @@ def t_mgmt():
     u2.mgmt(0, EXP)
     u2.siv ^= 1
     eq('altered MDH, other ml.State, other CSK, overwritten SIV at export -> Authentication Failed',
-       [import_(fresh(), 0, mdh_bytes(dict(st_md, UsagePolicy=15)) + img[16:]),
+       [import_(fresh(), 0, mdh_bytes(dict(st_md, UsagePolicy=0b00000)) + img[16:]),
         (v.mgmt(0, END, dict(st_md, State=READY)), v.getst(0))[1], import_(fresh(csk=DEFAULT_CSK ^ 1), 0, img),
         (u2.mgmt(0, END, cipher(State=READY)), u2.getst(0))[1]], [AUTH] * 4)
     u = opened()
@@ -2084,7 +2104,7 @@ def t_mgmt():
         ref = (u.getmd(0), u.klnamedlocker)
         got.append((trap_of(u.mgmt, 0, imm, form='A'), (u.getmd(0), u.klnamedlocker) == ref, u.klstart))
     eq('Form A opening whose KLIOBUF cannot supply the MDH (unconfigured, kliobuftop < 16, no Zklio): '
-       'illegal/2 before any change to the locker, klstart cleared (GR5, GR16, GR43)',
+       'illegal/2 before any change to the locker, klstart cleared (GR5, GR16, GR44)',
        got, [('illegal/2', True, 0)] * 3)
     w, w2 = opened(IMP, cipher(State=1), zklio=False), opened()
     eq('every Form A kl.mgmt checks its KLIOBUF MDH, whatever the operation: completion without Zklio, PI '
@@ -2099,7 +2119,7 @@ def t_mgmt():
     n.klstart = 16
     r += [trap_of(n.mgmt, 0, EXP), n.klstart]
     r += [trap_of(u.mgmt, 0, END), u.klstart]
-    eq('GR43: a first-group rejection (Form B) and kl_exc_no_csk keep klstart; a later rejection (end on a '
+    eq('GR44: a first-group rejection (Form B) and kl_exc_no_csk keep klstart; a later rejection (end on a '
        'Valid State) clears it', r, ['illegal/1', 16, 'no_csk', 16, 'illegal/2', 0])
     eq('an exception inside a management operation keeps State and klnamedlocker, clears klstart',
        (trap_of(w.mgmt, 0, END, form='A'), w.getst(0), w.klnamedlocker, w.klstart),
@@ -2116,11 +2136,11 @@ def t_mgmt():
         trap_of(y.mgmt, 3, END, form='C', vec_bits=64), y.getst(3), y.klstart],
        ['illegal/2', 0, 'illegal/2', INVALID, 0])
     v = fresh().csrs(klstart=16)
-    eq('GR50, inert table: a kl.setst that falls through keeps klstart; a kl.exec that falls through writes 0',
+    eq('GR51, inert table: a kl.setst that falls through keeps klstart; a kl.exec that falls through writes 0',
        [v.setst(0, 2), v.klstart, v.exec_(0, 'D'), v.klstart], ['noop', 16, 'noop', 0])
     w = rc(5).csrs(klnamedlocker=32)
     st5 = w.getst(5)
-    eq('GR26 item 1, GR43: a kl.mgmt that traps leaves klnamedlocker '
+    eq('GR26 item 1, GR44: a kl.mgmt that traps leaves klnamedlocker '
        'unchanged; one that raises no exception names its target',
        [trap_of(w.mgmt, 5, EXP, form='C', vec_bits=64), w.klnamedlocker, w.getst(5) == st5,
         trap_of(w.mgmt, 5, EXP) is None, w.klnamedlocker], ['illegal/2', 32, True, True, 5])
@@ -2145,7 +2165,7 @@ def t_mgmt():
        'it traps only with kl_exc_unsupported, kl_exc_out_of_memory', (zero, traps),
        ([], {None, 'unsupported', 'out_of_memory'}))
     u = pv(fresh(), 0, cipher())
-    eq('an opening zeroizes even a Valid locker (GR43), the one change a raising kl.mgmt keeps',
+    eq('an opening zeroizes even a Valid locker (GR44), the one change a raising kl.mgmt keeps',
        (trap_of(u.mgmt, 0, PROV, md(Machine=M_ABSENT)), u.getst(0), u.clf_free() == u.clf_total),
        ('unsupported', 0, True))
     rows = []
@@ -2242,7 +2262,7 @@ def t_error_states():
     section('Lockers in an Error State  <<KLE-error-state-transfer>>, <<KLE-insn-outcomes-inert>>')
     rows, want = [], []
     for st in ERROR_STATES[1:]:
-        u = pv(fresh(), 0, cipher(SCProtection=1, ExpirationDate=77, UsagePolicy=2))
+        u = pv(fresh(), 0, cipher(SCProtection=1, ExpirationDate=77, UsagePolicy=0b01101))
         u.setst(0, ToyCipher.ENCRYPT, 5)
         r = u.csrs(klstart=32).setst(0, st)
         m, img, v = u.getmd(0), export(u, 0), fresh(siv=5).csrs(klstart=48)
@@ -2277,7 +2297,7 @@ def t_error_states():
         u.getst(0)], ['unchanged', True, 0, 0, 'noop', 'noop', 'noop', 0, 'noop', EXPIRED])
     eq('use and kl.restrict* are no-ops, output zeroed; Error-State kl.setst changes it',
        [u.exec_(0, 'A', vin=bytearray(16), vout=vo), bytes(vo), u.setst(0, READY), u.setst(0, CLEAR_ADS),
-        u.restrict(0, md(UsagePolicy=8)), u.setst(0, READY), u.getst(0), u.setst(0, UNSUP), u.getst(0)],
+        u.restrict(0, rq(UsagePolicy=0b10111)), u.setst(0, READY), u.getst(0), u.setst(0, UNSUP), u.getst(0)],
        ['noop', bytes(16), 'noop', 'noop', 'noop', 'noop', EXPIRED, 'error state', UNSUP])
     eq('kl.clone from it copies the MDH; onto it replaces; provisioning reconfigures; kl.clear clears',
        [u.clone(5, 0), u.getmd(5) == u.getmd(0), u.lockers[5].c1, u.lockers[5].alloc, u.clone(5, 1), u.getst(5),
@@ -2416,7 +2436,7 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR62: access fault at the byte, prefix committed; restart option for interrupts only (GR47)',
+    eq('GR63: access fault at the byte, prefix committed; restart option for interrupts only (GR47)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()
@@ -2563,7 +2583,7 @@ def t_sgr():
            [w[0].setst(0, READY), w[0].getst(0), w[1].setst(0, 0), w[1].getst(0), w[2].setst(0, PRIV), w[2].getst(0),
             w[3].setst(0, CLEAR_ADS), w[3].getst(0), w[3].getmd(0)['AuxDataLen'], w[4].setst(0, ToyCipher.ENCRYPT),
             w[4].getst(0), ex(w[5], 0), w[5].getst(0), import_(fresh(), 0, export(w[6], 0)), w[6].size(k=0) > 16,
-            w[6].avail(k=0), w[6].getst(0), w[6].clone(1, 0), w[6].restrict(0, md(UsagePolicy=1))],
+            w[6].avail(k=0), w[6].getst(0), w[6].clone(1, 0), w[6].restrict(0, rq(UsagePolicy=0b11110))],
            ['ok', READY, 'cleared', 0, 'error state', PRIV, 'ads cleared', final, 0, 'invalid', INVALID, 'invalid',
             INVALID, final, True, 1, final, 'cloned', 'ok'])
     u = xof_squeezing(fresh(), 0, b'seed')
@@ -2590,14 +2610,14 @@ def t_sgr():
          'substitution depends on an operation the Error State does not define (per the purpose of GR34).')
     u, w = opened(), opened(k=3)
     r = [trap_of(u.exec_, 0, 'D'), trap_of(u.setst, 0, READY), trap_of(u.clone, 1, 0),
-         trap_of(u.restrict, 0, md(UsagePolicy=1)), provision(u.csrs(klnamedlocker=32), 2, cipher())]
+         trap_of(u.restrict, 0, rq(UsagePolicy=0b11110)), provision(u.csrs(klnamedlocker=32), 2, cipher())]
     eq('GR29 on a Configuration-State locker; cloning onto it releases klnamedlocker; same-index clone no-op',
        r + [u.csrs(klnamedlocker=0).clone(0, 2), u.getst(0), u.klnamedlocker, w.clone(3, 3), w.getst(3),
             w.clone(9, 9)],
        ['privilege_violation'] * 4 + [READY, 'cloned', READY, NONE, 'noop', PROV, 'noop'])
 
     def gated(**kw):
-        w = rc(unit=fresh(**kw), ExpirationDate=5, UsagePolicy=8)
+        w = rc(unit=fresh(**kw), ExpirationDate=5, UsagePolicy=0b00111)
         w.clock = 10
         return w
     w1, w2, w3, w4, w5, w6, w7, w8 = gated(), opened(), gated(), gated(zklio=False), gated(), \
@@ -2659,7 +2679,7 @@ def t_sgr():
           cl(2)[:2] == cl(1)[:2]]
     t = rc(0, rc(1, fresh(clf_total=2 * MACHINES[M_CIPHER].clf_capacity(cipher(SCProtection=1))), SCProtection=1),
            SCProtection=1)
-    r += [t.clone(1, 0), t.clf_free(), trap_of(t.clone, 2, 0), t.getst(2), t.restrict(1, md(MachinePolicy=2)),
+    r += [t.clone(1, 0), t.clf_free(), trap_of(t.clone, 2, 0), t.getst(2), t.restrict(1, rq(MachinePolicy=1)),
           t.getmd(1)['MachinePolicy'], t.getmd(0)['MachinePolicy']]
     eq('kl.clone: Unconfigured source clears Kd; perfect copy = export+import; capacity; clone then restrict', r,
        ['cleared', 'cloned', True, (1, 2, 3), ToyCipher.ENCRYPT, True, 'cloned', 0, 'out_of_memory', 0, 'ok', 1, 3])
@@ -2675,7 +2695,7 @@ def t_sgr():
     w = rc().csrs(klstart=16)
     w.vstart = 16
     ks = [(f(), w.klstart)[1] for f in (lambda: w.getmd(0), lambda: w.size(k=0), lambda: w.avail(k=0),
-                                        lambda: w.restrict(0, md(UsagePolicy=1), 'h'), lambda: w.clone(1, 0),
+                                        lambda: w.restrict(0, rq(UsagePolicy=0b11110), 'h'), lambda: w.clone(1, 0),
                                         lambda: w.rename(2, 1), lambda: w.swap(1, 2),
                                         lambda: w.setst(0, ToyCipher.ENCRYPT, 1))]
     eq('getmd, size, avail, restrict, clone, rename, swap, setst leave klstart', ks, [16] * 8)
@@ -2755,19 +2775,19 @@ def t_expiration():
     img, end = export(u, 0), (w.mgmt(0, END), w.getst(0), w.csrs(klnamedlocker=NONE))[:2]
     w.mgmt(1, IMP, cipher(State=2, ExpirationDate=10))
     eq('not evaluated by export, size, import, clone, restrict, clear, provisioning, or outside Valid States',
-       [u.getst(0), len(img) == u.size(k=0), import_(v, 0, img), u.clone(1, 0), u.restrict(1, md(ExpirationDate=5)),
+       [u.getst(0), len(img) == u.size(k=0), import_(v, 0, img), u.clone(1, 0), u.restrict(1, rq(ExpirationDate=5)),
         u.getst(1), u.setst(0, 0), u.getst(0), *end, trap_of(w.exec_, 1, 'D'), w.getst(1)],
        [ToyCipher.ENCRYPT, True, ToyCipher.ENCRYPT, 'cloned', 'ok', ToyCipher.ENCRYPT, 'cleared', 0, 'completed', READY,
         'privilege_violation', IMP])
     w = eu(5000)
-    w.lockers[0].mdh['UsagePolicy'] = 8
+    w.lockers[0].mdh['UsagePolicy'] = 0b00111
     eq('UsagePolicy precedes the expiration (GR21)', (trap_of(w.setst, 0, READY), w.getst(0)),
        ('privilege_violation', ToyCipher.ENCRYPT))
     n, e, n2 = fresh(zklexpire=False, clock=1 << 30), pv(fresh(), 0, cipher()), rc(1, fresh(zklexpire=False))
     e.setst(0, EXPIRED)
     eq('without Zklexpire no locker gets a date; an Expired MDH imports as Invalid; reserved #53 is illegal/1',
        ((n.mgmt(0, PROV, cipher(ExpirationDate=1)), n.csrs(klnamedlocker=NONE))[0],
-        rc(1, n).restrict(1, md(ExpirationDate=1)),
+        rc(1, n).restrict(1, rq(ExpirationDate=1)),
         import_(n2, 0, export(e, 0)), trap_of(n2.setst, 1, EXPIRED), n2.getst(1)),
        ('invalid', 'invalid', INVALID, 'illegal/1', ToyCipher.ENCRYPT))
     u, out = rc(1, eu(0, ed=1 << 19)), bytearray(b'\x22' * 16)
@@ -2777,7 +2797,7 @@ def t_expiration():
        (trap_of(u.exec_, 0, 'A', vin=bytearray(16), vout=out), u.getst(0), bytes(out), u.setst(1, READY),
         (setattr(u, 'clock', 0), u.exec_(0, 'A', vin=bytearray(16), vout=bytearray(16)))[1]),
        ('clock_unavailable', ToyCipher.ENCRYPT, b'\x22' * 16, 'ok', 'done'))
-    u.lockers[0].mdh['UsagePolicy'] = 8
+    u.lockers[0].mdh['UsagePolicy'] = 0b00111
     u.clock = None
     eq('UsagePolicy precedes the unreadable clock (GR21)', trap_of(u.exec_, 0, 'A', vin=bytearray(16),
                                                                         vout=bytearray(16)), 'privilege_violation')
@@ -2797,7 +2817,7 @@ def t_derive():
     rc().exec_(0, 'A', vin=bytearray(48), vout=expect)
     u, u2, u3 = pair(), pair(), pair()
     nxt = bytearray(16)
-    eq('CTR keystream into a Ready key field (GR42), the source advanced as by kl.exec of whole blocks, the unused '
+    eq('CTR keystream into a Ready key field (GR43), the source advanced as by kl.exec of whole blocks, the unused '
        'bytes discarded; length < key -> destination Invalid',
        (u.derive(1, 0, 32), u.lockers[1].c1[:32], u.exec_(0, 'A', vin=bytearray(16), vout=nxt), bytes(nxt),
         u.getst(1), u2.derive(1, 0, 40), u2.exec_(0, 'A', vin=bytearray(16), vout=nxt), bytes(nxt),
@@ -2805,13 +2825,13 @@ def t_derive():
        ('transferred', bytes(expect[:32]), 'done', bytes(expect[32:]), READY, 'transferred', 'done',
         bytes(expect[32:]), 'invalid', INVALID, ToyCipher.ENCRYPT, True))
     info('Toy endpoints follow <<KLE-derive-endpoints>> and <<KLE-admitted-pairs>>: the cipher in ENCRYPT stands for '
-         'the keystream in Operate, unrestricted into a key only (GR42); the KEX shared secret is a restricted field '
-         'into a key or, whole, into a XOF input (GR41); XOF output and the signature key are no endpoints.')
+         'the keystream in Operate, unrestricted into a key only (GR43); the KEX shared secret is a restricted field '
+         'into a key or, whole, into a XOF input (GR42); XOF output and the signature key are no endpoints.')
     u = [pair() for _ in range(6)]
     u[1].setst(1, EXPIRED)
     u[2].setst(0, 0)
     u[3].mgmt(1, EXP)
-    u[4].lockers[1].mdh['UsagePolicy'] = 8
+    u[4].lockers[1].mdh['UsagePolicy'] = 0b00111
     u[5].lockers[0].mdh['ExpirationDate'] = u[5].lockers[1].mdh['ExpirationDate'] = 1
     u[5].clock = 9
     eq('equal indices; Error-State endpoint no-op; Unconfigured; Configuration; UsagePolicy; both expire',
@@ -2844,7 +2864,7 @@ def t_derive():
         ('invalid', INVALID, INVALID), ('invalid', INVALID, ToyCipher.ENCRYPT)])
     u = pair()
     key1 = bytes(u.lockers[1].c1)
-    u.restrict(0, md(MachinePolicy=1))
+    u.restrict(0, rq(MachinePolicy=2))
     eq('MR9 item 1.a: a keystream source in a State that the narrowed MachinePolicy disables goes to Invalid, '
        'nothing moves', (u.derive(1, 0, 32), u.getst(0), u.getst(1), bytes(u.lockers[1].c1) == key1),
        ('invalid', INVALID, READY, True))
@@ -2853,22 +2873,22 @@ def t_derive():
        (u.derive(4, 0, 32), u.getst(4), u.getst(0), u2.derive(4, 0, 0), u2.getst(4), u2.getst(0)),
        ('invalid', INVALID, INVALID, 'invalid', INVALID, INVALID))
     u = pair()
-    u.lockers[0].mdh.update(UsagePolicy=1, Locality=loc(hw1=2))
+    u.lockers[0].mdh.update(UsagePolicy=0b01110, Locality=loc(hw1=2))
     before = u.getmd(1)
-    eq('the keystream into a key (GR42) is an unrestricted transfer: no narrowing (GR40)',
+    eq('the keystream into a key (GR43) is an unrestricted transfer: no narrowing (GR40)',
        (u.derive(1, 0, 32), u.getmd(1)), ('transferred', before))
 
     def kex(src=None, dst=None, dst_md=cipher, **kw):
         w = pv(fresh(**kw), 0, md(Machine=M_KEX, **(src or {})))
         w.setst(0, ToyKex.SHARED, 0x1234)
         return pv(w, 1, dst_md(**(dst or {})))
-    w = kex(src=dict(UsagePolicy=0b10001, Locality=loc(hw1=2, mloc=1), ExpirationDate=500),
-            dst=dict(UsagePolicy=0b10010, Locality=loc(hw1=1, sloc=1), ExpirationDate=900))
+    w = kex(src=dict(UsagePolicy=0b11110, Locality=loc(hw1=2, mloc=1), ExpirationDate=500),
+            dst=dict(UsagePolicy=0b11101, Locality=loc(hw1=1, sloc=1), ExpirationDate=900))
     secret = MACHINES[M_KEX].get_state(w.lockers[0])
     w2, w3, w4 = kex(src=dict(ExpirationDate=500)), kex(src=dict(SCProtection=1), dst=dict(SCProtection=2)), \
-        kex(src=dict(UsagePolicy=4), dst_md=xof)
+        kex(src=dict(UsagePolicy=0b01011), dst_md=xof)
     w5, w6, w7 = kex(src=dict(SCProtection=2), dst=dict(SCProtection=1)), kex(dst_md=xof), kex(dst_md=xof)
-    eq('shared secret: restricted into a key and, whole, into a XOF (GR40, GR41; 32 or 65 of 64 B: destination '
+    eq('shared secret: restricted into a key and, whole, into a XOF (GR40, GR42; 32 or 65 of 64 B: destination '
        'Invalid, GR39 item 5); a destination at a level not lower than the source receives it, its level unchanged; '
        'a lower one: Privilege Violation, nothing moved',
        [w.derive(1, 0, 32), w.lockers[1].c1[:32] == secret[:32], w.getmd(1)['UsagePolicy'], w.getmd(1)['Locality'],
@@ -2876,8 +2896,8 @@ def t_derive():
         w3.derive(1, 0, 32), w3.getmd(1)['SCProtection'], w4.derive(1, 0, 64), w4.getmd(1)['UsagePolicy'],
         w6.derive(1, 0, 32), w6.getst(1), w7.derive(1, 0, 65), w7.getst(1), w5.derive(1, 0, 32), w5.getst(1),
         w5.lockers[1].c1, w5.getst(0)],
-       ['transferred', True, 0b10011, loc(hw1=2, mloc=1, sloc=1), 500, ToyKex.SHARED, 'transferred', 500, 'transferred',
-        2, 'transferred', 4, 'invalid', INVALID, 'invalid', INVALID, 'privilege_violation', PRIV, b'', ToyKex.SHARED])
+       ['transferred', True, 0b11100, loc(hw1=2, mloc=1, sloc=1), 500, ToyKex.SHARED, 'transferred', 500, 'transferred',
+        2, 'transferred', 0b01011, 'invalid', INVALID, 'invalid', INVALID, 'privilege_violation', PRIV, b'', ToyKex.SHARED])
     pv(w2, 2, cipher())
     eq('a field source does not advance: the shared secret is derived again, whole, into a second key (GR38)',
        (w2.derive(2, 0, 32), w2.lockers[2].c1[:32] == w2.lockers[1].c1[:32] == secret[:32], w2.getst(0)),
@@ -2888,9 +2908,9 @@ def t_derive():
         rows.append((w.derive(1, 0, n), w.getst(1), w.klstart))
     w = fresh().csrs(klstart=16)
     eq('GR39 item 5: a key or a shared-secret input requires klstart = 0, else destination Invalid; every retirement '
-       'writes klstart = 0 (GR50), a no-op included',
+       'writes klstart = 0 (GR51), a no-op included',
        rows + [(w.derive(1, 0, 32), w.getst(1), w.klstart)], [('invalid', INVALID, 0)] * 3 + [('noop', UNCONF, 0)])
-    p1, x = kex(src=dict(UsagePolicy=1), dst_md=sig), pv(pair(), 2, sig())
+    p1, x = kex(src=dict(UsagePolicy=0b01110), dst_md=sig), pv(pair(), 2, sig())
     p1.setst(1, ToySig.SET_SCALAR)
     x.setst(2, ToySig.SET_SCALAR)
     eq('a private key is no destination, also in its Machine-named State (GR39 item 2): neither the shared secret '
@@ -2904,27 +2924,27 @@ def t_derive():
         w = kex(**kw)
         w.slocality = 0
         rows.append((w.derive(1, 0, 32), w.getst(1), w.getst(0), MACHINES[M_KEX].get_state(w.lockers[0]) == secret))
-    w1, w2, w3 = kex(), kex(), kex(src=dict(UsagePolicy=4))
+    w1, w2, w3 = kex(), kex(), kex(src=dict(UsagePolicy=0b01011))
     w1.setst(0, READY)
     w2.setst(1, ToyCipher.ENCRYPT, 1)
-    eq('GR40 failed narrowings: Privilege Violation; GR41 without a secret or a non-Ready key: Invalid; GR39 checks '
+    eq('GR40 failed narrowings: Privilege Violation; GR42 without a secret or a non-Ready key: Invalid; GR39 checks '
        'precede GR40 narrowing',
        rows + [(w1.derive(1, 0, 32), w1.getst(0), w1.getst(1)), (w2.derive(1, 0, 32), w2.getst(1), w2.getst(0)),
                (w3.derive(1, 0, 8), w3.getst(1), w3.getmd(1)['UsagePolicy'])],
        [('privilege_violation', PRIV, ToyKex.SHARED, True)] * 2
-       + [('invalid', INVALID, READY), ('invalid', INVALID, ToyKex.SHARED), ('invalid', INVALID, 0)])
+       + [('invalid', INVALID, READY), ('invalid', INVALID, ToyKex.SHARED), ('invalid', INVALID, 0b01111)])
 
 def t_errors():
     section('Error handling, CSK, KLS, Off gate  <<KLE-error-architecture>>, <<KLE-CSR-llockerstatus>>')
     cap = MACHINES[M_CIPHER].clf_capacity(cipher())
     def excs(priv):
         u1, u2 = fresh(priv=priv).csrs(klstart=16), fresh(priv=priv, clf_total=10)
-        u3 = rc(unit=fresh(priv=priv), UsagePolicy=8)
+        u3 = rc(unit=fresh(priv=priv), UsagePolicy=0b00111)
         u4, u5 = opened(priv=priv), pv(fresh(priv=priv, clf_total=cap), 0, cipher())
         u5.mgmt(1, IMP, cipher(State=EXPIRED))
         return [trap_of(u1.mgmt, 0, PROV, md(Machine=M_ABSENT, MachinePolicy=1)), u1.getst(0), u1.klnamedlocker,
                 trap_of(u2.mgmt, 0, IMP, cipher(State=1)), u2.getst(0), trap_of(ex, u3, 0), u3.getst(0),
-                trap_of(u4.clone, 1, 0), trap_of(u4.restrict, 0, md(UsagePolicy=1), 'h'), u4.getst(0),
+                trap_of(u4.clone, 1, 0), trap_of(u4.restrict, 0, rq(UsagePolicy=0b11110), 'h'), u4.getst(0),
                 trap_of(u5.clone, 2, 0), u5.getst(2), trap_of(fresh(priv=priv, csk=0).getmd, 0),
                 trap_of(fresh(priv=priv).input_, Memory(), BASE, 1)]
     r = excs(False)
@@ -2941,7 +2961,7 @@ def t_errors():
     r += [u.mgmt(0, END, m), u.getst(0), import_(fresh(), 3, mdh_bytes(m) + mem.read(BASE, n - 16))]
     eq('a stray kl.exec on a kl_cfg_exporting locker: privilege violation, State kept (GR29); the handler skips it, '
        'and the export completes and imports', r, ['privilege_violation', EXP, 'completed', READY, READY])
-    u, ml, v = fresh(), md(Machine=M_ABSENT, MachinePolicy=1, UsagePolicy=3), rc(UsagePolicy=8)
+    u, ml, v = fresh(), md(Machine=M_ABSENT, MachinePolicy=1, UsagePolicy=0b01100), rc(UsagePolicy=0b00111)
     b0 = snapshot(v)
     eq('handler: kl.setste records the Error State on Unconfigured (GR36), and so does a short import, which '
        'installs its MDH; exceptions change no state',
@@ -2990,7 +3010,7 @@ def build_context(u):
     """An interrupted import (K2, managed), an abandoned provisioning (K5), other lockers, a KLIOBUF."""
     ex(rc(0, u, SCProtection=1), 0, n=32)
     pv(u, 1, cipher()).setst(1, EXPIRED)
-    pv(u, 7, sig()).restrict(7, md(UsagePolicy=1), 'h')
+    pv(u, 7, sig()).restrict(7, rq(UsagePolicy=0b11110), 'h')
     u.mgmt(5, PROV, xof())
     u.mv_in(0x1111)
     src, ml, mem, _ = interrupted_import(u.csrs(klnamedlocker=32), 2, 64, decrypt=True)
@@ -3124,7 +3144,7 @@ def t_encodings():
     u = opened(k=5)
     r = [u.getst('KLNL'), u.size(k='KLNL') == u.size(k=5), u.mgmt('KLNL', END), u.getst(5), u.klnamedlocker,
          u.getst('KLNL')]
-    v = rc(7, rc(5, UsagePolicy=1)).csrs(klnamedlocker=5)
+    v = rc(7, rc(5, UsagePolicy=0b01110)).csrs(klnamedlocker=5)
     r += [v.getmd(7) == v.getmd(5), v.setst(7, 0), v.getst(7), v.getst(5)]
     w = fresh()
     r += [w.getmd('KLNL') == md(), w.size(k='KLNL'), w.avail(k='KLNL'), w.setst('KLNL', 0),
@@ -3199,10 +3219,10 @@ def t_klnl_pairs():
        [twin(lambda u: u.clone, (3, 'KLNL'), (3, 5)), twin(lambda u: u.clone, ('KLNL', 2), (5, 2)),
         twin(lambda u: u.rename, (3, 'KLNL'), (3, 5)), twin(lambda u: u.rename, ('KLNL', 2), (5, 2)),
         twin(lambda u: u.swap, (3, 'KLNL'), (3, 5)), twin(lambda u: u.swap, ('KLNL', 2), (5, 2)),
-        twin(lambda u: u.restrict, ('KLNL', md(UsagePolicy=2), 'h'), (5, md(UsagePolicy=2), 'h'))], [True] * 7)
+        twin(lambda u: u.restrict, ('KLNL', rq(UsagePolicy=0b11101), 'h'), (5, rq(UsagePolicy=0b11101), 'h'))], [True] * 7)
     w = rc(5, rc(3))
     r = [w.clone(3, 'KLNL'), w.rename('KLNL', 3), w.swap(3, 'KLNL'), w.derive('KLNL', 3, 16),
-         w.restrict('KLNL', md(UsagePolicy=2), 'h'), w.getst(3)]
+         w.restrict('KLNL', rq(UsagePolicy=0b11101), 'h'), w.getst(3)]
     w.csrs(klnamedlocker=3)
     r += [w.clone(3, 'KLNL'), w.swap('KLNL', 3), trap_of(w.derive, 3, 'KLNL', 16), trap_of(w.clone, 'KLNL', 'KLNL'),
           trap_of(w.derive, 'KLNL', 0, 16) is None]
@@ -3252,7 +3272,7 @@ def t_rename_swap():
        ['renamed', IMP, 0, 7, 48, True, 'noop', 'done', 'completed', True, True, 'swapped', 4, ToyCipher.ENCRYPT,
         PROV, 'swapped', 4, 'renamed', 32, ToyCipher.ENCRYPT, 'opened', 'privilege_violation', 'swapped', 'renamed',
         PROV, 8])
-    u, w = rc(UsagePolicy=1, ExpirationDate=10).csrs(klstart=32), rc()
+    u, w = rc(UsagePolicy=0b01110, ExpirationDate=10).csrs(klstart=32), rc()
     u.mode, u.clock, u.siv = 'U', 99, 11
     w.setst(0, EXPIRED)
     m = w.getmd(0)
@@ -3263,19 +3283,19 @@ def t_rename_swap():
     for final in (SUCCESS, FAILURE):
         f = final_cipher(final)
         r += [f.rename(1, 0), f.swap(2, 1), f.getst(2)]
-    eq('not usage instructions, no evaluation point, uninterruptible (GR45); Error, Success, Failure CCs move', r,
-       ['renamed', 'swapped', ToyCipher.ENCRYPT, 1, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
+    eq('not usage instructions, no evaluation point, uninterruptible (GR46); Error, Success, Failure CCs move', r,
+       ['renamed', 'swapped', ToyCipher.ENCRYPT, 0b01110, 32, 11, 'privilege_violation', 'renamed', True, 0, 'swapped', True,
         'renamed', 'swapped', SUCCESS, 'renamed', 'swapped', FAILURE])
 
 def t_controls():
     section('Negative controls')
-    cur, req = 0b01110, 0b00001
+    cur, req = 0b00001, 0b11110
     u, probe, gained = pv(fresh(), 0, cipher(UsagePolicy=cur)), fresh(), []
-    u.restrict(0, md(UsagePolicy=req), 'h')
+    u.restrict(0, rq(UsagePolicy=req), 'h')
     for probe.mode in ('U', 'VS', 'HS', 'M'):
         if probe.usage_allowed(cipher(UsagePolicy=req)) and not probe.usage_allowed(cipher(UsagePolicy=cur)):
             gained.append(probe.mode)
-    eq('the spec rule adds the requested denial and keeps the existing ones', u.getmd(0)['UsagePolicy'], 0b01111)
+    eq('the spec rule adds the requested denial and keeps the existing ones', u.getmd(0)['UsagePolicy'], 0)
     control('replace-if-non-zero UsagePolicy widens the allowed modes', gained == ['VS', 'HS', 'M'])
     src = pv(fresh(), 0, sig())
     img = export(src, 0)

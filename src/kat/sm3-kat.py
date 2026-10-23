@@ -141,11 +141,10 @@ check('bound: Form B Xs = 8, t - 8, t gives that prefix and _Success_; Xs = 264 
       ([(DIG_ABC[:x // 8], KL_STATE_SUCCESS) for x in (8, 248, 256)], KL_STATEEXT_INVALID))
 control('caller-padded message: the digest differs', digest(b'abc' + pad(3)) != DIG_ABC)
 
-check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
-      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
-      '<<KLE-instruction-restrict>>)',
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl keeps the unused _MachinePolicy_ '
+      'zero, whatever its request (<<KLE-hash-functions-MACs-XOFs>>, <<KLE-instruction-restrict>>)',
       None, (Sm3().provision(1).st, absorbing(data=b'abc').restrictl(1).st, absorbing(data=b'abc').restrictl(0).st),
-      (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB))
+      (KL_STATEEXT_UNSUPPORTED, KL_STATE_HASH_ABSORB, KL_STATE_HASH_ABSORB))
 
 section('Serialized Content')
 check('Content1 = n+16+16+32+64+b bits, padded to 128', None, len(absorbing(bytes(8)).export()), 112)
@@ -175,7 +174,7 @@ for d, ks in ((b'', 0), (b'a', 2)):
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
-      'window, _Invalid_ (MR1, GR51)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
+      'window, _Invalid_ (MR1, GR52)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 check('kl.exec in _Invalid_: no operation, output zeroed (GR32, GR34)',
       C(32)(cl) == ('noop', bytes(32)) and cl.st == KL_STATEEXT_INVALID)
 cl = outputting()
@@ -224,7 +223,7 @@ for ks in (59, 4):
     cl = absorbing(data=MP[:5]) if ks == 59 else absorbing()
     HART.klstart = ks
     res.append((cl.exec('B', MP[5:69] if ks == 59 else MP[:64], resume=True)[0], cl.st))
-check('a resumption at klstart = 59 with block_base != 0 (GR51) -> _Invalid_; at klstart = 4 with block_base = 0 '
+check('a resumption at klstart = 59 with block_base != 0 (GR52) -> _Invalid_; at klstart = 4 with block_base = 0 '
       '-> admitted', None, res, [('invalid', KL_STATEEXT_INVALID), ('retired', KL_STATE_HASH_ABSORB)])
 
 section('kl.derive')

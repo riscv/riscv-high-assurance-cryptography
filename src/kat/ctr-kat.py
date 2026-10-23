@@ -115,7 +115,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # GR20, GR21; MR1 (length first: GR51)
+        if self.state != OP or KLLEN % B:     # GR20, GR21; MR1 (length first: GR52)
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -139,12 +139,12 @@ class KsLocker:
 
     def derive_key(self, src, length):
         """kl.derive into `key` (<<KLE-derive-endpoints>>); src is bytes or a KsLocker, whose keystream
-        in Operate is an unrestricted source (GR42)."""
+        in Operate is an unrestricted source (GR43)."""
         n = self.params()[0] // 8
         if isinstance(src, KsLocker) and src.state != OP:
             return src.invalidate()           # GR39 item 1
         if self.state != RDY or self.keytype == 1:
-            return self.invalidate()          # GR39 item 2 (GR74)
+            return self.invalidate()          # GR39 item 2 (GR75)
         if length < n or not isinstance(src, KsLocker) and len(src) < n:
             return self.invalidate()          # GR39 item 5 (the keystream is unbounded)
         if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, unused bytes discarded
@@ -155,12 +155,12 @@ class KsLocker:
 
 
 class HashLocker:
-    """A SHA-256 locker in Hash_Absorb: its kl.exec input is a destination of a shared secret only (GR41)."""
+    """A SHA-256 locker in Hash_Absorb: its kl.exec input is a destination of a shared secret only (GR42)."""
     def __init__(self):
         self.state, self.h = HA, hashlib.sha256()
 
 def derive_to_hash(cl, h):
-    """Keystream into a hash in Hash_Absorb: both are endpoints, the pair is not admitted (GR42)."""
+    """Keystream into a hash in Hash_Absorb: both are endpoints, the pair is not admitted (GR43)."""
     if cl.state != OP:
         return cl.invalidate()                # GR39 item 1
     cl.invalidate()                           # GR39 item 3: both
@@ -425,18 +425,18 @@ def derived(length, keytype=0, state_op=False):
         return cl.state, bxor(keystream(operate(cl, T1, C0), 64), PT).hex()
     return cl.state, cl.key
 
-eq("CTR keystream (GR42), length 32, into the 16-byte key (GR38, GR39 item 5), then the F.5.1 inputs under that key",
+eq("CTR keystream (GR43), length 32, into the 16-byte key (GR38, GR39 item 5), then the F.5.1 inputs under that key",
    derived(32), (RDY, ref_ctr(ks_src[:16], NONCE, 32, C0, PT).hex()))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR74, GR39 item 2)", (32, 1)),
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR75, GR39 item 2)", (32, 1)),
                     ("destination in Operate (GR39 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst, twin = ctr_cl(key, T1, C0), ctr_cl(key), ctr_cl(key, T1, C0)
 dst.derive_key(src, 16)
-eq("CTR keystream into a CTR key (GR42): its first 16 bytes; the source advanced one block",
+eq("CTR keystream into a CTR key (GR43): its first 16 bytes; the source advanced one block",
    (dst.state, v2b(dst.key, 16), keystream(src, 16)), (RDY, keystream(twin, 16), keystream(twin, 16)))
 src, dst, ks = ctr_cl(key, T1, C0), ctr_cl(bytes(24)), bxor(H(c), PT)
 dst.derive_key(src, 40)
-eq("keystream into an AES-192 key, length 40 (GR42): 24 bytes from 2 whole blocks, the unused 8 discarded; "
+eq("keystream into an AES-192 key, length 40 (GR43): 24 bytes from 2 whole blocks, the unused 8 discarded; "
    "ctr advanced by 2 as by Form C kl.exec; the source goes on with F.5.1 block 3",
    (dst.state, v2b(dst.key, 24), src.state, src.ctr, keystream(src, 16)), (RDY, ks[:24], OP, C0 + 2, ks[32:48]))
 src, dst = ctr_cl(key, T1, C0), ctr_cl(bytes(24))

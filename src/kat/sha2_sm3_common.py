@@ -54,10 +54,8 @@ class MdHash:
             return s.reset(KL_STATEEXT_UNSUPPORTED)
         return s.reset(KL_STATE_READY)
 
-    def restrictl(s, clear):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use
-        if clear and not inert(s.st):  # a zero field changes nothing (<<KLE-instruction-restrict>>)
-            s.reset()
-        return s
+    def restrictl(s, rq):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use:
+        return s  # the field stays zero, whatever `rq` holds (<<KLE-instruction-restrict>>)
 
     def process_block(s):
         wd = lambda v, j: sl(v, (j + 1) * s.w - 1, j * s.w)
@@ -122,14 +120,14 @@ class MdHash:
             return 'retired', s.output(nbytes, prior)
         if s.st == KL_STATE_HASH_LAST_BLOCK and form == 'B':
             L, p = s.last_block_len, HART.klstart if resume else 0
-            if 8 * len(data) < L:  # MR1 / GR51 item 1: length first
+            if 8 * len(data) < L:  # MR1 / GR52 item 1: length first
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)
             if p >= len(data):
                 HART.klstart = 0
-                return 'empty', bytes(nbytes)  # GR51 item 2
-            if p or not L:  # interruption point 0 only (MR2, GR51 item 3); MR8
+                return 'empty', bytes(nbytes)  # GR52 item 2
+            if p or not L:  # interruption point 0 only (MR2, GR52 item 3); MR8
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)
@@ -143,7 +141,7 @@ class MdHash:
             return 'retired', bytes(nbytes)
         if resume and s.st == KL_STATE_HASH_ABSORB and form == 'B' and HART.klstart >= len(data):
             HART.klstart = 0
-            return 'empty', bytes(nbytes)  # GR51 item 2, before item 3
+            return 'empty', bytes(nbytes)  # GR52 item 2, before item 3
         if resume and HART.klstart and s.block_base:
             r, HART.klstart = 'invalid', 0  # not an interruption point (<<KLE-process-VLI>>)
         else:
@@ -202,14 +200,14 @@ class KeyDest:
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
-    ML-KEM `sharedkey`, GR41) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR42).  A hash in
+    ML-KEM `sharedkey`, GR42) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR43).  A hash in
     _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
     def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
-    """A Source -> the _Hash_Absorb_ kl.exec input (GR41: a shared secret only) or a KeyDest (GR41, GR42);
-    uninterruptible (GR45)."""
+    """A Source -> the _Hash_Absorb_ kl.exec input (GR42: a shared secret only) or a KeyDest (GR42, GR43);
+    uninterruptible (GR46)."""
     if src.st in ERROR_STATES or dst.st in ERROR_STATES:
         return 'noop'  # GR32: an inert endpoint
     key = isinstance(dst, KeyDest)
@@ -217,7 +215,7 @@ def kl_derive(dst, src, length):
                            (dst, dst.st == (KL_STATE_READY if key else KL_STATE_HASH_ABSORB))) if not ok]
     for c in bad:
         c.reset()  # GR39 items 1-2
-    pos, HART.klstart = HART.klstart, 0  # uninterruptible (GR45): no resumption
+    pos, HART.klstart = HART.klstart, 0  # uninterruptible (GR46): no resumption
     if bad:
         return 'refused'
     if not (key or src.secret):
@@ -231,7 +229,7 @@ def kl_derive(dst, src, length):
     if key:
         dst.key = src.data[:dst.n]
     else:
-        dst.exec('B', src.data)  # GR41: the whole secret (GR39 item 5)
+        dst.exec('B', src.data)  # GR42: the whole secret (GR39 item 5)
     return 'done'
 
 # ---------------------------------------------------------------- drivers

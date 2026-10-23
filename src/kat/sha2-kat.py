@@ -248,11 +248,11 @@ for d, ks in ((b'', 0), (b'a', 2)):
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
-      'window, _Invalid_ (MR1, GR51)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
+      'window, _Invalid_ (MR1, GR52)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 cl = Sha2().provision()
 run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0))
 r = B(b'')(cl)[0], cl.st
-check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR51)', None,
+check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR52)', None,
       (r, run(cl, O, C(32))[1]), (('empty', KL_STATE_HASH_LAST_BLOCK), hashlib.sha256(b'ab').digest()))
 m = bytes(range(70))
 cl = absorbing(data=m[:6])
@@ -268,14 +268,13 @@ cl = absorbing(data=b'abc')
 HART.klstart = 3
 r = cl.exec('B', b'xyz', resume=True)[0], cl.st, HART.klstart
 check('_Hash_Absorb_ with block_base = 24, a 3-byte kl.exec with klstart = 3: empty window, State kept, klstart = 0 '
-      '(GR51 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
+      '(GR52 item 2 precedes item 3); the digest is that of "abc"', None, (r, run(cl, O, C(32))[1]),
       (('empty', KL_STATE_HASH_ABSORB, 0), DIG))
 
-check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
-      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
-      '<<KLE-instruction-restrict>>)',
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl keeps the unused _MachinePolicy_ '
+      'zero, whatever its request (<<KLE-hash-functions-MACs-XOFs>>, <<KLE-instruction-restrict>>)',
       None, (Sha2().provision(1).st, absorbing(data=b'abc').restrictl(1).st, absorbing(data=b'abc').restrictl(0).st),
-      (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB))
+      (KL_STATEEXT_UNSUPPORTED, KL_STATE_HASH_ABSORB, KL_STATE_HASH_ABSORB))
 
 section('Serialized Content')
 for name, (w, b, n, t) in PARAMS.items():

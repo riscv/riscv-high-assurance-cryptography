@@ -218,10 +218,8 @@ class Sha3:
         s.reset(KL_STATE_READY)  # `state` zeroed
         return s
 
-    def restrictl(s, clear):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use
-        if clear and not inert(s.st):  # a zero field changes nothing (<<KLE-instruction-restrict>>)
-            s.reset()
-        return s
+    def restrictl(s, rq):  # kl.restrictl of the _MachinePolicy_ that the Machine does not use:
+        return s  # the field stays zero, whatever `rq` holds (<<KLE-instruction-restrict>>)
 
     def mdh(s):
         return v2b(mdh_pack(Machine=s.machine, State=s.st), 16)
@@ -319,7 +317,7 @@ class Sha3:
             if sew is not None and sew < GRANULARITY:
                 return s.fail(out)  # MR1
             if 8 * len(inp) < s.last_block_len:
-                return s.fail(out)  # MR1, GR51 item 1: the length first
+                return s.fail(out)  # MR1, GR52 item 1: the length first
             if s.empty(len(inp)):
                 return 'empty'
             if HART.klstart or s.last_block_len == 0:
@@ -401,14 +399,14 @@ class KeyDest:
 
 class Source:
     """A source endpoint, only its bytes modelled: a shared secret field (an ECC shared secret in _Output_ or the
-    ML-KEM `sharedkey`, GR41) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR42).  A SHA-3 or
+    ML-KEM `sharedkey`, GR42) or, with secret=False, the `hash` of a CMAC in _Hash_Output_ (GR43).  A SHA-3 or
     SHAKE _Hash_Output_ is not a source (<<KLE-derive-endpoints>>)."""
     def __init__(s, data, secret=True): s.st, s.data, s.secret = KL_STATE_HASH_OUTPUT, data, secret
     def reset(s): s.st = KL_STATEEXT_INVALID
 
 def kl_derive(dst, src, length):
-    """A Source -> the _Hash_Absorb_ kl.exec input (GR41: a shared secret only) or a KeyDest (GR41, GR42);
-    uninterruptible (GR45): it never halts, and retires with klstart = 0."""
+    """A Source -> the _Hash_Absorb_ kl.exec input (GR42: a shared secret only) or a KeyDest (GR42, GR43);
+    uninterruptible (GR46): it never halts, and retires with klstart = 0."""
     if inert(src.st) or inert(dst.st):  # GR32: an inert endpoint makes it a no-op
         HART.klstart = 0
         return 'noop'
@@ -586,7 +584,7 @@ check('[oracle] SHAKE128 512 B over kl.exec of 100+68+200+144 B; stays in _Hash_
 cl = squeezing('SHAKE128', MSG_ABC)
 out = bytearray(b'\xee' * 400)
 r = cl.exec('C', out=out, interrupt_at=1)
-check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR50, GR48)',
+check('squeeze halts at klstart = output_base / 8 = 168; bytes beyond left unwritten (GR51, GR49)',
       (r, HART.klstart, bytes(out[168:])) == ('interrupted', 168, b'\xee' * 232))
 check('resumed squeeze retires with klstart = 0', (cl.exec('C', out=out), HART.klstart) == ('done', 0))
 check('[oracle] SHAKE128 400 B with interrupt/resume', None, bytes(out), oracle('SHAKE128', MSG_ABC, 400))
@@ -720,11 +718,10 @@ for label, name, n_abs, n_out, want in [
     check(f'export/import round trip, {label}', None, head + squeeze(cl, len(want) - len(head))[1], want)
 
 pol = Sha3().provision(v2b(mdh_pack(Machine=MACHINE['SHA3-256'], MachinePolicy=1), 16)).st
-check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl of the unused _MachinePolicy_ -> '
-      '_Invalid_, one with a zero field changes nothing (<<KLE-hash-functions-MACs-XOFs>>, '
-      '<<KLE-instruction-restrict>>)',
+check('a PI with _MachinePolicy_ = 1: unsupported Metadata; a kl.restrictl keeps the unused _MachinePolicy_ '
+      'zero, whatever its request (<<KLE-hash-functions-MACs-XOFs>>, <<KLE-instruction-restrict>>)',
       None, (pol, absorbing('SHAKE128', MSG_ABC).restrictl(1).st, absorbing('SHAKE128', MSG_ABC).restrictl(0).st),
-      (KL_STATEEXT_UNSUPPORTED, KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB))
+      (KL_STATEEXT_UNSUPPORTED, KL_STATE_HASH_ABSORB, KL_STATE_HASH_ABSORB))
 
 section('kl.derive')
 SEC, SEC66 = bytes(range(0x40, 0x60)), bytes(range(0x80, 0xc2))  # shared secrets: ML-KEM, P-521 sizes
@@ -774,7 +771,7 @@ src, dst, s28, d28 = Source(SEC), KeyDest(16), Source(SEC[:28]), KeyDest(32)
 h, dh, cm, dc = squeezing('SHAKE128', MSG_ABC), KeyDest(16), Source(SEC[16:], secret=False), KeyDest(16)
 check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte secret -> a 32-byte key (GR39 item 5): '
       'destination _Invalid_, source untouched; SHAKE128(abc) -> a key (GR39 item 1): source _Invalid_, key '
-      'untouched; a CMAC -> a key (GR42): the CMAC', None,
+      'untouched; a CMAC -> a key (GR43): the CMAC', None,
       (kl_derive(dst, src, 32), dst.key, kl_derive(d28, s28, 32), d28.st, s28.st, kl_derive(dh, h, 16), h.st, dh.st,
        kl_derive(dc, cm, 16), dc.key),
       ('done', SEC[:16], 'invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 'invalid', KL_STATEEXT_INVALID,
@@ -820,7 +817,7 @@ for label, prep, act in [
          lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089)),
         ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8)),
         ('KLLEN = 8 < last_block_len = 13 (MR1)', last, lambda c: c.exec('B', inp=b'\x01')),
-        ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR51 item 1)',
+        ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR52 item 1)',
          lambda: last(L=16), lambda c: c.exec('B', inp=b'')),
         ('a second kl.exec (MR8)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
         ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
