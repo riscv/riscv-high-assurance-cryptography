@@ -255,23 +255,19 @@ A handler that can neither resolve nor forward a KLE exception covered by Rule <
 [[KLE-management-code-snippets]]
 == Code for Locker Configuration and Export Operations
 
-[WARNING]
-====
-These examples are being rewritten. They are not yet definitive.
-====
-
 This section gives the instruction sequences for provisioning, import and export.
-They show the operation and its error detection, not application-specific error handling, and can be packaged into libraries or OS APIs.
+They show the operation and its error detection, not application-specific error handling, and can be used as a starting point for the
+development of libraries or OS APIs.
 
 Registers::
 GPR `t0` holds the number of the locker to be provisioned, imported or exported, or 32 for the locker that `klnamedlocker` names, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (<<Zkl-ISA-unpriv.adoc#KLE-memory-check-order>>).
 The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 Selecting the locker::
-No instruction of the routines directly encodes a locker number: the routines save `klnamedlocker` on entry, select the locker with the preamble `select_locker` below on entry and at every `restart`, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>).
-`kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand; `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name `KLNL`.
-A clear resets `klnamedlocker` to 32, after which a `KLNL` opening performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>): the next _State_ check reads 0, and the preamble at `restart` names locker `t0` again or, if `t0` = 32, branches to `no_locker`, since the clear has destroyed the locker. An opening on a named locker opens it, even a Valid one.
-On exit the routines restore the saved value (Rule <<KLE-SR-klnamedlocker-write>>), or write 32 if the saved value names the locker that a clear has destroyed (Error handling below), so a handler that has saved the interrupted operation (<<KLE-state-save-and-restore-order>>) can call them, also for a nested export or import of the locker that operation manages.
+The routines encode no locker number: they save `klnamedlocker` on entry, select the locker with the preamble `select_locker` below on entry and at every `restart`, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>): `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand, and `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name `KLNL`.
+A clear resets `klnamedlocker` to 32, after which a `KLNL` opening performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), whereas an opening on a named locker opens it, even a Valid one.
+The next _State_ check then reads 0, and the preamble at `restart` names locker `t0` again or, if `t0` = 32, branches to `no_locker`, since the clear destroyed the locker.
+On exit the routines restore the saved value (Rule <<KLE-SR-klnamedlocker-write>>), or write 32 if it names a locker that a clear destroyed (Error handling below), so a handler that has saved the interrupted operation (<<KLE-state-save-and-restore-order>>) can call them, also for a nested export or import of the locker that operation manages.
 +
 ----
 .macro select_locker              # t0 = p: 0-31, or 32 for the named locker
@@ -289,13 +285,13 @@ On exit the routines restore the saved value (Rule <<KLE-SR-klnamedlocker-write>
 Checking the _State_::
 +
 --
-After each management instruction, the code reads the _State_ of the locker with `kl.getst`, and its _StateExtension_ with `kl.getstx` if the _State_ is 0.
-If a handler has meanwhile cleared the locker or set it to an Error State, every following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, including a `KLNL` opening or completion after a clear, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and the check detects the change:
+After each management instruction, the code reads the _State_ with `kl.getst` and, if it is 0, the _StateExtension_ with `kl.getstx`.
+If a handler has meanwhile cleared the locker or set an Error State, every following `kl.mvin`, `kl.mvout`, `kl.load`, `kl.store` or `kl.mgmt`, a `KLNL` opening or completion after a clear included, performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and the check detects the change:
 
-* after a clear, `KLNL` reads as an _Unconfigured_ locker, so the check finds _State_ and _StateExtension_ 0: a provisioning or an import restarts at its preamble, and an export, whose CC the clear has destroyed, branches to `handle_errors`;
+* after a clear, `KLNL` reads as _Unconfigured_, with _State_ and _StateExtension_ 0: a provisioning or an import restarts at its preamble, and an export, whose CC is destroyed, branches to `handle_errors`;
 * after an Error State, or after the completing `kl.mgmt`, `KLNL` still names the locker, so the check reads its final _State_ and _StateExtension_; an Error State abandons the operation.
 
-The routines pass `Xl` = `x0` to `kl.load` and `kl.store`: once a clear has set `klnamedlocker` to 32, these are a `kl.input` or `kl.output` with `Xl` = 0, which performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>).
+`kl.load` and `kl.store` take `Xl` = `x0`, so after a clear they are a `kl.input` or `kl.output` with `Xl` = 0, which performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>>).
 The macro `check_state` makes this check for provisioning and import; an export branches to `handle_errors` on _State_ 0 alone.
 ----
 .macro check_state on_clear       # after a management instruction
@@ -309,7 +305,7 @@ The macro `check_state` makes this check for provisioning and import; an export 
 ----
 
 Only the check after the last instruction is required; the earlier ones react sooner.
-The code may bound the number of restarts and then branch to its error handling, for robustness only: system software must let the operation complete (Rule <<KLE-SR-no-unconditional-clear>>).
+The code may bound the restarts and then branch to its error handling, for robustness only: system software must let the operation complete (Rule <<KLE-SR-no-unconditional-clear>>).
 --
 
 Error handling::
@@ -1387,27 +1383,20 @@ To verify a CMAC `T` of `T_len` bits instead, the code from label `4` on is repl
 [[KLE-hash-example]]
 === Hash Functions, MACs and XOFs
 
-The following sequence hashes a message with any Machine of <<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>; only the SCC and the number `out_bytes` of output bytes differ.
+The following sequence hashes a message with any Machine of <<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>; only the SCC and `out_bytes`, the number of output bytes, differ.
 
-* *Message.* The caller passes `M` unpadded; the `kl.setst` that ends the message pads it.
-The final piece, of `M_bits` mod 64 bits, fits every Machine, since `b` {ge} 64; for BLAKE2 it must be a whole number of bytes.
-A partial final byte holds the final bits in the order of the standard: in its most significant positions for SHA-2 and SM3,
-in its least significant positions for SHA-3, KMAC and Ascon, and as for its `H` for HMAC.
-* *Output length.* An `Xs` = 8 {times} `out_bytes` in the `kl.setst` into _Hash_Output_ makes the Machine emit exactly `out_bytes` bytes and then enter _Success_.
-For KMAC128 and KMAC256 it is also the `L` that the MAC encodes; KMACXOF128 and KMACXOF256 encode `L` = 0.
-For every other Machine, `out_bytes` only truncates the output.
-`Xs` = 0 asks instead for the full digest, or for an unbounded XOF; it is invalid for KMAC128 and KMAC256.
-`out_bytes` is:
-** at least 1; at least 8 for HMAC, and at least 4 for KMAC128 and KMAC256;
-** at most the digest length for a fixed-output Machine;
-** below 2^29^ for an XOF, KMAC128 or KMAC256.
-* *BLAKE2.* A digest of `nn` {ne} `nn~max~` bytes, such as BLAKE2b-256, needs an SCC whose `nn` was set by the _Set_Aux_Value_ operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> or by a system-specific import, since `nn` enters the IV.
-With `kk` {ne} 0 and no system key, the caller keys the hash: `M` starts with the key zero-padded to `b` bits (cite:[RFC7693] {sect}3.3), which alone forms the message for an empty `M`; a system key needs no such block.
-* *The SCC.*
-** It is in _Ready_; one exported in _Hash_Absorb_ after a prefix of the message, such as secret content (NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>), takes no first `kl.setst`, and `M` is then the rest of the message.
-** An SCC of the NIK variant of <<Zkl-ISA-machines.adoc#KLE-HMAC>> must already hold its key.
-** The SCC of HMAC, KMAC128 or KMAC256, or of BLAKE2 with a system key, must enable _Hash_Output_ (_MachinePolicy_[0]);
-for the MAC verification below, that of HMAC, KMAC128 or KMAC256 must enable _Hash_Verify_ (_MachinePolicy_[1]) instead.
+* *Message.* The caller passes `M` unpadded; the `kl.setst` that ends it pads it.
+The final piece, of `M_bits` mod 64 bits, fits every Machine, since `b` {ge} 64, and for BLAKE2 is a whole number of bytes.
+A partial final byte holds the final bits as the standard orders them: in its most significant positions for SHA-2 and SM3, in its least significant ones for SHA-3, KMAC and Ascon, and as its `H` does for HMAC.
+* *Output length.* `Xs` = 8 {times} `out_bytes` in the `kl.setst` into _Hash_Output_ makes the Machine emit exactly `out_bytes` bytes, then enter _Success_.
+For KMAC128 and KMAC256 it is also the `L` that the MAC encodes, while KMACXOF128 and KMACXOF256 encode `L` = 0; for every other Machine it only truncates the output.
+`Xs` = 0 requests the full digest, or an unbounded XOF, and is invalid for KMAC128 and KMAC256.
+`out_bytes` is at least 1 (8 for HMAC, 4 for KMAC128 and KMAC256), at most the digest length for a fixed-output Machine, and below 2^29^ for an XOF, KMAC128 or KMAC256.
+* *BLAKE2.* A digest of `nn` {ne} `nn~max~` bytes, such as BLAKE2b-256, needs an SCC whose `nn`, which enters the IV, was set by the _Set_Aux_Value_ operation of <<Zkl-ISA-machines.adoc#KLE-BLAKE2>> or by a system-specific import.
+With `kk` {ne} 0 and no system key, `M` starts with the key zero-padded to `b` bits (cite:[RFC7693] {sect}3.3), which alone forms the message for an empty `M`; a system key needs no such block.
+* *The SCC* is in _Ready_, or in _Hash_Absorb_ if it was exported after a prefix of the message, such as secret content (NOTE of <<Zkl-ISA-machines.adoc#KLE-Ascon-Hash256>>); it then takes no first `kl.setst`, and `M` is the rest of the message.
+An SCC of the NIK variant of <<Zkl-ISA-machines.adoc#KLE-HMAC>> must already hold its key.
+An SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key, must enable _Hash_Output_ (_MachinePolicy_[0]); for the MAC verification below, one of HMAC, KMAC128 or KMAC256 must enable _Hash_Verify_ (_MachinePolicy_[1]) instead.
 
 [[KLE-pseudocode-hash]]
 .Hashing a Message
