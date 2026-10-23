@@ -1821,8 +1821,9 @@ Rules <<KLE-GR-shared-secret>> and <<KLE-GR-exec-implies-unrestricted>> admit tw
 // a Machine may define further pairs, which narrow but never relax any policy and respect Rule <<KLE-GR-shared-secret>>.
 An admitted pair fixes the semantics of the transfer and its updates to the two States and to `klstart` (Rules <<KLE-GR-derive-rule-both-fixed-size>>–<<KLE-GR-exec-implies-unrestricted>>); `kl.derive` changes no other state of the hart (<<KLE-instruction-properties>>).
 
-`kl.derive` moves `eff_length` bytes (Rule <<KLE-GR-derive-rule-both-fixed-size>>), computed from `length`, the value of the auxiliary GPR, from an endpoint of the source locker to an endpoint of the destination locker without exposing them to software: the output of one Machine becomes an input of another, possibly into a key field or a `kl.exec` input, as the admitted pairs allow.
-`length` is that of the whole transfer, not of the part that remains after `klstart`; `Xs2` = `X0` gives `length` = 0 (Rule <<KLE-GR-x0-operand>>), and Rule <<KLE-GR-checks>> gives the outcome of a zero or short `length`.
+Let `length` be the value provided by the auxiliary GPR, `dest_length` the length in bytes of the destination field, and `eff_length` = min(`length`, `dest_length`).
+`kl.derive` moves `eff_length` bytes from an endpoint of the source locker to an endpoint of the destination locker without exposing them to software: the output of one Machine becomes an input of another, possibly into a key field or a `kl.exec` input, as the admitted pairs allow.
+`dest_length` is the length of the whole transfer, not of the part that remains after `klstart`; `Xs2` = `X0` gives `length` = 0, and Rule <<KLE-GR-checks>> gives the outcome when `length` is zero or short.
 
 A transfer is _unrestricted_ only where software could also obtain the moved data by issuing `kl.exec` instructions, as for the block cipher outputs of Rule <<KLE-GR-exec-implies-unrestricted>> and a shared secret that its Machine allows to export through `kl.exec`; otherwise it is _restricted_, as for any other shared secret (Rule <<KLE-GR-shared-secret>>).
 
@@ -1964,13 +1965,15 @@ With `Zklio`, the KLIOBUF can replace the vector operands of `kl.exec`, `kl.sets
 . a Form D `kl.exec` substitutes for a Form A, B or C `kl.exec`; and
 . a Form A `kl.setst` or `kl.mgmt` substitutes for Form C of the same instruction.
 
-[[KLE-GR-substitution-operands,GR11]]GR11:: Where a Form A or B `kl.exec` expects a vector input, its substitution takes it from [`klstart`, `kliobuftop`-1] instead of a vector register, and where a Form A or C `kl.exec` expects a vector output, its substitution writes it to [`klstart`, `kliobuftop`-1] (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-clear-output>>), a Form A substitution writing each block's output over its input.
+[[KLE-GR-substitution-operands,GR11]]GR11:: Where a Form A or B `kl.exec` expects a vector input, its substitution takes the input from [`klstart`, `kliobuftop`-1] instead of a vector register, and where a Form A or C `kl.exec` expects a vector output, its substitution writes it to [`klstart`, `kliobuftop`-1] (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-clear-output>>), a Form A substitution writing each block's output over its input.
 A substituting Form A `kl.setst` reads its auxiliary input from KLIOBUF bytes [0, `kliobuftop`-1], ignoring `klstart`, truncated to the operand width as Rule <<Zkl-ISA-machines.adoc#KLE-MGR-fixed-width-input>> states.
 A substituting Form A `kl.mgmt` that needs the MDH reads it from KLIOBUF bytes [0, 15], ignoring `klstart` (<<KLE-instruction-mgmt>>).
 
 [[KLE-GR-form-mismatch,GR12]]GR12:: A _wrong Form_ of a usage instruction is a Form that is neither a native Form of the instruction expected in the locker's State, for `kl.setst` with its immediate, nor, with `Zklio`, the substitution of that native Form (Rule <<KLE-GR-substitution>>).
 
-[[KLE-GR-substitution-needs-zklio,GR13]]GR13:: Without `Zklio`, a substitution of a usage instruction that is not also a native Form is a wrong Form (Rule <<KLE-GR-form-mismatch>>).
+// reviewer: a substitution is always a proper substitution, i.e., a different Form: a Form D kl.exec is not substituted by Form D kl.exec
+[horizontal]
+[[KLE-GR-substitution-needs-zklio,GR13]]GR13:: Without `Zklio`, a substitution of a usage instruction is always a wrong Form (Rule <<KLE-GR-form-mismatch>>).
 
 [[KLE-GR-iobuf-configured,GR14]]GR14:: These instructions access the KLIOBUF and require it to be configured, with a non-zero `kliobuflen`, even for an empty transfer window:
 +
@@ -1983,7 +1986,7 @@ A substituting Form A `kl.mgmt` that needs the MDH reads it from KLIOBUF bytes [
 A `kl.input` or `kl.output` with `Xl` = 0 is not one of them: it is the encoding of a locker transfer, which falls through as described in Rule <<KLE-GR-outcome-inert>> below.
 //, so it performs no operation and writes 0 to `klstart`, whatever `Zklio` and the KLIOBUF (<<KLE-instruction-load>>).
 +
-If the KLIOBUF is not configured, such an instruction raises an illegal-instruction exception, a ground of the third group (<<KLE-third-group-ILL-grounds>>): a usage instruction at item 1 of Rule <<KLE-GR-outcome-valid-state>>, a Form A `kl.mgmt` at item 7 of Rule <<KLE-GR-management-check-order>> even if it then falls through, and any other instruction right after the checks of Rule <<KLE-GR-management-check-order>>, unless it falls through (Rule <<KLE-GR-fall-through-operands>>).
+If the KLIOBUF is not configured, such an instruction raises an illegal-instruction exception, a ground of the <<KLE-third-group-ILL-grounds>>: a usage instruction at item 1 of Rule <<KLE-GR-outcome-valid-state>>, a Form A `kl.mgmt` at item 7 of Rule <<KLE-GR-management-check-order>> even if it then falls through, and any other instruction right after the checks of Rule <<KLE-GR-management-check-order>>, unless it falls through (Rule <<KLE-GR-fall-through-operands>>).
 
 [[KLE-GR-substitution-failures,GR15]]GR15:: For a substitution of `kl.exec` (Rule <<KLE-GR-substitution>>) that is not a wrong Form (Rule <<KLE-GR-form-mismatch>>), a non-zero `kliobuflen` with a `kliobuftop` invalid for the Machine transitions the locker to Error State _Invalid_, whether the KLIOBUF is used as input or only as output (Rule <<KLE-GR-transfer-window-checks>>).
 
@@ -1998,9 +2001,9 @@ If the KLIOBUF is not configured, such an instruction raises an illegal-instruct
 . a pending fatal condition: KLE fatal-error exception;
 . any other ground of the <<KLE-second-group-ILL-grounds>>: illegal-instruction exception, or the virtual-instruction exception that the ground prescribes;
 . no active CSK: KLE missing-CSK exception (<<KLE-CSK-requirements>>);
-. for an instruction that names `KLNL`, the _klnamedlocker check_: the locker is the one that `klnamedlocker` names, or none if it is 32 (Rule <<KLE-GR-klnamedlocker-override>>), and with none, item 6 does not apply, the remaining items are still checked, and the instruction then falls through (Rule <<KLE-GR-outcome-inert>>);
+. for an instruction that names `KLNL`, the _klnamedlocker check_: the locker is the one named by `klnamedlocker`, or none if it is 32 (Rule <<KLE-GR-klnamedlocker-override>>), and with none, item 6 does not apply, the remaining items are still checked, and the instruction falls through (Rule <<KLE-GR-outcome-inert>>);
 . an access to a locker whose `*llockerstatus` field in effect is _Off_, other than the destination access of a destructive configuration instruction other than `kl.swap` (<<KLE-destructive-config>>) and any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker (<<KLE-instruction-clone>>), so that `kl.load`, `kl.mvin` and `kl.setste` are not exempt: KLE locker-Off exception (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>);
-. the grounds of the third group (<<KLE-third-group-ILL-grounds>>) that do not depend on the locker's _State_, its items 3–5, 7 and 8: illegal-instruction exception; the MDH-operand check of `kl.mgmt` (item 3) is made whatever the operation, even if the instruction then falls through;
+. the grounds of the <<KLE-third-group-ILL-grounds>> that do not depend on the locker's _State_, its items 3–5, 7 and 8: illegal-instruction exception; the MDH-operand check of `kl.mgmt` (item 3) is made whatever the operation, even if the instruction then falls through;
 . for `kl.load` and `kl.store` with `klnamedlocker` < 32, the alignment of the effective address: address-misaligned exception, preceded by the address breakpoint of the first component access (<<KLE-memory-check-order>>).
 --
 
