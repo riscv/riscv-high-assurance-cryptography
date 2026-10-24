@@ -291,15 +291,15 @@ cl = Sha2().provision()
 check('"abc" unpadded, then the kl.setst into _Hash_Output_ with block_base != 0: the Machine pads, digest correct',
       run(cl, A, B(b'abc'), O, C(32))[1] == DIG_ABC and cl.st == KL_STATE_SUCCESS)
 for label, ops in [
-        ('kl.exec in _Ready_ (GR21)', (B(M_ABC),)),
+        ('kl.exec in _Ready_ (GR22)', (B(M_ABC),)),
         ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (GR21)', (A, B(M_ABC), O, O)),
+        ('same-State kl.setst to _Hash_Output_ (GR22)', (A, B(M_ABC), O, O)),
         ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
-        ('Form C kl.exec in _Hash_Absorb_ (GR22), output zeroed', (A, C(16))),
-        ('Form B kl.exec in _Hash_Output_ (GR22)', (A, B(M_ABC), O, B(bytes(64)))),
-        ('kl.exec in _Success_ (GR22, GR35), output zeroed', (A, B(M_ABC), O, C(32), C(32)))]:
+        ('Form C kl.exec in _Hash_Absorb_ (GR21), output zeroed', (A, C(16))),
+        ('Form B kl.exec in _Hash_Output_ (GR21)', (A, B(M_ABC), O, B(bytes(64)))),
+        ('kl.exec in _Success_ (GR21, GR35), output zeroed', (A, B(M_ABC), O, C(32), C(32)))]:
     cl = Sha2().provision()
     r = run(cl, *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID and not any(r[1] if r else b''))

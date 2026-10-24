@@ -293,7 +293,7 @@ class ToyCipher(Machine):
     def verify_tag(self, u, cl):
         return b2v(prf(b'verify', u.key_of(cl))[:8])
     def setst(self, u, cl, imm, aux):
-        # a same-State kl.setst into ENCRYPT or DECRYPT, which this Machine allows, sets a new IV (GR21)
+        # a same-State kl.setst into ENCRYPT or DECRYPT, which this Machine allows, sets a new IV (GR22)
         if imm in (2, 3) and cl.mdh['MachinePolicy'] & self.op_states[imm]:
             cl.mdh['State'] = imm
             self.put_state(cl, v2b(aux or 0, 16))
@@ -314,7 +314,7 @@ class ToyXof(Machine):
     def exec_form(self, m):
         return {READY: 'B', self.ABSORB: 'B', self.FINAL: 'C'}.get(m['State'])
     def setst(self, u, cl, imm, aux):
-        if imm == self.ABSORB and cl.mdh['State'] == READY:    # GR21: no same-State kl.setst into ABSORB
+        if imm == self.ABSORB and cl.mdh['State'] == READY:    # GR22: no same-State kl.setst into ABSORB
             cl.mdh['State'] = self.ABSORB
             self.put_state(cl, self.get_state(cl))
             return True
@@ -847,14 +847,14 @@ class Unit:
         cl = self.lockers[k]
         m = cl.mdh
         if imm == CLEAR_ADS:                                        # GR23: in every Valid State
-            if form != 'A':                                         # GR23: Form A only (GR13, GR22)
+            if form != 'A':                                         # GR23: Form A only (GR13, GR21)
                 self._enter_error(k, INVALID)
                 return 'invalid'
             m.update(AuxDataLen=0, ADSDropped=0)
             cl.c2 = b''
             self._dirty(k)
             return 'ads cleared'
-        if imm in (SUCCESS, FAILURE):                               # GR25: admitted in no State (GR22)
+        if imm in (SUCCESS, FAILURE):                               # GR25: admitted in no State (GR21)
             self._enter_error(k, INVALID)
             return 'invalid'
         if m['State'] in (SUCCESS, FAILURE) and imm != READY:       # GR23
@@ -886,7 +886,7 @@ class Unit:
         self.klnamedlocker = NONE
         return 'cleared all'
     def _usage_gate(self, k, needs_buf=False):
-        """GR17, GR33, GR22 items 1-5; a wrong Form is one of the Machine's rules (GR13)."""
+        """GR17, GR33, GR21 items 1-5; a wrong Form is one of the Machine's rules (GR13)."""
         m = self.lockers[k].mdh
         if m['State'] == UNCONF or m['State'] in ERROR_STATES: return 'noop'          # GR33
         if m['State'] in PARTIAL: return self._exc_config(k)
@@ -920,7 +920,7 @@ class Unit:
         sub = form == 'D' and want in ('A', 'B', 'C') and self.zklio   # without Zklio a wrong Form (GR14)
         g = self._usage_gate(k, sub)
         if g: return stop(g)
-        if want is None or not (form == want or sub):              # GR21, GR23; a wrong Form (GR13, GR22)
+        if want is None or not (form == want or sub):              # GR22, GR23; a wrong Form (GR13, GR21)
             self._enter_error(k, INVALID)
             return stop('invalid')
         if m['State'] in mach.op_states and not m['MachinePolicy'] & mach.op_states[m['State']]:
@@ -1074,7 +1074,7 @@ class Unit:
         for e in exp:
             self._enter_error(e, EXPIRED)
         if exp: return 'expired'
-        for e in ends:                                              # GR22 item 4, MR9 item 1.a: source first
+        for e in ends:                                              # GR21 item 4, MR9 item 1.a: source first
             m, mach = self.lockers[e].mdh, MACHINES.get(self.lockers[e].mdh['Machine'])
             if mach and m['State'] in mach.op_states and not m['MachinePolicy'] & mach.op_states[m['State']]:
                 self._enter_error(e, INVALID)
@@ -1589,7 +1589,7 @@ def t_states():
        [i for i in range(56, 64) if trap_of(fresh().mgmt, 0, i, md()) != 'illegal/1'], [56, 57, 58, 63])
     def st_46_47(u, i):
         return attempt(u.setst, 0, i), u.getst(0)
-    eq('kl.setst #54, #55 (GR25): Ready, Encrypt, Success, Failure -> Invalid (GR22); Unconfigured, Error State: '
+    eq('kl.setst #54, #55 (GR25): Ready, Encrypt, Success, Failure -> Invalid (GR21); Unconfigured, Error State: '
        'no operation (GR33); Provisioning: as any usage instruction, an exception, State kept (GR30)',
        [st_46_47(mk(), i) for i in (SUCCESS, FAILURE) for mk in (lambda: pv(fresh(), 0, cipher()), rc,
         lambda: final_cipher(SUCCESS), lambda: final_cipher(FAILURE), fresh,
@@ -2557,17 +2557,17 @@ def t_sgr():
        [u.getst(0)] + [(u.setst(0, ToyCipher.VERIFY, t), u.getst(0), u.setst(0, READY))[1] for t in (tag, tag ^ 1)],
        [READY, SUCCESS, FAILURE])
     u, x, out = pv(fresh(), 0, cipher()), pv(fresh(), 0, xof()), bytearray(b'\x55' * 16)
-    eq('GR21: kl.exec in Ready -> Invalid, output zeroed, klstart 0; unless the Machine allows it',
+    eq('GR22: kl.exec in Ready -> Invalid, output zeroed, klstart 0; unless the Machine allows it',
        (u.exec_(0, 'A', vin=bytearray(16), vout=out), u.getst(0), bytes(out), u.klstart,
         x.exec_(0, 'B', vin=bytearray(b'abc')), x.getst(0)), ('invalid', INVALID, bytes(16), 0, 'done', ToyXof.ABSORB))
     u = rc()
-    eq('GR21 same-State kl.setst; GR23 -> Ready erases state; unsupported or forbidden -> Invalid',
+    eq('GR22 same-State kl.setst; GR23 -> Ready erases state; unsupported or forbidden -> Invalid',
        (u.setst(0, ToyCipher.ENCRYPT, 3), u.getst(0), u.setst(0, READY), u.getst(0), u.getstx(0),
         [pv(fresh(), 0, cipher()).setst(0, imm) for imm in (5, 45, 66, 127)],
         pv(fresh(), 0, cipher(MachinePolicy=2)).setst(0, ToyCipher.ENCRYPT)),
        ('ok', ToyCipher.ENCRYPT, 'ok', READY, 0, ['invalid'] * 4, 'invalid'))
     x = pv(fresh(), 0, xof())
-    eq('GR21: same-State kl.setst in Ready admitted; in a State where the Machine does not allow it -> Invalid',
+    eq('GR22: same-State kl.setst in Ready admitted; in a State where the Machine does not allow it -> Invalid',
        (x.setst(0, READY), x.getst(0), x.setst(0, ToyXof.ABSORB), x.setst(0, ToyXof.ABSORB), x.getst(0)),
        ('ok', READY, 'ok', 'invalid', INVALID))
     for final in (SUCCESS, FAILURE):
@@ -2617,7 +2617,7 @@ def t_sgr():
         gated(mode='S').csrs(kliobuflen=16), rc(), pv(fresh(), 0, cipher())
     w9, w10 = gated(), gated(mode='S')                    # KLIOBUF unconfigured: checked before UsagePolicy and expiry
     w1.setst(0, INVALID)
-    eq('GR17, GR33, GR22: Error State > Configuration > KLIOBUF > UsagePolicy > expiry > Machine; a wrong Form, '
+    eq('GR17, GR33, GR21: Error State > Configuration > KLIOBUF > UsagePolicy > expiry > Machine; a wrong Form, '
        'a substitution without Zklio included, is one of the Machine\'s rules (GR14, GR13)',
        [(ex(w1, 0), w1.getst(0)), trap_of(w2.exec_, 0, 'B', vin=bytearray(16)),
         trap_of(w3.exec_, 0, 'B', vin=bytearray(16)),
@@ -2630,15 +2630,15 @@ def t_sgr():
         'illegal/2', ('illegal/2', ToyCipher.ENCRYPT)])
     wf = [rc(), rc(), rc(unit=fresh(zklio=False))]
     eq('a wrong Form invalidates the locker, no exception: Form B or C kl.exec where Form A is native; a Form D '
-       'substitution without Zklio (GR14, GR13, GR22)',
+       'substitution without Zklio (GR14, GR13, GR21)',
        [(wf[0].exec_(0, 'B', vin=bytearray(16)), wf[0].getst(0)), (wf[1].exec_(0, 'C', vout=bytearray(16)),
          wf[1].getst(0)), (wf[2].exec_(0, 'D'), wf[2].getst(0))], [('invalid', INVALID)] * 3)
     wr = [rc(), rc()]
-    eq('GR23: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR13, GR22)',
+    eq('GR23: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR13, GR21)',
        [(wr[0].setst(0, READY, 1, form='B'), wr[0].getst(0)), (wr[1].setst(0, READY, form='C'), wr[1].getst(0))],
        [('invalid', INVALID)] * 2)
     wc = [rc(), rc()]
-    eq('GR23: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR13, GR22)',
+    eq('GR23: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR13, GR21)',
        [(wc[0].setst(0, CLEAR_ADS, 1, form='B'), wc[0].getst(0)), (wc[1].setst(0, CLEAR_ADS, form='C'),
          wc[1].getst(0))], [('invalid', INVALID)] * 2)
     rows = []
@@ -2774,7 +2774,7 @@ def t_expiration():
         'privilege_violation', IMP])
     w = eu(5000)
     w.lockers[0].mdh['UsagePolicy'] = 0b00111
-    eq('UsagePolicy precedes the expiration (GR22)', (trap_of(w.setst, 0, READY), w.getst(0)),
+    eq('UsagePolicy precedes the expiration (GR21)', (trap_of(w.setst, 0, READY), w.getst(0)),
        ('privilege_violation', ToyCipher.ENCRYPT))
     n, e, n2 = fresh(zklexpire=False, clock=1 << 30), pv(fresh(), 0, cipher()), rc(1, fresh(zklexpire=False))
     e.setst(0, EXPIRED)
@@ -2792,7 +2792,7 @@ def t_expiration():
        ('clock_unavailable', ToyCipher.ENCRYPT, b'\x22' * 16, 'ok', 'done'))
     u.lockers[0].mdh['UsagePolicy'] = 0b00111
     u.clock = None
-    eq('UsagePolicy precedes the unreadable clock (GR22)', trap_of(u.exec_, 0, 'A', vin=bytearray(16),
+    eq('UsagePolicy precedes the unreadable clock (GR21)', trap_of(u.exec_, 0, 'A', vin=bytearray(16),
                                                                         vout=bytearray(16)), 'privilege_violation')
     h = rc(1, eu(0, ed=1 << 19))
     h.clock = None

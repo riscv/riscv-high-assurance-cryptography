@@ -150,14 +150,14 @@ class Gcm:
         return None if ctr == (s.start_ctr - 1) % 2**32 else ctr
 
     def _form(s, st, immed):
-        """kl.setst Form of each listed transition; None if not listed (GR22)."""
+        """kl.setst Form of each listed transition; None if not listed (GR21)."""
         t = {(HA, ENC): 'A', (HA, DEC): 'A', (DTF, HV): 'C'}
         for c, l, f in ((ENC, ELB, ETF), (DEC, DLB, DTF)):
-            t.update({(c, l): 'B', (c, f): 'C', (l, f): 'C'})   # no same-State pair: GR21
+            t.update({(c, l): 'B', (c, f): 'C', (l, f): 'C'})   # no same-State pair: GR22
         if s.set_iv:
             t[READY, HA] = 'A'
         else:
-            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (GR21, MR7)
+            t.update({(READY, SAV): 'B', (SAV, SAV): 'B', (SAV, HA): 'A'})   # SAV -> SAV restarts the IV (GR22, MR7)
         return t.get((st, immed))
 
     def setst(s, immed, form='A', aux=0, klen=128):
@@ -178,9 +178,9 @@ class Gcm:
             s.state = READY
             return s._ready()
         if st in (SUCC, FAIL) or s._form(st, immed) != form:
-            return s._invalid()                          # GR23, GR22
+            return s._invalid()                          # GR23, GR21
         if st == immed and st != SAV:
-            return s._invalid()                          # GR21, GR24: only the IV load restarts (MR7)
+            return s._invalid()                          # GR22, GR24: only the IV load restarts (MR7)
         if immed in GATED and not s.policy & GATED[immed]:
             return s._invalid()                          # MR9: entering a Gated State
         if immed == SAV:
@@ -229,7 +229,7 @@ class Gcm:
         if form == 'D' and want is not None and s.zklio:
             form = want                                  # the substitution of the native Form
         if want != form:
-            return s._invalid()                          # GR21, GR23, GR22; a wrong Form (GR14, GR13)
+            return s._invalid()                          # GR22, GR23, GR21; a wrong Form (GR14, GR13)
         if (KLLEN % 128 and s.cumul_len + KLLEN < s.len if s.state == SAV else
                 KLLEN < s.last_block_len if s.state in (ELB, DLB) else
                 KLLEN < 128 and KLLEN not in TAG_LENS if s.state == ETF else KLLEN % 128):
@@ -587,7 +587,7 @@ c3.setst(SAV, 'B', 160)
 c3.exec('B', b2v(bytes(range(16))), 128)
 c3.setst(SAV, 'B', 8 * len(IV))
 feed(c3, IV)
-check('same-State kl.setst into Set_Aux_Value part-way restarts the IV with its len (GR21, MR7): tc4',
+check('same-State kl.setst into Set_Aux_Value part-way restarts the IV with its len (GR22, MR7): tc4',
       finish(c3, A, P)[:2] == (RC, RT))
 cl = at('sav')
 cl.exec('B', b2v(IV60B[:16]), 128)
@@ -683,7 +683,7 @@ for where, last in (('enc', ELB), ('dec', DLB)):
     c2.setst(last, 'B', 96)
     ok = c2.exec('A', b2v(P[:12]), 96)
     c2.setst(last, 'B', 96)
-    check(f'GR21: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block -> _Invalid_, '
+    check(f'GR22: same-State kl.setst into {"Enc" if last == ELB else "Dec"}_Last_Block -> _Invalid_, '
           'before its kl.exec and after it (MR8)', ok and (cl.state, c2.state) == (INV, INV))
 for fin in (ETF, DTF):
     cl = at('enc' if fin == ETF else 'dec')
@@ -691,7 +691,7 @@ for fin in (ETF, DTF):
     cl.setst(fin, 'C', lb)
     ok = cl.state == fin
     cl.setst(fin, 'C', lb)
-    check(f'GR21: same-State kl.setst into {"Enc" if fin == ETF else "Dec"}_Tag_Finalize -> _Invalid_',
+    check(f'GR22: same-State kl.setst into {"Enc" if fin == ETF else "Dec"}_Tag_Finalize -> _Invalid_',
           ok and cl.state == INV)
 res = []
 for fin in (ETF, DTF):
@@ -824,20 +824,20 @@ check('Set IV: counter rule applies (ctr wrapping to start_ctr - 1 = 0 -> Invali
 section('general rules')
 B16 = b2v(P[:16])
 for name, where, ops, *kw in [
-        ('GR22: same-State kl.setst into Set_Aux_Value in Form A: an IV length of 0', 'sav', [('setst', SAV, 'A', 0)]),
+        ('GR21: same-State kl.setst into Set_Aux_Value in Form A: an IV length of 0', 'sav', [('setst', SAV, 'A', 0)]),
         ('MR1: short IV transfer that is not the last', 'sav', [('exec', 'B', 0, 96)]),
-        ('GR22: Form A kl.exec in Set_Aux_Value', 'sav', [('exec', 'A', 0, 128)]),
+        ('GR21: Form A kl.exec in Set_Aux_Value', 'sav', [('exec', 'A', 0, 128)]),
         ('resume at klstart = 5 in Set_Aux_Value', 'sav', [('exec', 'B', 0, 256, 5)]),
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 384, 8)]),
         ('KLLEN (96) < last_block_len (104)', 'enc', [('setst', ELB, 'B', 104), ('exec', 'A', 0, 96)]),
-        ('GR21: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
+        ('GR22: kl.exec in Ready', 'ready', [('exec', 'A', B16, 128)]),
         ('GR23: kl.exec in Success', 'success', [('exec', 'A', 0, 128)]),
         ('GR23: kl.setst Encrypt in Success', 'success', [('setst', ENC)]),
-        ('GR22: GCM Ready -> Hash_Absorb', 'ready', [('setst', HA)]),
-        ('GR22: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', B16, 128)]),
-        ('GR22: Form B kl.setst to Encrypt', 'ha', [('setst', ENC, 'B', 5)]),
-        ('GR22: Encrypt -> Hash_Verify', 'enc', [('setst', HV, 'C', 0)]),
-        ('GR22: Decrypt -> Enc_Last_Block', 'dec', [('setst', ELB, 'B', 8)]),
+        ('GR21: GCM Ready -> Hash_Absorb', 'ready', [('setst', HA)]),
+        ('GR21: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', B16, 128)]),
+        ('GR21: Form B kl.setst to Encrypt', 'ha', [('setst', ENC, 'B', 5)]),
+        ('GR21: Encrypt -> Hash_Verify', 'enc', [('setst', HV, 'C', 0)]),
+        ('GR21: Decrypt -> Enc_Last_Block', 'dec', [('setst', ELB, 'B', 8)]),
         ('MR1: KLLEN = 120 in Hash_Absorb', 'ha', [('exec', 'B', B16, 120)]),
         ('MR1: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', B16, 120)]),
         ('MR1: KLLEN = 120 in Decrypt', 'dec', [('exec', 'A', B16, 120)]),
@@ -857,7 +857,7 @@ cl.exec('B', 0, 256, 16)
 check('Set_Aux_Value with block_base != 0: klstart = 16 is no interruption point (<<KLE-process-VLI>>) -> Invalid',
       True, (bb, cl.state), (8, INV))
 cls = [at(w) for w in ('enc', 'dec', 'enc', 'dec')]
-check('a Form B or C kl.exec where Form A is native (Encrypt, Decrypt): a wrong Form, _Invalid_ (GR13, GR22)',
+check('a Form B or C kl.exec where Form A is native (Encrypt, Decrypt): a wrong Form, _Invalid_ (GR13, GR21)',
       True, ([c.exec(f, B16, 128) for c, f in zip(cls, 'BBCC')], [c.state for c in cls]), ([0] * 4, [INV] * 4))
 cl = at('enc')
 snap = dict(vars(cl))
@@ -881,7 +881,7 @@ check('GR23: Encrypt -> Ready mid-message; next message unaffected',
 cl, c2 = at('ha'), at('enc')
 cl.setst(HA)
 c2.setst(ENC)
-check('GR21: same-State kl.setst in Hash_Absorb and Encrypt -> _Invalid_', (cl.state, c2.state) == (INV, INV))
+check('GR22: same-State kl.setst in Hash_Absorb and Encrypt -> _Invalid_', (cl.state, c2.state) == (INV, INV))
 check('MachinePolicy decrypt-only: decryption works', kl_decrypt(K, IV, A, RC, RT, policy=2)[1] == SUCC)
 cl = at('enc')
 cl.setst(PRIV)

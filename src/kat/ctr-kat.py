@@ -102,7 +102,7 @@ class KsLocker:
             self.enter_ready()
         elif immed == OP and self.state in (RDY, OP):
             if form not in ('A', 'C', 'D'):
-                return self.invalidate()                          # GR22: a wrong Form (GR13)
+                return self.invalidate()                          # GR21: a wrong Form (GR13)
             if form != 'C':
                 KLLEN, operand = 128, setst_operand(form, operand)   # Form A or D: a 128-bit INPUT
             if KLLEN < n:
@@ -111,7 +111,7 @@ class KsLocker:
         elif immed == AUX and self.state in (RDY, OP) and form in ('A', 'B'):
             self.ctr = bin_(setst_operand(form, operand), j)      # bin(Xs, j), State unchanged
         else:
-            self.invalidate()                                     # GR22
+            self.invalidate()                                     # GR21
 
     def exec(self, KLLEN, klstart=0, out=0, halt_after=None):
         """Form C kl.exec (output only), or its Form D substitution; returns (output, klstart)."""
@@ -119,7 +119,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # GR21, GR22; MR1 (length first: GR53)
+        if self.state != OP or KLLEN % B:     # GR22, GR21; MR1 (length first: GR53)
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -324,13 +324,13 @@ eq("State values Ready 1, Operate 2, Set_Aux_Value 13; Invalid: State 0, StateEx
    (RDY, OP, AUX, state_fields(INV)), (1, 2, 13, {'State': 0, 'StateExtension': 2}))
 cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR21)",
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR22)",
    (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
 for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
                     ("#kl_state_set_aux_value in Form C (Form A or C only)", (AUX, 'C', C0))):
     cl = ctr_cl(key)
     cl.setst(*args)
-    eq(f"{label} -> Invalid (GR22)", cl.state, INV)
+    eq(f"{label} -> Invalid (GR21)", cl.state, INV)
 cl = ctr_cl(key)
 cl.setst(OP, 'A')
 eq("#kl_state_operate in Form A: a 128-bit zero INPUT, IV = 0 (<<KLE-instruction-setst>>)", (cl.state, cl.IV), (OP, 0))
@@ -343,7 +343,7 @@ eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
    (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, NONCE, 32, 0, PT)))
 cl = ctr_cl(key, 0x1234, C0)
 cl.setst(OP, 'C', T1)
-eq("Operate -> Operate (GR21): IV replaced, ctr kept; F.5.1",
+eq("Operate -> Operate (GR22): IV replaced, ctr kept; F.5.1",
    (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
 cl = ctr_cl(key)
 cl.setst(OP, 'D', b2v(SP38A_ICB))
@@ -463,6 +463,6 @@ eq("keystream with the source in Ready (no source endpoint, GR40 item 1) -> only
    (cl.state, h.state), (INV, HA))
 eq("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)",
    [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [ctr_cl(key)]], [(False, INV)] * 6)
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR22)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR21)",
    [(raises(c.setst, i), c.state) for i in (54, 55) for c in [ctr_cl(key)]], [(False, INV)] * 2)
 done()

@@ -156,7 +156,7 @@ class Locker:
                 key, Xs = (self.st, immed, 'B'), setst_operand('A', Xs)
             elif key not in t and form in 'AD' and (self.st, immed, 'C') in t:  # A or D supplies INPUT
                 key, INPUT, KLLEN = (self.st, immed, 'C'), setst_operand(form, Xs), 128
-            t.get(key, self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # GR22
+            t.get(key, self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # GR21
             if self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:
                 self.invalidate()                                 # GR26, MR9 1.b: would enter a disabled State
         return self
@@ -170,7 +170,7 @@ class Locker:
             self.invalidate(); self.klstart = 0; return zeroed
         ks = 8 * self.klstart                                    # <<KLE-GR-transfer-window-checks>>: interruption point?
         clause = self._exec().get((self.st, form))
-        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # GR21, GR23, GR22; MR1
+        if clause is None or (self.st not in self.LAST and KLLEN % self.GRAN):   # GR22, GR23, GR21; MR1
             self.invalidate(); self.klstart = 0; return zeroed
         if KLLEN < self._min_len():                              # MR1, GR53 item 1: the length first
             self.invalidate(); self.klstart = 0; return zeroed
@@ -246,7 +246,7 @@ class AEAD(Locker):
                 (ABSORB, ENCRYPT, 'A'): lambda **_: self._c_enter(ENCRYPT, 0b01),
                 (ABSORB, DECRYPT, 'A'): lambda **_: self._c_enter(DECRYPT, 0b10),
                 (ENCRYPT, ENC_LAST, 'B'): el, (DECRYPT, DEC_LAST, 'B'): dl}
-        # GR21: no same-State kl.setst; MR18: _Hash_Output_ and _Hash_Verify_ only by the Machine
+        # GR22: no same-State kl.setst; MR18: _Hash_Output_ and _Hash_Verify_ only by the Machine
     def _exec(self):
         return {(ABSORB, 'B'): self._x_absorb, (ENCRYPT, 'A'): self._x_encrypt,
                 (ENC_LAST, 'A'): self._x_enc_last, (OUTPUT, 'C'): self._x_tag,
@@ -833,10 +833,10 @@ check('Form A = Form B with X0: into _Enc_Last_Block_/_Dec_Last_Block_ as Xs = 0
 cc = aead_to(ENC_LAST)
 check('KLLEN = 32 < last_block_len = 40 -> _Invalid_, output window zeroed', True,
       (cc.exec('A', b2v(LAST5), 32, out=0xffffffff), cc.st), (0, INVALID))
-info('_Encrypt_ -> _Hash_Output_ is taken only through the Xs = 0 clause; a direct kl.setst is GR22')
+info('_Encrypt_ -> _Hash_Output_ is taken only through the Xs = 0 clause; a direct kl.setst is GR21')
 check('kl.setst #kl_state_hash_output from _Encrypt_ -> _Invalid_', True, aead_to(ENCRYPT).setst(OUTPUT, 'A').st,
       INVALID)
-check('GR21: a same-State kl.setst into _Hash_Output_ -> _Invalid_', True, aead_to(OUTPUT).setst(OUTPUT, 'A').st,
+check('GR22: a same-State kl.setst into _Hash_Output_ -> _Invalid_', True, aead_to(OUTPUT).setst(OUTPUT, 'A').st,
       INVALID)
 check('MR18: kl.setst #kl_state_hash_output in _Enc_Last_Block_, #kl_state_hash_verify in _Dec_Last_Block_ '
       '-> _Invalid_', True, [aead_to(ENC_LAST).setst(OUTPUT, 'A').st,
@@ -856,7 +856,7 @@ check('MR12: in _Hash_Verify_, which the Machine enters by itself, a Form B kl.e
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166) ^ 1, 128)).st,
        after(drive(AEAD(K).setst(SET_AUX, 'B', Xs=64), VERIFY, True), lambda c: c.exec('B', b2v(T166[:8]), 64)).st],
       [SUCCESS, FAILURE, SUCCESS])
-check('GR21: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form C with the right tag, -> _Invalid_; '
+check('GR22: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form C with the right tag, -> _Invalid_; '
       'MR1: a kl.exec with KLLEN < tag_len (120 < 128; 64 < 65) -> _Invalid_', True,
       [aead_to(VERIFY).setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128).st,
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166), 120)).st,
@@ -877,7 +877,7 @@ ca, cc = AEAD(K), AEAD(K)
 res = [(ca.exec('A', 0, 128, out=M128), ca.st), (cc.exec('B', 0, 128), cc.st)]
 o = cc.exec('A', 1, 128, out=M128)
 cc.setst(READY)
-check('GR21: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR36: Content cleared, export is '
+check('GR22: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR36: Content cleared, export is '
       'the MDH only (<<KLE-error-state-transfer>>); GR33: kl.exec and kl.setst are no-ops', True,
       (res, cc.key, cc.s, cc.tag_len, cc.export()[1], o, cc.st),
       ([(0, INVALID)] * 2, 0, [0] * 5, 0, b'', 0, INVALID))
@@ -890,7 +890,7 @@ res = [after(aead_to(start), act).st for start, act in (
     (VERIFY, lambda c: c.setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128)))]
 cc = aead_to(SUCCESS)
 res.append((cc.exec('C', 0, 128, out=M128), cc.st))
-check('GR22: tag_len in _Hash_Absorb_, wrong Forms and transitions, including _Encrypt_ -> _Hash_Output_ and '
+check('GR21: tag_len in _Hash_Absorb_, wrong Forms and transitions, including _Encrypt_ -> _Hash_Output_ and '
       '_Decrypt_ -> _Hash_Verify_ without the padded last block, and a kl.setst in _Hash_Verify_ (MR12) -> _Invalid_; '
       'GR23: kl.exec in _Success_ (not a XOF) -> _Invalid_, output zeroed', True, res, [INVALID] * 11 + [(0, INVALID)])
 res = []
@@ -1088,7 +1088,7 @@ for KLLEN, form, fin in ((64, 'B', None), (64, 'B', True), (64, 'A', False)):
     res.append(cc.st)
 cc, c2 = at_finalize(Hash256), Hash256()
 kl_restrictl(cc, 0b11, machine_use=0x0003); kl_restrictl(c2, 0b10)
-check('GR21; GR22 (Form B in _Hash_Output_, Form A in _Hash_Absorb_); kl.restrictl on _MachineUse_; kl.restrictl on '
+check('GR22; GR21 (Form B in _Hash_Output_, Form A in _Hash_Absorb_); kl.restrictl on _MachineUse_; kl.restrictl on '
       'an unused _MachinePolicy_ keeps it zero, no error', True, res + [cc.st, c2.st, c2.policy], [INVALID] * 4 + [READY, 0])
 cc, c2 = Hash256().setst(ABSORB, 'A'), at_finalize(Hash256)
 cc.exec('B', b2v(b'abcdefg'), 56)
@@ -1101,9 +1101,9 @@ for cls, ref in ((Hash256, ref_hash256), (XOF, lambda m: ref_xof128(m, 32))):
     c.exec('B', b2v(m40), 320); c.setst(OUTPUT, 'A')
     check(f'{cls.__name__}: _Hash_Absorb_ halted after 2 words (klstart = 16), resumed == reference', True,
           (ks, v2b(c.exec('C', 0, 256), 32)), (16, ref(m40)))
-check('GR21: a same-State kl.setst into _Hash_Output_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
+check('GR22: a same-State kl.setst into _Hash_Output_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
       [at_finalize(c).setst(OUTPUT, 'A').st for c in (Hash256, XOF, CXOF)], [INVALID] * 3)
-check('GR21: a same-State kl.setst into _Hash_Absorb_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
+check('GR22: a same-State kl.setst into _Hash_Absorb_ (Hash256, XOF128, CXOF128) -> _Invalid_', True,
       [c().setst(ABSORB, 'A').setst(ABSORB, 'A').st for c in (Hash256, XOF, CXOF)], [INVALID] * 3)
 r = []
 for xs in (8, 248, 256):
@@ -1222,7 +1222,7 @@ for tgt, kw in ((OUTPUT, {}), (HLAST, {'Xs': 8})):
     c = CXOF(); c.setst(SET_AUX, 'B', Xs=8); c.exec('B', 1, 8); c.setst(tgt, 'B' if kw else 'A', **kw)
     res.append(c.st)
 res.append(XOF().setst(ABSORB, 'A').setst(OUTPUT, 'B', Xs=1 << 32).st)
-check('CXOF: Form B (Xs = 0) into _Hash_Absorb_ (GR13); _Set_Aux_Value_ -> _Hash_Output_ or _Hash_Absorb_Last_Block_ (GR22); '
+check('CXOF: Form B (Xs = 0) into _Hash_Absorb_ (GR13); _Set_Aux_Value_ -> _Hash_Output_ or _Hash_Absorb_Last_Block_ (GR21); '
       'XOF128 bound Xs = 2^32 -> _Invalid_', True, res, [INVALID] * 4)
 c = CXOF(); c.setst(SET_AUX, 'B', Xs=64); c.exec('B', 1, 8); c.setst(READY)
 check('CXOF: leaving _Set_Aux_Value_ early for _Ready_: _Ready_, no error', True, (c.st, tuple(c.s)),

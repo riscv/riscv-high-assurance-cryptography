@@ -67,7 +67,7 @@ class MLDSALocker:
             return
         pol = self.get('MachinePolicy')
         if (self.state in (SUCCESS, FAILURE) and st != READY                                  # GR23
-                or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR22
+                or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR21
                 or aux is not None and st not in FORM_D or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
                 or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR9
@@ -75,7 +75,7 @@ class MLDSALocker:
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
                 or st == PK_IN and self.flag('HasPrivKey')                       # pubkey from compute_pubKey
                 or st == SIGN_OUT                                       # entered only from _Sign_Generate_
-                or st == self.state != READY and st not in IN_F):       # GR21: only a load restarts (MR7)
+                or st == self.state != READY and st not in IN_F):       # GR22: only a load restarts (MR7)
             return self.invalid()
         name = IN_F.get(self.state)
         if name and st != self.state and self.use < self.size(name):     # MR7: a load left incomplete
@@ -188,7 +188,7 @@ class MLDSALocker:
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             return self.put('State', SUCCESS if ok else FAILURE)
         else:
-            return self.invalid()                  # GR21 in _Ready_, GR22 elsewhere
+            return self.invalid()                  # GR22 in _Ready_, GR21 elsewhere
         if st == SIGN_GEN:
             return self.put('State', SIGN_OUT)
         self.set_flag('HasPubKey', 1)
@@ -349,7 +349,7 @@ def t_mdh():
           == (INVALID, SIGN_OUT, INVALID))
     for imm in (SUCCESS, FAILURE):
         cc = MLDSALocker(44)
-        check(f'kl.setst #{imm} -> Invalid (GR24, GR22)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
+        check(f'kl.setst #{imm} -> Invalid (GR24, GR21)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
     for imm in (14, 45):
         cc = MLDSALocker(44)
         cc.setst(imm)
@@ -359,7 +359,7 @@ def t_mdh():
                          (UNUSED7, None, 'kl.setst #7 (no _tr_Input_)')):
         cc = generated()
         cc.setst(st, aux)
-        check(f'{why}: _Invalid_ (GR22)', cc.state == INVALID)
+        check(f'{why}: _Invalid_ (GR21)', cc.state == INVALID)
     spec_note('the long-field transfers are recorded "in MachineUse" without the unit MR7 requires; the model '
               'counts bytes')
 
@@ -402,15 +402,15 @@ def t_state_machine():
     check('re-entering _GenerateKeyPair_ generates another key pair, then _pubkey_Output_',
           c2.state == PK_OUT and (c2.pubkey, c2.privkey) == D.keygen_internal(h(kv2['seed']), 44) != (pk, sk))
     c2.exec_D()
-    check('Form D kl.exec in _pubkey_Output_: _Invalid_ (GR22)', c2.state == INVALID)
+    check('Form D kl.exec in _pubkey_Output_: _Invalid_ (GR21)', c2.state == INVALID)
     c5 = generated()
     c5.setst(READY)
     c5.exec_D()
-    check('Form D kl.exec in _Ready_: _Invalid_ (GR21)', c5.state == INVALID)
+    check('Form D kl.exec in _Ready_: _Invalid_ (GR22)', c5.state == INVALID)
     c3 = generated()
     c3.exec_C(512)
     c3.setst(PK_OUT)
-    check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR21, GR24)', c3.state == INVALID)
+    check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR22, GR24)', c3.state == INVALID)
     check('_pubkey_Output_, entered by the Machine, emits the ACVP pubkey, then _Success_ (MR7)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
     cc = generated()
@@ -419,7 +419,7 @@ def t_state_machine():
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ by kl.setst zeroes MachineUse; the pubkey is emitted again', cc.use == 0
           and b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
-    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR22, GR35)',
+    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR21, GR35)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
     cc.setst(MU_IN)
@@ -464,7 +464,7 @@ def t_state_machine():
     check('_pubkey_Output_ with HasPubKey false: _Invalid_', cc.state == INVALID)
     cc = loaded(44, (MU_IN, bytes(64)))
     cc.exec_D()
-    check('Form D kl.exec in _mu_Input_: _Invalid_ (GR22)', cc.state == INVALID)
+    check('Form D kl.exec in _mu_Input_: _Invalid_ (GR21)', cc.state == INVALID)
 
 def t_compute_pubkey_and_import():
     section('_compute_pubKey_, and tr across export/import')
@@ -606,7 +606,7 @@ def t_progress():
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
     cc.setst(SIGN_GEN, 0)
-    check('same-State kl.setst in a halted _Sign_Generate_: _Invalid_, P zeroed, rnd destroyed (GR21, GR24, GR36)',
+    check('same-State kl.setst in a halted _Sign_Generate_: _Invalid_, P zeroed, rnd destroyed (GR22, GR24, GR36)',
           cc.state == INVALID and cc.use == 0 and cc.rnd == bytes(32))
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
@@ -625,7 +625,7 @@ def t_progress():
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
     cc.exec_C(64)
     cc.setst(SIGN_OUT)
-    check('same-State kl.setst in _Sign_Output_ part-way: _Invalid_, no re-emission (GR21, GR24)',
+    check('same-State kl.setst in _Sign_Output_ part-way: _Invalid_, no re-emission (GR22, GR24)',
           cc.state == INVALID and cc.signature == b'')
     cc, rbg = armed()
     cc.exec_D(halt_after=0)

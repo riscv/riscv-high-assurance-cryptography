@@ -183,13 +183,13 @@ class MLKEMLocker(Locker):
             if imm == CLEAR_ADS:                   # State kept; MachineUse is P only in a long-running State
                 self.discard(self.state in LONG)
             elif imm == READY or (GEN <= imm <= CT_OUT and self.state != FAILURE     # GR23
-                                  and (imm != self.state or imm in IN_F)):          # GR21: only a load restarts
+                                  and (imm != self.state or imm in IN_F)):          # GR22: only a load restarts
                 name = IN_F.get(self.state)
                 if name and self.use < self.size[name] and imm != self.state:   # left incomplete (MR7)
                     self.zero('ciphertext' if name == 'ciphertext' else 'decapsk')   # no State keeps a partial field
                 self.transition(imm)
             else:                                  # _sharedkey_Output_ is entered only on completion
-                self.enter_error(INVALID)          # GR22; #54, #55: GR25
+                self.enter_error(INVALID)          # GR21; #54, #55: GR25
 
     def exec_B(self, data):                        # Form B in a loading State (MR7)
         if not self.gate():
@@ -589,14 +589,14 @@ def t_state_machine():
           bool(cte.se & 4)) == (INVALID, FAILURE, True, False))
     cc = load(MLKEMLocker(ps), EK_IN, ek, (1024, 160))
     cc.setst(EK_IN)
-    check('same-State kl.setst zeroes MachineUse and the field (GR21, MR7)', cc.use == 0 and cc.encapsk == bytes(size))
+    check('same-State kl.setst zeroes MachineUse and the field (GR22, MR7)', cc.use == 0 and cc.encapsk == bytes(size))
     cc.exec_B(b'\x77' * 32)
     check('reloading replaces the field', cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
-    check('same-State kl.setst in _encapsk_Output_: _Invalid_, no re-emission (GR21, GR24)',
+    check('same-State kl.setst in _encapsk_Output_: _Invalid_, no re-emission (GR22, GR24)',
           voided(to(load(MLKEMLocker(ps), EK_IN, ek), EK_OUT, EK_OUT)))
     cc = MLKEMLocker(ps)
     cc.exec_D()
-    check('kl.exec in _Ready_: _Invalid_ (GR21)', cc.state == INVALID)
+    check('kl.exec in _Ready_: _Invalid_ (GR22)', cc.state == INVALID)
 
     cc = encapsulated()
     check('_Encapsulate_ -> _ciphertext_Output_, MachineUse zeroed, HasCiphertext set',
@@ -658,7 +658,7 @@ def t_state_machine():
           and cc.decapsk.hex() == kv['dk'])
     c2 = moved(cc, READY)
     c2.exec_D()
-    check('kl.exec in _Ready_ after key generation: _Invalid_ (GR21)', c2.state == INVALID)
+    check('kl.exec in _Ready_ after key generation: _Invalid_ (GR22)', c2.state == INVALID)
     c2 = moved(cc)
     run(c2, GEN)
     check('kl.setst _GenerateKeyPair_ again and kl.exec: another key pair, in _encapsk_Output_', c2.state == EK_OUT
@@ -697,7 +697,7 @@ def t_state_machine():
     c2 = moved(cc, EK_OUT)
     check('_sharedkey_Output_ -> _encapsk_Output_ (HasEncapsk set): admitted, sharedkey zeroed on leaving',
           c2.state == EK_OUT and zero(c2.sharedkey) and c2.decapsk.hex() == x['dk'])
-    check('same-State kl.setst in _sharedkey_Output_: _Invalid_, sharedkey not re-emitted, Content cleared (GR21, GR24)',
+    check('same-State kl.setst in _sharedkey_Output_: _Invalid_, sharedkey not re-emitted, Content cleared (GR22, GR24)',
           voided(moved(cc, SK_OUT)))
     bad = [NAME[s] for s in (READY, GEN, ENC, DEC, EK_IN, DK_IN, EK_OUT, CT_IN, CT_OUT)
            if moved(to(decaps_ready(x), s) if s != DEC else decaps_ready(x), SK_OUT).state != INVALID]
@@ -713,7 +713,7 @@ def t_state_machine():
     cc = load(MLKEMLocker(ps), EK_IN, ek)
     for imm in (SUCCESS, FAILURE):
         c1 = load(MLKEMLocker(ps), EK_IN, ek)
-        check(f'kl.setst #{imm} -> Invalid (GR24, GR22)', (raises(c1.setst, imm), c1.state) == (False, INVALID))
+        check(f'kl.setst #{imm} -> Invalid (GR24, GR21)', (raises(c1.setst, imm), c1.state) == (False, INVALID))
         c1 = to(MLKEMLocker(ps), UNCONF)
         check(f'kl.setst #{imm} on an Unconfigured locker: no operation (GR24, GR33)',
               (raises(c1.setst, imm), c1.state) == (False, UNCONF))
@@ -795,7 +795,7 @@ def t_long_running():
           and cc.rbg.draws == 2 and cc.state == EK_OUT and cc.use == 0 and cc.get('AuxDataLen') == 0
           and cc.encapsk.hex() == kv['ek'] and cc.decapsk.hex() == kv['dk'])
     cc = to(halted_gen()[0], GEN)
-    check('same-State kl.setst in a halted _GenerateKeyPair_: _Invalid_, P zeroed, the data discarded (GR21, GR36)',
+    check('same-State kl.setst in a halted _GenerateKeyPair_: _Invalid_, P zeroed, the data discarded (GR22, GR36)',
           voided(cc) and cc.use == 0 and cc.ads is None)
     cc = to(halted_gen()[0], READY, GEN)
     check('re-entered through _Ready_: P zeroed, the draws discarded; fresh draws follow',

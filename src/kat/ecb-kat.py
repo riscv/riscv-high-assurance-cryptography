@@ -88,12 +88,12 @@ class EcbLocker:
             return                            # GR33
         pol = fld(self.mdh, 'MachinePolicy')
         if immed in (KL_STATE_READY, KL_STATE_ENCRYPT, KL_STATE_DECRYPT) and form != 'A':
-            self.invalidate()                 # GR22, GR13: only Form A is native
+            self.invalidate()                 # GR21, GR13: only Form A is native
         elif (immed == KL_STATE_READY or immed == KL_STATE_ENCRYPT and pol & POL_ENC
                 or immed == KL_STATE_DECRYPT and pol & POL_DEC):
             self.mdh = put(self.mdh, 'State', immed)
         else:
-            self.invalidate()                 # GR22
+            self.invalidate()                 # GR21
 
     def exec(self, inp, KLLEN, klstart=0, halt_after=None):
         """Form A kl.exec with Vd = Vs2 (or its Form D substitution); returns (output, klstart)."""
@@ -102,7 +102,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR21, GR22; MR1 (length first: GR53)
+            self.invalidate()                 # GR22, GR21; MR1 (length first: GR53)
             return out & ~window, 0
         if not fld(self.mdh, 'MachinePolicy') & (POL_ENC if self.state == KL_STATE_ENCRYPT else POL_DEC):
             self.invalidate()                 # MR9: issued in a State that MachinePolicy disables (GR26)
@@ -257,11 +257,11 @@ eq("Encrypt -> Decrypt directly", (cl.state, run(cl, out)[0].hex()), (DEC, SP38A
 cl.setst(RDY)
 eq("back to Ready (GR23)", cl.state, RDY)
 cl.setst(RDY)
-eq("same-State kl.setst into Ready admitted (GR21)", cl.state, RDY)
+eq("same-State kl.setst into Ready admitted (GR22)", cl.state, RDY)
 c2 = new_cl(ci, k, state=DEC)
 c2.setst(DEC)
-eq("same-State kl.setst into Decrypt admitted, changes nothing (GR21)", (c2.state, c2.key), (DEC, b2v(H(k))))
-eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR21, GR36, GR35)",
+eq("same-State kl.setst into Decrypt admitted, changes nothing (GR22)", (c2.state, c2.key), (DEC, b2v(H(k))))
+eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR22, GR36, GR35)",
    (cl.exec(v, 512)[0], cl.state, cl.key), (0, INV, None))
 cl.setst(RDY)
 eq("Invalid locker: kl.setst and kl.exec perform no operation (GR33)", (cl.state, cl.exec(v, 512)[0]),
@@ -386,13 +386,13 @@ eq("ECB locker as source (no source endpoint) -> only the source Invalid", (src_
 
 eq("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)",
    [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 6)
-eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR22)",
+eq("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR21)",
    [(raises(c.setst, i), c.state) for i in (54, 55) for c in [new_cl(ci, k, state=ENC)]], [(False, INV)] * 2)
 
 section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test; Forms of kl.setst")
 eq("'State = 0' passes every Valid State and catches every Error State",
    [s for s in [*range(1, 56), *ERROR_STATES] if state_fields(s)['State'] == 0], list(ERROR_STATES))
-eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B, C or D -> Invalid; Form A -> _Encrypt_ (GR22, GR13)",
+eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B, C or D -> Invalid; Form A -> _Encrypt_ (GR21, GR13)",
    ([new_cl(ci, k, state=st, form=f).state for f in 'BCD' for st in (ENC, DEC)], new_cl(ci, k, state=ENC).state),
    ([INV] * 6, ENC))
 eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR23: Form A; GR13)",

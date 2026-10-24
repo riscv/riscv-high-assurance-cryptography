@@ -247,8 +247,8 @@ class Hmac:
         h = s.h
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
-                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR21: restarts the load
-                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key}  # MR9: K0 loaded; none from _Hash_Output_ (GR21)
+                   (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR22: restarts the load
+                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key}  # MR9: K0 loaded; none from _Hash_Output_ (GR22)
         if immed == KL_STATE_INERT or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
@@ -380,7 +380,7 @@ class Hmac:
                 return 'invalid', prior[:p] + bytes(nbytes - p)  # GR35
             return 'retired', s.output(nbytes, prior)
         else:
-            r = 'invalid'  # GR21 item 1, GR22
+            r = 'invalid'  # GR22 item 1, GR21
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)
@@ -585,11 +585,11 @@ for label, variant, ops in [
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
         ('NIK kl.exec after K0 is complete (MR7)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
-        ('kl.exec in _Ready_ (GR21)', 'KIP', (B(data7),)),
-        ('Form C kl.exec in _Hash_Absorb_ (GR22), output zeroed', 'KIP', (A, C(16))),
+        ('kl.exec in _Ready_ (GR22)', 'KIP', (B(data7),)),
+        ('Form C kl.exec in _Hash_Absorb_ (GR21), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
-        ('same-State kl.setst to _Hash_Output_ (GR21)', 'KIP', (A, B(data7), O, O)),
-        ('kl.exec in _Success_ (GR22, GR35), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
+        ('same-State kl.setst to _Hash_Output_ (GR22)', 'KIP', (A, B(data7), O, O)),
+        ('kl.exec in _Success_ (GR21, GR35), output zeroed', 'KIP', (A, B(data7), O, C(32), C(32)))]:
     r = run(cl := fresh(variant=variant, key=key7 if variant == 'KIP' else None), *ops)
     check(f'_Invalid_: {label}', cl.st == KL_STATEEXT_INVALID and not any(r[1] if r else b''))
 check('kl.exec in _Invalid_: no operation, output zeroed (GR33, GR35)',
@@ -652,7 +652,7 @@ cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
 check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MR7)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
 run(cl, SK)
-check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR21): K0 and cumul_len zeroed',
+check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR22): K0 and cumul_len zeroed',
       (cl.st, cl.K0, cl.h.cumul_len) == (KL_STATE_SET_KEY, 0, 0))
 check('... and a full reload gives the RFC 4231 tag', None, run(cl, B(K0_7), A, B(data7), O, C(32))[1], TAG7)
 cl = fresh(key=key7)

@@ -101,7 +101,7 @@ class MdHash:
             s.finalize()
             s.st, s.block_base, s.last_block_len, s.out_len = immed, 0, 0, x or s.t
         else:
-            s.reset()  # GR22; no same-State kl.setst (GR21); _Ready_ -> _Hash_Output_
+            s.reset()  # GR21; no same-State kl.setst (GR22); _Ready_ -> _Hash_Output_
 
     def exec(s, form, data=b'', nbytes=0, halt=False, resume=False, prior=None):
         """kl.exec Form B (data) or C (nbytes); returns (status, output)."""
@@ -145,7 +145,7 @@ class MdHash:
             r, HART.klstart = 'invalid', 0  # not an interruption point (<<KLE-process-VLI>>)
         else:
             r = s.process_vli(b2v(data), 8 * len(data), halt, resume) if (
-                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR21 item 1, GR22
+                s.st == KL_STATE_HASH_ABSORB and form == 'B') else 'invalid'  # GR22 item 1, GR21
         if r == 'invalid':
             s.reset()
         return r, bytes(nbytes)

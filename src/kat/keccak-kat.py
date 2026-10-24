@@ -279,7 +279,7 @@ class Sha3:
             else:
                 s.enter_output()
         else:
-            s.reset()  # GR22, GR23, GR21, <<KLE-process-VLI>> same-State rule
+            s.reset()  # GR21, GR23, GR22, <<KLE-process-VLI>> same-State rule
         return s.st
 
     def fail(s, out, status='invalid'):
@@ -330,7 +330,7 @@ class Sha3:
                 return s.fail(out)  # not an interruption point
             r = s.squeeze(out, 8 * HART.klstart, *halt)
         else:
-            return s.fail(out)  # GR22; GR21 item 1 in _Ready_
+            return s.fail(out)  # GR21; GR22 item 1 in _Ready_
         if r != 'interrupted':
             HART.klstart = 0
         return r
@@ -631,7 +631,7 @@ check('64-B read of SHA3-384: returns at _Success_, bytes [48, 63] cleared', Non
       squeeze(cl, 64, 0xee), ('success', V('SHA3-384', 'abc') + bytes(16)))
 cl = squeezing('SHA3-256', MSG_ABC)
 squeeze(cl, 32)
-check('kl.exec in _Success_ -> _Invalid_, output zeroed (GR22, GR35)', None,
+check('kl.exec in _Success_ -> _Invalid_, output zeroed (GR21, GR35)', None,
       (squeeze(cl, 32, 0xee), cl.st), (('invalid', bytes(32)), KL_STATEEXT_INVALID))
 cl = squeezing('SHA3-256', b'')
 squeeze(cl, 32)
@@ -645,18 +645,18 @@ check('SHA3-256 abc from the CC reused after _Ready_', None, squeeze(cl, 32)[1],
 section('States, transitions, Forms')
 ab, out_ = (lambda n: absorbing(n, MSG_ABC)), (lambda n: squeezing(n, MSG_ABC))
 for label, name, prep, act in [
-        ('kl.exec in _Ready_ (GR21)', 'SHA3-256', new, lambda c: c.exec('B', inp=MSG_ABC)),
+        ('kl.exec in _Ready_ (GR22)', 'SHA3-256', new, lambda c: c.exec('B', inp=MSG_ABC)),
         ('_Ready_ -> _Hash_Output_', 'SHA3-256', new, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('Form B kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
          lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B', 0)),
         ('same-State kl.setst in _Hash_Absorb_', 'SHA3-256', ab, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
         ('a kl.exec after a Form B kl.setst to _Hash_Absorb_Last_Block_ with Xs = 0 (MR8)', 'SHA3-256', ab,
          lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), c.exec('B', inp=b'x'))),
-        ('Form C kl.exec in _Hash_Absorb_ (GR22)', 'SHA3-256', ab, lambda c: c.exec('C', out=bytearray(32))),
-        ('Form A kl.exec in _Hash_Absorb_ (GR22)', 'SHA3-256', ab,
+        ('Form C kl.exec in _Hash_Absorb_ (GR21)', 'SHA3-256', ab, lambda c: c.exec('C', out=bytearray(32))),
+        ('Form A kl.exec in _Hash_Absorb_ (GR21)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
-        ('Form B kl.exec in _Hash_Output_ (GR22)', 'SHAKE256', out_, lambda c: c.exec('B', inp=MSG_ABC)),
-        ('same-State kl.setst to _Hash_Output_ (GR21)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
+        ('Form B kl.exec in _Hash_Output_ (GR21)', 'SHAKE256', out_, lambda c: c.exec('B', inp=MSG_ABC)),
+        ('same-State kl.setst to _Hash_Output_ (GR22)', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('_Hash_Output_ -> _Hash_Absorb_', 'SHAKE256', out_, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
         ('_Success_ -> _Hash_Absorb_ (GR23)', 'SHA3-224', out_,
          lambda c: (squeeze(c, 28), c.setst(KL_STATE_HASH_ABSORB)))]:
@@ -819,7 +819,7 @@ for label, prep, act in [
          lambda: last(L=16), lambda c: c.exec('B', inp=b'')),
         ('a second kl.exec (MR8)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
         ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
-        ('same-State kl.setst (GR21)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
+        ('same-State kl.setst (GR22)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
         ('klstart = 1: not an interruption point', last,
          lambda c: (setattr(HART, 'klstart', 1), c.exec('B', inp=b'\x01\x02')))]:
     cl = prep()

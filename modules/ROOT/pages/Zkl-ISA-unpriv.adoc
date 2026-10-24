@@ -197,7 +197,7 @@ KLE comprises several sub-extensions. Those that define ISA features follow; tho
 KLE instructions may raise the standard RISC-V exceptions and a few KLE-specific exception types, listed in <<Zkl-ISA-priv.adoc#KLE-exception-codes>>.
 
 With trap-and-emulate, the hardware raises an illegal-instruction exception for instructions it does not implement, which the platform must deliver to M-mode (`medeleg` bit 2 zero); the encodings are assigned, not reserved (<<KLE-second-group-ILL-grounds>>).
-`Zklmv` must then be in hardware, since the emulating code moves data between memory and the locker with it.
+The emulating code moves data between memory and the locker with `Zklmv`, hence item 3.
 `kl.load` and `kl.store` are thus always present; `Zklmv` and `Zklexpire` are otherwise optional.
 
 `Zklv` requires the KLV subset of the vector extension (<<KLE-KLV>>) with `VLEN` {ge} 128, that is, `Zvl128b` or a larger `Zvl*b`, which every vector Form that carries an MDH or a 128-bit block needs.
@@ -1260,10 +1260,10 @@ Mnemonic::
 (((KLE, instruction, kl.setst)))
 +
 [upperalpha]
-. `kl.setst  Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `kl.setst  Kd, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
-. `kl.setst  Kd, #immed7, Vs{nbsp}` — in a vector register.
-. `kl.setstq Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+. `kl.setst{nbsp}{nbsp}Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `kl.setst{nbsp}{nbsp}Kd, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
+. `kl.setst{nbsp}{nbsp}Kd, #immed7, Vs{nbsp}` — in a vector register.
+. `kl.setstq{nbsp}Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
 
 //
 
@@ -1282,7 +1282,7 @@ Encoding::
     { bits:  5, name: 'Kd' },
     { bits:  3, name: 0x3, attr: ['kl.setst'] },
     { bits:  5, name: 'rs1' },
-    { bits:  1, name: 'r', attr: ['KLNL']   },
+    { bits:  1, name: 'r', attr: ['KLNL'] },
     { bits:  2, name: 'F' },
     { bits:  2, name: 'G' },
     { bits:  7, name: 'immed7' },
@@ -1362,8 +1362,7 @@ It is a configuration instruction, admitted in every State (Rule <<KLE-GR-error-
 (((KLE, instruction, kl.clear)))`kl.clear Kd` is `kl.setst` (<<KLE-instruction-setst>>) with `#immed7` = `kl_state_inert` (<<KLE-State-field>>), in any Form; it ignores any auxiliary operand.
 It sets the locker's _State_ to _Unconfigured_ and releases its KLF resources.
 It is a configuration instruction, not a usage instruction: the _UsagePolicy_ does not restrict it, nor can the Machine (<<KLE-instruction-properties>>).
-
-Rule <<KLE-GR-klnamedlocker-updates>> applies.
+Rule <<KLE-GR-klnamedlocker-updates>> also applies.
 
 A `kl.clear` sets to Dirty the `*llockerstatus` field in effect for the current privilege mode of its locker if it changes the locker or that field is _Off_ (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), and the `KLS` fields in effect if it changes the locker or `klnamedlocker`, or that field is _Off_.
 
@@ -1996,7 +1995,7 @@ With `Zklio`, the KLIOBUF can replace the vector operands of `kl.exec`, so that 
 A `kl.input` or `kl.output` with `Xl` = 0 is not one of them: it is the encoding of a locker transfer, which falls through as described in Rule <<KLE-GR-outcome-inert>> below.
 //, so it performs no operation and writes 0 to `klstart`, whatever `Zklio` and the KLIOBUF (<<KLE-instruction-load>>).
 +
-If the KLIOBUF is not configured, such an instruction raises an illegal-instruction exception, a ground of the <<KLE-third-group-ILL-grounds>>: a usage instruction at item 1 of Rule <<KLE-GR-outcome-valid-state>>, and any other instruction right after the checks of Rule <<KLE-GR-management-check-order>>, unless it falls through (Rule <<KLE-GR-fall-through-operands>>).
+If the KLIOBUF is not configured, such an instruction is a ground of the <<KLE-third-group-ILL-grounds>>: a usage instruction at item 1 of Rule <<KLE-GR-outcome-valid-state>>, and any other instruction right after the checks of Rule <<KLE-GR-management-check-order>>, unless it falls through (Rule <<KLE-GR-fall-through-operands>>).
 
 [[KLE-GR-substitution-failures,GR16]]GR16:: For a substitution of `kl.exec` (Rule <<KLE-GR-substitution>>) that is not a wrong Form (Rule <<KLE-GR-form-mismatch>>), a non-zero `kliobuflen` with a `kliobuftop` invalid for the Machine transitions the locker to Error State _Invalid_, whether the KLIOBUF is used as input or only as output (Rule <<KLE-GR-transfer-window-checks>>).
 
@@ -2068,24 +2067,24 @@ A usage instruction that the _UsagePolicy_ forbids raises a KLE privilege-violat
 [horizontal]
 [[KLE-GR-config-valid-state,GR20]]GR20:: In a Valid State, in which no management operation is under way, every configuration instruction is admitted except a management transfer instruction or a completing `kl.mgmt`, which raise an illegal-instruction exception (Locker Checks in <<KLE-instruction-mv>>).
 
-[[KLE-GR-same-state,GR21]]GR21:: Unless the Machine explicitly allows it and defines what it does, a Valid State does not admit:
-+
---
-. a `kl.exec` in _Ready_;
-. a `kl.setst` naming the current State, except in _Ready_ (Rule <<KLE-GR-to-ready>>) and in a State that loads a field, where it restarts the load (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
---
-
-[[KLE-GR-outcome-valid-state,GR22]]GR22:: In a Valid State, a usage instruction must check these conditions in order; the first that applies decides the outcome, as stated in the cited Rule or section:
+[[KLE-GR-outcome-valid-state,GR21]]GR21:: In a Valid State, a usage instruction must check these conditions in order; the first that applies decides the outcome, as stated in the cited Rule or section:
 +
 --
 . a substitution (Rule <<KLE-GR-substitution>>) with an unconfigured KLIOBUF raises an illegal-instruction exception (Rule <<KLE-GR-iobuf-configured>>);
 . a _UsagePolicy_ that forbids the instruction raises a KLE privilege-violation exception according to Rule <<KLE-GR-usage-policy>>;
 . a non-zero _ExpirationDate_ is evaluated as <<KLE-Metadata-expiration-date>> states: a secure clock that cannot be read raises a KLE clock-unavailable exception and leaves the _State_ unchanged, and a passed _ExpirationDate_ transitions the affected locker to Error State _Expired_;
-. an instruction that the Machine, the State or _MachinePolicy_ does not admit, a wrong Form included, performs no operation, raises no exception, and transitions the locker to Error State _Invalid_ (Rules <<KLE-GR-same-state>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-GR-to-ready>>, <<KLE-GR-form-mismatch>>, <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
+. an instruction that the Machine, the State or _MachinePolicy_ does not admit, a wrong Form included, performs no operation, raises no exception, and transitions the locker to Error State _Invalid_ (see also Rules <<KLE-GR-same-state>>, <<KLE-GR-to-ready>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-GR-form-mismatch>>, <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
 . otherwise, the instruction performs its operation.
 --
 +
 For `kl.derive`, see Rule <<KLE-GR-derive-check-order>>.
+
+[[KLE-GR-same-state,GR22]]GR22:: Unless the Machine explicitly allows it and defines what it does, a Valid State does not admit:
++
+--
+. a `kl.exec` in _Ready_;
+. a `kl.setst` naming the current State, except in _Ready_ (Rule <<KLE-GR-to-ready>>) and in a State that loads a field, where it restarts the load (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
+--
 
 [[KLE-GR-to-ready,GR23]]GR23:: A `kl.setst` naming _Ready_ and `kl.clearads` (<<KLE-instruction-clearads>>) are admitted in every Valid State, whatever the _MachinePolicy_ of the locker, subject to items 1–3 of Rule <<KLE-GR-outcome-valid-state>>; a wrong Form of either is not admitted (Rule <<KLE-GR-form-mismatch>>).
 In States _Success_ and _Failure_, they are the only usage instructions admitted.

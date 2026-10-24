@@ -366,7 +366,7 @@ class Kmac:
         if self.st in (OUTPUT, VERIFY) and not self.xof and not self.policy & (1 if self.st == OUTPUT else 2):
             self.invalidate()                                            # MR9 1.a, GR26
             return self._end('invalid', out)
-        if self.st == ABSORB and inp is not None and out is None and (sew or 8) >= 8:  # GR22, MR1
+        if self.st == ABSORB and inp is not None and out is None and (sew or 8) >= 8:  # GR21, MR1
             p, top = self.hart.klstart, len(inp)
             if p >= top:
                 return self._end('empty')                                # empty window: only klstart = 0
@@ -402,7 +402,7 @@ class Kmac:
             L = self.L                                                   # MR12: constant-time compare of L bits
             self.st = SUCCESS if sl(b2v(inp), L - 1, 0) == sl(self.state, L - 1, 0) else FAILURE
             return self._end('done')
-        self.invalidate()                                                # GR22, GR21 item 1
+        self.invalidate()                                                # GR21, GR22 item 1
         return self._end('invalid', out)
 
     def _vli(self, X, n, ib, halt=None, literal=False):                 # <<KLE-process-VLI>>
@@ -726,22 +726,22 @@ for label, c, act in (
         ('KMAC128 Form A kl.setst to _Hash_Output_ (L = 0)', absorbing(128, DATA4), lambda c: c.setst(OUTPUT)),
         ('KMACXOF256 Form B kl.setst to _Hash_Output_ with a bound not a multiple of 8', absorbing(256, DATA4, True),
          lambda c: c.setst(OUTPUT, 'B', 513)),
-        ('kl.exec in _Ready_ (GR21)', locker(128), lambda c: c.exec(inp=DATA4)),
+        ('kl.exec in _Ready_ (GR22)', locker(128), lambda c: c.exec(inp=DATA4)),
         ('Form B kl.setst into _Hash_Absorb_', locker(128), lambda c: c.setst(ABSORB, 'B', 32)),
         ('same-State kl.setst in _Hash_Absorb_ (<<KLE-process-VLI>>)', absorbing(128, DATA4),
          lambda c: c.setst(ABSORB)),
-        ('Form B kl.exec in _Hash_Output_ (GR22)', squeezing(128, DATA4, 256),
+        ('Form B kl.exec in _Hash_Output_ (GR21)', squeezing(128, DATA4, 256),
          lambda c: c.exec(inp=DATA4)),
-        ('KMAC128 same-State kl.setst to _Hash_Output_ (GR21)', squeezing(128, DATA4, 256),
+        ('KMAC128 same-State kl.setst to _Hash_Output_ (GR22)', squeezing(128, DATA4, 256),
          lambda c: c.setst(OUTPUT, 'B', 256)),
-        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (GR21)', squeezing(256, DATA4, 0, True),
+        ('KMACXOF256 same-State kl.setst to _Hash_Output_ (GR22)', squeezing(256, DATA4, 0, True),
          lambda c: c.setst(OUTPUT))):
     act(c)
     check(f'{label} -> _Invalid_', True, c.st, INVALID)
 c = squeezing(128, DATA4, 256)
 squeeze(c, 32)
 (st, o), = squeeze(c, 32, fill=0xEE)
-check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR22, GR35)', True,
+check('kl.exec in _Success_ -> _Invalid_, output window zeroed (GR21, GR35)', True,
       (st, c.st, bytes(o)), ('invalid', INVALID, bytes(32)))
 c = squeezing(128, DATA200, 256)
 squeeze(c, 32)
@@ -1001,7 +1001,7 @@ for label, act in (('L = 24 < 32', lambda: verifying(128, 24)), ('L = 100, not a
                    ('verify with MachinePolicy = 0b01', lambda: verifying(128, 256, policy=1)),
                    ('output with MachinePolicy = 0b10', lambda: (lambda c: (c.setst(ABSORB), to_output(c, 256), c)[2])(
                        locker(128, policy=2))),
-                   ('KMACXOF: _Hash_Verify_ does not exist (GR22)', lambda: (lambda c: (c.setst(ABSORB), c.setst(VERIFY, 'B', 256), c)[2])(
+                   ('KMACXOF: _Hash_Verify_ does not exist (GR21)', lambda: (lambda c: (c.setst(ABSORB), c.setst(VERIFY, 'B', 256), c)[2])(
                        locker(128, xof=True)))):
     res.append(act().st)
 check('KMAC _Invalid_: L = 24, 100, b + 8; KLLEN < L; same-State; verify on 0b01; output on 0b10; KMACXOF Hash_Verify',

@@ -176,7 +176,7 @@ class Blake2:
                 return self.invalid()
             self.st, self.block_base, self.last_block_len, self.out_len = OUTPUT, 0, 0, xs or 8 * self.nn
             return self
-        return self.invalid()                             # e.g. _Hash_Output_ from _Ready_ (GR22)
+        return self.invalid()                             # e.g. _Hash_Output_ from _Ready_ (GR21)
 
     def finalize(self):
         """<<KLE-BLAKE2>> finalize(): F(true) on the block that holds the last byte, or on the empty message."""
@@ -212,7 +212,7 @@ class Blake2:
                 return self.invalid()
             bits, final = L, True
         else:
-            return self.invalid()                         # GR21 in _Ready_, GR22 elsewhere
+            return self.invalid()                         # GR22 in _Ready_, GR21 elsewhere
         ib = 8 * klstart
         if klstart and klstart < len(data) and not (self.st == ABSORB and self.block_base in (0, self.b)):
             return self.invalid()                         # GR53 item 3: 0, or block_base = 0 or b in _Hash_Absorb_

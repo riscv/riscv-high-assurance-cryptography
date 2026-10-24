@@ -86,7 +86,7 @@ def unpack(data, lay):
 class Ocb:
     USES_HASN = True
     # (immed, Form) -> States it is allowed from; the only same-State kl.setst is into Set_Aux_Value, which
-    # restarts the nonce load (GR21, MR7). No kl.setst names Enc_Tag_Finalize or Hash_Verify, which the
+    # restarts the nonce load (GR22, MR7). No kl.setst names Enc_Tag_Finalize or Hash_Verify, which the
     # Machine enters by itself (MR12: the tag is verified by a Form B kl.exec in Hash_Verify)
     SETST = {(SET_AUX, 'B'): (READY, SET_AUX), (ABSORB, 'B'): (SET_AUX,),
              (LAST, 'B'): (ABSORB,), (ENC_LAST, 'B'): (ENCRYPT,),
@@ -140,7 +140,7 @@ class Ocb:
             return s._ready()
         if form == 'A' and (immed, 'B') in s.SETST:    # Form A where Form B is expected: operand 0
             form, aux = 'B', 0
-        if (s.state not in s.SETST.get((immed, form), ())   # GR22, GR23
+        if (s.state not in s.SETST.get((immed, form), ())   # GR21, GR23
                 or not s.policy & s.GATE.get(s.state, 3)    # MR9 at issue (GR26)
                 or not s.policy & s.GATE.get(immed, 3)):
             s._invalid('transition')
@@ -185,7 +185,7 @@ class Ocb:
                 ENCRYPT: 'A', DECRYPT: 'A', ENC_LAST: 'A' if n else 'D',
                 DEC_LAST: 'A' if n else 'D', TAG_FIN: 'C', VERIFY: 'B'}.get(st, '')
         if not want or form not in (want, 'D'):
-            s._invalid('Form')                         # GR22, GR21, GR23; a wrong Form (GR13)
+            s._invalid('Form')                         # GR21, GR22, GR23; a wrong Form (GR13)
         if st == SET_AUX:
             if klen < 8 * ((s.N_len + 7) // 8):
                 s._invalid('KLLEN < 8q')               # MR5, MR1: a fixed-width input shorter than the nonce
@@ -511,7 +511,7 @@ INVALID_CASES = [
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
     ("kl.setst #encrypt from Hash_Absorb", at_absorb, lambda c: c.setst(ENCRYPT, 'A')),
     ("Form B kl.setst naming Ready (GR23, GR13)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
-    ("Form B kl.setst #encrypt, which expects Form A (GR22)", lambda: last_set(0), lambda c: c.setst(ENCRYPT, 'B', 0)),
+    ("Form B kl.setst #encrypt, which expects Form A (GR21)", lambda: last_set(0), lambda c: c.setst(ENCRYPT, 'B', 0)),
     ("kl.exec in Hash_Absorb_Last_Block, last_block_len = 0", lambda: last_set(0), lambda c: c.exec('D')),
     ("second kl.exec in Hash_Absorb_Last_Block", last_done, lambda c: c.exec('B', 0, 64)),
     ("kl.setst #enc_tag_finalize from Encrypt", at_crypt, lambda c: c.setst(TAG_FIN, 'A')),
@@ -532,21 +532,21 @@ INVALID_CASES = [
     ("KLLEN = 136 in Hash_Absorb (MR1)", at_absorb, lambda c: c.exec('B', 0, 136)),
     ("KLLEN = 200 in Hash_Absorb (MR1)", at_absorb, lambda c: c.exec('B', 0, 200)),
     ("KLLEN = 56 < last_block_len = 64", last_set, lambda c: c.exec('B', 0, 56)),
-    ("same-State kl.setst #hash_absorb (GR21)", at_absorb, lambda c: c.setst(ABSORB, 'B', 128)),
-    ("same-State kl.setst #hash_last_block after its kl.exec (GR21, MR8)", last_done,
+    ("same-State kl.setst #hash_absorb (GR22)", at_absorb, lambda c: c.setst(ABSORB, 'B', 128)),
+    ("same-State kl.setst #hash_last_block after its kl.exec (GR22, MR8)", last_done,
      lambda c: c.setst(LAST, 'B', 64)),
-    ("same-State kl.setst #encrypt (GR21)", at_crypt, lambda c: c.setst(ENCRYPT, 'A')),
-    ("same-State kl.setst #decrypt (GR21)", lambda: at_crypt(True), lambda c: c.setst(DECRYPT, 'A')),
-    ("same-State kl.setst #hash_last_block before its kl.exec (GR21)", last_set, lambda c: c.setst(LAST, 'B', 64)),
-    ("same-State kl.setst #enc_last_block before its kl.exec (GR21)", lambda: at_last()[0],
+    ("same-State kl.setst #encrypt (GR22)", at_crypt, lambda c: c.setst(ENCRYPT, 'A')),
+    ("same-State kl.setst #decrypt (GR22)", lambda: at_crypt(True), lambda c: c.setst(DECRYPT, 'A')),
+    ("same-State kl.setst #hash_last_block before its kl.exec (GR22)", last_set, lambda c: c.setst(LAST, 'B', 64)),
+    ("same-State kl.setst #enc_last_block before its kl.exec (GR22)", lambda: at_last()[0],
      lambda c: c.setst(ENC_LAST, 'B', 64)),
-    ("same-State kl.setst #dec_last_block before its kl.exec (GR21)", lambda: at_last(True)[0],
+    ("same-State kl.setst #dec_last_block before its kl.exec (GR22)", lambda: at_last(True)[0],
      lambda c: c.setst(DEC_LAST, 'B', 64)),
-    ("same-State kl.setst #enc_tag_finalize (GR21)", lambda: at_last(finish=True)[0],
+    ("same-State kl.setst #enc_tag_finalize (GR22)", lambda: at_last(finish=True)[0],
      lambda c: c.setst(TAG_FIN, 'A')),
-    ("kl.setst #hash_verify in Hash_Verify, even of Form C with the right tag (GR21, MR12)",
+    ("kl.setst #hash_verify in Hash_Verify, even of Form C with the right tag (GR22, MR12)",
      lambda: at_last(True, finish=True)[0], lambda c: c.setst(VERIFY, 'C', b2v(CT13[40:]))),
-    ("Form C kl.exec in Hash_Verify (GR22: Form B expected)", lambda: at_last(True, finish=True)[0],
+    ("Form C kl.exec in Hash_Verify (GR21: Form B expected)", lambda: at_last(True, finish=True)[0],
      lambda c: c.exec('C')),
     ("KLLEN = 120 < tag_len = 128 in Hash_Verify, right tag (MR1)", lambda: at_last(True, finish=True)[0],
      lambda c: c.exec('B', b2v(CT13[40:]), 120)),
@@ -559,7 +559,7 @@ for name, mk, act in INVALID_CASES:
     check(f"{name} -> Invalid", inval(act, cl) is not None and cl.state == INVALID)
 cl = Ocb(K128)
 inval(cl.exec, 'B')
-check("kl.exec in Ready -> Invalid (GR21); Content cleared (GR36); then no operation (GR33)",
+check("kl.exec in Ready -> Invalid (GR22); Content cleared (GR36); then no operation (GR33)",
       True, (cl.state, cl.key, cl.hash_A, cl.exec('A', 1234), cl.state), (INVALID, None, 0, 0, INVALID))
 cl = Ocb(K128)
 cl.setst(EXPIRED)
@@ -568,7 +568,7 @@ check("kl.setst naming Expired -> Expired, Content cleared (GR37, GR36); 48, whi
       "-> Invalid", True, (cl.state, cl.key, raises(cx.setst, 48, exc=Invalid), cx.state), (EXPIRED, None, True, INVALID))
 for dec, form in ((False, 'B'), (True, 'C')):
     cl = at_crypt(dec)
-    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR13, GR22)",
+    check(f"kl.exec Form {form} where Form A is native: a wrong Form -> Invalid (GR13, GR21)",
           inval(cl.exec, form, 0) is not None and cl.state == INVALID)
 check("Form D kl.exec substitutions, the Hash_Verify kl.exec included: all vectors, both directions",
       all(run(*v[1:5], v[6], subst=True) == v[5] and run(*v[1:3], v[3], v[5], v[6], dec=True, subst=True)
@@ -631,7 +631,7 @@ cl.exec('B', b2v(nonce(0x3)))
 cl.setst(SET_AUX, 'B', 96)
 st = (cl.state, cl.N_len, cl.N, cl.has_n)
 cl.exec('B', b2v(N13))
-check("same-State kl.setst #set_aux_value restarts the nonce load (GR21, MR7): N_len replaced, N zeroed, HasN "
+check("same-State kl.setst #set_aux_value restarts the nonce load (GR22, MR7): N_len replaced, N zeroed, HasN "
       "clear; then vector 0D", True, (st, run(None, None, S40, S40, 128, cl=cl)), ((SET_AUX, 96, 0, False), CT13))
 lab, K, N, A, P, CT, t = VEC[16]
 cl = Ocb(K)

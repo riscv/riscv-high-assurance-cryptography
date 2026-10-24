@@ -33,7 +33,7 @@ class RbgUnavailable(Exception):
     """KLE RBG-unavailable exception (GR66): random bits unavailable past the bound; State unchanged."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
-    """kl.setst targets (<<KLE-ECC>>, <<KLE-EdDSA>>, <<KLE-X25519-X448>>, GR23, GR21). A same-State kl.setst is
+    """kl.setst targets (<<KLE-ECC>>, <<KLE-EdDSA>>, <<KLE-X25519-X448>>, GR23, GR22). A same-State kl.setst is
     admitted only in _Ready_, in a Set State (it restarts the load, MR7) and in the EdDSA _Msg_Absorb_ (a pass
     boundary)."""
     if xdh:                                  # no signature States
@@ -126,7 +126,7 @@ class Locker:
     def setst(self, t, xs=0, rand=None, form=None):
         """kl.setst #t; without `form`, xs = 0 means Form A."""
         if t not in targets(self.state, self.mode == 'eddsa', self.sig_exit, self.mode == 'xdh'):
-            raise Invalid('transition not allowed')                   # GR22; #46, #47: GR25
+            raise Invalid('transition not allowed')                   # GR21; #46, #47: GR25
         if t != READY and not self._leads_enabled(t, xs):
             self._policy_gate()                                         # MR9 item 1.a, before the State is left
         if form == 'C':
@@ -853,7 +853,7 @@ cr = armed()
 cr.halt(7, K0)
 cr.setst(READY)
 check(f'kl.setst #{READY} from a halted Sign_Generate discards Progress and RndNum', cleared(cr))
-check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR21, GR24)',
+check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR22, GR24)',
       invalid((lambda c: (c.halt(7, K0), c)[1])(armed()).setst, SIGN_GEN))
 check('MR18: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
       bool(invalid(locker(P256, (SET_SCALAR, D256), to=POINT_MUL).setst, OUTPUT)) and bool(invalid(armed().setst, OUTPUT)))
@@ -916,7 +916,7 @@ for label, kw, loads, t in (
         ('no HasSignature: Sign_Verify', {}, [(SET_SECONDPT, PUB256), H1], SIGN_VER),
         ('MachinePolicy[1] clear: Sign_Input (MR9)', dict(verify=False), [(SET_SECONDPT, PUB256), H1], SET_SIG),
         ('MachinePolicy[1] clear: Sign_Verify', dict(verify=False), [(SET_SECONDPT, PUB256), H1], SIGN_VER),
-        ('Ready -> Output (GR22)', {}, [], OUTPUT)):
+        ('Ready -> Output (GR21)', {}, [], OUTPUT)):
     check(f'{label} -> Invalid', invalid(locker(P256, *loads, **kw).setst, t))
 cr = locker(P256, sc(2), to=POINT_MUL, sign=False, verify=False)
 check('MachinePolicy 0 on a generic ECC Machine: Point_Mul still available', True,
@@ -933,7 +933,7 @@ cr.exec_in(cr.default_gen[:20])
 cr.setst(SET_SECONDPT)
 part = (cr.state, cr.bb, cr.sec, 'sec' in cr.has)
 cr.exec_in(cr.default_gen)
-check('same-State kl.setst in a Set State part-way restarts the load (GR21, MR7): block_base 0, field unconfigured; '
+check('same-State kl.setst in a Set State part-way restarts the load (GR22, MR7): block_base 0, field unconfigured; '
       'a full reload completes it', part == (SET_SECONDPT, 0, None, False) and cr.sec == cr.default_gen
       and 'sec' in cr.has)
 cr = Locker(P256)
@@ -958,10 +958,10 @@ cr.exec_out(24), cr.exec_out(24)
 check('Output: a final 24-byte kl.exec past the 64-byte field -> Invalid (MR7)', invalid(cr.exec_out, 24))
 for t in (SUCCESS, FAILURE):
     cr = Locker(P256)
-    check(f'kl.setst #{t} -> Invalid (GR25, GR22)', invalid(cr.setst, t))
+    check(f'kl.setst #{t} -> Invalid (GR25, GR21)', invalid(cr.setst, t))
 cr = locker(P256, sc(2), to=POINT_MUL)
 cr.halt(3)
-check('same-State kl.setst in a halted Point_Mul -> Invalid (GR21, GR24)', invalid(cr.setst, POINT_MUL))
+check('same-State kl.setst in a halted Point_Mul -> Invalid (GR22, GR24)', invalid(cr.setst, POINT_MUL))
 
 def reach(eddsa, sig_exit=True):
     """Whether Sign_Verify is reachable by kl.setst from every Set state."""
@@ -1428,8 +1428,8 @@ check('kl.exec emits the shared secret Z (32 B, big-endian X), then _Success_', 
 check('_Success_ is no kl.derive source (GR40 item 1): source _Invalid_', None, derive_who(Dest('hash'), cr, 32), 'source')
 cr = ecdh()[0]
 cr.exec_out(16)
-check('same-State kl.setst in _Output_ part-way -> Invalid: no re-emission (GR21, GR24)', invalid(cr.setst, OUTPUT))
-check('same-State kl.setst in _Output_ before any kl.exec -> Invalid (GR21, GR24)', invalid(ecdh()[0].setst, OUTPUT))
+check('same-State kl.setst in _Output_ part-way -> Invalid: no re-emission (GR22, GR24)', invalid(cr.setst, OUTPUT))
+check('same-State kl.setst in _Output_ before any kl.exec -> Invalid (GR22, GR24)', invalid(ecdh()[0].setst, OUTPUT))
 pk = locker(P256, sc(2), to=POINT_MUL)
 pk.exec_run()
 h = Dest('hash')
@@ -1630,7 +1630,7 @@ for name, c in EC.MONTGOMERY_CURVES.items():
     check(f'{name}: non-canonical u = p + {c.G} accepted and reduced; no check on write or on read', True,
           xdh(c, a, v2b(big, n))[:2], (A, SUCCESS))
     check(f'{name}: _Sign_Generate_, _Sign_Verify_, _Set_Hash_, _Sign_Input_ (and the EdDSA States) are not '
-          'defined: kl.setst -> _Invalid_ (GR22)',
+          'defined: kl.setst -> _Invalid_ (GR21)',
           all(invalid(Locker(c).setst, t) for t in (SIGN_GEN, SIGN_VER, SET_HASH, SET_SIG, MSG_ABSORB, SET_CTX)))
     check(f'{name}: a non-zero _MachinePolicy_ is unsupported Metadata',
           all(raises(Locker, c, exc=Unsupported, **kw) for kw in (dict(sign=True), dict(verify=True))))
@@ -1652,7 +1652,7 @@ check('x25519: bit 255 of the u-coordinate is ignored', True,
       xdh(X25, bytes.fromhex(RFC7748['x25519']['dh'][0]), v2b(9 | 1 << 255, 32))[0].hex(), RFC7748['x25519']['dh'][1])
 XST = {READY, SET_GEN, SET_SCALAR, SET_SECONDPT, POINT_MUL, OUTPUT}
 check('x25519 / x448: kl.setst reaches only _Ready_, the three _Set_ states and _Point_Mul_; _Output_, entered by '
-      'the kl.exec of _Point_Mul_, is named by no kl.setst, not even a same-State one (GR21)', True,
+      'the kl.exec of _Point_Mul_, is named by no kl.setst, not even a same-State one (GR22)', True,
       {t for s in XST | {SUCCESS, FAILURE} for t in targets(s, False, xdh=True)}, XST - {OUTPUT})
 
 section('Negative controls')

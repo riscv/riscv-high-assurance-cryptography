@@ -158,7 +158,7 @@ class XexLocker:
               and s.state in (READY, ENCRYPT, DECRYPT)    # also Encrypt <-> Decrypt and same State: sets the tweak
               and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR9
             if form not in ('A', 'C', 'D'):
-                return s.invalidate()                          # GR22: a wrong Form (GR13)
+                return s.invalidate()                          # GR21: a wrong Form (GR13)
             if form != 'C':
                 KLLEN, operand = 128, setst_operand(form, operand)   # Form A or D: a 128-bit INPUT
             if KLLEN < B:
@@ -167,7 +167,7 @@ class XexLocker:
             s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(sl(value, B - 1, 0), 16)))   # MR5
             s.goto(immed)
         else:
-            s.invalidate()                        # GR22
+            s.invalidate()                        # GR21
 
     def exec(s, inp, KLLEN, klstart=0, out=None, halt_after=None):
         """Form A kl.exec (or its Form D substitution, Vd = Vs2); returns (output operand, klstart)."""
@@ -176,7 +176,7 @@ class XexLocker:
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
             return out & ~window, 0               # GR35
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR21, GR22; MR1 (length first: GR53)
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR22, GR21; MR1 (length first: GR53)
             s.invalidate()
             return out & ~window, 0
         if not fget(s.mdh, 'MachinePolicy') & (POL_ENC if s.state == ENCRYPT else POL_DEC):
@@ -633,7 +633,7 @@ check("Encrypt -> Ready zeroes the mask; the CC is reusable with another tweak",
       (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
 cl = tw(new_xex(k1, k2), t=0xdead)
 cl_run(cl, data)
-check("same-State kl.setst (GR21) re-tweaks: mask index back to 0", True,
+check("same-State kl.setst (GR22) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
@@ -752,7 +752,7 @@ check("KLE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
 
 check("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)", True,
       [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 6)
-check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR22)", True,
+check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR21)", True,
       [(raises(c.setst, i), c.state) for i in (54, 55) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
 
 section("negative controls")

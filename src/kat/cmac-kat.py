@@ -82,7 +82,7 @@ class Cmac:
         L = s.enc(0)
         K1 = s.nc['dbl'](L, s.b)
         return L, K1, s.nc['dbl'](K1, s.b)
-    # (immed, Form) -> States it is allowed from; no same-State kl.setst (GR21): no State loads a field (MR7)
+    # (immed, Form) -> States it is allowed from; no same-State kl.setst (GR22): no State loads a field (MR7)
     SETST = {(ABSORB, 'A'): (READY,), (LAST, 'B'): (ABSORB,),
              (OUTPUT, 'A'): (LAST,), (VERIFY, 'B'): (LAST,)}
     def setst(s, immed, form='A', aux=0):
@@ -99,7 +99,7 @@ class Cmac:
         if form == 'A' and (immed, 'B') in s.SETST:  # Form A where Form B is expected: operand 0
             form, aux = 'B', 0
         if s.state not in s.SETST.get((immed, form), ()):
-            s._invalid('transition')              # GR22, GR23
+            s._invalid('transition')              # GR21, GR23
         if immed == LAST:
             if aux > s.b or aux % 8:
                 s._invalid('Xs')
@@ -131,7 +131,7 @@ class Cmac:
         if (st, s.policy & (1 if st == OUTPUT else 2)) in ((OUTPUT, 0), (VERIFY, 0)):
             s._invalid('MR9, GR26: the operation of the State is disabled')
         if form not in ({ABSORB: 'BD', LAST: 'BD', OUTPUT: 'CD', VERIFY: 'BD'}.get(st) or ''):
-            s._invalid('Form')                    # GR22, GR21, GR23
+            s._invalid('Form')                    # GR21, GR22, GR23
         short = (st == ABSORB and klen % s.b or st == LAST and klen < s.last_block_len
                  or st == OUTPUT and klen < 64 or st == VERIFY and klen < s.tag_len)
         if not short and 8 * klstart >= klen:
@@ -363,7 +363,7 @@ def last_set():
 at_last = lambda: run(K128, MSG[:40], to=None)
 at_verify = lambda: (lambda c: (c.setst(VERIFY, 'B', B), c)[1])(at_last())
 INVALID_CASES = [
-    ("kl.exec in Ready (GR21)", lambda: Cmac(K128), lambda c: c.exec('B')),
+    ("kl.exec in Ready (GR22)", lambda: Cmac(K128), lambda c: c.exec('B')),
     ("kl.setst #hash_last_block from Ready", lambda: Cmac(K128), lambda c: c.setst(LAST, 'B', 0)),
     ("kl.setst #hash_verify in Hash_Absorb", at_absorb, lambda c: c.setst(VERIFY, 'B', B)),
     ("kl.setst #hash_output before the last block is absorbed", last_set, lambda c: c.setst(OUTPUT)),
@@ -374,15 +374,15 @@ INVALID_CASES = [
     ("kl.setst #hash_verify of Form C", at_last, lambda c: c.setst(VERIFY, 'C', B)),
     ("Xs = 0 after a block was absorbed: not a CMAC of any message", lambda: (lambda c: (c.exec('B', 0), c)[1])(at_absorb()),
      lambda c: c.setst(LAST, 'B', 0)),
-    ("same-State kl.setst #hash_verify (GR21)", at_verify, lambda c: c.setst(VERIFY, 'B', 64)),
+    ("same-State kl.setst #hash_verify (GR22)", at_verify, lambda c: c.setst(VERIFY, 'B', 64)),
     ("kl.setst #hash_output with MachinePolicy = 2 (verify only, MR9)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=2)), lambda c: c.setst(OUTPUT)),
     ("kl.setst #hash_verify with MachinePolicy = 1 (generate only, MR9)",
      lambda: run(K128, MSG[:40], to=None, cl=Cmac(K128, policy=1)), lambda c: c.setst(VERIFY, 'B', B)),
-    ("same-State kl.setst #hash_last_block after the last block (GR21)", at_last, lambda c: c.setst(LAST, 'B', 0)),
-    ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR21)", last_set,
+    ("same-State kl.setst #hash_last_block after the last block (GR22)", at_last, lambda c: c.setst(LAST, 'B', 0)),
+    ("same-State kl.setst #hash_last_block before its kl.exec, absorbed_all = false (GR22)", last_set,
      lambda c: c.setst(LAST, 'B', 64)),
-    ("same-State kl.setst #hash_absorb (GR21)", at_absorb, lambda c: c.setst(ABSORB)),
+    ("same-State kl.setst #hash_absorb (GR22)", at_absorb, lambda c: c.setst(ABSORB)),
     ("KLLEN = 64 < tag_len = 128 in Hash_Verify (MR1)", at_verify, lambda c: c.exec('B', 0, 64)),
     ("kl.exec Form C in Hash_Verify", at_verify, lambda c: c.exec('C')),
     ("kl.exec Form A in Hash_Absorb", at_absorb, lambda c: c.exec('A')),
@@ -395,7 +395,7 @@ INVALID_CASES = [
     ("second tag kl.exec, in Success (GR23)", done_ok, lambda c: c.exec('C')),
     ("kl.setst #hash_absorb in Success (GR23)", done_ok, lambda c: c.setst(ABSORB)),
     ("kl.setst #hash_absorb in Failure (GR23)", lambda: done_ok(0), lambda c: c.setst(ABSORB)),
-    ("same-State kl.setst #hash_output (GR21)", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
+    ("same-State kl.setst #hash_output (GR22)", lambda: run(K128, MSG[:40]), lambda c: c.setst(OUTPUT)),
     ("Form B kl.setst naming Ready (GR23, GR13)", at_absorb, lambda c: c.setst(READY, 'B', 0)),
     ("Form B kl.setst #hash_output, which expects Form A (GR23)", at_last, lambda c: c.setst(OUTPUT, 'B', 64)),
     ("Form A kl.setst #hash_verify: Xs = 0 < 64", at_last, lambda c: c.setst(VERIFY, 'A')),
