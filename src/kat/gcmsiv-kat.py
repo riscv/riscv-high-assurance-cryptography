@@ -98,14 +98,14 @@ def SCC_KeyDeriv(key, nonce):
 
 # kl.setst Forms of the listed transitions; Encrypt is entered only by the Enc_Tag_Finalize kl.exec. No State
 # loads a field by kl.exec (MR7), so no same-State kl.setst is admitted (GR21, GR24)
-FORMS = {(READY, SAV): 'C', (SAV, SAV2): 'C', (SAV, HA): 'A', (SAV2, HA): 'A', (HA, ETF): 'A', (HA, DEC): 'A',
-         (ENC, ELB): 'B', (DEC, DLB): 'B', (DEC, DTF): 'A', (DLB, DTF): 'A'}
+FORMS = {(READY, SAV): 'B', (SAV, SAV2): 'B', (SAV, HA): 'A', (SAV2, HA): 'A', (HA, ETF): 'A', (HA, DEC): 'A',
+         (ENC, ELB): 'C', (DEC, DLB): 'C', (DEC, DTF): 'A', (DLB, DTF): 'A'}
 GATE = {ETF: 1, ENC: 1, ELB: 1, DEC: 2, DLB: 2, DTF: 2}  # MR9: the MachinePolicy bit of each gated State
 
 class Siv:
     """A GCM-SIV locker; MDH reduced to State, MachinePolicy (bit 0 encrypt, bit 1 decrypt),
     KeyType.  stale_derived (no MR3 re-derivation on import) is a negative control.  The hart has no Zklio:
-    every substitution is a wrong Form (GR14)."""
+    every kl.exec substitution is a wrong Form (GR14)."""
 
     def __init__(s, policy=3, stale_derived=False):
         s.policy, s.stale = policy, stale_derived
@@ -162,7 +162,7 @@ class Siv:
             s._invalid()                                 # GR26: MR9 requires a set bit
 
     def setst(s, immed, form='A', aux=0, klen=128):
-        """klen: KLLEN of a Form C operand."""
+        """klen: KLLEN of a Form B operand."""
         st = s.state
         if immed in ERROR_STATES:                        # <<KLE-instruction-setst>>, GR37: in every State
             return s._error(immed)
@@ -171,12 +171,17 @@ class Siv:
         if immed == READY and form == 'A':               # GR23
             s.state = READY
             return s._ready()
-        if st in (SUCC, FAIL) or FORMS.get((st, immed)) != form:
+        want = FORMS.get((st, immed))
+        if form == 'A' and want == 'C':                  # Form A is Form C with operand 0
+            form, aux = 'C', 0
+        elif form in 'AC' and want == 'B':               # Form A or C where Form B is expected: a 128-bit INPUT
+            form, klen, aux = 'B', 128, aux & MASK128 if form == 'C' else 0
+        if st in (SUCC, FAIL) or want != form:
             return s._invalid()                          # GR23, GR22
         if not s.policy & GATE.get(st, 3) or not s.policy & GATE.get(immed, 3):
             return s._invalid()                          # MR9 at issue (GR26)
         if immed in (SAV, SAV2) and klen < (96 if immed == SAV else 128):
-            return s._invalid()                          # MR5: a Form C operand narrower than its field
+            return s._invalid()                          # MR5: a Form B operand narrower than its field
         if immed == SAV:
             s.nonce = sl(aux, 95, 0)
             s._derive()
@@ -278,16 +283,16 @@ def crypt(m, text, KLLEN=128, last=ELB):
         t = text[i:min(i + step, n)]
         out += v2b(m.exec('A', b2v(t), 8 * len(t)), len(t))
     if text[n:]:
-        m.setst(last, 'B', 8 * len(text[n:]))
+        m.setst(last, 'C', 8 * len(text[n:]))
         out += v2b(m.exec('A', b2v(text[n:]), 8 * len(text[n:])), len(text[n:]))
     return out
 
 def opened(key, nonce, aad=b'', siv=None, KLLEN=128, m=None, **kw):
     """Set_Aux_Value (nonce value), optionally Set_Aux_Value_2, Hash_Absorb, absorb aad."""
     m = m or Siv.provisioned(key, **kw)
-    m.setst(SAV, 'C', nonce)
+    m.setst(SAV, 'B', nonce)
     if siv is not None:
-        m.setst(SAV2, 'C', b2v(siv))
+        m.setst(SAV2, 'B', b2v(siv))
     m.setst(HA)
     absorb(m, aad, KLLEN)
     return m
@@ -477,7 +482,7 @@ def at(where, **kw):
         return m
     m = Siv.provisioned(K, **kw)
     if where != 'ready':
-        m.setst(SAV, 'C', b2v(N))
+        m.setst(SAV, 'B', b2v(N))
     for st in {'ha': (HA,), 'etf': (HA, ETF), 'enc': (HA, ETF), 'dec': (HA, DEC)}.get(where, ()):
         m.setst(st)
     if where == 'enc':
@@ -520,11 +525,11 @@ for i, v in enumerate(VECTORS):
 
 section('Set_Aux_Value, Set_Aux_Value_2, Encrypt only via Enc_Tag_Finalize')
 m = Siv.provisioned(k5)
-m.setst(SAV, 'C', b2v(bytes(range(12))))
-m.setst(SAV, 'C', b2v(n5))
+m.setst(SAV, 'B', b2v(bytes(range(12))))
+m.setst(SAV, 'B', b2v(n5))
 inv = m.state == INV
 m = Siv.provisioned(k5)
-m.setst(SAV, 'C', b2v(bytes(range(12))))
+m.setst(SAV, 'B', b2v(bytes(range(12))))
 m.setst(READY)
 check('GR21: same-State kl.setst into Set_Aux_Value -> _Invalid_; after Ready, a new nonce re-derives the keys '
       '(C.1 #15)', inv and kl_encrypt(k5, n5, a5, p5, m=m)[0] == w5)
@@ -533,13 +538,24 @@ absorb(m, p5)
 m.setst(ETF)
 check('nonce <- INPUT[95:0]: higher INPUT bits ignored', v2b(m.exec('A', len_block(a5, p5), 128), 16) == w5[-16:])
 m = Siv.provisioned(k5)
-m.setst(SAV, 'C', b2v(n5))
-m.setst(SAV2, 'C', 0x1234)
+m.setst(SAV, 'C', b2v(n5) | 0xDEADBEEF << 96)
 m.setst(SAV2, 'C', b2v(w5[-16:]))
+m.setst(HA)
+absorb(m, a5)
+m.setst(DEC)
+pt = crypt(m, w5[:-16], 128, DLB)
+m.setst(DTF)
+m.exec('B', len_block(a5, pt), 128)
+check('Form C kl.setst in place of the Form B ones into Set_Aux_Value and Set_Aux_Value_2: C.1 #15 decrypts '
+      'and verifies', (m.state, pt) == (SUCC, p5))
+m = Siv.provisioned(k5)
+m.setst(SAV, 'B', b2v(n5))
+m.setst(SAV2, 'B', 0x1234)
+m.setst(SAV2, 'B', b2v(w5[-16:]))
 inv = m.state == INV
 m = Siv.provisioned(k5)
-m.setst(SAV, 'C', b2v(n5))
-m.setst(SAV2, 'C', b2v(w5[-16:]) | 0x77 << 200)
+m.setst(SAV, 'B', b2v(n5))
+m.setst(SAV2, 'B', b2v(w5[-16:]) | 0x77 << 200)
 siv = m.SIV
 m.setst(READY)
 check('GR21: same-State kl.setst into Set_Aux_Value_2 -> _Invalid_; a 256-bit INPUT keeps its 128 LSBs (MR5)',
@@ -570,11 +586,11 @@ for where, path, last in (('enc', ENC, ELB), ('dec', DEC, DLB)):
     m.exec('A', 0, 128)
     m2 = at(where)
     m2.ctr = M32
-    m2.setst(last, 'B', 8)
+    m2.setst(last, 'C', 8)
     m2.exec('A', 0x5A, 8)
     m3 = at(where)
     m3.ctr = 2**32
-    m3.setst(last, 'B', 8)
+    m3.setst(last, 'C', 8)
     m3.exec('A', 0x5A, 8)
     check(f'{where}: block 2^32 (ctr = 2^32-1) processed, also as the last block; ctr = 2^32 -> Invalid',
           (st1, c1, m.state, m2.state, m3.state) == (path, 2**32, INV, last, INV))
@@ -593,21 +609,21 @@ check('ctr = 2^32 survives export/import (bit 32 in field vi): the next block ->
 bad = (0, 4, 12, 121, 128)
 for where, last in (('enc', ELB), ('dec', DLB)):
     nm = 'Enc' if last == ELB else 'Dec'
-    check(f'{nm}_Last_Block: last_block_len in {bad} -> Invalid', all(at(where).setst(last, 'B', n) == 0 for n in bad))
+    check(f'{nm}_Last_Block: last_block_len in {bad} -> Invalid', all(at(where).setst(last, 'C', n) == 0 for n in bad))
     check(f'{nm}_Last_Block: last_block_len 8 and 120 accepted',
-          all(at(where).setst(last, 'B', n) is None for n in (8, 120)))
+          all(at(where).setst(last, 'C', n) is None for n in (8, 120)))
     m = at(where)
-    m.setst(last, 'B', 64)
+    m.setst(last, 'C', 64)
     first = m.exec('A', b2v(bytes(range(1, 17))), 128)
     check(f'{nm}_Last_Block: excess input ignored, OUTPUT above last_block_len clear (MR6); '
           'a second kl.exec -> _Invalid_, output zeroed (MR8)',
           first >> 64 == 0 and first and m.exec('A', b2v(bytes(range(1, 17))), 128) == 0 and m.state == INV)
     m, m2 = at(where), at(where)
-    m.setst(last, 'B', 64)
-    m.setst(last, 'B', 32)
-    m2.setst(last, 'B', 32)
+    m.setst(last, 'C', 64)
+    m.setst(last, 'C', 32)
+    m2.setst(last, 'C', 32)
     ok = m2.exec('A', b2v(bytes(range(1, 17))), 128)
-    m2.setst(last, 'B', 32)
+    m2.setst(last, 'C', 32)
     check(f'GR21: same-State kl.setst into {nm}_Last_Block -> _Invalid_, before its kl.exec and after it (MR8)',
           ok and (m.state, m2.state) == (INV, INV))
 k10, n10, a10, p10, w10 = vec(9)
@@ -626,25 +642,25 @@ check('GR50: Hash_Absorb halted at klstart = 32 and Encrypt at 16, both resumed:
 section('general rules')
 LB0 = len_block(b'', b'')
 for name, where, ops, *kw in [
-        ('GR22: Form C kl.setst to Enc_Tag_Finalize', 'ha', [('setst', ETF, 'C', LB0)]),
+        ('GR22: Form B kl.setst to Enc_Tag_Finalize', 'ha', [('setst', ETF, 'B', LB0)]),
         ('GR22: Form A kl.exec in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'A', LB0, 128)]),
         ('MR5: KLLEN = 64 < 128 for the length block in Enc_Tag_Finalize', 'ha', [('setst', ETF), ('exec', 'A', LB0, 64)]),
         ('MR5: KLLEN = 64 < 128 for the length block in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'B', LB0, 64)]),
-        ('GR22: Form C kl.setst to Decrypt', 'ha', [('setst', DEC, 'C', 0)]),
-        ('GR14: Form A kl.setst to Set_Aux_Value (the substitution) without Zklio', 'ready', [('setst', SAV)]),
+        ('GR22: Form B kl.setst to Decrypt', 'ha', [('setst', DEC, 'B', 0)]),
+        ('MR14: Form A kl.setst to Enc_Last_Block: last_block_len = 0', 'enc', [('setst', ELB)]),
         ('GR22: kl.exec in Set_Aux_Value', 'sav', [('exec', 'B', 0, 128)]),
-        ('GR22: Set_Aux_Value_2 -> Set_Aux_Value', 'sav', [('setst', SAV2, 'C', 0), ('setst', SAV, 'C', 0)]),
+        ('GR22: Set_Aux_Value_2 -> Set_Aux_Value', 'sav', [('setst', SAV2, 'B', 0), ('setst', SAV, 'B', 0)]),
         ('kl.setst naming Encrypt in Hash_Absorb', 'ha', [('setst', ENC)]),
-        ('kl.setst naming Encrypt in Set_Aux_Value_2', 'sav', [('setst', SAV2, 'C', 0), ('setst', ENC)]),
+        ('kl.setst naming Encrypt in Set_Aux_Value_2', 'sav', [('setst', SAV2, 'B', 0), ('setst', ENC)]),
         ('kl.setst naming Encrypt in Enc_Tag_Finalize', 'etf', [('setst', ENC)]),
         ('kl.setst naming Encrypt in Decrypt', 'dec', [('setst', ENC)]),
         ('kl.setst naming Encrypt in Encrypt', 'enc', [('setst', ENC)]),
-        ('kl.setst naming Enc_Last_Block in Hash_Absorb', 'ha', [('setst', ELB, 'B', 64)]),
-        ('kl.setst naming Enc_Last_Block in Set_Aux_Value_2', 'sav', [('setst', SAV2, 'C', 0), ('setst', ELB, 'B', 64)]),
-        ('kl.setst naming Enc_Last_Block in Enc_Tag_Finalize', 'etf', [('setst', ELB, 'B', 64)]),
+        ('kl.setst naming Enc_Last_Block in Hash_Absorb', 'ha', [('setst', ELB, 'C', 64)]),
+        ('kl.setst naming Enc_Last_Block in Set_Aux_Value_2', 'sav', [('setst', SAV2, 'B', 0), ('setst', ELB, 'C', 64)]),
+        ('kl.setst naming Enc_Last_Block in Enc_Tag_Finalize', 'etf', [('setst', ELB, 'C', 64)]),
         ('GR21: kl.exec in Ready', 'ready', [('exec', 'A', 0, 128)]),
         ('GR23: kl.exec in Success', 'success', [('exec', 'B', 0, 128)]),
-        ('GR23, GR13: Form B kl.setst naming Ready', 'sav', [('setst', READY, 'B', 0)]),
+        ('GR23, GR13: Form C kl.setst naming Ready', 'sav', [('setst', READY, 'C', 0)]),
         ('GR22: Form A kl.exec in Hash_Absorb', 'ha', [('exec', 'A', 0, 128)]),
         ('MR1: KLLEN = 120 in Hash_Absorb', 'ha', [('exec', 'B', 1, 120)]),
         ('MR1: KLLEN = 120 in Encrypt', 'enc', [('exec', 'A', 1, 120)]),
@@ -652,14 +668,17 @@ for name, where, ops, *kw in [
         ('resume at klstart = 8 in Encrypt', 'enc', [('exec', 'A', 0, 256, 8)]),
         ('MR2: resume at klstart = 16 in Enc_Tag_Finalize', 'etf', [('exec', 'A', LB0, 256, 16)]),
         ('MR2: resume at klstart = 16 in Dec_Tag_Finalize', 'dec', [('setst', DTF), ('exec', 'B', LB0, 256, 16)]),
-        ('MR2: resume at klstart = 16 in Enc_Last_Block', 'enc', [('setst', ELB, 'B', 64), ('exec', 'A', 0, 256, 16)]),
-        ('Enc_Last_Block: KLLEN (56) < last_block_len (64)', 'enc', [('setst', ELB, 'B', 64), ('exec', 'A', 0, 56)]),
-        ('Dec_Last_Block: KLLEN (56) < last_block_len (64)', 'dec', [('setst', DLB, 'B', 64), ('exec', 'A', 0, 56)]),
+        ('MR2: resume at klstart = 16 in Enc_Last_Block', 'enc', [('setst', ELB, 'C', 64), ('exec', 'A', 0, 256, 16)]),
+        ('Enc_Last_Block: KLLEN (56) < last_block_len (64)', 'enc', [('setst', ELB, 'C', 64), ('exec', 'A', 0, 56)]),
+        ('Dec_Last_Block: KLLEN (56) < last_block_len (64)', 'dec', [('setst', DLB, 'C', 64), ('exec', 'A', 0, 56)]),
         ('MachinePolicy decrypt-only: -> Enc_Tag_Finalize', 'ha', [('setst', ETF)], {'policy': 2}),
         ('MachinePolicy encrypt-only: -> Decrypt', 'ha', [('setst', DEC)], {'policy': 1})]:
     m = at(where, **(kw[0] if kw else {}))
     outs = [getattr(m, op)(*a) for op, *a in ops]
     check(f'{name} -> Invalid, no output', m.state == INV and not any(outs))
+check('Form A kl.setst to Set_Aux_Value, Set_Aux_Value_2 = Form B with a 128-bit zero INPUT (<<KLE-instruction-setst>>)',
+      [(m.setst(st, 'A'), m.state)[1] for m, st in ((at('ready'), SAV), (at('sav'), SAV2))]
+      == [(m.setst(st, 'B', 0), m.state)[1] for m, st in ((at('ready'), SAV), (at('sav'), SAV2))] != [INV] * 2)
 ms = [at(w) for w in ('etf', 'enc', 'dec')]
 check('a Form B kl.exec where Form A is native (Enc_Tag_Finalize, Encrypt, Decrypt): a wrong Form, _Invalid_ '
       '(GR13, GR22)', True, ([x.exec('B', LB0, 128) for x in ms], [x.state for x in ms]), ([0] * 3, [INV] * 3))
@@ -668,7 +687,7 @@ snap = dict(vars(m))
 check('klstart >= KLLEN/8 in Encrypt (32, 48 of 256): empty window, only klstart = 0',
       [(m.exec('A', 1, kl, ks), vars(m) == snap) for kl, ks in ((256, 32), (256, 48))] == [(0, True)] * 2)
 m = at('enc')
-m.setst(ELB, 'B', 64)
+m.setst(ELB, 'C', 64)
 m.exec('A', 1, 64)
 snap = dict(vars(m))
 check('KLLEN = 0 in Enc_Last_Block after its kl.exec: empty window, no operation (GR53, MR8)',
@@ -684,7 +703,7 @@ m.setst(READY)
 check('GR37/GR33: in an Error State kl.exec and kl.setst Ready do nothing', (m.state, out) == (EXPIRED, 0))
 m = Siv()
 check('GR33/GR37: an Unconfigured locker ignores kl.setst and kl.exec; kl.setste naming Expired records Expired',
-      (m.setst(SAV, 'C', 0), m.setst(READY), m.exec('B', 1), m.state, m.setst(EXPIRED), m.state)
+      (m.setst(SAV, 'B', 0), m.setst(READY), m.exec('B', 1), m.state, m.setst(EXPIRED), m.state)
       == (None, None, 0, UNCONF, 0, EXPIRED))
 check('kl.setst naming 48 or 53, which the Machine does not define -> _Invalid_ (<<KLE-instruction-setst>>)',
       [(raises(c.setst, i), c.state) for i in (48, 53) for c in [at('ha')]] == [(False, INV)] * 2)
@@ -719,7 +738,7 @@ def resumed(where, stale):
     if where == 'Dec_Last_Block':
         m.setst(DEC)
         ct = v2b(m.exec('A', b2v(w5[:16]), 128), 16)
-        m.setst(DLB, 'B', 32)
+        m.setst(DLB, 'C', 32)
     elif where == 'Encrypt':
         absorb(m, p5)
         m.setst(ETF)
@@ -766,7 +785,7 @@ for where in ('etf', 'success'):
     check(f'GCM-SIV in {"Enc_Tag_Finalize" if where == "etf" else "Success"} as a kl.derive source (none, '
           'GR40 item 1) -> only the source Invalid', True, (s_.state, m.state, m.key), (INV, READY, K))
 
-section('kl.restrictl (GR26, MR9), Form C KLLEN (MR5)')
+section('kl.restrictl (GR26, MR9), Form B KLLEN (MR5)')
 m = Siv.provisioned(K)
 m.restrictl(2)
 check('GR26: narrowed to decrypt-only in Ready: decryption still succeeds (C.1 #1)', kl_decrypt(K, N, b'', W1, m=m)[0] == SUCC)
@@ -788,8 +807,8 @@ m.restrictl(0)
 check('GR26: narrowed to MachinePolicy = 0 -> Invalid', m.state == INV)
 for imm, kl in ((SAV, 88), (SAV2, 120)):
     m = at('ready') if imm == SAV else at('sav')
-    m.setst(imm, 'C', 0x1234, klen=kl)
-    check(f'MR5: Form C kl.setst into {"Set_Aux_Value" if imm == SAV else "Set_Aux_Value_2"} with KLLEN = {kl} -> Invalid', m.state == INV)
+    m.setst(imm, 'B', 0x1234, klen=kl)
+    check(f'MR5: Form B kl.setst into {"Set_Aux_Value" if imm == SAV else "Set_Aux_Value_2"} with KLLEN = {kl} -> Invalid', m.state == INV)
 
 section('negative controls')
 k2, n2, a2, p2, w2 = vec(1)

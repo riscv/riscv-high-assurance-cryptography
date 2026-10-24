@@ -4,7 +4,7 @@ The compression function, word size, IV, block and digest sizes come from the ca
 the KATs."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
+from common import (setst_operand, b2v, v2b, sl, bswap, bin_, ERROR_STATES, inert,
                     KL_STATE_INERT, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
                     KL_STATEEXT_INVALID, KL_STATEEXT_UNSUPPORTED, md_pad, HashPort, IllegalInstruction)
@@ -90,13 +90,12 @@ class MdHash:
         elif (s.st, immed, form) == (KL_STATE_READY, KL_STATE_HASH_ABSORB, 'A'):
             s.st, s.last_block_len = immed, s.b  # Form A; last_block_len <- b (<<KLE-hash-functions-MACs-XOFs>>)
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
-                form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # any bit length, MSB-first (MR14, second bullet); Form A keeps b
-            if form == 'B':
-                s.last_block_len = xs
-        elif immed == KL_STATE_HASH_OUTPUT and form in 'AB' and (
+                form == 'A' or form == 'C' and xs is not None and 0 <= xs <= s.b):
+            s.st = immed  # any bit length, MSB-first (MR14, second bullet); Form A is Xs = 0
+            s.last_block_len = setst_operand(form, xs)
+        elif immed == KL_STATE_HASH_OUTPUT and form in 'AC' and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
-            x = xs if form == 'B' else 0
+            x = setst_operand(form, xs or 0)
             if x and (x % 8 or x > s.t):
                 return s.reset()  # the bound: a multiple of 8, at most d = t
             s.finalize()

@@ -8,7 +8,7 @@ endif::[]
 _This chapter is informative._ It gives requirements, guidelines and code examples for software that uses KLE.
 The examples follow <<Zkl-notation.adoc#KLE-Notation>>: a vector register loaded from memory holds the
 byte at the lowest address in its least significant bits.
-The example listings assume RV64, where a 64-bit operand, such as the `Xs` of a Form B `kl.setst`, is one GPR; on RV32 it is a GPR pair (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
+The example listings assume RV64, where the 128-bit `Xs` of a Form C `kl.setst` is a GPR pair; on RV32 it is a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 // ///////////////////////////////////////////////////////////////////
 
@@ -198,7 +198,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 . Save `klstart`.
 . Save `klnamedlocker`.
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
-If there is a managed locker, save it first, with Form C or D `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
+If there is a managed locker, save it first, with Form B or C `kl.mgmt` and no KLIOBUF transfer (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is under management.
@@ -224,7 +224,7 @@ A handler that passes `ml` through the KLIOBUF for the other lockers configures 
 .. restore `kliobuflen`;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop`.
-. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt` and no KLIOBUF transfer.
+. If an image was saved for the managed locker, restore it last, with Form B or C `kl.mgmt` and no KLIOBUF transfer.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` last.
 
@@ -529,7 +529,7 @@ success:
   kl.setnl  s8                    # restore the caller's value
 ----
 
-The opening `kl.mgmt` of provisioning and import receives the MDH in Form D (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>) and checks all of it; for the image of a locker in an Error State it checks only the _State_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
+The opening `kl.mgmt` of provisioning and import receives the MDH in Form C (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>) and checks all of it; for the image of a locker in an Error State it checks only the _State_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
 The completing `kl.mgmt KLNL, #kl_cfg_management_end` can still transition the locker to an Error State, at SKS resolution (provisioning) or authentication (import); the `kl.getst` after it detects this, and also a clear or an Error State set earlier.
 A data error found by a Machine check on a field of the PI or SCC leaves the locker in _Failure_ instead (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>); these listings do not test for it.
 
@@ -596,13 +596,10 @@ With `Zklio`, the substitutions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-substitutio
 `2: kl.exec{nbsp}{nbsp}{nbsp}Kn` +
 | `kl.exec`, Form C   | `kl.exec{nbsp}{nbsp}Vd, Kn`     | `1: kl.exec{nbsp}{nbsp}{nbsp}Kn` +
 `2: kl.output{nbsp}%offset(Xs),  Xl` +
-| `kl.setst`, Form C  | `kl.setst{nbsp}Kd, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
-`2: kl.setst{nbsp}{nbsp}Kd, #immed` +
-| `kl.mgmt`, Form C  | `kl.mgmt{nbsp}Kd, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
-`2: kl.mgmt{nbsp}{nbsp}Kd, #immed` +
 |===
 
 The architecture does not enforce these sequences or their order.
+`kl.setst` and `kl.mgmt` have no substitution: code without vectors uses Form C in place of Form B.
 
 // ////////////////////////////////////////////////////////////////////////////
 
@@ -695,7 +692,12 @@ An interrupt may halt such a `kl.exec` after some blocks; on return, the same in
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
   vle8.v    v1, (a5)              # XCTR; for CTR use vl = 12 (KLLEN = 96)
   kl.setst  K0, #kl_state_operate, v1        # set the IV
-  kl.setst  K0, #kl_state_set_aux_value, a4  # ctr <- bin(a4, j)
+
+# The following "li a5, 0" is commented out as superfluous, since in this
+# case a5 is not  used, as the Machine does not use more than 64 bits.
+
+# li        a5, 0                 # Form C operand a5:a4 = a4
+  kl.setst  K0, #kl_state_set_aux_value, a5:a4 # ctr <- bin(a4, j)
 
   li        t2, 16
   beqz      a3, 2f
@@ -831,12 +833,15 @@ The Machine takes the PT and the CT in whole bytes (each last-block `Xs` is a mu
 
   import_scc 0, a0                # also computes the derived hash key
 
-  # Set the IV.  The Form B kl.setst carries its length in bits; kl.exec
+  # Set the IV.  The Form C kl.setst carries its length in bits; kl.exec
   # then absorbs the IV in chunks of 16 bytes, the last one possibly
   # shorter.  After the last byte the Machine computes J0 and moves to
   # _Hash_Absorb_ by itself, so no kl.setst is issued for that transition.
   slli      t1, a7, 3
-  kl.setst  K0, #kl_state_set_aux_value, t1 # len_in_bits(IV)
+
+# same li commented as in CTR/XCTR code
+# li        t2, 0                 # Form C operand t2:t1
+  kl.setst  K0, #kl_state_set_aux_value, t2:t1 # len_in_bits(IV)
   li        t2, 16
 1:
   minu      t1, a7, t2
@@ -878,8 +883,9 @@ The Machine takes the PT and the CT in whole bytes (each last-block `Xs` is a mu
   # Final partial block, if any.  The plaintext is not zero-padded here.
   andi      t1, a5, 15            # its length in bytes
   beqz      t1, 6f
-  slli      t2, t1, 3
-  kl.setst  K0, #kl_state_enc_last_block, t2 # its length in bits
+  slli      t5, t1, 3
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_enc_last_block, t6:t5 # its length in bits
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   v1, K0, v0
@@ -929,8 +935,9 @@ stays inside the locker.
   # Final partial block, if any.  The ciphertext is not zero-padded here.
   andi      t1, a5, 15
   beqz      t1, 6f
-  slli      t2, t1, 3
-  kl.setst  K0, #kl_state_dec_last_block, t2
+  slli      t5, t1, 3
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_dec_last_block, t6:t5
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   v1, K0, v0
@@ -1067,7 +1074,7 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
   import_scc 0, a0
 
   # Set the nonce, which also derives enc_key and auth_key.  The nonce is
-  # the vector operand of a Form C kl.setst; no kl.exec is issued in this
+  # the vector operand of a Form B kl.setst; no kl.exec is issued in this
   # State.
   vsetivli  zero, 12, e8, m1, ta, ma # KLLEN = 96
   vle8.v    v0, (a6)
@@ -1131,8 +1138,9 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
   # keystream bit past the end of PT to CT.
   andi      t1, a5, 15
   beqz      t1, 7f
-  slli      t2, t1, 3
-  kl.setst  K0, #kl_state_enc_last_block, t2
+  slli      t5, t1, 3
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_enc_last_block, t6:t5
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   v1, K0, v0
@@ -1190,8 +1198,9 @@ the hashing key, which may lead to forgeries, though not to a loss of confidenti
   # Final partial block, if any
   andi      t1, a5, 15
   beqz      t1, 5f
-  slli      t2, t1, 3
-  kl.setst  K0, #kl_state_dec_last_block, t2
+  slli      t5, t1, 3
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_dec_last_block, t6:t5
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   v1, K0, v0
@@ -1227,8 +1236,10 @@ This section gives OCB encryption and decryption (`b` = 128, one block per `kl.e
 
   import_scc 0, a0
 
-  # Set the nonce
-  kl.setst  K0, #kl_state_set_aux_value, a7
+# Set the nonce.  t6 stays 0, so t6:t5 holds Form C operands.
+  li        t6, 0
+  mv        t5, a7
+  kl.setst  K0, #kl_state_set_aux_value, t6:t5
   addi      t1, a7, 7
   srli      t1, t1, 3             # ceil(N_len/8) bytes
   vsetvli   zero, t1, e8, m1, ta, ma
@@ -1236,7 +1247,8 @@ This section gives OCB encryption and decryption (`b` = 128, one block per `kl.e
   kl.exec   K0, v0
 
   # The next state change also sets the tag length
-  kl.setst  K0, #kl_state_hash_absorb, s9
+  mv        t5, s9
+  kl.setst  K0, #kl_state_hash_absorb, t6:t5
 
   # Compute the AD contribution to the tag
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
@@ -1250,10 +1262,10 @@ This section gives OCB encryption and decryption (`b` = 128, one block per `kl.e
   addi      t1, t1, -1
   bnez      t1, 1b
 2:
-  andi      t2, a2, 127           # can be zero
-  kl.setst  K0, #kl_state_hash_last_block, t2
-  beqz      t2, 3f
-  srli      t1, t2, 3
+  andi      t5, a2, 127           # can be zero
+  kl.setst  K0, #kl_state_hash_last_block, t6:t5
+  beqz      t5, 3f
+  srli      t1, t5, 3
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   K0, v0                # absorb the last AD block
@@ -1274,10 +1286,10 @@ This section gives OCB encryption and decryption (`b` = 128, one block per `kl.e
   addi      t1, t1, -1
   bnez      t1, 4b
 5:
-  andi      t2, a5, 127           # can be zero
-  kl.setst  K0, #kl_state_enc_last_block, t2
-  beqz      t2, 6f
-  srli      t1, t2, 3
+  andi      t5, a5, 127           # can be zero
+  kl.setst  K0, #kl_state_enc_last_block, t6:t5
+  beqz      t5, 6f
+  srli      t1, t5, 3
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
   kl.exec   v1, K0, v0            # encrypt it and absorb it into the tag
@@ -1338,7 +1350,9 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag.
   addi      t1, t1, -1
   bnez      t1, 2b
 3:
-  kl.setst  K0, #kl_state_hash_last_block, t2
+  mv        t5, t2
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_hash_last_block, t6:t5
                                   # with t2 = 0 (empty message), the
                                   # padded block is absorbed here
   beqz      t2, 4f
@@ -1359,7 +1373,9 @@ To verify a CMAC `T` of `T_len` bits instead, the code from label `4` on is repl
 ----
 # a3 = T, a4 = T_len in bits, a multiple of 8, 64 to 128
 4:
-  kl.setst  K0, #kl_state_hash_verify, a4
+  mv        t5, a4
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_hash_verify, t6:t5
   srli      t1, a4, 3
   vsetvli   zero, t1, e8, m1, ta, ma # KLLEN = T_len
   vle8.v    v0, (a3)
@@ -1409,7 +1425,8 @@ An SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key, must enable _Hash
   sub       t4, t4, t1
   bnez      t4, 1b
 2:
-  kl.setst  K0, #kl_state_hash_last_block, t3 # r = 0: does nothing
+  kl.setst  K0, #kl_state_hash_last_block, t4:t3 # t4 = 0 here;
+                                  # r = 0 does nothing
   beqz      t3, 3f
   addi      t1, t3, 7
   srli      t1, t1, 3             # ceil(r/8) bytes
@@ -1417,8 +1434,10 @@ An SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key, must enable _Hash
   vle8.v    v0, (a1)
   kl.exec   K0, v0                # absorb the final r bits
 3:
-  slli      t1, a4, 3
-  kl.setst  K0, #kl_state_hash_output, t1 # end the message: the Machine
+  slli      t5, a4, 3
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_hash_output, t6:t5 # end the message: the
+                                  # Machine
                                   # pads
 4:
   minu      t1, a4, t2
@@ -1441,7 +1460,9 @@ For KMAC128 and KMAC256, it takes `T_len` {le} `b`, and `T_len` {le} 1024 if `VL
 ----
 # a5 = T, a6 = T_len in bits, a multiple of 8, >= 64 (KMAC: 32)
 3:
-  kl.setst  K0, #kl_state_hash_verify, a6
+  mv        t5, a6
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_hash_verify, t6:t5
   srli      t1, a6, 3
   vsetvli   zero, t1, e8, m8, ta, ma # KLLEN = T_len
   vle8.v    v0, (a5)
@@ -1457,7 +1478,9 @@ is replaced by:
 .Ascon-CXOF128 Customization
 ----
 # a5 = Z, a6 = Z_bits, 0 to 2048
-  kl.setst  K0, #kl_state_set_aux_value, a6 # absorbs bin(Z_bits, 64)
+  mv        t5, a6
+# li        t6, 0                 # Form C operand t6:t5
+  kl.setst  K0, #kl_state_set_aux_value, t6:t5 # absorbs bin(Z_bits, 64)
   addi      t4, a6, 7
   srli      t4, t4, 3             # ceil(Z_bits/8) bytes of Z
   li        t2, 16

@@ -393,7 +393,7 @@ section("<<KLE-pseudocode-ECB-encryption>> [informative]: its Error State test; 
 eq("'State = 0' passes every Valid State and catches every Error State",
    [s for s in [*range(1, 56), *ERROR_STATES] if state_fields(s)['State'] == 0], list(ERROR_STATES))
 eq("kl.setst into _Encrypt_ or _Decrypt_ in Form B or C -> Invalid; Form A -> _Encrypt_ (GR22, GR13)",
-   ([new_cl(ci, k, state=st, form=f).state for f in 'BC' for st in (ENC, DEC)], new_cl(ci, k, state=ENC).state),
+   ([new_cl(ci, k, state=st, form=f).state for f in 'CD' for st in (ENC, DEC)], new_cl(ci, k, state=ENC).state),
    ([INV] * 4, ENC))
 eq("kl.setst naming _Ready_ in Form B or C -> Invalid (GR23: Form A; GR13)",
    [(lambda c: (c.setst(RDY, f), c.state)[1])(new_cl(ci, k, state=ENC)) for f in 'BC'], [INV] * 2)

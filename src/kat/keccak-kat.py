@@ -3,7 +3,7 @@
 Keccak-f[1600] and a bit-level FIPS 202 reference sponge from scratch; hashlib is only a labeled oracle."""
 import hashlib, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert,
+from common import (setst_operand, b2v, v2b, sl, cat, mdh_pack, mdh_unpack, ERROR_STATES, inert,
                     KL_STATE_INERT, KL_STATE_READY, KL_STATE_HASH_ABSORB,
                     KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT, KL_STATE_SUCCESS,
                     KL_STATE_FAILURE, KL_STATEEXT_INVALID, KL_STATEEXT_UNSUPPORTED, KL_CFG_PROVISIONING, section, check,
@@ -168,7 +168,7 @@ CAVP_BITS = [  # NIST CAVP bit-oriented vectors (CAVS 19.0: SHA3AllBits1-28-16, 
      'c8f129596bbfd453ccee966bb1fa80b7e74cf36ed973c84d61b1cf39ddb97b2586b7db36fd91cc25276c6ee63b73d487'
      '19d3005ade0a0e56b562afbbf0b8d9f55782bdc3bf11fa98df13',
      'd846859ba7da90c700f9f8fc8e718ecd'),
-    ('SHAKE256', 2176, 136, 'Form A: a full-block piece',
+    ('SHAKE256', 2176, 136, 'Xs = b: a full-block piece',
      '0e3bd320a9b1dff29504e1371ea0a95898dc39174e2463d0bb579afefd6e0200865fc91e1540bac7e4b00f1c237387b3'
      'a65cb994db70a888fe48979490b71fc005ad7e1cbd5b32053598c7a57f84edb9ef6bcd9718ec9d6ff65a72d16d62566f'
      'f2ee9b25894a6f36ef85b0d9181b01f4dcd01d27eddf6b0c0c54d3bd7cb7d197b7eac73e615498e17a4072c0d77febeb'
@@ -195,7 +195,7 @@ def make_pi(name):  # the MDH only
 
 class Sha3:
     wrong_suffix = False  # negative control
-    bound = 0             # the Form B Xs of the kl.setst into _Hash_Output_
+    bound = 0             # the Form C Xs of the kl.setst into _Hash_Output_
     pad_case = None       # which padding clause fired
 
     def __init__(s):
@@ -268,13 +268,12 @@ class Sha3:
         elif form == 'A' and (s.st, immed) == (KL_STATE_READY, KL_STATE_HASH_ABSORB):
             s.st, s.last_block_len = immed, s.b  # Form A: max_len is set by the Machine
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
-                form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # Form A keeps last_block_len = b; any bit length (MR14, FIPS 202 bit order)
-            if form == 'B':
-                s.last_block_len = xs
-        elif form in 'AB' and immed == KL_STATE_HASH_OUTPUT and (
+                form in ('A', 'C') and 0 <= setst_operand(form, xs) <= s.b):
+            s.st = immed  # Form A: Xs = 0; any bit length (MR14, FIPS 202 bit order)
+            s.last_block_len = setst_operand(form, xs)
+        elif form in ('A', 'C') and immed == KL_STATE_HASH_OUTPUT and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
-            s.bound = (xs or 0) if form == 'B' else 0
+            s.bound = setst_operand(form, xs)
             if s.bound and (s.bound % 8 or s.bound > (s.t if not s.xof else (1 << 32) - 1)):
                 s.reset()  # a multiple of 8, at most d, below 2^32 for an XOF
             else:
@@ -648,11 +647,11 @@ ab, out_ = (lambda n: absorbing(n, MSG_ABC)), (lambda n: squeezing(n, MSG_ABC))
 for label, name, prep, act in [
         ('kl.exec in _Ready_ (GR21)', 'SHA3-256', new, lambda c: c.exec('B', inp=MSG_ABC)),
         ('_Ready_ -> _Hash_Output_', 'SHA3-256', new, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
-        ('Form B kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
-         lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B')),
+        ('Form C kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
+         lambda c: c.setst(KL_STATE_HASH_ABSORB, 'C', 0)),
         ('same-State kl.setst in _Hash_Absorb_', 'SHA3-256', ab, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
-        ('a kl.exec after a Form B kl.setst to _Hash_Absorb_Last_Block_ with Xs = 0 (MR8)', 'SHA3-256', ab,
-         lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), c.exec('B', inp=b'x'))),
+        ('a kl.exec after a Form C kl.setst to _Hash_Absorb_Last_Block_ with Xs = 0 (MR8)', 'SHA3-256', ab,
+         lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0), c.exec('B', inp=b'x'))),
         ('Form C kl.exec in _Hash_Absorb_ (GR22)', 'SHA3-256', ab, lambda c: c.exec('C', out=bytearray(32))),
         ('Form A kl.exec in _Hash_Absorb_ (GR22)', 'SHA3-256', ab,
          lambda c: c.exec('A', inp=MSG_ABC + bytes(1), out=bytearray(4))),
@@ -744,7 +743,7 @@ check('SHAKE128 output in _Hash_Output_ as a source (GR40 item 1): source _Inval
       (r, src.st, dst.st) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_ABSORB)
       and snap == (dst.state, dst.block_base))
 dst = absorbing('SHA3-256', MSG_ABC)
-dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)
 check('shared secret into SHA3-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR40 item 2): destination _Invalid_',
       (kl_derive(dst, Source(SEC), 32), dst.st) == ('invalid', KL_STATEEXT_INVALID))
 src, dst = Source(bytes(range(16)), secret=False), absorbing('SHA3-256')
@@ -779,7 +778,7 @@ check('shared secret -> a 16-byte `key` in _Ready_ (length 32: 16 B); a 28-byte 
 
 section('Final piece of any bit length: _Hash_Absorb_Last_Block_ (NIST CAVP bit-oriented vectors)')
 
-def piece_hash(name, nbits, nb, msg, nout, form=None, junk=True, msb_piece=False, split_at=None):
+def piece_hash(name, nbits, nb, msg, nout, junk=True, msb_piece=False, split_at=None):
     """Whole bytes msg[:nb] in _Hash_Absorb_, then the final nbits - 8 nb bits in _Hash_Absorb_Last_Block_;
     junk: the bits of INPUT above last_block_len set, plus one extra byte (MR5)."""
     L, cl = nbits - 8 * nb, absorbing(name, msg[:nb])
@@ -787,8 +786,7 @@ def piece_hash(name, nbits, nb, msg, nout, form=None, junk=True, msb_piece=False
     if msb_piece:  # negative control: a partial last byte taken from its most significant bits
         pv = sl(b2v(msg[nb:]), 8 * ((L + 7) // 8) - 1, 8 * ((L + 7) // 8) - L) if L % 8 else pv
     inp = v2b(pv | (((1 << 8 * ((L + 7) // 8 + 1)) - 1) >> L << L if junk else 0), (L + 7) // 8 + junk)
-    form = form or ('A' if L == cl.b else 'B')
-    cl.setst(KL_STATE_HASH_LAST_BLOCK, form, None if form == 'A' else L)
+    cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', L)
     snap = (cl.st, cl.last_block_len)
     r = cl.exec('B', inp=inp, interrupt_at=0)
     cl.setst(KL_STATE_HASH_OUTPUT)
@@ -808,20 +806,20 @@ check('the piece kl.exec is atomic: interrupt_at = 0 does not halt it, klstart =
 
 def last(name='SHA3-256', L=13, nb=10):
     cl = absorbing(name, MSG_A3[:nb])
-    cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
+    cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', L)
     return cl
 for label, prep, act in [
         ('a kl.exec after Xs = 0', lambda: absorbing('SHA3-256', MSG_A3[:10]),
-         lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), c.exec('B', inp=b'x'))),
+         lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0), c.exec('B', inp=b'x'))),
         ('Xs = b + 1', lambda: absorbing('SHA3-256', MSG_A3[:10]),
-         lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089)),
-        ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8)),
+         lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 1089)),
+        ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 8)),
         ('KLLEN = 8 < last_block_len = 13 (MR1)', last, lambda c: c.exec('B', inp=b'\x01')),
         ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR53 item 1)',
          lambda: last(L=16), lambda c: c.exec('B', inp=b'')),
         ('a second kl.exec (MR8)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
         ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
-        ('same-State kl.setst (GR21)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
+        ('same-State kl.setst (GR21)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 13)),
         ('klstart = 1: not an interruption point', last,
          lambda c: (setattr(HART, 'klstart', 1), c.exec('B', inp=b'\x01\x02')))]:
     cl = prep()
@@ -835,7 +833,7 @@ check('_Hash_Absorb_Last_Block_ -> _Ready_ with the piece pending: restarts (abc
 name, nbits, nb, what, msg, md = CAVP_BITS[-3]  # SHA3-512 Len = 1153, the piece crosses a block boundary
 msg, md, L = bytes.fromhex(msg), bytes.fromhex(md), nbits - 8 * nb
 cl = absorbing(name, msg[:nb])
-cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
+cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', L)
 c1 = cl.export()
 cl = Sha3.load(cl.mdh(), c1)
 cl.exec('B', inp=msg[nb:])
@@ -866,24 +864,24 @@ for name, (c, b, t, xof, D) in PARAMS.items():
     check_hash(name, lambda name=name: Port(name), ref, msgs if name in ('SHA3-256', 'SHAKE128') else msgs[::3],
                t // 8 if not xof else 200)
 cl = absorbing('SHA3-256', MSG_ABC)
-cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)
 st = cl.st
 cl.setst(KL_STATE_HASH_OUTPUT)
 check('Xs = 0: no final piece, the State stays; the kl.setst into _Hash_Output_ gives the digest of the message', None,
       (st, squeeze(cl, 32)[1]), (KL_STATE_HASH_LAST_BLOCK, V('SHA3-256', 'abc')))
 r = []
 for name, xs in (('SHA3-256', 8), ('SHA3-256', 248), ('SHA3-256', 256), ('SHAKE128', 8), ('SHAKE128', 8 * 400)):
-    o, st, _ = hash_run(Port(name), MSG_ABC, 24, xs // 8, end=('B', xs))
+    o, st, _ = hash_run(Port(name), MSG_ABC, 24, xs // 8, end=('C', xs))
     r.append((o == oracle(name, MSG_ABC, xs // 8), st))
 check('bound: SHA3-256 Xs = 8, t - 8, t and SHAKE128 Xs = 8, 3200 (over two rate blocks) give that prefix, then '
       '_Success_', None, r, [(True, KL_STATE_SUCCESS)] * 5)
 res = []
 for name, xs in (('SHA3-256', 264), ('SHA3-256', 12), ('SHAKE128', 12), ('SHAKE128', 1 << 32)):
     cl = absorbing(name, MSG_ABC)
-    res.append(cl.setst(KL_STATE_HASH_OUTPUT, 'B', xs))
+    res.append(cl.setst(KL_STATE_HASH_OUTPUT, 'C', xs))
 check('bound: SHA3-256 Xs = t + 8 or 12, SHAKE128 Xs = 12 or 2^32 -> _Invalid_', None, res, [KL_STATEEXT_INVALID] * 4)
 cl = absorbing('SHAKE256', MSG_ABC)
-cl.setst(KL_STATE_HASH_OUTPUT, 'B', 8 * 150)
+cl.setst(KL_STATE_HASH_OUTPUT, 'C', 8 * 150)
 o1 = squeeze(cl, 100)[1]
 cl = Sha3.load(cl.mdh(), cl.export())
 o2 = squeeze(cl, 64, 0xee)
@@ -897,7 +895,7 @@ check('SHAKE128 Form A: unbounded, never _Success_', None, (squeeze(cl, 400)[1],
 
 info('the two-block padding clause needs b - block_base < |D| + 2 <= 6: reached only through a final piece')
 cl = absorbing('SHAKE128', MSG_ABC)
-cl.setst(KL_STATE_HASH_OUTPUT, 'B', 1344)
+cl.setst(KL_STATE_HASH_OUTPUT, 'C', 1344)
 o1 = squeeze(cl, 168)[1]
 cl = Sha3.load(cl.mdh(), cl.export())
 check('SHAKE128 bound t = 1344 bits: _Success_ with block_base = t (the loop returns before update()); '

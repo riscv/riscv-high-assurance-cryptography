@@ -6,7 +6,8 @@ import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (state_fields, mdh_get, mdh_put, install_key, aes_encrypt, b2v, v2b, bswap, bin_, bxor, cat, sl, mdh_pack, MDH_FIELD,
                     KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_HASH_ABSORB, KL_STATE_ENCRYPT, KL_STATE_SET_AUX_VALUE,
-                    KL_STATEEXT_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, done)
+                    KL_STATEEXT_INVALID, ERROR_STATES, IllegalInstruction, raises, section, check, control, done,
+                    setst_operand)
 
 
 B, ONES64 = 128, (1 << 64) - 1
@@ -93,19 +94,20 @@ class KsLocker:
         self._install(sl(v, self.kw - 1, 0), True)
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
-        """form: 'A', 'A/iobuf' (operand = KLIOBUF bytes), 'B' (64-bit Xs), 'C' (KLLEN-bit value)."""
+        """form: 'A' (operand 0), 'C' (128-bit Xs), 'B' (KLLEN-bit value)."""
         if self.state in ERROR_STATES:
             return
         _, _, n, j = self.params()
         if immed == RDY and form == 'A':
             self.enter_ready()
-        elif immed == OP and self.state in (RDY, OP) and form in ('C', 'A/iobuf'):
-            if (8 * len(operand) if form == 'A/iobuf' else KLLEN) < n:
+        elif immed == OP and self.state in (RDY, OP):
+            if form != 'B':
+                KLLEN, operand = 128, setst_operand(form, operand)   # Form A or C: a 128-bit INPUT
+            if KLLEN < n:
                 return self.invalidate()                          # MR5, MR1: INPUT narrower than IV
-            value = b2v(operand) if form == 'A/iobuf' else sl(operand, KLLEN - 1, 0)
-            self.IV, self.mdh = sl(value, n - 1, 0), put(self.mdh, 'State', OP)
-        elif immed == AUX and self.state in (RDY, OP) and form == 'B':
-            self.ctr = bin_(operand, j)                           # bin(Xs, j), State unchanged
+            self.IV, self.mdh = sl(operand, n - 1, 0), put(self.mdh, 'State', OP)
+        elif immed == AUX and self.state in (RDY, OP) and form in ('A', 'C'):
+            self.ctr = bin_(setst_operand(form, operand), j)      # bin(Xs, j), State unchanged
         else:
             self.invalidate()                                     # GR22
 
@@ -178,11 +180,11 @@ def ctr_cl(key, ivv=None, ctr0=None, keytype=0, mode='CTR', **kw):
                           b2v(key) if isinstance(key, bytes) else key, mode, keytype))
     return operate(cl, ivv, ctr0)
 
-def operate(cl, ivv=None, ctr0=None):         # Form C IV <- ivv, then Form B ctr <- ctr0
+def operate(cl, ivv=None, ctr0=None):         # Form B IV <- ivv, then Form C ctr <- ctr0
     if ivv is not None:
-        cl.setst(OP, 'C', ivv)
+        cl.setst(OP, 'B', ivv)
     if ctr0 is not None:
-        cl.setst(AUX, 'B', ctr0)
+        cl.setst(AUX, 'C', ctr0)
     return cl
 
 def kl_ctr(key, ivv, msg, ctr0=0, per_block=False, **kw):
@@ -251,7 +253,7 @@ def eq(name, got, want):
 H, PT, T1 = bytes.fromhex, SP38A_PT, b2v(SP38A_ICB)      # T1: the whole initial counter block
 NONCE, C0 = SP38A_ICB[:12], int.from_bytes(SP38A_ICB[12:], 'big')   # IV = lsb_96(T1); ctr 0xfcfdfeff
 
-section("SP 800-38A F.5: reference, and a locker (Form C IV <- T1, Form B ctr <- 0xfcfdfeff)")
+section("SP 800-38A F.5: reference, and a locker (Form B IV <- T1, Form C ctr <- 0xfcfdfeff)")
 for name, k, c in SP38A_F5:
     key = H(k)
     eq(f"{name} reference, nonce 96 | ctr 32 and one 128-bit counter",
@@ -278,21 +280,21 @@ eq("no block limit: ctr wraps mod 2^32 after 0xffffffff (block 1 = E(nonce | 0^3
    (ks, ks[16:32], cl.ctr, cl.IV, cl.state, bxor(ks, PT).hex() != c),
    (ref_ctr(key, NONCE, 32, 0xffffffff, bytes(64)), aes_encrypt(key, NONCE + bytes(4)), 3, b2v(NONCE), OP, True))
 
-section("Form B kl.setst #kl_state_set_aux_value: ctr <- bin(Xs, 32), State unchanged")
+section("Form C kl.setst #kl_state_set_aux_value: ctr <- bin(Xs, 32), State unchanged")
 eq("F.5.1 blocks 2..3 by random access",
    bxor(keystream(ctr_cl(key, T1, C0 + 2), 32), PT[32:]).hex(), c[64:])
 eq("bin(Xs, 32) keeps only the low 32 bits",
    keystream(ctr_cl(key, b2v(nonce), 0xdeadbeef << 32 | 5), 32), ref_ctr(key, nonce, 32, 5, bytes(32)))
 cl = ctr_cl(key, ctr0=C0)
 st = cl.state
-cl.setst(OP, 'C', T1)
-eq("Form B in Ready (State stays 1), then Form C: ctr survives the transition, F.5.1",
+cl.setst(OP, 'B', T1)
+eq("Form C in Ready (State stays 1), then Form B: ctr survives the transition, F.5.1",
    (st, cl.state, bxor(keystream(cl, 64), PT).hex()), (RDY, OP, c))
-cl.setst(AUX, 'B', C0)
-eq("Form B in Operate leaves State 2", cl.state, OP)
+cl.setst(AUX, 'C', C0)
+eq("Form C in Operate leaves State 2", cl.state, OP)
 cr = ctr_cl(key, ctr0=C0)
 cr.setst(RDY)
-eq("Form B in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR16)",
+eq("Form C in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR16)",
    (cr.state, cr.ctr), (RDY, 0))
 
 section("XCTR [reference-implementation anchor: google/hctr2; Ready sets HCTR2's initial ctr = 1]")
@@ -305,7 +307,7 @@ eq("XCTR with ctr = 1 as left by Ready matches the reference", kl_xctr(key, b2v(
    ref_xctr(key, iv, 1, m64))
 eq("XCTR streams with ctr = 0 and ctr = 1 differ",
    kl_xctr(key, b2v(iv), m64, 0) != kl_xctr(key, b2v(iv), m64, 1), True)
-eq("XCTR Form B: ctr <- bin(Xs, 64), the whole 64-bit Xs; the first block matches HCTR2's counter 2^64 - 1",
+eq("XCTR Form C: ctr <- bin(Xs, 64); the first block matches HCTR2's counter 2^64 - 1",
    kl_xctr(key, b2v(iv), m64[:16], ONES64), ref_xctr(key, iv, ONES64, m64[:16]))
 cl = ctr_cl(key, b2v(iv), ONES64, mode='XCTR')
 two = keystream(cl, 32)
@@ -322,27 +324,29 @@ cl = ctr_cl(key)
 eq("provisioning completes in Ready with IV = ctr = 0", (cl.state, cl.IV, cl.ctr), (RDY, 0, 0))
 eq("kl.exec in Ready: Invalid, window zeroed, Content cleared (GR21)",
    (cl.exec(512, out=ONES64)[0], cl.state, cl.key), (0, INV, None))
-for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'C', T1)),
-                    ("#kl_state_operate in Form B (Form C required)", (OP, 'B', T1 & ONES64)),
-                    ("#kl_state_set_aux_value in Form C (Form B only)", (AUX, 'C', C0))):
+for label, args in (("kl.setst #kl_state_encrypt (no such transition)", (KL_STATE_ENCRYPT, 'B', T1)),
+                    ("#kl_state_set_aux_value in Form B (Form A or C only)", (AUX, 'B', C0))):
     cl = ctr_cl(key)
     cl.setst(*args)
     eq(f"{label} -> Invalid (GR22)", cl.state, INV)
+cl = ctr_cl(key)
+cl.setst(OP, 'A')
+eq("#kl_state_operate in Form A: a 128-bit zero INPUT, IV = 0 (<<KLE-instruction-setst>>)", (cl.state, cl.IV), (OP, 0))
 cl = ctr_cl(key, T1, C0)
 keystream(cl, 64)
 cl.setst(RDY)
 cleared = (cl.state, cl.IV, cl.ctr)
-cl.setst(OP, 'C', T1)
+cl.setst(OP, 'B', T1)
 eq("Operate -> Ready zeroes IV and ctr; re-entry restarts at ctr = 0",
    (cleared, bxor(keystream(cl, 64), PT)), ((RDY, 0, 0), ref_ctr(key, NONCE, 32, 0, PT)))
 cl = ctr_cl(key, 0x1234, C0)
-cl.setst(OP, 'C', T1)
+cl.setst(OP, 'B', T1)
 eq("Operate -> Operate (GR21): IV replaced, ctr kept; F.5.1",
    (cl.state, bxor(keystream(cl, 64), PT).hex()), (OP, c))
 cl = ctr_cl(key)
-cl.setst(OP, 'A/iobuf', SP38A_ICB)
-cl.setst(AUX, 'B', C0)
-eq("Form A kl.setst and Form D kl.exec with the KLIOBUF (kliobuftop 16, 64): F.5.1",
+cl.setst(OP, 'C', b2v(SP38A_ICB))
+cl.setst(AUX, 'C', C0)
+eq("Form C kl.setst #kl_state_operate (128-bit Xs as INPUT), Form D kl.exec with the KLIOBUF (64): F.5.1",
    bxor(v2b(cl.exec(512)[0], 64), PT).hex(), c)
 cl = ctr_cl(key, T1, C0)
 eq("MR1 (vector): KLLEN = 136 -> Invalid, window zeroed",
@@ -405,18 +409,18 @@ for pol in (1, 2):
        bxor(keystream(operate(cl, T1, C0), 64), PT).hex(), c)
 
 cl = ctr_cl(key)
-cl.setst(OP, 'C', T1, KLLEN=64)
+cl.setst(OP, 'B', T1, KLLEN=64)
 eq("kl.setst #kl_state_operate with KLLEN = 64 < n = 96 -> Invalid (MR5, MR1)", cl.state, INV)
 cl = ctr_cl(key)
-cl.setst(OP, 'A/iobuf', bytes(2))
-eq("kl.setst #kl_state_operate with a 2-byte KLIOBUF operand -> Invalid (MR5, MR1)", cl.state, INV)
+cl.setst(AUX, 'A')
+eq("Form A kl.setst #kl_state_set_aux_value: ctr <- 0 (Form C with X0)", (cl.state, cl.ctr), (RDY, 0))
 
 section("kl.derive (<<KLE-derive-endpoints>>, <<KLE-instruction-derive>>)")
 ks_src = keystream(ctr_cl(key, T1, C0), 32)
 for mode, want in (('CTR', 0), ('XCTR', 1)):
     cl = ctr_cl(key, ctr0=5, mode=mode)
     cl.derive_key(ks_src, 32)
-    eq(f"{mode}: Form B ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR16, GR40 item 5)",
+    eq(f"{mode}: Form C ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR16, GR40 item 5)",
        (cl.state, cl.IV, cl.ctr), (RDY, 0, want))
 
 def derived(length, keytype=0, state_op=False):

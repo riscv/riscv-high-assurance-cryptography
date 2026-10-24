@@ -12,7 +12,7 @@ from common import (mdh_get, mdh_put, ERROR_STATES, MDH_FIELD, LoopBound, check,
 (GEN, PK_OUT, PK_IN, UNUSED5, MU_IN, UNUSED7, SIGN_GEN, SIGN_OUT, SIGN_VERIFY, SIGN_IN, SK_IN,
  COMPUTE_PK) = range(2, 14)                         # States 5 and 7 are not used (external mu)
 LISTED_GLOBAL = [('Ready', 1), ('Success', 54), ('Failure', 55)]   # the ML-DSA State list, verbatim
-FORM_B = (SIGN_GEN,)                               # every other State is entered with Form A
+FORM_D = (SIGN_GEN,)                               # Form A (Xs = 0) admitted; every other State takes only Form A
 IN_F = {PK_IN: 'pubkey', MU_IN: 'mu', SIGN_IN: 'signature', SK_IN: 'privkey'}
 OUT_F = {PK_OUT: 'pubkey', SIGN_OUT: 'signature'}
 SE = {'HasPrivKey': 1, 'HasPubKey': 2, 'Hedged': 4, 'HasMu': 8}   # StateExtension bits 0, 1, 2, 3
@@ -62,13 +62,13 @@ class MLDSALocker:
         self.use = 0                               # GR57: P zeroed on a transition to an Error State
 
     def setst(self, st, aux=None):
-        """Form A (aux None) or Form B (aux = Xs)."""
+        """Form A (aux None, Xs reads 0) or Form C (aux = Xs)."""
         if self.state in ERROR_STATES:
             return
         pol = self.get('MachinePolicy')
         if (self.state in (SUCCESS, FAILURE) and st != READY                                  # GR23
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR22
-                or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
+                or aux is not None and st not in FORM_D or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
                 or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR9
                 or st == SIGN_IN and not pol & 2                                   # MR9: _Sign_Input_ gated by [1]
@@ -89,7 +89,7 @@ class MLDSALocker:
         if st in IN_F:
             setattr(self, IN_F[st], b'')           # MR7: reloading replaces
         if st == SIGN_GEN:
-            self.set_flag('Hedged', aux == 0)
+            self.set_flag('Hedged', not aux)       # Form A: Xs = 0
         elif st == SK_IN:
             self.pubkey = b''
             self.set_flag('HasPrivKey', 0)
@@ -354,8 +354,8 @@ def t_mdh():
         cc = MLDSALocker(44)
         cc.setst(imm)
         check(f'kl.setst #{imm} (undefined): _Invalid_', cc.state == INVALID)
-    for st, aux, why in ((MU_IN, 0, 'Form B into _mu_Input_'), (SIGN_GEN, None, 'Form A into _Sign_Generate_'),
-                         (UNUSED5, None, 'kl.setst #5 (no _ctx_Input_)'), (UNUSED5, 4, 'Form B kl.setst #5'),
+    for st, aux, why in ((MU_IN, 0, 'Form C into _mu_Input_'),
+                         (UNUSED5, None, 'kl.setst #5 (no _ctx_Input_)'), (UNUSED5, 4, 'Form C kl.setst #5'),
                          (UNUSED7, None, 'kl.setst #7 (no _tr_Input_)')):
         cc = generated()
         cc.setst(st, aux)
@@ -506,7 +506,7 @@ def t_sign_verify():
     det, hed = mu_vec(False), mu_vec(True)
     cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
     cc.setst(SIGN_GEN, 1)
-    check('Form B kl.setst with Xs != 0 selects deterministic signing (Hedged clear)', not cc.flag('Hedged'))
+    check('Form C kl.setst with Xs != 0 selects deterministic signing (Hedged clear)', not cc.flag('Hedged'))
     cc.exec_D()
     check(f"deterministic _Sign_Generate_ = ACVP {det['src']}, rnd zero", cc.signature.hex() == det['sig']
           and cc.state == SIGN_OUT and cc.rnd == bytes(32))
@@ -519,8 +519,8 @@ def t_sign_verify():
           [_to(MLDSALocker(44), SIGN_OUT).state, _to(MLDSALocker(44), SIGN_IN, SIGN_OUT).state] == [INVALID, INVALID])
     rbg = RBG(h(hed['rnd']))
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=rbg)
-    cc.setst(SIGN_GEN, 0)
-    check('Xs = 0 selects hedged signing; rnd not yet drawn', cc.flag('Hedged') and cc.rnd == bytes(32) and rbg.draws == 0)
+    cc.setst(SIGN_GEN)
+    check('Form A (Xs = 0) selects hedged signing; rnd not yet drawn', cc.flag('Hedged') and cc.rnd == bytes(32) and rbg.draws == 0)
     cc.exec_D()
     check(f"hedged _Sign_Generate_ with the drawn rnd = ACVP {hed['src']}; rnd destroyed", cc.signature.hex() == hed['sig']
           and cc.state == SIGN_OUT and cc.rnd == bytes(32) and rbg.draws == 1)

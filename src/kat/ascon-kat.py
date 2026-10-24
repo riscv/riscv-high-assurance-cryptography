@@ -7,7 +7,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (b2v, v2b, sl, cat, bxor, mdh_pack, mdh_unpack, ERROR_STATES,
+from common import (b2v, v2b, sl, cat, bxor, mdh_pack, mdh_unpack, ERROR_STATES, setst_operand,
                     KL_STATEEXT_OUT_OF_MEMORY, IllegalInstruction, raises,
                     KL_STATE_INERT as UNCONF, KL_STATE_READY as READY, KL_STATEEXT_UNSUPPORTED as UNSUP,
                     KL_STATE_HASH_ABSORB as ABSORB, KL_STATE_HASH_LAST_BLOCK as HLAST,
@@ -151,7 +151,12 @@ class Locker:
         elif self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:
             self.invalidate()                                     # GR26, MR9 1.a: issued in a disabled State
         else:
-            self._setst().get((self.st, immed, form), self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # GR22
+            t, key = self._setst(), (self.st, immed, form)
+            if key not in t and form == 'A' and (self.st, immed, 'C') in t:   # Form A = Form C with X0
+                key, Xs = (self.st, immed, 'C'), setst_operand('A', Xs)
+            elif key not in t and form in 'AC' and (self.st, immed, 'B') in t:  # A or C supplies INPUT
+                key, INPUT, KLLEN = (self.st, immed, 'B'), setst_operand(form, Xs), 128
+            t.get(key, self.invalidate)(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)  # GR22
             if self.GATE.get(self.st) and not self.policy & self.GATE[self.st]:
                 self.invalidate()                                 # GR26, MR9 1.b: would enter a disabled State
         return self
@@ -237,10 +242,10 @@ class AEAD(Locker):
     def _setst(self):
         el = lambda Xs, **_: self._c_last(Xs, ENC_LAST, OUTPUT)
         dl = lambda Xs, **_: self._c_last(Xs, DEC_LAST, VERIFY)
-        return {(READY, SET_AUX, 'B'): self._c_tag_len, (READY, ABSORB, 'C'): self._c_nonce,
+        return {(READY, SET_AUX, 'C'): self._c_tag_len, (READY, ABSORB, 'B'): self._c_nonce,
                 (ABSORB, ENCRYPT, 'A'): lambda **_: self._c_enter(ENCRYPT, 0b01),
                 (ABSORB, DECRYPT, 'A'): lambda **_: self._c_enter(DECRYPT, 0b10),
-                (ENCRYPT, ENC_LAST, 'B'): el, (DECRYPT, DEC_LAST, 'B'): dl}
+                (ENCRYPT, ENC_LAST, 'C'): el, (DECRYPT, DEC_LAST, 'C'): dl}
         # GR21: no same-State kl.setst; MR18: _Hash_Output_ and _Hash_Verify_ only by the Machine
     def _exec(self):
         return {(ABSORB, 'B'): self._x_absorb, (ENCRYPT, 'A'): self._x_encrypt,
@@ -318,7 +323,7 @@ class AEADNonce(AEAD):
     def _layout(self): return super()._layout() + [('nonce', 128)]     # Pos. ix
     def _setst(self):
         c = super()._setst()
-        del c[(READY, ABSORB, 'C')]
+        del c[(READY, ABSORB, 'B')]
         c[(READY, ABSORB, 'A')] = lambda **_: (self._load(self.nonce), self._c_init())
         return c
 
@@ -353,10 +358,9 @@ class Hash256(Locker):
         self.s[:] = ascon_p([self.IV, 0, 0, 0, 0], 12); self.st = READY
         self.block_base = self.last_block_len = self.aux = 0
     def _setst(self):
-        t = {(READY, ABSORB, 'A'): self._c_absorb, (ABSORB, HLAST, 'B'): self._c_last,
-             (ABSORB, HLAST, 'A'): self._c_last}
+        t = {(READY, ABSORB, 'A'): self._c_absorb, (ABSORB, HLAST, 'C'): self._c_last}
         for src in (ABSORB, HLAST):
-            for form in 'AB':
+            for form in 'AC':
                 t[(src, OUTPUT, form)] = self._c_to_output
         return t
     def _exec(self): return {(ABSORB, 'B'): self._x_absorb, (HLAST, 'B'): self._x_last, (OUTPUT, 'C'): self._x_squeeze}
@@ -369,8 +373,7 @@ class Hash256(Locker):
             return done_ if form in 'AC' else out
         return Locker.exec(self, form, INPUT, KLLEN, out, halt_after)
     def _c_absorb(self, **_): self.st, self.last_block_len = ABSORB, 64
-    def _c_last(self, Xs=None, **_):
-        if Xs is None: self.st = HLAST; return                    # Form A keeps last_block_len = b
+    def _c_last(self, Xs, **_):
         if not 0 <= Xs <= 64: return self.invalidate()
         self.st, self.last_block_len = HLAST, Xs
     def _c_to_output(self, Xs=None, **_):
@@ -419,7 +422,7 @@ class Hash256(Locker):
     def derive_dest(self, data): self._absorb(b2v(data), 8 * len(data))
 
 class XOF(Hash256):
-    """<<KLE-Ascon-XOF128>>: no d; unbounded output unless a Form B Xs bounds it."""
+    """<<KLE-Ascon-XOF128>>: no d; unbounded output unless a Form C Xs bounds it."""
     MODE, IV, D = 4, IV_XOF, None
 
 class CXOF(XOF):
@@ -429,7 +432,7 @@ class CXOF(XOF):
     MODE, IV = 5, IV_CXOF
     def _setst(self):
         t = XOF._setst(self)
-        t.update({(READY, SET_AUX, 'B'): self._c_z, (SET_AUX, SET_AUX, 'B'): self._c_z,
+        t.update({(READY, SET_AUX, 'C'): self._c_z, (SET_AUX, SET_AUX, 'C'): self._c_z,
                   (SET_AUX, ABSORB, 'A'): self._c_z_end})
         return t
     def _exec(self):
@@ -541,9 +544,9 @@ def aead_run(cc, decrypt, nonce, ad, data, tag=0, tag_len=128, ad_chunk=1, pt_ch
     """The <<KLE-Ascon-AEAD128>> sequence on `cc` (nonce None: Form A into _Hash_Absorb_); `after` runs
     after every instruction and may replace the locker.  Returns (cc, data out, tag | verdict)."""
     step = Run(cc, after)
-    if tag_len != 128: step('setst', SET_AUX, 'B', Xs=tag_len)
+    if tag_len != 128: step('setst', SET_AUX, 'C', Xs=tag_len)
     if nonce is None: step('setst', ABSORB, 'A')
-    else: step('setst', ABSORB, 'C', INPUT=nonce if isinstance(nonce, int) else b2v(nonce), KLLEN=nkl)
+    else: step('setst', ABSORB, 'B', INPUT=nonce if isinstance(nonce, int) else b2v(nonce), KLLEN=nkl)
     a = pad_bytes(ad, 16) if ad else b''
     for chunk in (a[off:off + 16 * ad_chunk] for off in range(0, len(a), 16 * ad_chunk)):
         step('exec', 'B', b2v(chunk), 8 * len(chunk))
@@ -553,7 +556,7 @@ def aead_run(cc, decrypt, nonce, ad, data, tag=0, tag_len=128, ad_chunk=1, pt_ch
         chunk = data[off:min(off + 16 * pt_chunk, full)]
         out += v2b(step('exec', 'A', b2v(chunk), 8 * len(chunk), out=ONES & mask(8 * len(chunk))), len(chunk))
     last, n = data[full:], 8 * (len(data) - full)
-    step('setst', DEC_LAST if decrypt else ENC_LAST, 'B', Xs=n)
+    step('setst', DEC_LAST if decrypt else ENC_LAST, 'C', Xs=n)
     if last:                                                      # last_block_128: junk beyond last_block_len
         o = (step('exec', 'A', b2v(last) | ((0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a << n) & M128), 128, out=M128)
              if last_block_128 else step('exec', 'A', b2v(last), n))
@@ -563,13 +566,13 @@ def aead_run(cc, decrypt, nonce, ad, data, tag=0, tag_len=128, ad_chunk=1, pt_ch
 
 def aead_run_bits(cc, decrypt, N, A, alen, D, dlen, T=0, tag_len=128):
     """aead_run on bit strings; the final dlen mod 128 bits come in whole bytes.  Returns (out, tag|verdict, State)."""
-    if tag_len != 128: cc.setst(SET_AUX, 'B', Xs=tag_len)
-    cc.setst(ABSORB, 'C', INPUT=N, KLLEN=128)
+    if tag_len != 128: cc.setst(SET_AUX, 'C', Xs=tag_len)
+    cc.setst(ABSORB, 'B', INPUT=N, KLLEN=128)
     if alen: cc.exec('B', _pad(A, alen), -(-(alen + 1) // 128) * 128)
     cc.setst(DECRYPT if decrypt else ENCRYPT, 'A')
     nfull, Xs = dlen // 128, dlen % 128
     out = cc.exec('A', sl(D, 128 * nfull - 1, 0), 128 * nfull) if nfull else 0
-    cc.setst(DEC_LAST if decrypt else ENC_LAST, 'B', Xs=Xs)
+    cc.setst(DEC_LAST if decrypt else ENC_LAST, 'C', Xs=Xs)
     if Xs: out |= sl(cc.exec('A', D >> (128 * nfull), -(-Xs // 8) * 8), Xs - 1, 0) << (128 * nfull)
     if decrypt: cc.exec('B', T, 128); return out, cc.st == SUCCESS, cc.st
     return out, cc.exec('C', 0, 128), cc.st
@@ -588,8 +591,8 @@ def drive(cc, target, dec_=False):
     """Drive a fresh Ascon-AEAD128 locker (empty AD, Count=166's 5-byte block) up to `target`."""
     order = [READY, ABSORB, DECRYPT if dec_ else ENCRYPT, DEC_LAST if dec_ else ENC_LAST,
              VERIFY if dec_ else OUTPUT, SUCCESS]
-    steps = [lambda: cc.setst(ABSORB, 'C', INPUT=b2v(KAT_NONCE), KLLEN=128),
-             lambda: cc.setst(order[2], 'A'), lambda: cc.setst(order[3], 'B', Xs=40),
+    steps = [lambda: cc.setst(ABSORB, 'B', INPUT=b2v(KAT_NONCE), KLLEN=128),
+             lambda: cc.setst(order[2], 'A'), lambda: cc.setst(order[3], 'C', Xs=40),
              lambda: cc.exec('A', b2v(C166 if dec_ else LAST5), 40), lambda: cc.exec('C', 0, 128)]
     for s in steps[:order.index(target)]: s()
     assert cc.st == target, (cc.st, target)
@@ -600,13 +603,13 @@ def aead_to(target, policy=0b11): return drive(AEAD(K, policy=policy), target, t
 def sponge_run(cc, msg, outlen, z=None, absorb_chunk=8, squeeze=(64,), after=None, nbits=None, end=None,
                z_chunk=8, zbits=None):
     """The uniform sequence (<<Zkl-software.adoc#KLE-pseudocode-hash>>): for CXOF with a customization string z
-    (zbits bits), Form B into _Set_Aux_Value_ and its kl.exec; Form A into _Hash_Absorb_; the head in chunks of
+    (zbits bits), Form C into _Set_Aux_Value_ and its kl.exec; Form A into _Hash_Absorb_; the head in chunks of
     absorb_chunk bytes; the final piece of nbits mod 64 bits (Xs = 0 included); the kl.setst into _Hash_Output_ (Form A,
-    or Form B with Xs = end); Form C with the KLLENs in `squeeze` (last one repeated).  Returns (out, cc)."""
+    or Form C with Xs = end); Form C with the KLLENs in `squeeze` (last one repeated).  Returns (out, cc)."""
     step = Run(cc, after)
     if z is not None:
         zb = 8 * len(z) if zbits is None else zbits
-        step('setst', SET_AUX, 'B', Xs=zb)
+        step('setst', SET_AUX, 'C', Xs=zb)
         zz = z[:-(-zb // 8)]
         for off in range(0, len(zz), z_chunk):
             chunk = zz[off:off + z_chunk]
@@ -618,11 +621,11 @@ def sponge_run(cc, msg, outlen, z=None, absorb_chunk=8, squeeze=(64,), after=Non
     for off in range(0, len(head), absorb_chunk):
         chunk = head[off:off + absorb_chunk]
         step('exec', 'B', b2v(chunk), 8 * len(chunk))
-    step('setst', HLAST, 'B', Xs=r)
+    step('setst', HLAST, 'C', Xs=r)
     if r:
         piece = msg[len(head):len(head) - (-r // 8)]
         step('exec', 'B', b2v(piece), 8 * len(piece))
-    step('setst', OUTPUT, 'A' if end is None else 'B', Xs=end)
+    step('setst', OUTPUT, 'A' if end is None else 'C', Xs=end)
     out, k = b'', 0
     while len(out) < outlen and step.cc.st == OUTPUT:
         n, k = squeeze[min(k, len(squeeze) - 1)], k + 1
@@ -805,7 +808,7 @@ for alen in (0, 3, 133):
                  == (*ref_aead_bits_enc(K, NN, A, alen, D, dlen), SUCCESS, (D, True, SUCCESS)))
     check(f'AD of {alen} bits, data of 1/13/64/127/141/255 bits: == Algorithms 3/4, round trip', good)
 
-section('tag_len and last_block_len (Form B kl.setst)')
+section('tag_len and last_block_len (Form C kl.setst)')
 A_, P_ = b2v(h("30313233")), b2v(h("202122232425262728292a2b2c2d2e2f30"))
 for tl in (64, 65, 96, 100, 127, 128):
     C, T, st = aead_run_bits(AEAD(K), False, NN, A_, 32, P_, 136, tag_len=tl)
@@ -813,14 +816,20 @@ for tl in (64, 65, 96, 100, 127, 128):
     check(f'tag_len={tl}: == T[tag_len-1:0]; verify ignores INPUT above tag_len, rejects a flip of bit tag_len-1',
           True, ((C, T, st), vrf(T | (0x3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c << tl) & M128), vrf(T ^ 1 << (tl - 1))[1:]),
           ((*ref_aead_bits_enc(K, NN, A_, 32, P_, 136, lam=tl), SUCCESS), (P_, True, SUCCESS), (False, FAILURE)))
-res = [(c.st, c.tag_len) for c in (AEAD(K).setst(SET_AUX, 'B', Xs=tl) for tl in (0, 8, 32, 63, 129, 255, 96, 128))]
+res = [(c.st, c.tag_len) for c in (AEAD(K).setst(SET_AUX, 'C', Xs=tl) for tl in (0, 8, 32, 63, 129, 255, 96, 128))]
 check('tag_len outside 64..128 -> _Invalid_; 96 and 128 are set and _State_ stays _Ready_', True, res,
       [(INVALID, 0)] * 6 + [(READY, 96), (READY, 128)])
-res = [(c.st, c.last_block_len) for c in (aead_to((ENCRYPT, DECRYPT)[d]).setst((ENC_LAST, DEC_LAST)[d], 'B', Xs=xs)
+res = [(c.st, c.last_block_len) for c in (aead_to((ENCRYPT, DECRYPT)[d]).setst((ENC_LAST, DEC_LAST)[d], 'C', Xs=xs)
        for xs, d in ((128, 0), (129, 0), (255, 0), (128, 1), (129, 1), (255, 1), (0, 0), (1, 0), (127, 0), (0, 1),
                      (127, 1)))]
 check('Xs > 127 -> _Invalid_; Xs = 0 -> _Hash_Output_/_Hash_Verify_; else last_block_len <- Xs', True, res,
       [(INVALID, 0)] * 6 + [(OUTPUT, 0), (ENC_LAST, 1), (ENC_LAST, 127), (VERIFY, 0), (DEC_LAST, 127)])
+check('Form A = Form C with X0: into _Enc_Last_Block_/_Dec_Last_Block_ as Xs = 0; Xs = 2^64 + 8 (128-bit operand) '
+      '-> _Invalid_; a Form C nonce (128-bit INPUT) = the Form B one', True,
+      [aead_to(ENCRYPT).setst(ENC_LAST, 'A').st, aead_to(DECRYPT).setst(DEC_LAST, 'A').st,
+       aead_to(ENCRYPT).setst(ENC_LAST, 'C', Xs=1 << 64 | 8).st, AEAD(K).setst(SET_AUX, 'C', Xs=1 << 64 | 96).st,
+       AEAD(K).setst(ABSORB, 'C', Xs=NN).s == AEAD(K).setst(ABSORB, 'B', INPUT=NN, KLLEN=128).s],
+      [OUTPUT, VERIFY, INVALID, INVALID, True])
 cc = aead_to(ENC_LAST)
 check('KLLEN = 32 < last_block_len = 40 -> _Invalid_, output window zeroed', True,
       (cc.exec('A', b2v(LAST5), 32, out=0xffffffff), cc.st), (0, INVALID))
@@ -831,32 +840,32 @@ check('GR21: a same-State kl.setst into _Hash_Output_ -> _Invalid_', True, aead_
       INVALID)
 check('MR18: kl.setst #kl_state_hash_output in _Enc_Last_Block_, #kl_state_hash_verify in _Dec_Last_Block_ '
       '-> _Invalid_', True, [aead_to(ENC_LAST).setst(OUTPUT, 'A').st,
-                             aead_to(DEC_LAST).setst(VERIFY, 'C', INPUT=0, KLLEN=128).st], [INVALID] * 2)
-check('same-State kl.setst into _Hash_Absorb_ (Form C, and Form A with a set nonce), _Encrypt_, _Decrypt_ '
+                             aead_to(DEC_LAST).setst(VERIFY, 'B', INPUT=0, KLLEN=128).st], [INVALID] * 2)
+check('same-State kl.setst into _Hash_Absorb_ (Form B, and Form A with a set nonce), _Encrypt_, _Decrypt_ '
       '-> _Invalid_', True,
-      [aead_to(ABSORB).setst(ABSORB, 'C', INPUT=NN, KLLEN=128).st, aead_to(ENCRYPT).setst(ENCRYPT, 'A').st,
+      [aead_to(ABSORB).setst(ABSORB, 'B', INPUT=NN, KLLEN=128).st, aead_to(ENCRYPT).setst(ENCRYPT, 'A').st,
        aead_to(DECRYPT).setst(DECRYPT, 'A').st,
        provision(build_pi(1, [(K, 128), (NN, 128)], policy=0b11)).setst(ABSORB, 'A').setst(ABSORB, 'A').st],
       [INVALID] * 4)
 check('same-State kl.setst into _Enc_Last_Block_ and _Dec_Last_Block_ -> _Invalid_ (as for every last-block State)',
-      True, [AEAD(K).setst(ABSORB, 'C', INPUT=NN, KLLEN=128).setst(st0, 'A').setst(st1, 'B', Xs=16)
-             .setst(st1, 'B', Xs=40).st for st0, st1 in ((ENCRYPT, ENC_LAST), (DECRYPT, DEC_LAST))], [INVALID] * 2)
+      True, [AEAD(K).setst(ABSORB, 'B', INPUT=NN, KLLEN=128).setst(st0, 'A').setst(st1, 'C', Xs=16)
+             .setst(st1, 'C', Xs=40).st for st0, st1 in ((ENCRYPT, ENC_LAST), (DECRYPT, DEC_LAST))], [INVALID] * 2)
 check('MR12: in _Hash_Verify_, which the Machine enters by itself, a Form B kl.exec carries the tag (Count=166: '
       '_Success_, bit 0 flipped: _Failure_); KLLEN = 64 suffices for tag_len = 64', True,
       [after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166), 128)).st,
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166) ^ 1, 128)).st,
-       after(drive(AEAD(K).setst(SET_AUX, 'B', Xs=64), VERIFY, True), lambda c: c.exec('B', b2v(T166[:8]), 64)).st],
+       after(drive(AEAD(K).setst(SET_AUX, 'C', Xs=64), VERIFY, True), lambda c: c.exec('B', b2v(T166[:8]), 64)).st],
       [SUCCESS, FAILURE, SUCCESS])
-check('GR21: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form C with the right tag, -> _Invalid_; '
+check('GR21: a kl.setst naming _Hash_Verify_ in _Hash_Verify_, even of Form B with the right tag, -> _Invalid_; '
       'MR1: a kl.exec with KLLEN < tag_len (120 < 128; 64 < 65) -> _Invalid_', True,
-      [aead_to(VERIFY).setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128).st,
+      [aead_to(VERIFY).setst(VERIFY, 'B', INPUT=b2v(T166), KLLEN=128).st,
        after(aead_to(VERIFY), lambda c: c.exec('B', b2v(T166), 120)).st,
-       after(drive(AEAD(K).setst(SET_AUX, 'B', Xs=65), VERIFY, True), lambda c: c.exec('B', b2v(T166), 64)).st],
+       after(drive(AEAD(K).setst(SET_AUX, 'C', Xs=65), VERIFY, True), lambda c: c.exec('B', b2v(T166), 64)).st],
       [INVALID] * 3)
 
 res = []
 for tl, kl in ((64, 64), (64, 56), (100, 104), (100, 96), (128, 128)):
-    c = drive(AEAD(K).setst(SET_AUX, 'B', Xs=tl), OUTPUT)
+    c = drive(AEAD(K).setst(SET_AUX, 'C', Xs=tl), OUTPUT)
     res.append((c.exec('C', 0, kl, out=mask(kl)), c.st))
 check('_Hash_Output_: KLLEN = tag_len rounded up to bytes emits the tag, then _Success_; KLLEN < tag_len -> _Invalid_, '
       'output zeroed (MR1)', True, res,
@@ -873,12 +882,12 @@ check('GR21: Form A/B kl.exec in _Ready_ -> _Invalid_, output zeroed; GR36: Cont
       (res, cc.key, cc.s, cc.tag_len, cc.export()[1], o, cc.st),
       ([(0, INVALID)] * 2, 0, [0] * 5, 0, b'', 0, INVALID))
 res = [after(aead_to(start), act).st for start, act in (
-    (ABSORB, lambda c: c.setst(SET_AUX, 'B', Xs=96)), (ABSORB, lambda c: c.exec('A', 0, 128)),
+    (ABSORB, lambda c: c.setst(SET_AUX, 'C', Xs=96)), (ABSORB, lambda c: c.exec('A', 0, 128)),
     (ENCRYPT, lambda c: c.exec('B', 0, 128)), (DECRYPT, lambda c: c.exec('C', 0, 128)),
-    (ABSORB, lambda c: c.setst(ENC_LAST, 'B', Xs=8)), (ENCRYPT, lambda c: c.setst(DECRYPT, 'A')),
+    (ABSORB, lambda c: c.setst(ENC_LAST, 'C', Xs=8)), (ENCRYPT, lambda c: c.setst(DECRYPT, 'A')),
     (OUTPUT, lambda c: c.exec('A', 0, 128)), (VERIFY, lambda c: c.exec('C', 0, 128)),
     (ENCRYPT, lambda c: c.setst(OUTPUT, 'A')), (DECRYPT, lambda c: c.setst(VERIFY, 'A')),
-    (VERIFY, lambda c: c.setst(VERIFY, 'C', INPUT=b2v(T166), KLLEN=128)))]
+    (VERIFY, lambda c: c.setst(VERIFY, 'B', INPUT=b2v(T166), KLLEN=128)))]
 cc = aead_to(SUCCESS)
 res.append((cc.exec('C', 0, 128, out=M128), cc.st))
 check('GR22: tag_len in _Hash_Absorb_, wrong Forms and transitions, including _Encrypt_ -> _Hash_Output_ and '
@@ -892,13 +901,13 @@ for start, form, n in ((ABSORB, 'B', 120), (ENCRYPT, 'A', 136), (DECRYPT, 'A', 6
 check('MR1: KLLEN 120 (absorb), 136 (encrypt), 64 (decrypt) -> _Invalid_, output zeroed', True, res,
       [(INVALID, 0)] * 3)
 check('nonce with KLLEN = 64 -> _Invalid_; MR5: KLLEN = 256 with junk above bit 127 == Count=579', True,
-      (AEAD(K).setst(ABSORB, 'C', INPUT=NN, KLLEN=64).st, seal(AEAD(K), NN | 0xdeadbeef << 150, nkl=256)),
+      (AEAD(K).setst(ABSORB, 'B', INPUT=NN, KLLEN=64).st, seal(AEAD(K), NN | 0xdeadbeef << 150, nkl=256)),
       (INVALID, blob579))
 cc, c2 = aead_to(ENC_LAST), aead_to(DEC_LAST)
 o, t = cc.exec('A', b2v(LAST5), 256, out=mask(256)), cc.exec('C', 0, 256, out=mask(256))
 o2 = c2.exec('A', b2v(C166), 256, out=mask(256))
 c2.exec('B', b2v(T166), 128)
-t3 = drive(aead_to(OUTPUT).setst(READY).setst(SET_AUX, 'B', Xs=64), OUTPUT).exec('C', 0, 128, out=M128)
+t3 = drive(aead_to(OUTPUT).setst(READY).setst(SET_AUX, 'C', Xs=64), OUTPUT).exec('C', 0, 128, out=M128)
 check('MR6: KLLEN = 256 into _Enc_Last_Block_, _Hash_Output_, _Dec_Last_Block_ clears OUTPUT above bit 127; '
       'tag_len = 64 clears OUTPUT[127:64]', True,
       (sl(o, 39, 0), o >> 40, sl(t, 127, 0), t >> 128, sl(o2, 39, 0), o2 >> 40, c2.st, t3 >> 64, v2b(t3, 8)),
@@ -921,15 +930,15 @@ section('_MachinePolicy_, kl.restrictl and kl.restricth')
 _, rec, ok = aead_run(AEAD(K, policy=0b10), True, KAT_NONCE, ad579, ct579, tag=b2v(tag579))
 res = [(rec, ok)] + [(c.st, c.policy) for c in (after(aead_to(start, policy=pol), act) for pol, start, act in (
     (0b10, ABSORB, lambda c: c.setst(ENCRYPT, 'A')), (0b01, ABSORB, lambda c: c.setst(DECRYPT, 'A')),
-    (0b11, READY, lambda c: (kl_restrictl(c, 0b10), c.setst(ABSORB, 'C', INPUT=NN, KLLEN=128), c.setst(ENCRYPT, 'A'))),
+    (0b11, READY, lambda c: (kl_restrictl(c, 0b10), c.setst(ABSORB, 'B', INPUT=NN, KLLEN=128), c.setst(ENCRYPT, 'A'))),
     (0b11, ENCRYPT, lambda c: kl_restrictl(c, 0b10)), (0b11, ENCRYPT, lambda c: (kl_restrictl(c, 0b10), c.exec('A', 0, 128))),
     (0b11, OUTPUT, lambda c: kl_restrictl(c, 0b10)), (0b11, OUTPUT, lambda c: (kl_restrictl(c, 0b10), c.exec('C', 0, 128))),
     (0b01, READY, lambda c: kl_restrictl(c, 0b01)), (0b11, ABSORB, lambda c: kl_restrictl(c, 0b01)),
     (0b11, ABSORB, lambda c: kl_restrictl(c, 0b00)),
     (0b11, READY, lambda c: kl_restricth(c, 0x0001)),
-    (0b11, ENCRYPT, lambda c: (kl_restrictl(c, 0b10), c.setst(ENC_LAST, 'B', Xs=8))),
-    (0b11, ENCRYPT, lambda c: (kl_restrictl(c, 0b10), c.setst(ENC_LAST, 'B', Xs=0))),
-    (0b11, DECRYPT, lambda c: (kl_restrictl(c, 0b01), c.setst(DEC_LAST, 'B', Xs=0)))))]
+    (0b11, ENCRYPT, lambda c: (kl_restrictl(c, 0b10), c.setst(ENC_LAST, 'C', Xs=8))),
+    (0b11, ENCRYPT, lambda c: (kl_restrictl(c, 0b10), c.setst(ENC_LAST, 'C', Xs=0))),
+    (0b11, DECRYPT, lambda c: (kl_restrictl(c, 0b01), c.setst(DEC_LAST, 'C', Xs=0)))))]
 check('decryption-only locker decrypts but cannot _Encrypt_ (and vice versa); kl.restrictl removes functions, a clear bit '
       'of a disabled one changing nothing; a narrowing that disables the current operation keeps the State, and the next '
       'kl.exec in it -> _Invalid_ (GR26); clearing both bits leaves 0, which the Machine forbids -> _Invalid_ at once; '
@@ -995,8 +1004,8 @@ check('PI = MDH, key, nonce (384 bits): every vector with Form A into _Hash_Abso
       (48, [(c, SUCCESS) for c in CTTS], pt579, True, 48, blob579))
 long_pt = seq(40 * 16 + 3, 13, 5)
 c2, ct, tag = aead_run(provision(pi), False, None, ad579, long_pt, pt_chunk=7)
-check('Form C kl.setst into _Hash_Absorb_ -> _Invalid_; no block budget (40 blocks + 3 bytes == reference)', True,
-      (provision(pi).setst(ABSORB, 'C', INPUT=NN, KLLEN=128).st, ct + tag, c2.st),
+check('Form B kl.setst into _Hash_Absorb_ -> _Invalid_; no block budget (40 blocks + 3 bytes == reference)', True,
+      (provision(pi).setst(ABSORB, 'B', INPUT=NN, KLLEN=128).st, ct + tag, c2.st),
       (INVALID, ref_aead_encrypt(KAT_KEY, KAT_NONCE, ad579, long_pt), SUCCESS))
 cc, ct, tag = aead_run(provision(pi), False, None, ad579, pt579)
 st_r = cc.setst(READY).st
@@ -1050,7 +1059,7 @@ for count, msg, md in HASH_KAT:
     got += [sponge_run(Hash256(), m, 32, absorb_chunk=3), sponge_run(Hash256(), m, 32, absorb_chunk=1),
             sponge_run(Hash256(), m, 32, after=migrate(Hash256)), sponge_run(Hash256(), m, 32, end=256)]
     check(f'Count={count}: squeezes 256, 4x64, 2x128, 192+192, 64+256, 128+64+64, 32x8, 24+104+...; absorbed in 3- '
-          f'and 1-byte transfers; migrated (out_len in Position viii); Form B Xs = 256; then _Success_', True,
+          f'and 1-byte transfers; migrated (out_len in Position viii); Form C Xs = 256; then _Success_', True,
           [(o, c.st) for o, c in got], [(h(md), SUCCESS)] * 12)
 md = h(HASH_KAT[0][2])
 cc = at_finalize(Hash256)
@@ -1100,7 +1109,7 @@ r = []
 for xs in (8, 248, 256):
     o, c = sponge_run(Hash256(), b'abc', xs // 8, end=xs, squeeze=(256,))
     r.append((o, c.st))
-res = [Hash256().setst(ABSORB, 'A').setst(OUTPUT, 'B', Xs=x).st for x in (264, 12)]
+res = [Hash256().setst(ABSORB, 'A').setst(OUTPUT, 'C', Xs=x).st for x in (264, 12)]
 check('bound: Xs = 8, d - 8, d gives that prefix of the digest, then _Success_; Xs = d + 8 or 12 -> _Invalid_', True,
       (r, res), ([(ref_hash256(b'abc')[:x // 8], SUCCESS) for x in (8, 248, 256)], [INVALID] * 2))
 
@@ -1120,19 +1129,19 @@ check('the bit-level reference equals the byte reference on whole bytes', True,
       [ref_bits(IV_HASH, m, 8 * len(m), 32) == ref_hash256(m) for m in msgs], [True] * len(msgs))
 res = []
 for label, ops in [
-        ('a kl.exec after Xs = 0 (MR8)', lambda c: (c.setst(HLAST, 'B', Xs=0), c.exec('B', 1, 8))),
-        ('Xs = 65', lambda c: c.setst(HLAST, 'B', Xs=65)),
-        ('_Hash_Output_ before the final piece', lambda c: (c.setst(HLAST, 'B', Xs=8), c.setst(OUTPUT, 'A'))),
-        ('a second final piece', lambda c: (c.setst(HLAST, 'B', Xs=8), c.exec('B', 1, 8), c.exec('B', 1, 8))),
-        ('a final piece of 16 bits in a KLLEN of 8 (MR1)', lambda c: (c.setst(HLAST, 'B', Xs=16), c.exec('B', 1, 8)))]:
+        ('a kl.exec after Xs = 0 (MR8)', lambda c: (c.setst(HLAST, 'C', Xs=0), c.exec('B', 1, 8))),
+        ('Xs = 65', lambda c: c.setst(HLAST, 'C', Xs=65)),
+        ('_Hash_Output_ before the final piece', lambda c: (c.setst(HLAST, 'C', Xs=8), c.setst(OUTPUT, 'A'))),
+        ('a second final piece', lambda c: (c.setst(HLAST, 'C', Xs=8), c.exec('B', 1, 8), c.exec('B', 1, 8))),
+        ('a final piece of 16 bits in a KLLEN of 8 (MR1)', lambda c: (c.setst(HLAST, 'C', Xs=16), c.exec('B', 1, 8)))]:
     c = Hash256().setst(ABSORB, 'A')
     ops(c)
     res.append(c.st)
-res.append(Hash256().setst(HLAST, 'B', Xs=8).st)
+res.append(Hash256().setst(HLAST, 'C', Xs=8).st)
 check('final piece: _Invalid_ for a kl.exec after Xs = 0, Xs = 65, _Hash_Output_ before the piece, a second piece, '
       'KLLEN < Xs, _Ready_ -> _Hash_Absorb_Last_Block_', True, res, [INVALID] * 6)
-c, c2 = Hash256().setst(ABSORB, 'A'), Hash256().setst(ABSORB, 'A').setst(HLAST, 'B', Xs=64)
-c.exec('B', b2v(b'abcdefgh'), 64); c.setst(HLAST, 'B', Xs=0).setst(OUTPUT, 'A')
+c, c2 = Hash256().setst(ABSORB, 'A'), Hash256().setst(ABSORB, 'A').setst(HLAST, 'C', Xs=64)
+c.exec('B', b2v(b'abcdefgh'), 64); c.setst(HLAST, 'C', Xs=0).setst(OUTPUT, 'A')
 c2.exec('B', b2v(b'abcdefgh'), 64); c2.setst(OUTPUT, 'A')
 check('a message of one 64-bit block ended by Xs = 0 or given as the final piece of 64 bits: the same digest',
       True, (v2b(c.exec('C', 0, 256), 32), v2b(c2.exec('C', 0, 256), 32)), (ref_hash256(b'abcdefgh'),) * 2)
@@ -1154,7 +1163,7 @@ for _ in range(20): cc.exec('C', 0, 64)
 check('unbounded (Form A): out_len 0, _MachineUse_ 0, never _Success_', True, (cc.aux, cc.machine_use, cc.st),
       (0, 0, OUTPUT))
 o, c = sponge_run(XOF(), b'abc', 100, end=800, squeeze=(24, 512))
-check('bounded (Form B Xs = 800): the first 100 B of the stream, then _Success_', True, (o, c.st),
+check('bounded (Form C Xs = 800): the first 100 B of the stream, then _Success_', True, (o, c.st),
       (ref_xof128(b'abc', 100), SUCCESS))
 cc = at_finalize(XOF)
 s_before, res = list(cc.s), []
@@ -1188,7 +1197,7 @@ for count, msg, z, md in CXOF_KAT:
           [sponge_run(CXOF(), h(msg), 64, z=h(z))[0],
            sponge_run(CXOF(), h(msg), 64, z=h(z), squeeze=(512,), after=migrate(CXOF))[0],
            sponge_run(CXOF(), h(msg), 64, z=h(z), z_chunk=1)[0]], [h(md)] * 3)
-check('empty Z both ways (Form A from _Ready_; Form B Xs = 0 then Form A) = the reference, which differs from XOF128',
+check('empty Z both ways (Form A from _Ready_; Form C Xs = 0 then Form A) = the reference, which differs from XOF128',
       True, (sponge_run(CXOF(), b'abc', 32)[0], sponge_run(CXOF(), b'abc', 32, z=b'')[0], sponge_run(XOF(), b'abc', 32)[0]
              != ref_cxof128(b'abc', b'', 32)), (ref_cxof128(b'abc', b'', 32),) * 2 + (True,))
 zz = bytes((13 * i + 1) & 0xFF for i in range(256))
@@ -1198,36 +1207,39 @@ for zb in (1, 8, 63, 64, 2048):
     res.append(sponge_run(CXOF(), b'abc', 32, z=zz, zbits=zb, z_chunk=5)[0] == want)
 check('Z of 1, 8, 63, 64 and 2048 bits, in 5-byte transfers = the bit-level SP 800-232 reference', True, res, [True] * 5)
 res = []
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=2049); res.append(c.st)
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=64); c.exec('B', 1, 8); c.setst(ABSORB, 'A'); res.append(c.st)
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=8); c.exec('B', 1, 8); c.exec('B', 1, 8); res.append(c.st)
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=0); c.exec('B', 1, 8); res.append(c.st)
-res += [cls().setst(SET_AUX, 'B', Xs=8).st for cls in (Hash256, XOF)]
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=2049); res.append(c.st)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=64); c.exec('B', 1, 8); c.setst(ABSORB, 'A'); res.append(c.st)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=8); c.exec('B', 1, 8); c.exec('B', 1, 8); res.append(c.st)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=0); c.exec('B', 1, 8); res.append(c.st)
+res += [cls().setst(SET_AUX, 'C', Xs=8).st for cls in (Hash256, XOF)]
 check('CXOF: Xs = 2049; leaving _Set_Aux_Value_ with Z incomplete for _Hash_Absorb_; a kl.exec after a complete Z, '
       'or with Z_len = 0; _Set_Aux_Value_ in Hash256 or XOF128 -> _Invalid_', True, res, [INVALID] * 6)
-res = [CXOF().setst(SET_AUX, 'A').st]
+c, c2 = CXOF().setst(SET_AUX, 'A'), CXOF().setst(SET_AUX, 'C', Xs=0)
+check('CXOF: Form A into _Set_Aux_Value_ is Form C with Xs = 0 (an empty Z)', True,
+      (c.st, c.z_len, c.s), (SET_AUX, 0, c2.s))
+res = [CXOF().setst(ABSORB, 'C', Xs=0).st]
 for tgt, kw in ((OUTPUT, {}), (HLAST, {'Xs': 8})):
-    c = CXOF(); c.setst(SET_AUX, 'B', Xs=8); c.exec('B', 1, 8); c.setst(tgt, 'B' if kw else 'A', **kw)
+    c = CXOF(); c.setst(SET_AUX, 'C', Xs=8); c.exec('B', 1, 8); c.setst(tgt, 'C' if kw else 'A', **kw)
     res.append(c.st)
-res.append(XOF().setst(ABSORB, 'A').setst(OUTPUT, 'B', Xs=1 << 32).st)
-check('CXOF: Form A into _Set_Aux_Value_; _Set_Aux_Value_ -> _Hash_Output_ or _Hash_Absorb_Last_Block_ (GR22); '
+res.append(XOF().setst(ABSORB, 'A').setst(OUTPUT, 'C', Xs=1 << 32).st)
+check('CXOF: Form C (Xs = 0) into _Hash_Absorb_ (GR13); _Set_Aux_Value_ -> _Hash_Output_ or _Hash_Absorb_Last_Block_ (GR22); '
       'XOF128 bound Xs = 2^32 -> _Invalid_', True, res, [INVALID] * 4)
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=64); c.exec('B', 1, 8); c.setst(READY)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=64); c.exec('B', 1, 8); c.setst(READY)
 check('CXOF: leaving _Set_Aux_Value_ early for _Ready_: _Ready_, no error', True, (c.st, tuple(c.s)),
       (READY, TABLE12['Ascon-CXOF128']))
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=64); c.exec('B', b2v(b'wrongpfx'), 64)
-c.setst(SET_AUX, 'B', Xs=24); c.exec('B', b2v(b'xyz'), 24); c.setst(ABSORB, 'A')
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=64); c.exec('B', b2v(b'wrongpfx'), 64)
+c.setst(SET_AUX, 'C', Xs=24); c.exec('B', b2v(b'xyz'), 24); c.setst(ABSORB, 'A')
 c.exec('B', b2v(b'abc'), 24); c.setst(OUTPUT, 'A')
 check('CXOF: a same-State kl.setst into _Set_Aux_Value_ restarts the load: the digest of the restarted Z', True,
       v2b(c.exec('C', 0, 256), 32), ref_cxof128(b'abc', b'xyz', 32))
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=8 * 20); c.exec('B', b2v(zz[:9]), 72)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=8 * 20); c.exec('B', b2v(zz[:9]), 72)
 c = migrate(CXOF)(c)
 mid = (c.z_len, c.cumul, c.block_base)
 c.exec('B', b2v(zz[9:20]), 88)
 c.setst(ABSORB, 'A'); c.exec('B', b2v(b'abc'), 24); c.setst(OUTPUT, 'A')
 check('CXOF: export/import mid-Z keeps Z_len, cumul_len and block_base', True,
       (mid, v2b(c.exec('C', 0, 256), 32)), ((160, 72, 8), ref_cxof128(b'abc', zz[:20], 32)))
-c = CXOF(); c.setst(SET_AUX, 'B', Xs=8 * 40)
+c = CXOF(); c.setst(SET_AUX, 'C', Xs=8 * 40)
 c.exec('B', b2v(zz[:40]), 320, halt_after=2)
 ks = c.klstart
 c.exec('B', b2v(zz[:40]), 320)
@@ -1336,7 +1348,7 @@ for s, n in ((sec, 16), (sec, 40), (sec, 0), (sec[:12], 13), (sec[:12], 16)):
     res.append(dst.st)
 check('a shared secret into XOF128 _Hash_Absorb_: 32 B with length 16, 40 or 0, 12 B with length 13 or 16 (GR40 '
       'item 5: exactly the secret length): destination _Invalid_', True, res, [INVALID] * 5)
-dst = XOF().setst(ABSORB, 'A').setst(HLAST, 'B', 0)
+dst = XOF().setst(ABSORB, 'A').setst(HLAST, 'C', 0)
 kl_derive(dst, Secret(sec), 32)
 check('shared secret into XOF128 _Hash_Absorb_Last_Block_ (not an endpoint, GR40 item 2): destination _Invalid_',
       True, dst.st, INVALID)
@@ -1351,7 +1363,7 @@ check('a shared secret with klstart = 1 at issue -> XOF128 _Hash_Absorb_, -> Asc
 
 section('The tag is not a kl.derive source; out_len on entering _Ready_')
 cc, dst = AEAD(K), AEAD(K1v)
-cc.setst(SET_AUX, 'B', Xs=100); drive(cc, OUTPUT)
+cc.setst(SET_AUX, 'C', Xs=100); drive(cc, OUTPUT)
 kl_derive(dst, cc, 13)
 check('tag_len = 100: the tag in _Hash_Output_ is not a source (GR40 item 1, GR44): source _Invalid_, destination '
       '`key` untouched', None, (cc.st, dst.st, dst.key), (INVALID, READY, K1v))
@@ -1389,10 +1401,10 @@ control('domain separation on state[0] instead of state[4] (Count=1, 17, 166, 23
 res = []
 for cls in (Hash256, XOF, CXOF):
     c = cls()
-    c.setst(ABSORB); c.exec('B', INPUT=0x636261, KLLEN=24); c.setst(HLAST, 'B', 16)
+    c.setst(ABSORB); c.exec('B', INPUT=0x636261, KLLEN=24); c.setst(HLAST, 'C', 16)
     c.exec('B', INPUT=0, KLLEN=0)
     c2 = cls()
-    c2.setst(ABSORB); c2.setst(HLAST, 'B', 16); c2.klstart = 1
+    c2.setst(ABSORB); c2.setst(HLAST, 'C', 16); c2.klstart = 1
     c2.exec('B', INPUT=0x61, KLLEN=8)
     res.append((c.st, c2.st))
 check('_Hash_Absorb_Last_Block_ with Xs = 16: KLLEN = 0, or KLLEN = 8 with klstart = 1, is a length below '

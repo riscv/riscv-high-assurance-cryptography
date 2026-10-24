@@ -162,10 +162,10 @@ class Blake2:
                 self.key_block()
             self.st, self.last_block_len = ABSORB, self.b
             return self
-        if t == LAST:                                     # Form A: a final piece of b bits
+        if t == LAST:                                     # Form A is Form C with Xs = 0
             if self.st != ABSORB or xs is not None and (xs % 8 or not 0 <= xs <= self.b):
                 return self.invalid()
-            self.st, self.last_block_len = LAST, self.b if xs is None else xs
+            self.st, self.last_block_len = LAST, xs or 0
             return self
         if t == OUTPUT:                                   # ends the message held in `block`
             if not (self.st == ABSORB or self.st == LAST and self.last_block_len == 0):
@@ -470,9 +470,8 @@ for v in VARIANTS:
           (o, c.st, c2.setst(OUTPUT, 8 * nnmax + 8).st, Blake2(v).provision().setst(ABSORB).setst(OUTPUT, 12).st),
           (oracle(v, b'abc', nnmax)[:20] + bytes(12), SUCCESS, INVALID, INVALID))
     c = Blake2(v).provision().setst(ABSORB).exec(b'ab').setst(LAST)
-    check(f'{v}: Form A into _Hash_Absorb_Last_Block_ keeps last_block_len = b; a b-bit piece gives the digest',
-          None, (c.last_block_len, c.exec(bytes(b // 8)).setst(OUTPUT).output(nnmax)),
-          (b, oracle(v, b'ab' + bytes(b // 8), nnmax)))
+    check(f'{v}: Form A into _Hash_Absorb_Last_Block_ is Xs = 0: last_block_len = 0, then _Hash_Output_ gives the digest',
+          None, (c.last_block_len, c.setst(OUTPUT).output(nnmax)), (0, oracle(v, b'ab', nnmax)))
 
 section('_Invalid_ outcomes')
 for v in VARIANTS:
@@ -636,8 +635,8 @@ class Port(HashPort):
         p.b = p.cl.b
     st = property(lambda p: p.cl.st)
     klstart = property(lambda p: getattr(p.cl, 'klstart', 0))
-    def setst(p, immed, form='A', xs=None):  # no kl.setst of BLAKE2 is native in Form C
-        p.cl.invalid() if form == 'C' and not inert(p.cl.st) else p.cl.setst(immed, xs if form == 'B' else None)
+    def setst(p, immed, form='A', xs=None):  # no kl.setst of BLAKE2 is native in Form B
+        p.cl.invalid() if form == 'B' and not inert(p.cl.st) else p.cl.setst(immed, xs if form == 'C' else None)
     def exec_in(p, d, halt_at=None):
         k = getattr(p.cl, 'klstart', 0)
         p.cl.exec(d, halt=halt_at is not None, klstart=k)
@@ -661,10 +660,10 @@ for v in VARIANTS:
                    lambda m, nb, o, v=v, key=key: oracle(v, m[:nb // 8], nnmax, key)[:o], hash_msgs(bb), nnmax)
 for v in VARIANTS:
     nnmax = PARAMS[v][4]
-    p = Port(v); p.setst(ABSORB); p.exec_in(b'abc'); p.setst(LAST, 'B', 0); p.setst(OUTPUT)
+    p = Port(v); p.setst(ABSORB); p.exec_in(b'abc'); p.setst(LAST, 'C', 0); p.setst(OUTPUT)
     p.cl.klstart = 5
     s1, o1 = p.exec_out(nnmax, prior=b'\xa5' * nnmax)
-    q = Port(v); q.setst(ABSORB); q.exec_in(b'abc'); q.setst(LAST, 'B', 0); q.setst(OUTPUT)
+    q = Port(v); q.setst(ABSORB); q.exec_in(b'abc'); q.setst(LAST, 'C', 0); q.setst(OUTPUT)
     q.exec_out(8)
     q.cl.klstart = 1
     s2, o2 = q.exec_out(8, prior=b'\xa5' * 8)

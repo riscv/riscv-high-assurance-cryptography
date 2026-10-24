@@ -207,19 +207,19 @@ check('a final piece of nbits mod 8 + 16 bits that ends at, or straddles, a bloc
       'bits; SHA-512 1022, 1037 bits): the pad bit in its last byte, against the bit-string reference', all(res))
 r = []
 for x in (8, 224, 256):
-    o, st, _ = hash_run(Port(), b'abc', 24, x // 8, end=('B', x))
+    o, st, _ = hash_run(Port(), b'abc', 24, x // 8, end=('C', x))
     r.append((o, st))
 o_a, st_a, _ = hash_run(Port(), b'abc', 24, 32, end=('A', None))
-check('bound (<<KLE-hash-functions-MACs-XOFs>>): Form B Xs = 8, t - 8, t gives that prefix of the digest and _Success_; '
+check('bound (<<KLE-hash-functions-MACs-XOFs>>): Form C Xs = 8, t - 8, t gives that prefix of the digest and _Success_; '
       'Form A the full digest', None, (r, (o_a, st_a)),
       ([(DIG[:x // 8], KL_STATE_SUCCESS) for x in (8, 224, 256)], (DIG, KL_STATE_SUCCESS)))
 res = []
 for xs in (264, 12):
     cl = absorbing(data=b'abc')
-    cl.setst(KL_STATE_HASH_OUTPUT, 'B', xs)
+    cl.setst(KL_STATE_HASH_OUTPUT, 'C', xs)
     res.append(cl.st)
 cl = absorbing(data=b'abc')
-cl.setst(KL_STATE_HASH_OUTPUT, 'B', 128)
+cl.setst(KL_STATE_HASH_OUTPUT, 'C', 128)
 o1 = C(8)(cl)[1]
 cl = Sha2.load('SHA-256', cl.st, cl.export())
 o2 = cl.exec('C', nbytes=16, prior=b'\xa5' * 16)[1]
@@ -228,15 +228,15 @@ check('bound Xs = t + 8 or 12 (not a multiple of 8) -> _Invalid_; Xs = 128 read 
       ([KL_STATEEXT_INVALID] * 2, DIG[:16] + bytes(8), KL_STATE_SUCCESS))
 res = []
 for label, ops in [
-        ('Xs = 0 then a kl.exec (MR8)', (A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), B(b'c'))),
-        ('Xs = b + 8', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 520))),
+        ('Xs = 0 then a kl.exec (MR8)', (A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0), B(b'c'))),
+        ('Xs = b + 8', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 520))),
         ('_Hash_Output_ before the final piece (last_block_len != 0)',
-         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), O)),
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 8), O)),
         ('a second kl.exec in _Hash_Absorb_Last_Block_',
-         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), B(b'a'), B(b'b'))),
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 8), B(b'a'), B(b'b'))),
         ('a final piece of 16 bits in a KLLEN of 8 (MR1)',
-         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16), B(b'a'))),
-        ('_Ready_ -> _Hash_Absorb_Last_Block_', (lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8),))]:
+         (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 16), B(b'a'))),
+        ('_Ready_ -> _Hash_Absorb_Last_Block_', (lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 8),))]:
     cl = Sha2().provision()
     run(cl, *ops)
     res.append((label, cl.st))
@@ -244,25 +244,29 @@ check('final piece: _Invalid_ for ' + '; '.join(l for l, _ in res), None, [st fo
 res = []
 for d, ks in ((b'', 0), (b'a', 2)):
     cl = Sha2().provision()
-    run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16))
+    run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 16))
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
       'window, _Invalid_ (MR1, GR53)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 cl = Sha2().provision()
-run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0))
+run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0))
 r = B(b'')(cl)[0], cl.st
 check('Xs = 0, then an empty kl.exec: empty window, State kept; the digest is that of "ab" (GR53)', None,
       (r, run(cl, O, C(32))[1]), (('empty', KL_STATE_HASH_LAST_BLOCK), hashlib.sha256(b'ab').digest()))
 m = bytes(range(70))
 cl = absorbing(data=m[:6])
-run(cl, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK), B(m[6:]), lambda c: c.setst(KL_STATE_HASH_OUTPUT, 'B', 0))
+run(cl, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 512), B(m[6:]), lambda c: c.setst(KL_STATE_HASH_OUTPUT, 'C', 0))
 o = C(32)(cl)[1]
 cl2 = absorbing(data=m[:6])
-run(cl2, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK), O)
-check('Form A into _Hash_Absorb_Last_Block_ (last_block_len = b): a 512-bit piece, then Form B Xs = 0 into '
-      '_Hash_Output_: the full digest, _Success_; Form A, then _Hash_Output_ before the piece: _Invalid_', None,
-      (o, cl.st, cl2.st), (hashlib.sha256(m).digest(), KL_STATE_SUCCESS, KL_STATEEXT_INVALID))
+run(cl2, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 512), O)
+cl3 = absorbing(data=m[:6])
+run(cl3, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK), O)
+check('Form C Xs = b into _Hash_Absorb_Last_Block_: a 512-bit piece, then Form C Xs = 0 into _Hash_Output_: the full '
+      'digest, _Success_; Xs = b, then _Hash_Output_ before the piece: _Invalid_; Form A is Xs = 0: _Hash_Output_ '
+      'directly gives the digest of the absorbed prefix', None,
+      (o, cl.st, cl2.st, C(32)(cl3)[1]),
+      (hashlib.sha256(m).digest(), KL_STATE_SUCCESS, KL_STATEEXT_INVALID, hashlib.sha256(m[:6]).digest()))
 control('caller-padded message: the digest differs', digest('SHA-256', M_ABC + md_pad(24, 32), 'multi') != DIG)
 cl = absorbing(data=b'abc')
 HART.klstart = 3
@@ -288,10 +292,10 @@ check('"abc" unpadded, then the kl.setst into _Hash_Output_ with block_base != 0
       run(cl, A, B(b'abc'), O, C(32))[1] == DIG_ABC and cl.st == KL_STATE_SUCCESS)
 for label, ops in [
         ('kl.exec in _Ready_ (GR21)', (B(M_ABC),)),
-        ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
+        ('Form C kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'C'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
         ('same-State kl.setst to _Hash_Output_ (GR21)', (A, B(M_ABC), O, O)),
-        ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
+        ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (GR22), output zeroed', (A, C(16))),
         ('Form B kl.exec in _Hash_Output_ (GR22)', (A, B(M_ABC), O, B(bytes(64)))),
@@ -390,7 +394,7 @@ check('shared secret into SHA-256 absorb: 32 B with length 0, 31 or 36, 30 B wit
       'exactly the secret length): destination _Invalid_', None, res,
       [('refused', KL_STATEEXT_INVALID)] * 6)
 dst, dst2 = absorbing(data=b'abc'), absorbing(data=b'abc')
-dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)
 check('shared secret into SHA-256 _Hash_Absorb_Last_Block_ (not an endpoint, GR40 item 2): destination _Invalid_; '
       'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret [hashlib]', None,
       (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),

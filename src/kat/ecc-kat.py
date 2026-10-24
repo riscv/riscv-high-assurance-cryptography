@@ -129,11 +129,9 @@ class Locker:
             raise Invalid('transition not allowed')                   # GR22; #46, #47: GR25
         if t != READY and not self._leads_enabled(t, xs):
             self._policy_gate()                                         # MR9 item 1.a, before the State is left
-        if form == 'C':
-            raise Invalid('wrong Form: no Form C kl.setst is native')       # GR13
-        if form == 'A' and t in (SET_CTX, MSG_ABSORB):
-            raise Invalid('wrong Form: only Form B is native')         # GR13
-        if (form or ('B' if xs or t in (SET_CTX, MSG_ABSORB) else 'A')) == 'B' and t not in (
+        if form == 'B':
+            raise Invalid('wrong Form: no Form B kl.setst is native')       # GR13
+        if (form or ('C' if xs else 'A')) == 'C' and t not in (     # Form A, Xs = 0, is admitted where C is
                 SET_GEN, SET_SCALAR, READY, SET_CTX, MSG_ABSORB):
             raise Invalid('wrong Form: only Form A is native')         # GR13
         if t == SET_HASH and not any(self.policy):
@@ -153,9 +151,9 @@ class Locker:
         self.bb, self.loading, self.buf = 0, None, b''
         f = SET_FIELD.get(t)
         if f == 'scalar':
-            self.scalar = v2b(rand, self.fw) if xs else bytes(self.fw)   # Form B: drawn inside
+            self.scalar = v2b(rand, self.fw) if xs else bytes(self.fw)   # Form C: drawn inside
         elif f == 'gen':
-            self.gen = bytes(self.size['gen']) if xs else self.default_gen     # Form B: erased, then loaded
+            self.gen = bytes(self.size['gen']) if xs else self.default_gen     # Form C: erased, then loaded
         elif f in ('sec', 'hash', 'sig'):
             setattr(self, f, None)
             self.has.discard(f)
@@ -859,23 +857,23 @@ check('same-State kl.setst in a halted Sign_Generate -> Invalid (GR21, GR24)',
       invalid((lambda c: (c.halt(7, K0), c)[1])(armed()).setst, SIGN_GEN))
 check('MR18: a kl.setst naming _Output_ from _Point_Mul_ or _Sign_Generate_ -> Invalid',
       bool(invalid(locker(P256, (SET_SCALAR, D256), to=POINT_MUL).setst, OUTPUT)) and bool(invalid(armed().setst, OUTPUT)))
-check('a Form B kl.setst into _Set_Hash_, _Set_SecondPt_, _Sign_Input_ or _Point_Mul_ is a wrong Form '
+check('a Form C kl.setst into _Set_Hash_, _Set_SecondPt_, _Sign_Input_ or _Point_Mul_ is a wrong Form '
       '(only Form A is native): _Invalid_ (GR13)', True,
-      [invalid(locker(P256, (SET_SCALAR, D256)).setst, t, form='B') for t in (SET_HASH, SET_SECONDPT, SET_SIG, POINT_MUL)],
+      [invalid(locker(P256, (SET_SCALAR, D256)).setst, t, form='C') for t in (SET_HASH, SET_SECONDPT, SET_SIG, POINT_MUL)],
       [True] * 4)
-check('a Form C kl.setst naming _Ready_ is a wrong Form (Form A or B is native): _Invalid_ (GR23, GR13)',
-      bool(invalid(locker(P256, (SET_SCALAR, D256)).setst, READY, form='C')))
+check('a Form B kl.setst naming _Ready_ is a wrong Form (Form A or C is native): _Invalid_ (GR23, GR13)',
+      bool(invalid(locker(P256, (SET_SCALAR, D256)).setst, READY, form='B')))
 cr = Locker(P256)
 cr.setst(SET_GEN, 1)
-check('a Form B kl.setst into _Set_Generator_ with a non-zero GPR erases Generator when the load starts (MR7)',
+check('a Form C kl.setst into _Set_Generator_ with a non-zero GPR erases Generator when the load starts (MR7)',
       True, cr.gen, bytes(cr.size['gen']))
 cr = locker(EC.ED25519, (SET_SCALAR, bytes(range(1, 33))), (SET_CTX, b'', None, 0))
 cr.setst(MSG_ABSORB, 0); cr.exec_in(b'abc'); cr.setst(MSG_ABSORB, 1); cr.exec_in(b'abc')
 cr.setst(MSG_ABSORB, 0)
 check("re-entering signing pass 1 zeroes k'", True, (cr.msg_pass, cr.kp), (0, None))
 cr = Locker(P256)
-cr.setst(SET_GEN, form='B')
-check('a Form B kl.setst into _Set_Generator_ with zero in the GPR is native: the default generator', True,
+cr.setst(SET_GEN, form='C')
+check('a Form C kl.setst into _Set_Generator_ with zero in the GPR is native: the default generator', True,
       (cr.state, cr.gen), (SET_GEN, cr.default_gen))
 for how in ('kl.clearads', 'an import without Content2'):
     cr = armed()
@@ -940,7 +938,7 @@ check('same-State kl.setst in a Set State part-way restarts the load (GR21, MR7)
       and 'sec' in cr.has)
 cr = Locker(P256)
 cr.setst(SET_SCALAR, xs=1, rand=V256['x'])
-check('Form B Set_Scalar: random private key set, no kl.exec expected',
+check('Form C Set_Scalar: random private key set, no kl.exec expected',
       b2v(cr.scalar) == V256['x'] and invalid(cr.exec_in, D256))
 cr, gs = Locker(P256), []
 for t, xs in ((SET_GEN, 0), (SET_SCALAR, 1)):
@@ -1003,7 +1001,7 @@ for xs, change, label in (
                             **{f: getattr(cr, f) if f in cr.has else None for f in ('sec', 'hash', 'sig')}),
           {**BASE, **change})
 
-check('bits 7 and above of Xs are reserved: Form B kl.setst into _Ready_ with Xs = 128 -> Invalid',
+check('bits 7 and above of Xs are reserved: Form C kl.setst into _Ready_ with Xs = 128 -> Invalid',
       invalid(locker(P256, sc(7)).setst, READY, 128))
 cr = locker(P256, (SET_GEN, G2))
 cr.setst(READY, 32)
@@ -1265,12 +1263,14 @@ r3.restrictl_policy(0b10)
 check('EdDSA signing pass 1 with _MachinePolicy_[0] cleared: the pass-2 kl.setst -> Invalid before pass 1 is '
       'finalized (MR9 item 1.a): no r, no R', None,
       (invalid(r3.setst, MSG_ABSORB, 1), r3.r, r3.msg_pass), (True, None, 0))
-fa = [invalid(locker(EC.ED25519, (SET_SCALAR, seed)).setst, SET_CTX, 0, form='A'),
-      invalid(locker(EC.ED25519, (SET_SCALAR, seed), (SET_CTX, b'', None, 0)).setst, MSG_ABSORB, 0, form='A')]
+fa = locker(EC.ED25519, (SET_SCALAR, seed))
+fa.setst(SET_CTX, form='A'); fa.setst(MSG_ABSORB, form='A')
 fb = locker(EC.ED25519, (SET_SCALAR, seed))
-fb.setst(SET_CTX, 0, form='B'); fb.setst(MSG_ABSORB, 0, form='B')
-check('EdDSA: a Form A kl.setst into _Set_Ctx_ or _Msg_Absorb_ -> Invalid (GR13); Form B admitted', None,
-      fa + [fb.state], [True, True, MSG_ABSORB])
+fb.setst(SET_CTX, 0, form='C'); fb.setst(MSG_ABSORB, 0, form='C')
+check('EdDSA: _Set_Ctx_ and _Msg_Absorb_ take Form C; Form A, operand zero, is admitted and acts alike; '
+      'Form B -> Invalid (GR13)', None,
+      [fa.state, fa.msg_pass, fb.state, fb.msg_pass, invalid(locker(EC.ED25519, (SET_SCALAR, seed)).setst, SET_CTX, 0, form='B')],
+      [MSG_ABSORB, 0, MSG_ABSORB, 0, True])
 check('EdDSA: _MachinePolicy_ = 0 is invalid, at provisioning and as the result of kl.restrictl', None,
       [invalid(Locker, EC.ED25519, sign=False, verify=False),
        invalid(locker(EC.ED25519, (SET_SCALAR, seed)).restrictl_policy, 0b00)], [True, True])
