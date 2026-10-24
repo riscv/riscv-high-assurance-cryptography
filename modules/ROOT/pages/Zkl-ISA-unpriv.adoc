@@ -296,6 +296,8 @@ Architecturally, the KLF holds two distinct parts, whatever the implementation:
 Insufficient capacity may prevent a configuration instruction from executing; unconfiguring other lockers frees capacity.
 The number of lockers, 32, comes from the 5-bit register fields of the encoding, not from the capacity: an implementation need not hold 32 configured lockers at once.
 The KLF capacity must suffice for two fully configured CCs of the largest Machine that the implementation supports, each with the largest ADS that the implementation keeps for it, together with any state that the implementation needs while it operates on them.
+If support for system-specific format (i.e., other formats which differ from those defined by KLE) is provided,
+the capacity must also include the largest difference between the memory required by the import of a system-specific format and the memory required by the import of a KLE format of the same Machine.
 Any further capacity is desirable, but not required.
 
 Corruption of a hart's KLF is unrecoverable: it resets the hart's KLE architectural state (<<KLE-reset-and-m-mode-only>>) and raises a KLE fatal-error exception (<<Zkl-ISA-priv.adoc#KLE-exceptions>>).
@@ -2212,8 +2214,15 @@ A `kl.derive` falls through if its source is inert, or if its source is in a Val
 [float="center",align="center",width="100%",cols="<2,<3,<3,<3",options="header"]
 |===
 | Instruction | Error State | _Unconfigured_ locker | `KLNL` & `klnamedlocker` = 32
+
+| Usage instructions +
+(<<KLE-instruction-properties>>)
+3+| Write no locker; a `kl.exec` with an output window writes zeros to its unwritten part (Rule <<KLE-GR-zero-unwritten-output>>), and any other instruction writes nothing.
+They leave the MDH, hence the original error condition, unchanged, and evaluate neither the _UsagePolicy_ nor the _ExpirationDate_.
+Every such instruction that honors `klstart` (<<KLE-CSR-klstart>>) writes 0 to `klstart`; `kl.setst` and `kl.clearads` leave it unchanged (Rule <<KLE-GR-klstart-updates>>).
+
 | <<KLE-instruction-size,kl.size Form A>>
-| Writes 16 to `Xd`.
+| Writes 16 to `Xd`. {dagger}
 2+| Writes 0 to `Xd`.
 
 | <<KLE-instruction-size,kl.avail Form A>>
@@ -2224,12 +2233,6 @@ A `kl.derive` falls through if its source is inert, or if its source is in a Val
 | Writes the MDH, resp. its _State_ or _StateExtension_ field.
 2+| Writes zeros to the destination.
 
-| Usage instructions +
-(<<KLE-instruction-properties>>)
-3+| Write no locker; a `kl.exec` with an output window writes zeros to its unwritten part (Rule <<KLE-GR-zero-unwritten-output>>), and any other instruction writes nothing.
-They leave the MDH, hence the original error condition, unchanged, and evaluate neither the _UsagePolicy_ nor the _ExpirationDate_.
-Every such instruction that honors `klstart` (<<KLE-CSR-klstart>>) writes 0 to `klstart`; `kl.setst` and `kl.clearads` leave it unchanged (Rule <<KLE-GR-klstart-updates>>).
-
 | <<KLE-instruction-restrict,kl.restrict*>>
 3+| Writes nothing.
 
@@ -2238,12 +2241,12 @@ Every such instruction that honors `klstart` (<<KLE-CSR-klstart>>) writes 0 to `
 | Writes nothing.
 
 | <<KLE-instruction-mv,kl.mvin>>
-3+| Writes nothing; `klstart` is unchanged.
+3+| Writes nothing.
 
 | <<KLE-instruction-mv,kl.mvout>>
-3+| Writes zeros to its destination GPRs, resp. vector elements, or KLIOBUF; `klstart` is unchanged.
+3+| Writes zeros to its destination GPRs, resp. vector elements, or KLIOBUF.
 
-| <<KLE-instruction-mgmt,kl.mgmt>> opening a provisioning or an import
+| <<KLE-instruction-mgmt,kl.mgmt>> {doubledagger} opening a provisioning or an import
 2+| Zeroizes and configures the locker, as any <<KLE-destructive-config,destructive configuration instruction>>; `klnamedlocker` <- locker number, `klstart` <- 0.
 | Writes nothing except `klstart` <- 0.
 
@@ -2281,13 +2284,14 @@ writes only `klnamedlocker` <- locker number, and `klstart` <- 0.
 | Writes the CC of the source into the locker; a `kl.swap` writes the MDH of the locker, unchanged, into the source.
 | Writes the CC of the source into the locker; after a `kl.swap`, the source is _Unconfigured_.
 | Writes nothing.
-4+| An instruction for which the table states no write of `klstart` leaves it unchanged (Rule <<KLE-GR-klstart-updates>>).
-`kl.clear`, `kl.clone`, `kl.rename`, `kl.swap` and `kl.mgmt` update `klnamedlocker` as Rule <<KLE-GR-klnamedlocker-updates>> states.
 
 | <<KLE-instruction-load,kl.load>>, <<KLE-instruction-store,kl.store>> +
 <<KLE-instruction-load,kl.input>>, <<KLE-instruction-store,kl.output>>
 2+| `kl.load`/`kl.store` write nothing except `klstart` <- 0.
 | With `Xl` = 0, `kl.load`/`kl.store`: write nothing except `klstart` <- 0. With `Xl` {ne} 0, `kl.input`/`kl.output`: as Rule <<KLE-GR-iobuf-configured>> and <<KLE-instruction-load>> state.
+
+4+| {dagger} An instruction for which the table states no write of `klstart` leaves it unchanged (Rule <<KLE-GR-klstart-updates>>). +
+{doubledagger} `kl.clear`, `kl.clone`, `kl.rename`, `kl.swap` and `kl.mgmt` update `klnamedlocker` as stated by Rule <<KLE-GR-klnamedlocker-updates>>.
 |===
 
 [horizontal]
@@ -2452,10 +2456,10 @@ _P_ is non-zero from the first precise halt of the operation until its completio
 +
 The set of these points, and the progress recorded at each,
 never depends on key material, a secret field, plaintext or ciphertext, or the value of any ephemeral random value drawn for the operation, with one exception: where the Machine's standard allows the execution time to reveal the number of iterations of a loop, such as a rejection loop (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>), they may depend on that number.
-Only the timing of the halt decides at which point the operation is interrupted.
+Only the timing of the halt determines the interruption point.
 +
 The operation keeps its intermediate results in the ADS and updates architected Content only at completion.
-Apart from changes in the MDH at the beginning or at the end of the instruction according to the instruction's semantics, no other changes are made to the MDH during the operation except for _P_ and _AuxDataLen_; the _AuxDataLen_ at each halt point depends only on what the set of halt points and the progress recorded at each may depend on.
+Apart from changes in the MDH at issue or at retirement of the instruction as per the latter's semantics, no other changes are made to the MDH during the operation except for _P_ and _AuxDataLen_; the _AuxDataLen_ at each halt point depends only on what the set of halt points and the progress recorded at each may depend on.
 +
 A long-running operation takes no input after it starts: all its inputs are those in its lockers and its scalar or vector operands when the instruction that starts it is issued.
 It may consume them at any point, and keeps in the ADS any that it has not consumed at a halt point, so that a resumed instruction never reads its operands again.
@@ -2539,12 +2543,13 @@ An instruction draws all the random bits that it needs before it writes any of i
 
 [horizontal]
 [[KLE-GR-sysfmt-import-only,GR66]]GR66:: System-specific formats are optional and only imported: a PI, or a PCCC of base type `pi`, with _Version_ = 3 is invalid Metadata (<<KLE-Metadata-validity>>).
-Such an import replaces a provisioning and is never a snapshot of a started Machine: the format supplies every field that the Machine needs and cannot set itself, MDH fields such as _AuxInfo_ included.
+Such an import replaces a provisioning and is never a snapshot of a running Machine: the format supplies every field that the Machine needs and cannot set itself, MDH fields such as _AuxInfo_ included.
 _Version_ = 3 appears only during such an import, base or nested, and in the PCCC of a nested export taken during it.
 An implementation may support several such formats and distinguishes them in an implementation-defined way.
-
-NOTE: A system-specific format is imported, not provisioned, because it may authenticate its data: SCC import code already handles _Authentication Failed_, whereas provisioning code does not, since completing a provisioning authenticates nothing.
-As after a provisioning, a successful import ends in _Ready_ with no ADS, and the MDH fields that describe a started Machine are zero (Rule <<KLE-GR-sysfmt-mdh>>).
++
+NOTE: A system-specific format is imported and not provisioned because it may authenticate its data: SCC import code already handles an _Authentication Failed_ error, whereas provisioning code does not, since completing a provisioning authenticates nothing.
+Furthermore, software normally _imports_ CCs (as SCCs) provided by other environments, and since system-defined formats are external to the caller and also provide from external sources, import is also conceptually the right operation.
+However, as after a provisioning of a KLE format, a successful import of a system-specific format ends in _Ready_ with no ADS, and the MDH fields that describe a started Machine are zero (Rule <<KLE-GR-sysfmt-mdh>>).
 
 [horizontal]
 [[KLE-GR-sysfmt-mdh,GR67]]GR67:: The base import of a system-specific format opens with a KLE-format MDH:
@@ -2554,10 +2559,10 @@ As after a provisioning, a successful import ends in _Ready_ with no ADS, and th
 * _AuxDataLen_: the length, in 128-bit blocks, of the data after the MDH, zero-padded to a whole number of blocks.
   Software records it before the import, and `kl.size` and `kl.load` read it (<<KLE-instruction-size>>, <<KLE-serialized-image>>). The format carries no ADS.
 * _Machine_, _MachinePolicy_ and _MachineExtension_: the Machine that the import configures.
-  The opening `kl.mgmt` checks them and allocates capacity as for any import, plus the capacity that holds the 16 {times} _AuxDataLen_ bytes of data while the import lasts (Rules <<KLE-GR-sysfmt-as-received>>, <<KLE-GR-klf-capacity>>); no `kl.mgmt` rewrites them.
+  The opening `kl.mgmt` checks them and allocates capacity as for any import, or the capacity that holds the 16 {times} _AuxDataLen_ bytes of data while the import lasts (Rules <<KLE-GR-sysfmt-as-received>>, <<KLE-GR-klf-capacity>>), whichever is larger; no `kl.mgmt` rewrites them.
   The format determines this Machine, by naming it or by its own definition.
   Before converting the data, the import-completing `kl.mgmt` checks that the _Machine_ and _MachineExtension_ of the MDH equal those that the format determines, and that the _MachinePolicy_ of the MDH enables only operations that the format allows; if not, the locker transitions to Error State _Invalid_.
-* _SCProtection_, _UsagePolicy_, _Locality_ and _ExpirationDate_: the policies, applied as in any import.
+* _SCProtection_, _UsagePolicy_, _Locality_ and _ExpirationDate_: the policies, applied as in any import. The system-specific format may supply values for these fields, which are accordingly narrowed.
 * _AuxInfo_: as in a PI of the Machine.
 * _State_, _StateExtension_, _KeyType_, _ADSDropped_ and _MachineUse_: zero.
 --
