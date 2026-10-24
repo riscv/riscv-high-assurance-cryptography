@@ -488,7 +488,7 @@ def kl_derive(dst, src, length):
         return dst.invalidate()                                   # GR39 item 5 (GR42: the whole secret, exactly)
     ks, dst.klstart = dst.klstart, 0                              # uninterruptible: retires with klstart = 0
     if ks:
-        return dst.invalidate()                                   # GR39 item 5: klstart = 0
+        return dst.invalidate()                                   # GR39 item 7: klstart = 0
     eff = n or length                                             # GR38
     if eff: dst.derive_dest(src.derive_source(eff))
 
@@ -1346,7 +1346,7 @@ for dst, n in ((XOF().setst(ABSORB, 'A'), 32), (AEAD(K), 16)):
     src = Secret(sec)
     kl_derive(dst, src, n)
     res.append((src.st, dst.st, dst.klstart))
-check('a shared secret with klstart = 1 at issue -> XOF128 _Hash_Absorb_, -> Ascon-AEAD128 `key` (GR39 item 5: '
+check('a shared secret with klstart = 1 at issue -> XOF128 _Hash_Absorb_, -> Ascon-AEAD128 `key` (GR39 item 7: '
       'klstart = 0): destination _Invalid_, klstart = 0, the source unchanged', True, res, [(SUCCESS, INVALID, 0)] * 2)
 
 section('The tag is not a kl.derive source; out_len on entering _Ready_')

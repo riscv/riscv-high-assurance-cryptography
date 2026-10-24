@@ -757,7 +757,7 @@ for name, m, s_, n, ks in (('in Hash_Absorb (GR39 item 2)', at('ha'), src, 16, 0
                            ('of 16 bytes into a 256-bit key (GR39 item 5)', P(K256), src, 16, 0),
                            ('of 0 bytes into a key (GR39 item 5)', P(K), src, 0, 0),
                            ('from a 12-byte source into a 128-bit key (GR39 item 5)', P(K), src[:12], 16, 0),
-                           ('with klstart = 8 (uninterruptible, GR46; GR39 item 5)', P(K), src, 16, 8)):
+                           ('with klstart = 8 (uninterruptible, GR46; GR39 item 7)', P(K), src, 16, 8)):
     m.derive(s_, n, ks)
     check(f'kl.derive {name} -> Invalid, no key written', (m.state, m.key) == (INV, b''))
 for where in ('etf', 'success'):

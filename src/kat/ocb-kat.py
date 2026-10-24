@@ -735,7 +735,7 @@ for name, mk, src, n, ks in [
         ("length 8 into the 16-byte key, no zero-fill (GR39 item 5)", lambda: Ocb(bytes(16)), secret, 8, 0),
         ("length 0 into the key (GR39 item 5)", lambda: Ocb(bytes(16)), secret, 0, 0),
         ("12-byte source into the 16-byte key (GR39 item 5)", lambda: Ocb(bytes(16)), secret[:12], 16, 0),
-        ("klstart = 8 (uninterruptible, GR46; GR39 item 5)", lambda: Ocb(bytes(16)), secret, 16, 8),
+        ("klstart = 8 (uninterruptible, GR46; GR39 item 7)", lambda: Ocb(bytes(16)), secret, 16, 8),
         ("into a locker in Hash_Absorb (GR39 item 2)", at_absorb, secret, 16, 0),
         ("into a locker in Success (GR39 item 2)", at_end, secret, 16, 0),
         ("into the key of a KeyType 1 locker (GR75, GR39 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:

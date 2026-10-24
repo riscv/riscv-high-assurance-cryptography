@@ -753,7 +753,7 @@ check('a CMAC (16 B) -> SHA3-256: pair not admitted (GR39 item 3), both _Invalid
 src, dst = Source(SEC), absorbing('SHA3-512')
 HART.klstart = 8
 r = kl_derive(dst, src, 32)
-check('uninterruptible: klstart = 8 at issue (no resumption, GR39 item 5): destination _Invalid_, klstart = 0',
+check('uninterruptible: klstart = 8 at issue (no resumption, GR39 item 7): destination _Invalid_, klstart = 0',
       (r, dst.st, src.st, HART.klstart) == ('invalid', KL_STATEEXT_INVALID, KL_STATE_HASH_OUTPUT, 0))
 res = []
 for length in (0, 31, 33):

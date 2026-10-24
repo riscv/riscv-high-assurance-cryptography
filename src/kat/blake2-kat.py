@@ -711,7 +711,7 @@ for v in VARIANTS:
     res = [kl_derive(Blake2(v).provision().setst(ABSORB).exec(b'abc'), SEC, n, ks).st
            for n, ks in ((32, 1), (31, 0), (33, 0))]
     res.append(kl_derive(Blake2(v).provision().setst(ABSORB).setst(LAST, 0), SEC, 32).st)
-    check(f'{v}: klstart = 1, a length of 31 or 33 bytes for a 32-byte secret (GR39 item 5), or a destination in '
+    check(f'{v}: klstart = 1 (GR39 item 7), a length of 31 or 33 bytes for a 32-byte secret (GR39 item 5), or a destination in '
           '_Hash_Absorb_Last_Block_ (GR39 item 2) -> _Invalid_', None, res, [INVALID] * 4)
 
 section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR32, GR36)')

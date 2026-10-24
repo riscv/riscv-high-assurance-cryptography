@@ -896,7 +896,7 @@ for n, length, ks in ((32, 0, 0), (32, 31, 0), (32, 33, 0), (32, 1 << 60, 0), (3
     derive(h, dst, FieldSrc(SS[:n]), length)
     res.append((dst.st, h.klstart))
 check('shared secret (32 B) into KMAC128 _Hash_Absorb_ with length 0, 31, 33 or 2^60 (8-bit granularity), or '
-      'klstart = 4 (uninterruptible, GR46) -> destination _Invalid_ (GR39 item 5), klstart = 0', True, res,
+      'klstart = 4 (uninterruptible, GR46) -> destination _Invalid_ (GR39 item 7), klstart = 0', True, res,
       [(INVALID, 0)] * 5)
 
 src, dst = squeezing(128, DATA4, 0, xof=True, hart=h), KeyDest(16)

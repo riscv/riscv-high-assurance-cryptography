@@ -1084,10 +1084,10 @@ class Unit:
             return 'invalid'
         key, dlen, secret = de[0] == 'key', MACHINES[D['Machine']].key_len, se[1] == 'secret'
         slen = MACHINES[M_KEX].state_len if secret else 1 << 30     # a field, or the unbounded keystream
-        if self.klstart or (length < dlen or slen < dlen if key else length != slen):   # GR39 item 5, GR42
+        if self.klstart or (length < dlen or slen < dlen if key else length != slen):   # GR39 items 5 and 7, GR42
             self._enter_error(kd, INVALID)
             return 'invalid'
-        # GR39 items 6-7 bind no toy pair: these destinations require klstart = 0, and both sources suffice
+        # GR39 item 6 binds no toy pair: both sources suffice
         if secret:                                                  # GR42 restricted (GR40); GR43 unrestricted
             if sc_rank(D['SCProtection']) < sc_rank(S['SCProtection']):   # GR40: never to a weaker level
                 self._enter_error(kd, PRIV)
@@ -1387,7 +1387,7 @@ def listing_checked(kind, checks, at, event='clear', via='load'):
     """A KLNL routine of <<KLE-management-code-snippets>> (kind 'prov', 'imp' or 'exp', transfers via 'load' or 'mv')
     that reads the _State_ after every step (checks 'each'), only after its last kl.mgmt ('last'), or only before it
     ('before-last'). At boundary `at`, a locker in a Configuration State is cleared by a handler that then restores 32
-    ('clear'; for an export, against Rule SR10), or set to Out of Memory by a failed context restore ('error').
+    ('clear'; for an export, against Rule SR8), or set to Out of Memory by a failed context restore ('error').
     Returns 'ok', 'restarted' (then Ready), 'reported', 'trap', or 'silent': finished without a Ready locker or an
     importable image."""
     img = export(pv(fresh(), 0, cipher()), 0) if kind == 'imp' else None
@@ -2094,7 +2094,7 @@ def t_mgmt():
         (v.mgmt(0, END, dict(st_md, State=READY)), v.getst(0))[1], import_(fresh(csk=DEFAULT_CSK ^ 1), 0, img),
         (u2.mgmt(0, END, cipher(State=READY)), u2.getst(0))[1]], [AUTH] * 4)
     u = opened()
-    eq('klnamedlocker = 0: a kl.mgmt that names locker 1 is not checked against klnamedlocker (SR7): it opens '
+    eq('klnamedlocker = 0: a kl.mgmt that names locker 1 is not checked against klnamedlocker (SR5): it opens '
        'on locker 1 and names it; the provisioning of locker 0 stays open',
        (trap_of(u.mgmt, 1, PROV, cipher()), u.getst(1), u.klnamedlocker, u.getst(0)), (None, PROV, 1, PROV))
     eq('the second provisioning completes; the first one, abandoned, stays open',
@@ -2804,7 +2804,7 @@ def t_expiration():
     h = rc(1, eu(0, ed=1 << 19))
     h.clock = None
     tag = trap_of(h.exec_, 0, 'A', vin=bytearray(16), vout=bytearray(16))
-    eq('SR11: a handler that cannot resolve kl_exc_clock_unavailable sets Expired by a kl.setst, which is no usage '
+    eq('SR9: a handler that cannot resolve kl_exc_clock_unavailable sets Expired by a kl.setst, which is no usage '
        'instruction and reads no clock', (tag, (h.setst(0, EXC_STATE[tag]), h.getst(0))[1]),
        ('clock_unavailable', EXPIRED))
 
@@ -2907,7 +2907,7 @@ def t_derive():
         w.csrs(klstart=16)
         rows.append((w.derive(1, 0, n), w.getst(1), w.klstart))
     w = fresh().csrs(klstart=16)
-    eq('GR39 item 5: a key or a shared-secret input requires klstart = 0, else destination Invalid; every retirement '
+    eq('GR39 item 7: kl.derive requires klstart = 0, else destination Invalid; every retirement '
        'writes klstart = 0 (GR51), a no-op included',
        rows + [(w.derive(1, 0, 32), w.getst(1), w.klstart)], [('invalid', INVALID, 0)] * 3 + [('noop', UNCONF, 0)])
     p1, x = kex(src=dict(UsagePolicy=0b01110), dst_md=sig), pv(pair(), 2, sig())
@@ -3020,8 +3020,8 @@ def build_context(u):
     return src, ml, mem
 
 def save_context(u):
-    """<<KLE-save-order>>: the named locker first, without the KLIOBUF (Rule SR8), then the KLIOBUF and the other
-    lockers, with 32 written before the KLIOBUF save and before each export (SR7)."""
+    """<<KLE-save-order>>: the named locker first, without the KLIOBUF (Rule SR6), then the KLIOBUF and the other
+    lockers, with 32 written before the KLIOBUF save and before each export (SR5)."""
     ctx = {c: u.csr_read(c) for c in ('klstart', 'klnamedlocker', 'kliobuflen', 'kliobuftop')}
     mc, ctx['images'] = ctx['klnamedlocker'], {}
     if mc < 32 and u.getmd(mc)['State'] != UNCONF:
@@ -3037,7 +3037,7 @@ def save_context(u):
     return ctx
 
 def restore_context(u, ctx, managed_first=False):
-    """<<KLE-restore-order>>: the other lockers, the KLIOBUF, then the named locker, without the KLIOBUF (Rule SR8);
+    """<<KLE-restore-order>>: the other lockers, the KLIOBUF, then the named locker, without the KLIOBUF (Rule SR6);
     managed_first restores the named locker before the other lockers, a negative control."""
     mc = ctx['klnamedlocker']
     named = [mc] if mc in ctx['images'] else []
