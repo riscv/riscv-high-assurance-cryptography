@@ -55,19 +55,19 @@ class MLDSALocker:
     def set_flag(self, f, v): self.put('StateExtension', self.get('StateExtension') & ~SE[f] | SE[f] * v)
     def size(self, name): return 64 if name == 'mu' else self.n.get(name, 0)
 
-    def invalid(self):                             # GR35
+    def invalid(self):                             # GR36
         self.put('State', INVALID)
         self.privkey = self.pubkey = b''
         self.clear()
-        self.use = 0                               # GR56: P zeroed on a transition to an Error State
+        self.use = 0                               # GR57: P zeroed on a transition to an Error State
 
     def setst(self, st, aux=None):
         """Form A (aux None) or Form B (aux = Xs)."""
         if self.state in ERROR_STATES:
             return
         pol = self.get('MachinePolicy')
-        if (self.state in (SUCCESS, FAILURE) and st != READY                                  # GR22
-                or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR21
+        if (self.state in (SUCCESS, FAILURE) and st != READY                                  # GR23
+                or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR22
                 or (aux is not None) != (st in FORM_B) or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
                 or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR9
@@ -75,13 +75,13 @@ class MLDSALocker:
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
                 or st == PK_IN and self.flag('HasPrivKey')                       # pubkey from compute_pubKey
                 or st == SIGN_OUT                                       # entered only from _Sign_Generate_
-                or st == self.state != READY and st not in IN_F):       # GR20: only a load restarts (MR7)
+                or st == self.state != READY and st not in IN_F):       # GR21: only a load restarts (MR7)
             return self.invalid()
         name = IN_F.get(self.state)
         if name and st != self.state and self.use < self.size(name):     # MR7: a load left incomplete
             setattr(self, name, b'')                                      # leaves the field unconfigured
         self.put('State', st)
-        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR56; MR7 W
+        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR57; MR7 W
         if st == READY:
             self.clear()
         if st in (READY, MU_IN):
@@ -99,7 +99,7 @@ class MLDSALocker:
 
     GATE = {SIGN_GEN: 1, SIGN_OUT: 1, SIGN_IN: 2, SIGN_VERIFY: 2}   # MR9: the States that follow uniquely
 
-    def gated(self):                               # GR25: a narrowing takes effect at the next instruction
+    def gated(self):                               # GR26: a narrowing takes effect at the next instruction
         bit = self.GATE.get(self.state)
         if bit and not self.get('MachinePolicy') & bit:
             self.invalid()
@@ -130,7 +130,7 @@ class MLDSALocker:
 
     def exec_C(self, n):                           # Form C in an emitting State (MR7)
         if self.state in ERROR_STATES or self.gated():
-            return bytes(n)                        # GR34: the output window is zeroed
+            return bytes(n)                        # GR35: the output window is zeroed
         name, w = OUT_F.get(self.state), self.use
         if name is None or w + n > self.size(name):
             self.invalid()
@@ -169,9 +169,9 @@ class MLDSALocker:
         elif st == SIGN_GEN:
             if not self.flag('HasPrivKey'):
                 return self.invalid()
-            if self.use == 0:                      # GR56: start, drawing rnd when Hedged
+            if self.use == 0:                      # GR57: start, drawing rnd when Hedged
                 self.rnd, self.kappa = self.rbg() if self.flag('Hedged') else bytes(32), 0
-                if self.rnd is None:               # GR65: RBG failure
+                if self.rnd is None:               # GR66: RBG failure
                     return self.invalid()
             status, sig, self.kappa, _ = D.sign_internal_mu_resumable(self.privkey, self.mu, self.rnd, self.ps,
                                                                       self.kappa, halt_after, self.sign_bound)
@@ -188,7 +188,7 @@ class MLDSALocker:
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             return self.put('State', SUCCESS if ok else FAILURE)
         else:
-            return self.invalid()                  # GR20 in _Ready_, GR21 elsewhere
+            return self.invalid()                  # GR21 in _Ready_, GR22 elsewhere
         if st == SIGN_GEN:
             return self.put('State', SIGN_OUT)
         self.set_flag('HasPubKey', 1)
@@ -211,7 +211,7 @@ class MLDSALocker:
             setattr(new, f, getattr(self, f))
         new.kappa = self.kappa if content2 else 0
         if not content2:
-            new.use, new.rnd = 0, bytes(32)        # GR57, GR56: a restart zeroes P and destroys rnd
+            new.use, new.rnd = 0, bytes(32)        # GR58, GR57: a restart zeroes P and destroys rnd
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
             new.invalid()                          # MR11: the privkey check on import
         return new
@@ -232,9 +232,9 @@ def kl_derive(dest, src, length):
     """kl.derive into a hash in _Hash_Absorb_ (dest: its absorbed bytes), a KeyDest or an ML-DSA locker.
     No ML-DSA State is a source endpoint, nor is the ML-DSA Machine a destination (<<KLE-derive-endpoints>>)."""
     if isinstance(src, MLDSALocker):
-        return src.invalid()                       # GR39 item 1: the source; nothing transferred
+        return src.invalid()                       # GR40 item 1: the source; nothing transferred
     if isinstance(dest, MLDSALocker):
-        return dest.invalid()                      # GR39 item 2: the destination; nothing transferred
+        return dest.invalid()                      # GR40 item 2: the destination; nothing transferred
     raise NotImplementedError('only the ML-DSA endpoints are modelled')
 
 # ---------------------------------------------------------------- helpers
@@ -345,11 +345,11 @@ def t_mdh():
     kept = so.state
     so.exec_C(16)
     check('MR9: _Sign_Input_ gated by MachinePolicy[1] (sign-only -> _Invalid_); _Sign_Output_ by MachinePolicy[0]: '
-          'cleared there, the State is kept and the next kl.exec -> _Invalid_ (GR25)', (cc.state, kept, so.state)
+          'cleared there, the State is kept and the next kl.exec -> _Invalid_ (GR26)', (cc.state, kept, so.state)
           == (INVALID, SIGN_OUT, INVALID))
     for imm in (SUCCESS, FAILURE):
         cc = MLDSALocker(44)
-        check(f'kl.setst #{imm} -> Invalid (GR23, GR21)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
+        check(f'kl.setst #{imm} -> Invalid (GR24, GR22)', (raises(cc.setst, imm), cc.state) == (False, INVALID))
     for imm in (14, 45):
         cc = MLDSALocker(44)
         cc.setst(imm)
@@ -359,7 +359,7 @@ def t_mdh():
                          (UNUSED7, None, 'kl.setst #7 (no _tr_Input_)')):
         cc = generated()
         cc.setst(st, aux)
-        check(f'{why}: _Invalid_ (GR21)', cc.state == INVALID)
+        check(f'{why}: _Invalid_ (GR22)', cc.state == INVALID)
     spec_note('the long-field transfers are recorded "in MachineUse" without the unit MR7 requires; the model '
               'counts bytes')
 
@@ -402,15 +402,15 @@ def t_state_machine():
     check('re-entering _GenerateKeyPair_ generates another key pair, then _pubkey_Output_',
           c2.state == PK_OUT and (c2.pubkey, c2.privkey) == D.keygen_internal(h(kv2['seed']), 44) != (pk, sk))
     c2.exec_D()
-    check('Form D kl.exec in _pubkey_Output_: _Invalid_ (GR21)', c2.state == INVALID)
+    check('Form D kl.exec in _pubkey_Output_: _Invalid_ (GR22)', c2.state == INVALID)
     c5 = generated()
     c5.setst(READY)
     c5.exec_D()
-    check('Form D kl.exec in _Ready_: _Invalid_ (GR20)', c5.state == INVALID)
+    check('Form D kl.exec in _Ready_: _Invalid_ (GR21)', c5.state == INVALID)
     c3 = generated()
     c3.exec_C(512)
     c3.setst(PK_OUT)
-    check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR20, GR23)', c3.state == INVALID)
+    check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR21, GR24)', c3.state == INVALID)
     check('_pubkey_Output_, entered by the Machine, emits the ACVP pubkey, then _Success_ (MR7)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
     cc = generated()
@@ -419,7 +419,7 @@ def t_state_machine():
     cc.setst(PK_OUT)
     check('entering _pubkey_Output_ by kl.setst zeroes MachineUse; the pubkey is emitted again', cc.use == 0
           and b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
-    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR21, GR34)',
+    check('kl.exec after the field is complete (in _Success_): _Invalid_, OUTPUT zeroed (GR22, GR35)',
           cc.exec_C(16) == bytes(16) and cc.state == INVALID)
     cc = generated(aux=SHAKE256)
     cc.setst(MU_IN)
@@ -464,7 +464,7 @@ def t_state_machine():
     check('_pubkey_Output_ with HasPubKey false: _Invalid_', cc.state == INVALID)
     cc = loaded(44, (MU_IN, bytes(64)))
     cc.exec_D()
-    check('Form D kl.exec in _mu_Input_: _Invalid_ (GR21)', cc.state == INVALID)
+    check('Form D kl.exec in _mu_Input_: _Invalid_ (GR22)', cc.state == INVALID)
 
 def t_compute_pubkey_and_import():
     section('_compute_pubKey_, and tr across export/import')
@@ -529,7 +529,7 @@ def t_sign_verify():
     cc = loaded(44, (SK_IN, h(hed['sk'])), (MU_IN, h(hed['mu'])), rbg=RBG(None))
     cc.setst(SIGN_GEN, 0)
     cc.exec_D()
-    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR65)',
+    check('RBG failure in hedged _Sign_Generate_: _Invalid_, Content cleared (GR66)',
           cc.state == INVALID and cc.privkey == b'' and cc.signature == b'')
     cc = loaded(44, (PK_IN, h(VECTORS['keyGen'][0]['pk'])))
     cc.setst(SIGN_GEN, 1)
@@ -565,14 +565,14 @@ def t_sign_verify():
     sig = cc.signature
     run(cc, SIGN_VERIFY)
     check('sign then verify in one CC: _Success_', cc.state == SUCCESS and len(sig) == 2420)
-    cc.setst(READY)                                 # GR22; _Ready_ keeps the keys
+    cc.setst(READY)                                 # GR23; _Ready_ keeps the keys
     for st, data in ((MU_IN, bytes([mu[0] ^ 1]) + mu[1:]), (SIGN_IN, sig)):
         cc.setst(st)
         cc.exec_B(data)
     run(cc, SIGN_VERIFY)
     check('verification under another mu, after _Ready_: _Failure_ (a Valid State)', cc.state == FAILURE)
     cc.setst(SIGN_IN)
-    check('GR22: _Failure_ -> _Sign_Input_ -> _Invalid_', cc.state == INVALID)
+    check('GR23: _Failure_ -> _Sign_Input_ -> _Invalid_', cc.state == INVALID)
     c2 = generated()
     c2.setst(MU_IN)
     c2.exec_B(mu)
@@ -580,7 +580,7 @@ def t_sign_verify():
     check('deterministic signing is reproducible', c2.signature == sig)
 
 def t_progress():
-    section('Interrupted _Sign_Generate_: MachineUse as P (GR56)')
+    section('Interrupted _Sign_Generate_: MachineUse as P (GR57)')
     hed = mu_vec(True)
 
     def armed(aux=0):
@@ -606,7 +606,7 @@ def t_progress():
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
     cc.setst(SIGN_GEN, 0)
-    check('same-State kl.setst in a halted _Sign_Generate_: _Invalid_, P zeroed, rnd destroyed (GR20, GR23, GR35)',
+    check('same-State kl.setst in a halted _Sign_Generate_: _Invalid_, P zeroed, rnd destroyed (GR21, GR24, GR36)',
           cc.state == INVALID and cc.use == 0 and cc.rnd == bytes(32))
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
@@ -625,14 +625,14 @@ def t_progress():
           == D.sign_internal_mu(h(hed['sk']), h(hed['mu']), bytes(32), 44))
     cc.exec_C(64)
     cc.setst(SIGN_OUT)
-    check('same-State kl.setst in _Sign_Output_ part-way: _Invalid_, no re-emission (GR20, GR23)',
+    check('same-State kl.setst in _Sign_Output_ part-way: _Invalid_, no re-emission (GR21, GR24)',
           cc.state == INVALID and cc.signature == b'')
     cc, rbg = armed()
     cc.exec_D(halt_after=0)
     cc.restrictl_policy(0b10)
     cc.exec_D()
     check('narrowed to verify-only during a halted _Sign_Generate_: the resuming kl.exec -> _Invalid_, no signature '
-          '(GR25, MR9)', cc.state == INVALID and cc.signature == b'')
+          '(GR26, MR9)', cc.state == INVALID and cc.signature == b'')
 
     def finish(x):
         while x.exec_D(halt_after=1) == 'halted':
@@ -642,12 +642,12 @@ def t_progress():
     cc.exec_D(halt_after=2)
     a, b = cc.export_import(), cc.export_import()
     check('export/import with Content2 of a halted _Sign_Generate_, into two lockers: both resume to the same '
-          'signature, one draw (GR55)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
+          'signature, one draw (GR56)', finish(a).signature.hex() == finish(b).signature.hex() == hed['sig']
           and rbg.draws == 1)
     cc, rbg = armed()
     cc.exec_D(halt_after=2)
     r = cc.export_import(content2=False)
-    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR57, GR56)',
+    check('export/import without Content2: the operation restarts, P = 0, the held rnd destroyed (GR58, GR57)',
           r.state == SIGN_GEN and r.use == 0 and r.rnd == bytes(32) and r.kappa == 0)
     finish(r)
     check('the restarted operation draws a fresh rnd and signs with it', rbg.draws == 2 and r.signature
@@ -707,18 +707,18 @@ def t_derive():
             kl_derive(dest, src, n)
             res.append((src.state, bytes(dest) if isinstance(dest, bytearray) else (dest.state, dest.key), src.use))
         check(f'source in _{st}_ (the output of an ML-DSA Machine is not a source) into SHAKE256 '
-              '_Hash_Absorb_, an AES-256 `key` in _Ready_ or an ECC `Scalar`: source _Invalid_ (GR39 item 1), '
+              '_Hash_Absorb_, an AES-256 `key` in _Ready_ or an ECC `Scalar`: source _Invalid_ (GR40 item 1), '
               'nothing transferred, destination unchanged', True, res,
               [(INVALID, b'', 0), (INVALID, (READY, bytes(32)), 0), (INVALID, (SET_SCALAR, bytes(32)), 0)])
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
     kd = KeyDest(ecc=False)
     kl_derive(kd, cc, 64)
-    check('source in _privkey_Input_ (no endpoint): only it becomes _Invalid_ (GR39 item 1)', cc.state == INVALID
+    check('source in _privkey_Input_ (no endpoint): only it becomes _Invalid_ (GR40 item 1)', cc.state == INVALID
           and kd.state == READY and kd.key == bytes(32))
     cc = loaded(44, (SK_IN, h(VECTORS['keyGen'][0]['sk'])))
     kl_derive(cc, SecretSrc(), 32)
     check('a shared-secret source into an ML-DSA locker (no destination endpoint): destination _Invalid_ '
-          '(GR39 item 2), privkey cleared', True, (cc.state, cc.privkey), (INVALID, b''))
+          '(GR40 item 2), privkey cleared', True, (cc.state, cc.privkey), (INVALID, b''))
 
 def t_hints():
     section('FIPS 204 Algorithm 21 hint checks')

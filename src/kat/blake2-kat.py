@@ -123,13 +123,13 @@ class Blake2:
             self.F(final)
             self.block = bytearray(self.b // 8)
 
-    def gated(self):                                      # MR9, GR25: with a system key the only operation (the MAC)
+    def gated(self):                                      # MR9, GR26: with a system key the only operation (the MAC)
         return bool(self.syskey) and not self.policy & 1  # needs bit 0; every useful State leads only to it
 
-    def restrict(self, rq):                               # kl.restrictl: AND-s _MachinePolicy_ with `rq` (GR25)
-        if not inert(self.st) and self.syskey:            # GR32; unused without a system key: it stays zero
+    def restrict(self, rq):                               # kl.restrictl: AND-s _MachinePolicy_ with `rq` (GR26)
+        if not inert(self.st) and self.syskey:            # GR33; unused without a system key: it stays zero
             self.policy &= rq                             # <<KLE-instruction-restrict>>
-            if not self.policy & 1:                       # GR25: a value the Machine forbids (bit 0 must be set)
+            if not self.policy & 1:                       # GR26: a value the Machine forbids (bit 0 must be set)
                 return self.invalid()
         return self                                       # otherwise the restriction alone changes no State
 
@@ -138,14 +138,14 @@ class Blake2:
         if t == UNCONF:                                   # kl.clear (#immed7 = 0), in any State and Form
             self.__init__(self.v, self.sks, self.bad)
             return self
-        if t in ERROR_STATES:                             # GR36: in every State
+        if t in ERROR_STATES:                             # GR37: in every State
             self.st = t
             return self
-        if inert(self.st):                                # GR32
+        if inert(self.st):                                # GR33
             return self
-        if t == READY:                                    # GR22: Form A
+        if t == READY:                                    # GR23: Form A
             return self.ready() if xs is None else self.invalid()
-        if t in (ABSORB, LAST, OUTPUT) and self.gated():  # GR25: States that lead only to the disabled operation
+        if t in (ABSORB, LAST, OUTPUT) and self.gated():  # GR26: States that lead only to the disabled operation
             return self.invalid()
         if t == SET_AUX:                                  # the operation: nn = Xs[7:0], kk = Xs[15:8]
             nn, kk = (xs or 0) & 0xFF, (xs or 0) >> 8 & 0xFF
@@ -176,7 +176,7 @@ class Blake2:
                 return self.invalid()
             self.st, self.block_base, self.last_block_len, self.out_len = OUTPUT, 0, 0, xs or 8 * self.nn
             return self
-        return self.invalid()                             # e.g. _Hash_Output_ from _Ready_ (GR21)
+        return self.invalid()                             # e.g. _Hash_Output_ from _Ready_ (GR22)
 
     def finalize(self):
         """<<KLE-BLAKE2>> finalize(): F(true) on the block that holds the last byte, or on the empty message."""
@@ -194,28 +194,28 @@ class Blake2:
 
     # -- kl.exec
     def exec(self, data, halt=False, klstart=0):
-        """halt: halt at the first interruption point; self.klstart then records it (GR49)."""
+        """halt: halt at the first interruption point; self.klstart then records it (GR50)."""
         self.klstart = 0
-        if inert(self.st):                                # GR32
+        if inert(self.st):                                # GR33
             return self
         if self.st in (ABSORB, LAST, OUTPUT) and self.gated():
-            return self.invalid()                         # GR25: the first operation after the narrowing
+            return self.invalid()                         # GR26: the first operation after the narrowing
         if self.st == ABSORB:
             bits, final = 8 * len(data), False
         elif self.st == LAST:
             L = self.last_block_len
-            if 8 * len(data) < L:                         # the whole piece (MR1, GR52 item 1): length first
+            if 8 * len(data) < L:                         # the whole piece (MR1, GR53 item 1): length first
                 return self.invalid()
-            if klstart >= len(data):                      # GR52 item 2: an empty window does not reach the Machine
+            if klstart >= len(data):                      # GR53 item 2: an empty window does not reach the Machine
                 return self
-            if not L or klstart:                          # MR8; interruption point 0 only (MR2, GR52 item 3)
+            if not L or klstart:                          # MR8; interruption point 0 only (MR2, GR53 item 3)
                 return self.invalid()
             bits, final = L, True
         else:
-            return self.invalid()                         # GR20 in _Ready_, GR21 elsewhere
+            return self.invalid()                         # GR21 in _Ready_, GR22 elsewhere
         ib = 8 * klstart
         if klstart and klstart < len(data) and not (self.st == ABSORB and self.block_base in (0, self.b)):
-            return self.invalid()                         # GR52 item 3: 0, or block_base = 0 or b in _Hash_Absorb_
+            return self.invalid()                         # GR53 item 3: 0, or block_base = 0 or b in _Hash_Absorb_
         if ib < bits and 'eager-key' not in self.bad:
             self.key_block()                              # the pending system-key block, before the first byte
         while ib < bits:
@@ -237,16 +237,16 @@ class Blake2:
 
     def output(self, nbytes, klstart=0, prior=None):
         head = (prior or bytes(nbytes))[:klstart]         # MR6: the bytes below klstart are not written
-        if inert(self.st):                                # GR32, GR34
+        if inert(self.st):                                # GR33, GR35
             return head.ljust(nbytes, b'\0')
-        if self.st != OUTPUT or self.gated():             # GR25 in _Hash_Output_
+        if self.st != OUTPUT or self.gated():             # GR26 in _Hash_Output_
             self.invalid()
-            return head.ljust(nbytes, b'\0')              # GR34: [klstart, KLLEN/8-1] zeroed
-        if klstart >= nbytes:                             # GR52 item 2: an empty window writes nothing
+            return head.ljust(nbytes, b'\0')              # GR35: [klstart, KLLEN/8-1] zeroed
+        if klstart >= nbytes:                             # GR53 item 2: an empty window writes nothing
             return b''
-        if klstart and self.block_base:                   # GR52 item 3: 0, or any byte offset at block_base = 0
+        if klstart and self.block_base:                   # GR53 item 3: 0, or any byte offset at block_base = 0
             self.invalid()
-            return head.ljust(nbytes, b'\0')              # GR34: [klstart, KLLEN/8-1] zeroed
+            return head.ljust(nbytes, b'\0')              # GR35: [klstart, KLLEN/8-1] zeroed
         digest = b''.join(x.to_bytes(self.w // 8, 'little') for x in self.h)[:self.nn]
         n = min(nbytes - klstart, self.out_len // 8)
         out = digest[self.block_base // 8:self.block_base // 8 + n]
@@ -519,7 +519,7 @@ for v in VARIANTS:
             .restrict(0b10).st,
             Blake2(v, sks=sks).provision(1, SKID).restrict(0b01).st]
     check(f'{v}: system key: a kl.restrictl clearing bit 0 leaves _MachinePolicy_ = 0, which the Machine forbids: '
-          '_Invalid_ at once, in _Hash_Absorb_ and in _Hash_Output_ (GR25); clearing the unset bit 1 changes nothing',
+          '_Invalid_ at once, in _Hash_Absorb_ and in _Hash_Output_ (GR26); clearing the unset bit 1 changes nothing',
           None, gate, [INVALID, INVALID, READY])
     check(f'{v}: without a system key nothing is gated, and a kl.restrictl keeps the unused _MachinePolicy_ zero, '
           'whatever its request (<<KLE-instruction-restrict>>)', None,
@@ -537,7 +537,7 @@ for v in VARIANTS:
           sizes == [-(-(n + 128 + b) // 128) * 16, -(-(64 + n + 128 + b) // 128) * 16]
           and img[:8] == v2b(SKID, 8) and img[8 + n // 8 + 4:8 + n // 8 + 8] == v2b(nnmax, 2) + v2b(9, 2))
     part = Blake2(v, sks=sks).provision(1, SKID).setst(ABSORB).exec(b'ab').export()[1]
-    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR75)',
+    check(f'{v}: no system-key byte in `block` of a Content in _Ready_ or after 2 B in _Hash_Absorb_ (GR76)',
           img[8 + n // 8 + 16:][:b // 8] == bytes(b // 8)
           and part[8 + n // 8 + 16:][:b // 8] == b'ab' + bytes(b // 8 - 2))
 
@@ -581,7 +581,7 @@ for v in VARIANTS:
           'from it (Xs = 0 then ends the message): the digest, unkeyed and with a system key', None,
           (halts[0], got), ([bb - 3 + i * bb for i in range(5)], [oracle(v, data, nnmax), oracle(v, data, nnmax, b's' * 24)]))
     c = Blake2(v).provision().setst(ABSORB).exec(data[:3])
-    check(f'{v}: a resumption at klstart = 1 while block_base is neither 0 nor b -> _Invalid_ (GR52)', None,
+    check(f'{v}: a resumption at klstart = 1 while block_base is neither 0 nor b -> _Invalid_ (GR53)', None,
           c.exec(data[3:], klstart=1).st, INVALID)
     got = [Blake2(v).provision().setst(ABSORB).exec(data, klstart=5).setst(LAST, 0).setst(OUTPUT).output(nnmax),
            Blake2(v, sks=sks).provision(1, SKID).setst(ABSORB).exec(data, klstart=5).setst(LAST, 0).setst(OUTPUT)
@@ -602,7 +602,7 @@ for v in VARIANTS:
                 [sk[:8] in c.export()[1][8:] for c in (new(), c1, c2, c3, c4)]))
 check('system key: no Content holds a system-key byte, with the key block pending (after the kl.setst into '
       '_Hash_Absorb_, after an empty window, in _Hash_Absorb_Last_Block_ before its piece; cumul_len = 0), after a '
-      'halt of the first absorbing kl.exec, or after 2 B (<<KLE-BLAKE2>>, GR75)', None, res,
+      'halt of the first absorbing kl.exec, or after 2 B (<<KLE-BLAKE2>>, GR76)', None, res,
       [(True, 0, 0, [False] * 5)] * 2)
 res = []
 for v in VARIANTS:
@@ -621,7 +621,7 @@ for v in VARIANTS:
     c2 = Blake2(v).provision().setst(ABSORB).exec(b'ab').setst(LAST, 8)
     st2 = c2.exec(b'c', klstart=1).st
     check(f'{v}: an empty-window kl.exec in _Hash_Absorb_Last_Block_ (KLLEN = 0 after Xs = 0; klstart = KLLEN/8 '
-          'with Xs = 8) does not reach the Machine (GR52 item 2): the State is kept and the digest unchanged', None,
+          'with Xs = 8) does not reach the Machine (GR53 item 2): the State is kept and the digest unchanged', None,
           (st, c.setst(OUTPUT).output(PARAMS[v][4]), st2),
           (LAST, oracle(v, b'ab', PARAMS[v][4]), LAST))
 
@@ -670,7 +670,7 @@ for v in VARIANTS:
     s2, o2 = q.exec_out(8, prior=b'\xa5' * 8)
     check(f'{v}, through the Port: a Form C kl.exec resumed at klstart = 5 with block_base = 0 writes '
           'digest[0:n-5] from byte 5, the bytes below kept (MR6); at klstart = 1 with block_base != 0 -> '
-          '_Invalid_ (GR52 item 3), reported as such', None, (s1, o1, s2, q.st, o2),
+          '_Invalid_ (GR53 item 3), reported as such', None, (s1, o1, s2, q.st, o2),
           ('done', b'\xa5' * 5 + oracle(v, b'abc', nnmax)[:nnmax - 5], 'invalid', INVALID, b'\xa5' + bytes(7)))
 res = []
 for v in VARIANTS:
@@ -684,7 +684,7 @@ for v in VARIANTS:
     o1, st2 = c.output(8, klstart=1, prior=b'\xa5' * 8), c.st
     o2 = c.output(8, klstart=1, prior=b'\xa5' * 8)
     check(f'{v}: Form C in _Hash_Output_: klstart = KLLEN/8 is an empty window, the State is kept; klstart = 1 at '
-          'block_base = 0 writes the digest from byte 1; klstart = 1 at block_base != 0 -> _Invalid_ (GR52 items 2, 3)', None,
+          'block_base = 0 writes the digest from byte 1; klstart = 1 at block_base != 0 -> _Invalid_ (GR53 items 2, 3)', None,
           (e, st1, o1, st2, o2, c.st),
           (b'', OUTPUT, b'\xa5' + oracle(v, b'abc', PARAMS[v][4])[:7], OUTPUT, b'\xa5' + bytes(7), INVALID))
 
@@ -692,10 +692,10 @@ section('kl.derive of a shared secret into _Hash_Absorb_ (<<KLE-derive-endpoints
 
 
 def kl_derive(c, secret, length, klstart=0):
-    """A shared-secret field -> the _Hash_Absorb_ kl.exec input (GR42): the whole secret, with klstart = 0 and a
-    length equal to that of the secret (GR39 item 5); uninterruptible (GR46).  Only the destination is modelled."""
+    """A shared-secret field -> the _Hash_Absorb_ kl.exec input (GR43): the whole secret, with klstart = 0 and a
+    length equal to that of the secret (GR40 item 5); uninterruptible (GR47).  Only the destination is modelled."""
     if c.st != ABSORB or klstart or length != len(secret):
-        return c.invalid()                                # GR39 items 2 and 5: the destination
+        return c.invalid()                                # GR40 items 2 and 5: the destination
     return c.exec(secret)                                 # as a kl.exec: a pending system-key block first
 
 
@@ -711,10 +711,10 @@ for v in VARIANTS:
     res = [kl_derive(Blake2(v).provision().setst(ABSORB).exec(b'abc'), SEC, n, ks).st
            for n, ks in ((32, 1), (31, 0), (33, 0))]
     res.append(kl_derive(Blake2(v).provision().setst(ABSORB).setst(LAST, 0), SEC, 32).st)
-    check(f'{v}: klstart = 1 (GR39 item 7), a length of 31 or 33 bytes for a 32-byte secret (GR39 item 5), or a destination in '
-          '_Hash_Absorb_Last_Block_ (GR39 item 2) -> _Invalid_', None, res, [INVALID] * 4)
+    check(f'{v}: klstart = 1 (GR40 item 7), a length of 31 or 33 bytes for a 32-byte secret (GR40 item 5), or a destination in '
+          '_Hash_Absorb_Last_Block_ (GR40 item 2) -> _Invalid_', None, res, [INVALID] * 4)
 
-section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR32, GR36)')
+section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR33, GR37)')
 for v in VARIANTS:
     got = []
     for imm in (UNCONF, KL_STATEEXT_OUT_OF_MEMORY):

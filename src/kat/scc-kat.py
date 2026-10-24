@@ -134,7 +134,7 @@ class Locker:
 
 def err_mdh(m, st):                            # <<KLE-GR-clear-locker-content-error-state>>
     m = put(put(put(m, 'State', st), 'AuxDataLen', 0), 'ADSDropped', 0)
-    return put(m, 'Version', 0) if fld(m, 'Version') == 3 else m   # GR35: a Version of 3 to 0
+    return put(m, 'Version', 0) if fld(m, 'Version') == 3 else m   # GR36: a Version of 3 to 0
 
 def enter_error_state(cl, st):
     cl.content1, cl.content2, cl.mdh = None, None, err_mdh(cl.mdh, st)
@@ -160,7 +160,7 @@ class Unit:
     def _set_managed(self, cl):                # common step 2
         self.klnamedlocker = cl.idx if KL_CFG_PROVISIONING <= cl.state <= 60 else 32
 
-    def _check_transfer(self, cl):             # GR4
+    def _check_transfer(self, cl):             # GR5
         if cl.state in (IMPORTING, EXPORTING) and cl.idx != self.klnamedlocker:
             raise IllegalInstruction
 
@@ -248,9 +248,9 @@ class Unit:
 
     def load(self, cl, mem, at=16):            # kl.load: step 9
         if cl.state == UNCONF or cl.state in ERROR_STATES:
-            return                             # GR32: no operation
+            return                             # GR33: no operation
         if cl.state not in (KL_CFG_PROVISIONING, IMPORTING, KL_CFG_PPI_IMPORTING):
-            raise IllegalInstruction           # GR30
+            raise IllegalInstruction           # GR31
         self._check_transfer(cl)
         off, c1 = content_offset(cl.mdh), self.content1_size(cl.mdh)
         end = off + min(c1 + content2_size(cl.mdh), self.max_admissible(cl.mdh))   # image_end
@@ -265,7 +265,7 @@ class Unit:
     def mgmt_open_export(self, cl):            # kl.mgmt #kl_cfg_exporting: <<KLE-SCC-export>>
         self._check_managed(cl)
         st = cl.state
-        if st == UNCONF:                       # GR32: common steps only
+        if st == UNCONF:                       # GR33: common steps only
             self.klnamedlocker = 32
             return
         if is_valid(st):
@@ -284,9 +284,9 @@ class Unit:
 
     def store(self, cl):                       # kl.store
         if cl.state == UNCONF:
-            return b''                         # GR32: no operation
+            return b''                         # GR33: no operation
         if cl.state not in (EXPORTING, KL_CFG_PPI_EXPORTING):
-            raise IllegalInstruction           # GR30
+            raise IllegalInstruction           # GR31
         self._check_transfer(cl)
         S = v2b(self.reg_SIV, 16) + (v2b(self.reg_IMPQUAL, 16) + v2b(self.reg_SIV2, 16)
                                      if content_offset(cl.mdh) == 48 else b'')
@@ -298,7 +298,7 @@ class Unit:
         """kl_cfg_management_end for base type scc: <<KLE-SCC-import>> steps 10-18. regen = (AuxDataLen,
         Content2) of a replacement ADS; clear_ads=False is the harness-only negative control."""
         self._check_managed(cl)
-        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR32: common steps only
+        if cl.state == UNCONF or cl.state in ERROR_STATES:   # GR33: common steps only
             self.klnamedlocker = 32
             return
         st = fld(ml, 'State')
@@ -790,7 +790,7 @@ kl_swap(u, klf, 2, 5)
 eq("kl.swap mid-export exchanges the lockers; klnamedlocker follows (2 -> 5)",
    (u.klnamedlocker, klf[2].snapshot()), (5, snap5))
 u.klnamedlocker = 32
-check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR4, GR30)",
+check("kl.store from a kl_cfg_exporting locker not named by klnamedlocker: illegal (GR5, GR31)",
       raises(u.store, klf[5]))
 u.klnamedlocker = 5
 img = v2b(ml, 16) + u.store(klf[5])
@@ -801,7 +801,7 @@ u.mgmt_open_import(klf[7], mdh_i)
 klf[1] = Locker(make_mdh(), CONTENT1, idx=1)
 snap1 = klf[1].snapshot()
 kl_rename(u, klf, 1, 7)
-eq("kl.rename onto the named locker discards its import (GR26 item 2); klnamedlocker -> 32",
+eq("kl.rename onto the named locker discards its import (GR27 item 2); klnamedlocker -> 32",
    (u.klnamedlocker, klf[7].snapshot(), klf[1].state), (32, snap1, UNCONF))
 u.mgmt_open_import(klf[4], mdh_i)
 u.load(klf[4], Mem(tampered(scc_i, 8 * (off1 + 6))))
@@ -813,7 +813,7 @@ section("Error States (<<KLE-error-state-transfer>>)")
 bad_c1 = tampered(scc_i, 8 * (off1 + 6))
 cl_fail, res = import_image(unit, Mem(bad_c1))
 failed = err_mdh(mdh_i, AUTH)
-eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR35); "
+eq("authentication failure: State 51, Content cleared, AuxDataLen and ADSDropped 0, other fields kept (GR36); "
    "also after a dropped ADS", (res, cl_fail.snapshot(), import_image(small, Mem(bad_c1))[0].snapshot()),
    (AUTH_F, (failed, (), None), (failed, (), None)))
 before = (unit.reg_SIV, unit.reg_IMPQUAL, unit.reg_SIV2)
@@ -829,7 +829,7 @@ far = new_unit(LST_NO_SLOC, ids=IDS_NEXT_REV, csk=CSK ^ 7, max_aux=0)
 cl_e, res = import_image(far, Mem(img_e))
 far.mgmt_complete(cl_e, cl_e.mdh)
 far.load(cl_e, Mem(img_e))
-eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR32)",
+eq("the short import elsewhere reproduces it; kl_cfg_management_end and kl.load are then no-ops (GR33)",
    (res, cl_e.snapshot()), (AUTH_F, snap))
 dirty = make_mdh(Machine=0xFFF, MachinePolicy=0, KeyType=3, AuxDataLen=5, ADSDropped=1, UsagePolicy=0b10101,
                  MachineExtension=2, SCProtection=3, StateExtension=0xF, AuxInfo=0x155, MachineUse=0x2EEF,
@@ -850,7 +850,7 @@ eq("Error States (State 0, StateExtension 1-15): the short import installs the w
    "and ADSDropped 0, the reserved 7-15 as Invalid, registers untouched", bad, [])
 cl_v = Locker()
 unit.mgmt_open_import(cl_v, put(put(dirty, 'State', INVALID), 'Version', 3))
-eq("the short import of an Error-State MDH with Version 3 installs Version 0 (GR35)",
+eq("the short import of an Error-State MDH with Version 3 installs Version 0 (GR36)",
    fld(cl_v.snapshot()[0], 'Version'), 0)
 cl_x = Locker()
 exp_unit.mgmt_open_import(cl_x, put(dirty, 'State', EXPIRED))
