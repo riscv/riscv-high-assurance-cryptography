@@ -90,10 +90,10 @@ class MdHash:
         elif (s.st, immed, form) == (KL_STATE_READY, KL_STATE_HASH_ABSORB, 'A'):
             s.st, s.last_block_len = immed, s.b  # Form A; last_block_len <- b (<<KLE-hash-functions-MACs-XOFs>>)
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
-                form == 'A' or form == 'C' and xs is not None and 0 <= xs <= s.b):
+                form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
             s.st = immed  # any bit length, MSB-first (MR14, second bullet); Form A is Xs = 0
             s.last_block_len = setst_operand(form, xs)
-        elif immed == KL_STATE_HASH_OUTPUT and form in 'AC' and (
+        elif immed == KL_STATE_HASH_OUTPUT and form in 'AB' and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
             x = setst_operand(form, xs or 0)
             if x and (x % 8 or x > s.t):

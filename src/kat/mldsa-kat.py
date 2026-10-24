@@ -62,7 +62,7 @@ class MLDSALocker:
         self.use = 0                               # GR57: P zeroed on a transition to an Error State
 
     def setst(self, st, aux=None):
-        """Form A (aux None, Xs reads 0) or Form C (aux = Xs)."""
+        """Form A (aux None, Xs reads 0) or Form B (aux = Xs)."""
         if self.state in ERROR_STATES:
             return
         pol = self.get('MachinePolicy')
@@ -354,8 +354,8 @@ def t_mdh():
         cc = MLDSALocker(44)
         cc.setst(imm)
         check(f'kl.setst #{imm} (undefined): _Invalid_', cc.state == INVALID)
-    for st, aux, why in ((MU_IN, 0, 'Form C into _mu_Input_'),
-                         (UNUSED5, None, 'kl.setst #5 (no _ctx_Input_)'), (UNUSED5, 4, 'Form C kl.setst #5'),
+    for st, aux, why in ((MU_IN, 0, 'Form B into _mu_Input_'),
+                         (UNUSED5, None, 'kl.setst #5 (no _ctx_Input_)'), (UNUSED5, 4, 'Form B kl.setst #5'),
                          (UNUSED7, None, 'kl.setst #7 (no _tr_Input_)')):
         cc = generated()
         cc.setst(st, aux)
@@ -506,7 +506,7 @@ def t_sign_verify():
     det, hed = mu_vec(False), mu_vec(True)
     cc = loaded(44, (SK_IN, h(det['sk'])), (MU_IN, h(det['mu'])))
     cc.setst(SIGN_GEN, 1)
-    check('Form C kl.setst with Xs != 0 selects deterministic signing (Hedged clear)', not cc.flag('Hedged'))
+    check('Form B kl.setst with Xs != 0 selects deterministic signing (Hedged clear)', not cc.flag('Hedged'))
     cc.exec_D()
     check(f"deterministic _Sign_Generate_ = ACVP {det['src']}, rnd zero", cc.signature.hex() == det['sig']
           and cc.state == SIGN_OUT and cc.rnd == bytes(32))

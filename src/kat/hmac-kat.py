@@ -260,19 +260,19 @@ class Hmac:
             h.ready()
             s.st, s.tag_len = KL_STATE_READY, 0
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
-                form in ('A', 'C') and 0 <= setst_operand(form, xs) <= h.b):
+                form in ('A', 'B') and 0 <= setst_operand(form, xs) <= h.b):
             s.st = immed  # a final piece of any bit length (as in H); Form A: Xs = 0
             h.last_block_len = setst_operand(form, xs)
         elif (s.st, immed) == (KL_STATE_HASH_LAST_BLOCK, KL_STATE_HASH_OUTPUT) and h.last_block_len == 0:
             s.st = KL_STATE_HASH_ABSORB  # finalize as from _Hash_Absorb_
             s.setst(immed, form, xs)
-        elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT) and form in ('A', 'C') and s.policy & 1:
+        elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_OUTPUT) and form in ('A', 'B') and s.policy & 1:
             xs = setst_operand(form, xs)
             if xs and (xs % 8 or xs < 64 or xs > s.d):
                 return s.reset()  # <<KLE-HMAC>>: a bound is a multiple of 8, 64 <= Xs <= t
             s.finish()
             s.st, h.out_len = immed, xs or s.d
-        elif immed == KL_STATE_HASH_VERIFY and form in ('A', 'C') and s.policy & 2 and (
+        elif immed == KL_STATE_HASH_VERIFY and form in ('A', 'B') and s.policy & 2 and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and h.last_block_len == 0):
             xs = setst_operand(form, xs)
             if xs % 8 or xs < 64:
@@ -583,7 +583,7 @@ for label, variant, ops in [
         ('KIP kl.setst to _Set_Key_ (cannot be re-keyed)', 'KIP', (SK,)),
         ('NIK _Ready_ -> _Hash_Absorb_', 'NIK', (A,)),
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
-        ('NIK Form C kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'C'),)),
+        ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
         ('NIK kl.exec after K0 is complete (MR7)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
         ('kl.exec in _Ready_ (GR21)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (GR22), output zeroed', 'KIP', (A, C(16))),
@@ -728,7 +728,7 @@ check('shared secret into _Hash_Absorb_ with length 29, 31 or 32 for 30 B (SHA-5
       '(SHA3-256) -> destination _Invalid_ (GR40 item 5: exactly the secret length)', None, res,
       [('refused', KL_STATEEXT_INVALID)] * 6)
 dst = fresh('SHA-512', 'NIK', key7, (A, B(b'abc')))
-dst.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
 check('shared secret into HMAC-SHA-512 _Hash_Absorb_Last_Block_ (not an endpoint, GR40 item 2): destination _Invalid_',
       (kl_derive(dst, FieldSrc(S32), 32), dst.st) == ('refused', KL_STATEEXT_INVALID))
 src, dst = CmacSrc(bytes(16)), fresh('SHA-256', 'NIK', key7, (A,))
@@ -862,25 +862,25 @@ for name in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
         mv = sl(b2v(pat), 8 * nb + L - 1, 0)
         piece = v2b(sl(mv, 8 * nb + L - 1, 8 * nb) | 0xff << L, (L + 7) // 8 + 1)  # junk above L (MR5)
         cl = fresh(name, ops=(A, B(pat[:nb])))
-        cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', L)
+        cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
         r = cl.exec('B', piece)[0]
         st = cl.st
         tag = run(cl, O, C(d // 8))[1]
         check(f'HMAC-{name}: {nb} B, then a {L}-bit piece ({what}) = bit-level reference', None,
               (r, st, tag), ('retired', KL_STATE_HASH_LAST_BLOCK, ref_hmac_bits(name, b'key', mv, 8 * nb + L)))
 cl = fresh('SHA3-256', ops=(A, B(pat[:3])))
-cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 13)
+cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)
 c1 = cl.export()
 cl = Hmac.load('SHA3-256', 'KIP', cl.st, c1)
 cl.exec('B', pat[3:5])
 check('HMAC-SHA3-256: export/import between the kl.setst and the kl.exec of a 13-bit piece', None,
       run(cl, O, C(32))[1], ref_hmac_bits('SHA3-256', b'key', b2v(pat[:5]), 37))
-for label, ops in [('_Hash_Output_ before the piece', (A, B(pat[:3]), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 13), O)),
-                   ('a second piece (MR8)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 13), B(pat[:2]), B(pat[:2]))),
-                   ('Xs = b + 1', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 1089))),
-                   ('KLLEN < last_block_len (MR1)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 13), B(pat[:1])))]:
+for label, ops in [('_Hash_Output_ before the piece', (A, B(pat[:3]), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), O)),
+                   ('a second piece (MR8)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:2]), B(pat[:2]))),
+                   ('Xs = b + 1', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089))),
+                   ('KLLEN < last_block_len (MR1)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:1])))]:
     check(f'HMAC-SHA3-256 _Invalid_: {label}', fresh('SHA3-256', ops=ops).st == KL_STATEEXT_INVALID)
-cl = fresh('SHA-256', ops=(A, B(b'abc'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)))
+cl = fresh('SHA-256', ops=(A, B(b'abc'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)))
 r = cl.exec('B', b'')[0]
 st = cl.st
 check('HMAC-SHA-256: after Xs = 0, a kl.exec with KLLEN = 0 is an empty window (GR53 item 2): _Hash_Absorb_Last_Block_ '
@@ -890,7 +890,7 @@ res = []
 for name in ('SHA-256', 'SM3', 'SHA-512'):
     for L in (12, 13, 0):
         cl = fresh(name, ops=(A, B(pat[:3])))
-        cl.setst(KL_STATE_HASH_LAST_BLOCK, 'C', L)
+        cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
         if L:
             cl.exec('B', pat[3:3 + -(-L // 8)])
         res.append(run(cl, O, C(16))[1] == ref_hmac_bits_msb(name, b'key', pat[:3], pat[3:3 + -(-L // 8)], L)[:16])
@@ -899,7 +899,7 @@ check('HMAC-SHA-256, HMAC-SM3, HMAC-SHA-512: 3 B, then a final piece of 12, 13 o
 r = []
 for xs in (56, 64, 264):
     cl = fresh('SHA-256', ops=(A, B(b'abc')))
-    cl.setst(KL_STATE_HASH_OUTPUT, 'C', xs)
+    cl.setst(KL_STATE_HASH_OUTPUT, 'B', xs)
     out = C(8)(cl)[1] if cl.st == KL_STATE_HASH_OUTPUT else None
     r.append((cl.st, out))
 check('HMAC bound (<<KLE-HMAC>>): Xs = 56 -> _Invalid_ (below 64); Xs = 64 -> the first 8 B, then _Success_; '
@@ -908,7 +908,7 @@ check('HMAC bound (<<KLE-HMAC>>): Xs = 56 -> _Invalid_ (below 64); Xs = 64 -> th
        (KL_STATEEXT_INVALID, None)])
 
 section('_Hash_Verify_ and _MachinePolicy_ (generate: bit 0, verify: bit 1)')
-V = lambda xs: lambda c: c.setst(KL_STATE_HASH_VERIFY, 'C', xs)
+V = lambda xs: lambda c: c.setst(KL_STATE_HASH_VERIFY, 'B', xs)
 cg = fresh('SHA-256', ops=(A, B(b'abc'), O))
 cg.restrictl(0b10)
 cv = fresh('SHA-256', ops=(A, B(b'abc')))

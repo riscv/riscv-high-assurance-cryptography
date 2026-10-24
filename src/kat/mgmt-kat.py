@@ -141,11 +141,11 @@ def decode(w):
             raise Trap('illegal', 1)
         k = lk(r, rd, km=True)
         try:
-            form = setst_form(F, rs1)                               # Form A is Form C with rs1 = X0
+            form = setst_form(F, rs1)                               # Form A is Form B with rs1 = X0
         except ValueError:
-            raise Trap('illegal', 1)                                # GR1: F = 0b10 and 0b11 reserved
+            raise Trap('illegal', 1)                                # GR1: F = 0b11 reserved
         if G == 3 or imm >> 3 == 0b0111:                            # kl.mgmt: G = 0b11, #immed7 56-58 or 63
-            if G != 3 or imm >> 3 != 0b0111 or 59 <= imm <= 62: raise Trap('illegal', 1)
+            if G != 3 or imm >> 3 != 0b0111 or 59 <= imm <= 62 or form == 'B': raise Trap('illegal', 1)
             return ('kl.mgmt', form, k, imm)
         return ({0: 'kl.clear', CLEAR_ADS: 'kl.clearads'}.get(imm, 'kl.setst'), form, k, imm)
     # kl.load / kl.input and kl.store / kl.output share one encoding each; klnamedlocker selects the target (GR5)
@@ -672,8 +672,8 @@ class Unit:
         return off, n, off + n, off + min(n, c1 + 16 * (MAX_ADL - 2))
 
     # -- kl.mgmt  <<KLE-instruction-mgmt>>, <<KLE-locker-management>>
-    def mgmt(self, k, imm, ml=None, form='C', vec_bits=128):
-        if imm not in (PROV, EXP, IMP, END) or form not in ('A', 'B', 'C') or (form == 'B' and (not self.zklv or self.vstart)):  # GR7
+    def mgmt(self, k, imm, ml=None, form='D', vec_bits=128):
+        if imm not in (PROV, EXP, IMP, END) or form not in ('A', 'C', 'D') or (form == 'C' and (not self.zklv or self.vstart)):  # GR7
             raise Trap('illegal', 1)
         via_km = k == 'KLNL'
         k = self._idx(k, km=True)
@@ -703,7 +703,7 @@ class Unit:
         if opening: return self._open_in(k, imm, ml)
         return self._open_export(k) if imm == EXP else self._complete(k, ml)
     def _mdh_check(self, form, vec_bits=128):
-        if form == 'B' and vec_bits < 128:                          # GR6: Form B
+        if form == 'C' and vec_bits < 128:                          # GR6: Form C
             raise Trap('illegal', 2)
     def _mgmt_md(self, form, ml, vec_bits=128):
         return as_md(0 if form == 'A' else ml)                      # Form A: an all-zero MDH (GR3)
@@ -826,14 +826,14 @@ class Unit:
 
     # -- kl.setst family  <<KLE-instruction-setst>>
     def setst(self, k, imm, aux=None, form='A', vec_bits=128):
-        if form not in ('A', 'B', 'C'): raise Trap('illegal', 1)   # GR1: no Form B
+        if form not in ('A', 'B', 'C', 'D'): raise Trap('illegal', 1)   # GR1
         if imm == EXPIRED and not self.zklexpire:                   # reserved (kl.setste: GR24)
             raise Trap('illegal', 1)
         if 56 <= imm <= 63: return self.mgmt(k, imm, aux, form=form, vec_bits=vec_bits)
         if imm == CLEARALL:                                         # kl.clearall: Form A, locker 0, r = 0
             if form == 'A' and k == 0: return self.clearall()
             raise Trap('illegal', 1)
-        if form == 'B' and (not self.zklv or self.vstart): raise Trap('illegal', 1)          # GR7: no vstart value
+        if form == 'C' and (not self.zklv or self.vstart): raise Trap('illegal', 1)          # GR7: no vstart value
         k = self._idx(k, km=True)                                   # GR4: KLNL admitted
         self._pre()
         if k == NONE: return 'noop'                                 # GR33: KLNL at 32, as on an Unconfigured locker
@@ -1308,7 +1308,7 @@ def finished(u, saved):
     """Management code restores klnamedlocker when it is done (<<KLE-CSR-klnamedlocker>>)."""
     u.klnamedlocker = saved
 
-def provision(u, k, m, content=None, via='load', form='C', done_form='C'):
+def provision(u, k, m, content=None, via='load', form='D', done_form='D'):
     content, saved = pi_content(m) if content is None else content, u.klnamedlocker
     u.mgmt(k, PROV, m, form=form)
     if u.lockers[k].mdh['State'] == PROV:
@@ -1448,7 +1448,7 @@ def opened(imm=PROV, m=None, k=0, **kw):
     u.mgmt(k, imm, cipher() if m is None else m)
     return u
 
-def export(u, k, via='store', form='C'):
+def export(u, k, via='store', form='D'):
     """MDH, then the image; an Error-State locker is its MDH alone."""
     m, n, saved = u.getmd(k), u.size(k=k), u.klnamedlocker
     if m['State'] in ERROR_STATES: return mdh_bytes(m)
@@ -1463,7 +1463,7 @@ def export(u, k, via='store', form='C'):
     finished(u, saved)
     return mdh_bytes(m) + img
 
-def import_(u, k, img, via='load', form='C', halt_after=None):
+def import_(u, k, img, via='load', form='D', halt_after=None):
     ml, saved = unpack(b2v(img[:16])), u.klnamedlocker
     u.mgmt(k, IMP, ml, form=form)
     if u.lockers[k].mdh['State'] not in CONFIG:
@@ -1760,8 +1760,8 @@ def t_lengths():
     g = pv(fresh(), 0, cipher())
     before, g.vstart = g.getmd(0), 16
     eq('vstart != 0 on a vector form that produces no vstart value: illegal-instruction exception (GR7), no effect',
-       [trap_of(g.size, 'C', m=base), trap_of(g.avail, 'C', m=base), trap_of(g.mgmt, 1, PROV, cipher(), form='B'),
-        trap_of(g.setst, 0, ToyCipher.ENCRYPT, 1, form='B'), trap_of(g.restrict, 0, rq(UsagePolicy=0b11110), 'v'),
+       [trap_of(g.size, 'C', m=base), trap_of(g.avail, 'C', m=base), trap_of(g.mgmt, 1, PROV, cipher(), form='C'),
+        trap_of(g.setst, 0, ToyCipher.ENCRYPT, 1, form='C'), trap_of(g.restrict, 0, rq(UsagePolicy=0b11110), 'v'),
         g.getmd(0) == before, g.getst(1), g.vstart], ['illegal/1'] * 5 + [True, 0, 16])
     ok = []
     for adl, drop in ((0, 0), (4, 0), (4, 1), (6, 0)):
@@ -2021,11 +2021,11 @@ def t_mgmt():
         u.getmd(0)['MachineUse'], u.klnamedlocker, u.getmd(0)['AuxDataLen'], len(u.lockers[0].c2), u.lockers[0].c1,
         u.size(k=0)), ('done', 0, 'completed', READY, 0, 0, 0, ADS_BLOCKS, 32, content, 128))
     ref, got = (u.getmd(0), u.lockers[0].c1, u.lockers[0].c2), []
-    for via, form in (('mv', 'C'), ('mvv', 'B'), ('load', 'C')):
+    for via, form in (('mv', 'D'), ('mvv', 'C'), ('load', 'D')):
         w = fresh().csrs(klstart=5 if via == 'load' else 0)
         provision(w, 0, m, via=via, form=form)
         got.append((w.getmd(0), w.lockers[0].c1, w.lockers[0].c2))
-    eq('provisioning via kl.mvin, vector kl.mvin (Form B), kl.load (klstart ignored) agree', got, [ref] * 3)
+    eq('provisioning via kl.mvin, vector kl.mvin (Form C), kl.load (klstart ignored) agree', got, [ref] * 3)
     w, starts = opened(m=m), []
     for o in (0, 16):
         starts.append(w.klstart)
@@ -2062,9 +2062,9 @@ def t_mgmt():
        ((v.siv, v.impqual, v.siv2), v.mgmt(1, END, md0), v.getmd(1), v.lockers[1].c1, v.lockers[1].c2),
        ((u.siv, u.impqual, u.siv2), 'completed', md0, content, u.lockers[0].c2))
     w1, w3 = fresh(), fresh()
-    eq('import via kl.mvin, Form B agree; export via kl.mvout agrees with kl.store',
+    eq('import via kl.mvin, Form C agree; export via kl.mvout agrees with kl.store',
        [(import_(w1, 2, img, via='mv'), w1.getmd(2), w1.lockers[2].c1),
-        (w3.mgmt(2, IMP, md0, form='B'), import_(w3, 2, img)), export(v, 1, via='mv') == img],
+        (w3.mgmt(2, IMP, md0, form='C'), import_(w3, 2, img)), export(v, 1, via='mv') == img],
        [(READY, md0, content), ('opened', READY), True])
     u = rc()
     ex(u, 0, n=32)
@@ -2103,30 +2103,30 @@ def t_mgmt():
         a, d = mk(), mk()
         got.append((trap_of(a.mgmt, 0, imm, form='A'), a.getmd(0), a.klnamedlocker, a.klstart)
                    == (trap_of(d.mgmt, 0, imm, 0), d.getmd(0), d.klnamedlocker, d.klstart))
-    eq('Form A kl.mgmt is Form C with X0: an all-zero MDH, no KLIOBUF read, no Zklio needed (GR3); a PI '
+    eq('Form A kl.mgmt: an all-zero MDH, no KLIOBUF read, no Zklio needed (GR3); a PI '
        'completion, which reads no MDH, completes', (got, opened(zklio=False).mgmt(0, END, form='A')),
        ([True] * 4, 'completed'))
     w = opened(IMP, cipher(State=1)).csrs(klstart=16)
     u = rc(unit=fresh(zklv=False)).csrs(klstart=16)
-    r = [trap_of(u.mgmt, 0, PROV, cipher(), form='B'), u.klstart]
+    r = [trap_of(u.mgmt, 0, PROV, cipher(), form='C'), u.klstart]
     n = fresh(csk=0)
     n.klstart = 16
     r += [trap_of(n.mgmt, 0, EXP), n.klstart]
     r += [trap_of(u.mgmt, 0, END), u.klstart]
-    eq('GR45: a first-group rejection (Form B without Zklv, GR7) and kl_exc_no_csk keep klstart; a later rejection (end on a '
+    eq('GR45: a first-group rejection (Form C without Zklv, GR7) and kl_exc_no_csk keep klstart; a later rejection (end on a '
        'Valid State) clears it', r, ['illegal/1', 16, 'no_csk', 16, 'illegal/2', 0])
     eq('an exception inside a management operation keeps State and klnamedlocker, clears klstart',
-       (trap_of(w.mgmt, 0, END, form='B', vec_bits=64), w.getst(0), w.klnamedlocker, w.klstart),
+       (trap_of(w.mgmt, 0, END, form='C', vec_bits=64), w.getst(0), w.klnamedlocker, w.klstart),
        ('illegal/2', IMP, 0, 0))
-    eq('Form B VL*SEW < 128 (GR6, second group for kl.mgmt); end on a Complete State illegal/2',
-       [trap_of(w.mgmt, 0, PROV, cipher(), form='B', vec_bits=64), trap_of(rc().mgmt, 0, END, md(State=1))],
+    eq('Form C VL*SEW < 128 (GR6, second group for kl.mgmt); end on a Complete State illegal/2',
+       [trap_of(w.mgmt, 0, PROV, cipher(), form='C', vec_bits=64), trap_of(rc().mgmt, 0, END, md(State=1))],
        ['illegal/2'] * 2)
     x, y = fresh().csrs(klstart=16), rc(3).csrs(klstart=16)
     y.setst(3, INVALID)
-    eq('GR6 for kl.mgmt is locker-state-independent: a short Form B end on an Unconfigured or Error-State locker, which '
+    eq('GR6 for kl.mgmt is locker-state-independent: a short Form C end on an Unconfigured or Error-State locker, which '
        'would fall through, is illegal/2, State kept, klstart cleared (GR17 item 7)',
-       [trap_of(x.mgmt, 0, END, form='B', vec_bits=64), x.klstart,
-        trap_of(y.mgmt, 3, END, form='B', vec_bits=64), y.getst(3), y.klstart],
+       [trap_of(x.mgmt, 0, END, form='C', vec_bits=64), x.klstart,
+        trap_of(y.mgmt, 3, END, form='C', vec_bits=64), y.getst(3), y.klstart],
        ['illegal/2', 0, 'illegal/2', INVALID, 0])
     v = fresh().csrs(klstart=16)
     eq('GR52, inert table: a kl.setst that falls through keeps klstart; a kl.exec that falls through writes 0',
@@ -2135,7 +2135,7 @@ def t_mgmt():
     st5 = w.getst(5)
     eq('GR27 item 1, GR45: a kl.mgmt that traps leaves klnamedlocker '
        'unchanged; one that raises no exception names its target',
-       [trap_of(w.mgmt, 5, EXP, form='B', vec_bits=64), w.klnamedlocker, w.getst(5) == st5,
+       [trap_of(w.mgmt, 5, EXP, form='C', vec_bits=64), w.klnamedlocker, w.getst(5) == st5,
         trap_of(w.mgmt, 5, EXP) is None, w.klnamedlocker], ['illegal/2', 32, True, True, 5])
     v = fresh().csrs(klstart=16, klnamedlocker=0)
     v.siv, v.impqual, v.siv2 = 1, 2, 3
@@ -2635,11 +2635,11 @@ def t_sgr():
          wf[1].getst(0)), (wf[2].exec_(0, 'D'), wf[2].getst(0))], [('invalid', INVALID)] * 3)
     wr = [rc(), rc()]
     eq('GR23: a kl.setst naming Ready is of Form A; a Form B or C one is a wrong Form (GR13, GR22)',
-       [(wr[0].setst(0, READY, 1, form='C'), wr[0].getst(0)), (wr[1].setst(0, READY, form='B'), wr[1].getst(0))],
+       [(wr[0].setst(0, READY, 1, form='B'), wr[0].getst(0)), (wr[1].setst(0, READY, form='C'), wr[1].getst(0))],
        [('invalid', INVALID)] * 2)
     wc = [rc(), rc()]
     eq('GR23: kl.clearads is of Form A; a Form B or C kl.setst with #immed7 = 64 is a wrong Form (GR13, GR22)',
-       [(wc[0].setst(0, CLEAR_ADS, 1, form='C'), wc[0].getst(0)), (wc[1].setst(0, CLEAR_ADS, form='B'),
+       [(wc[0].setst(0, CLEAR_ADS, 1, form='B'), wc[0].getst(0)), (wc[1].setst(0, CLEAR_ADS, form='C'),
          wc[1].getst(0))], [('invalid', INVALID)] * 2)
     rows = []
     for st in CONFIG:
@@ -2651,13 +2651,13 @@ def t_sgr():
     eq('GR30: size, avail, getmd*, getst, swap, rename, Error/clear kl.setst, kl.clearall in Configuration States',
        (rows, w.setst(0, INVALID), w.klnamedlocker), ([[None] * 7] * 10, 'error state', 0))
     w = rc().csrs(klstart=32, klnamedlocker=0)
-    r = [w.setst(0, 0, aux=5, form='C'), w.klstart, w.klnamedlocker, w.clf_free() == w.clf_total]
+    r = [w.setst(0, 0, aux=5, form='B'), w.klstart, w.klnamedlocker, w.clf_free() == w.clf_total]
     w = rc(unit=fresh(siv=3))
     w.mgmt(1, IMP, cipher(State=1))
     w.csrs(kliobuflen=64, klstart=16)
     eq('kl.clear, kl.clearall, reserved #immed7 65 forms',
        r + [w.setst(0, CLEARALL), [w.getst(k) for k in range(32)], w.kliobuflen, w.kliobuftop, bytes(w.kliobuf),
-            w.klstart, w.klnamedlocker, w.siv, w.clf_free() == w.clf_total, trap_of(w.setst, 0, CLEARALL, form='C'),
+            w.klstart, w.klnamedlocker, w.siv, w.clf_free() == w.clf_total, trap_of(w.setst, 0, CLEARALL, form='B'),
             trap_of(w.setst, 3, CLEARALL)],
        ['cleared', 32, NONE, True, 'cleared all', [0] * 32, 0, 0, b'', 0, 32, 0, True] + ['illegal/1'] * 2)
     c = rc(5)                                                       # K0 Unconfigured, K5 configured
@@ -2980,7 +2980,7 @@ def t_errors():
     L = u.llstatus
     eq('exempt accesses execute and set Dirty; none before the zeroizing step',
        [u.clone(5, 0), L[5], u.setst(6, 0), L[6], u.setst(7, 0), L[7], u.mgmt(8, PROV, cipher()), L[8],
-        trap_of(u.mgmt, 9, PROV, cipher(), form='B', vec_bits=64), L[9],
+        trap_of(u.mgmt, 9, PROV, cipher(), form='C', vec_bits=64), L[9],
         trap_of(u.csrs(klnamedlocker=32).mgmt, 9, PROV, md(Machine=M_ABSENT)),
         L[9]],
        ['cloned', 'dirty', 'cleared', 'dirty', 'cleared', 'clean', 'opened', 'dirty', 'illegal/2', 'off', 'unsupported',
@@ -3073,7 +3073,7 @@ def t_save_restore():
        [True, 'done', 'completed', True, 'moved', 'completed', READY, v2b(0x1111, 16) + v2b(0x2222, 16)])
     u, w = pv(fresh(), 0, cipher()), fresh().csrs(klnamedlocker=0)
     u.mgmt(0, EXP)
-    eq('ml passed in GPRs (Form C); klnamedlocker need not name a named locker (Unconfigured: no image)',
+    eq('ml passed in GPRs (Form D); klnamedlocker need not name a named locker (Unconfigured: no image)',
        (u.mgmt(0, END, cipher(State=READY)), u.getst(0), w.getmd(0)['State'], save_context(w)['images']),
        ('completed', READY, 0, {}))
     u, out = pv(fresh(), 3, cipher(SCProtection=1)), Memory()
@@ -3105,7 +3105,7 @@ def t_encodings():
     words = {'kl.exec': enc_r(0, 2, rs2=2, rs1=6, rd=3),
              'kl.size': enc_r(0, 6, rs1=6, rd=3), 'kl.restrictl': enc_r(1, 2, rs1=4, rd=6),
              'kl.getmdl': enc_r(3, 2, rs1=6, rd=3), 'kl.setst': enc_setst(2, F=1, r=1, rs1=4, rd=6),
-             'kl.mgmt': enc_setst(PROV, r=1, rs1=4, rd=6)}
+             'kl.mgmt': enc_setst(PROV, F=2, r=1, rs1=4, rd=6)}
     eq('r = 1 with a register other than X0 is reserved (GR4); kl.load/kl.input and kl.store/kl.output share one '
        'encoding each with Xl (GR5); funct3 = 6 is not KLE',
        ({n: decoded(w) for n, w in words.items()},
@@ -3114,12 +3114,12 @@ def t_encodings():
     eq('GR4: KLNL (r = 1, X0) on every instruction that names a locker: kl.clear, kl.setst (any #immed7, kl.clearads '
        'included), kl.setste, kl.mgmt, kl.exec, kl.getmd*, kl.size/kl.avail Form A, kl.restrict*; kl.clearall is #immed7 65 with '
        'Kd = 0, r = 0, its other forms reserved',
-       [decoded(enc_setst(0, r=1)), decoded(enc_setst(2, r=1, G=1)), decoded(enc_setst(PROV, r=1, rs1=4)),
+       [decoded(enc_setst(0, r=1)), decoded(enc_setst(2, r=1, G=1)), decoded(enc_setst(PROV, F=2, r=1, rs1=4)),
         decoded(enc_r(3, 2, rs1=0, rd=3)), decoded(enc_r(0, 6, rs1=0, rd=3)), decoded(enc_setst(CLEARALL)),
         decoded(enc_setst(CLEARALL, rd=3)), decoded(enc_setst(CLEARALL, r=1)), decoded(enc_setst(CLEARALL, F=1, rs1=2)),
         decoded(enc_r(0, 2, rs1=0)), decoded(enc_r(1, 2, rs1=4)), d(3, rs1=0, rd=7),
         decoded(enc_setst(1, r=1)), decoded(enc_setst(CLEAR_ADS, r=1))],
-       [('kl.clear', 'A', 'KLNL', 0), ('kl.setste', 'A', 'KLNL', INVALID), ('kl.mgmt', 'C', 'KLNL', PROV),
+       [('kl.clear', 'A', 'KLNL', 0), ('kl.setste', 'A', 'KLNL', INVALID), ('kl.mgmt', 'D', 'KLNL', PROV),
         ('kl.getmdl', 'KLNL'),
         ('kl.size', 'A', 'KLNL'), ('kl.clearall',)] + ['illegal/1'] * 3 + [('kl.exec', 'A', 'KLNL')]
        + [('kl.restrictl', 'KLNL'), 'illegal/1', ('kl.setst', 'A', 'KLNL', 1), ('kl.clearads', 'A', 'KLNL', CLEAR_ADS)])
@@ -3192,12 +3192,12 @@ def t_encodings():
         decoded(enc_r(0, 26, rs2=9, rd=1))],
        [('kl.mvin', 'I', 'X9'), ('kl.mvin', 'II', 'V9'), ('kl.mvin', 'III', 'KLIOBUF'), ('kl.mvout', 'IV', 'X9'),
         ('kl.mvout', 'V', 'V9'), ('kl.mvout', 'VI', 'KLIOBUF'), ('kl.exec', 'D', 'K6')] + ['illegal/1'] * 5)
-    names = [decoded(enc_setst(i, rs1=4, rd=6)) for i in range(128)]
-    eq('#immed7: 0111xxx kl.mgmt (59-62 reserved; F = 0b10 reserved, GR1); 48-55 kl.setst (GR25); 0, 64; '
+    names = [decoded(enc_setst(i, F=2, rs1=4, rd=6)) for i in range(128)]
+    eq('#immed7: 0111xxx kl.mgmt (59-62 reserved; F = 0b11 reserved, GR1); 48-55 kl.setst (GR25); 0, 64; '
        '65 only as kl.clearall; '
        '66-127',
        ([i for i in range(128) if names[i][0] == 'kl.mgmt'], [i for i in range(128) if names[i] == 'illegal/1'],
-        decoded(enc_setst(56, F=2, rs1=4, rd=6)), names[0][0], names[64][0], {names[i][0] for i in range(66, 128)}),
+        decoded(enc_setst(56, F=3, rs1=4, rd=6)), names[0][0], names[64][0], {names[i][0] for i in range(66, 128)}),
        ([56, 57, 58, 63], [59, 60, 61, 62, 65], 'illegal/1', 'kl.clear', 'kl.clearads', {'kl.setst'}))
     eq('G selects kl.setst (0b00), kl.setste (0b01), kl.setnl/kl.setnli (0b10) and kl.mgmt (0b11); #immed7 56-63 with '
        'G = 0b00, any other #immed7 with G = 0b11, and kl.setnl/kl.setnli with Kd, r or F other than 0b00/0b01 are reserved',
@@ -3206,11 +3206,13 @@ def t_encodings():
         decoded(enc_setst(0, r=1, G=2)), decoded(enc_setst(1, F=1, rs1=9, G=2)), decoded(enc_setst(0, F=2, rs1=9, G=2)),
         decoded(enc_setst(CLEARALL, G=1)), decoded(enc_setst(CLEARALL, G=3))],
        ['illegal/1', 'illegal/1', ('kl.setnli', 5), ('kl.setnl', 'X9')] + ['illegal/1'] * 6)
-    eq('kl.setst and kl.mgmt: F = 0b00 is Form A with rs1 = X0 and Form C otherwise, F = 0b01 Form B, '
-       'F = 0b10 and 0b11 reserved (GR1)',
+    eq('kl.setst and kl.mgmt: F = 0b00 is Form A with rs1 = X0 and Form B otherwise (reserved for kl.mgmt), '
+       'F = 0b01 Form C, F = 0b10 Form D, F = 0b11 reserved (GR1)',
        [two(enc_setst(i, F=f, rs1=s, rd=6)) for i in (ToyCipher.ENCRYPT, PROV)
         for f, s in ((0, 0), (0, 4), (1, 4), (2, 0), (2, 4), (3, 0), (3, 4))],
-       [x for n in ('kl.setst', 'kl.mgmt') for x in [(n, 'A'), (n, 'C'), (n, 'B')] + ['illegal/1'] * 4])
+       [('kl.setst', 'A'), ('kl.setst', 'B'), ('kl.setst', 'C'), ('kl.setst', 'D'), ('kl.setst', 'D')]
+       + ['illegal/1'] * 2 + [('kl.mgmt', 'A'), 'illegal/1', ('kl.mgmt', 'C'), ('kl.mgmt', 'D'), ('kl.mgmt', 'D')]
+       + ['illegal/1'] * 2)
 
 def t_klnl_pairs():
     section('KLNL in kl.clone, kl.rename, kl.swap and kl.derive  (GR4, GR33)')

@@ -135,9 +135,9 @@ for nb in (1, 5, 447, 448, 449, 511, 1000):
     m = bytes((3 * i + 7) & 0xFF for i in range(-(-nb // 8)))
     res.append(hash_run(Port(), m, nb, 32)[0] == sm3_ref_bits(m, nb))
 check('bit-length messages of 1, 5, 447, 448, 449, 511 and 1000 bits: the final piece MSB-first (<<KLE-SM3>>)', all(res))
-r = [hash_run(Port(), b'abc', 24, x // 8, end=('C', x))[:2] for x in (8, 248, 256)]
-check('bound: Form C Xs = 8, t - 8, t gives that prefix and _Success_; Xs = 264 -> _Invalid_', None,
-      (r, (lambda c: (c.setst(KL_STATE_HASH_OUTPUT, 'C', 264), c.st)[1])(absorbing(b'abc'))),
+r = [hash_run(Port(), b'abc', 24, x // 8, end=('B', x))[:2] for x in (8, 248, 256)]
+check('bound: Form B Xs = 8, t - 8, t gives that prefix and _Success_; Xs = 264 -> _Invalid_', None,
+      (r, (lambda c: (c.setst(KL_STATE_HASH_OUTPUT, 'B', 264), c.st)[1])(absorbing(b'abc'))),
       ([(DIG_ABC[:x // 8], KL_STATE_SUCCESS) for x in (8, 248, 256)], KL_STATEEXT_INVALID))
 control('caller-padded message: the digest differs', digest(b'abc' + pad(3)) != DIG_ABC)
 
@@ -155,11 +155,11 @@ check('"abc" unpadded, then the kl.setst into _Hash_Output_ with block_base != 0
       run(cl, A, B(b'abc'), O, C(32))[1] == DIG_ABC and cl.st == KL_STATE_SUCCESS)
 for label, ops in [
         ('kl.exec in _Ready_ (GR21)', (B(b'abc'),)),
-        ('Form C kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'C'),)),
+        ('Form B kl.setst to _Hash_Absorb_', (lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B'),)),
         ('same-State kl.setst to _Hash_Absorb_', (A, A)),
         ('same-State kl.setst to _Hash_Output_ (GR21)', (A, B(b'abc'), O, O)),
-        ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C'))),
-        ('a kl.exec after Xs = 0 (MR8)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0), B(b'a'))),
+        ('kl.setst #kl_state_hash_last_block without Xs', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B'))),
+        ('a kl.exec after Xs = 0 (MR8)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), B(b'a'))),
         ('_Ready_ -> _Hash_Output_', (O,)),
         ('Form C kl.exec in _Hash_Absorb_ (GR22), output zeroed', (A, C(16))),
         ('Form B kl.exec in _Hash_Output_ (GR22)', (A, B(b'abc'), O, B(bytes(64)))),
@@ -170,7 +170,7 @@ for label, ops in [
 res = []
 for d, ks in ((b'', 0), (b'a', 2)):
     cl = Sm3().provision()
-    run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 16))
+    run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16))
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
@@ -253,7 +253,7 @@ for s, length in ((SEC, 0), (SEC, 31), (SEC, 36), (SEC[:30], 32), (SEC[:30], 33)
 check('shared secret into SM3 absorb: 32 B with length 0, 31 or 36, 30 B with length 32 or 33 (GR40 item 5: '
       'exactly the secret length): destination _Invalid_', None, res, [('refused', KL_STATEEXT_INVALID)] * 5)
 dst, dst2 = absorbing(b'abc'), absorbing(b'abc')
-dst.setst(KL_STATE_HASH_LAST_BLOCK, 'C', 0)
+dst.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)
 check('shared secret into SM3 _Hash_Absorb_Last_Block_ (not an endpoint, GR40 item 2): destination _Invalid_; '
       'after a 3-byte prefix in _Hash_Absorb_: the digest of the prefix and the secret', None,
       (kl_derive(dst, Source(SEC), 32), dst.st, kl_derive(dst2, Source(SEC), 32), run(dst2, O, C(32))[1]),

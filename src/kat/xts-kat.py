@@ -141,8 +141,8 @@ class XexLocker:
             return s.invalidate()   # StateExtension @ State not supported
         s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
 
-    def setst(s, immed, form='B', operand=0, KLLEN=128):
-        """form 'A' (no operand), 'B' (KLLEN-bit INPUT) or 'C' (128-bit Xs, admitted where B is expected)."""
+    def setst(s, immed, form='C', operand=0, KLLEN=128):
+        """form 'A' (no operand), 'C' (KLLEN-bit INPUT) or 'B' (128-bit Xs, admitted where B is expected)."""
         if s.state in ERROR_STATES:               # GR33
             return
         pol = fget(s.mdh, 'MachinePolicy')
@@ -157,8 +157,10 @@ class XexLocker:
         elif (immed in (ENCRYPT, DECRYPT)
               and s.state in (READY, ENCRYPT, DECRYPT)    # also Encrypt <-> Decrypt and same State: sets the tweak
               and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR9
-            if form != 'B':
-                KLLEN, operand = 128, setst_operand(form, operand)   # Form A or C: a 128-bit INPUT
+            if form not in ('A', 'C', 'D'):
+                return s.invalidate()                          # GR22: a wrong Form (GR13)
+            if form != 'C':
+                KLLEN, operand = 128, setst_operand(form, operand)   # Form A or D: a 128-bit INPUT
             if KLLEN < B:
                 return s.invalidate()                     # MR5, MR1: INPUT narrower than the tweak
             value = sl(operand, KLLEN - 1, 0)
@@ -273,7 +275,7 @@ def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, **kw):
     m, sb = divmod(len(data), 16)
     s = 8 * sb
     cl = new_xex(key1, key2, **kw)
-    cl.setst(ENCRYPT if encrypt else DECRYPT, 'B', bin_(seq, B), 128)   # the tweak is bin(i, b)
+    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)   # the tweak is bin(i, b)
     if s == 0:
         return cl_run(cl, data, per_block)[0]
     out = cl_run(cl, data[:16 * (m - 1)], per_block)[0]      # mask at index m-1
@@ -457,7 +459,7 @@ def listing_xts(key1, key2, seq, buf, n, last_len, encrypt=True):
     """<<Zkl-software.adoc#KLE-pseudocode-basic-IV-mode>> and <<Zkl-software.adoc#KLE-pseudocode-XEX-decryption>>,
     line by line, in place (CT = PT)."""
     cl = new_xex(key1, key2)
-    cl.setst(ENCRYPT if encrypt else DECRYPT, 'B', bin_(seq, B), 128)
+    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)
     blk = lambda j: b2v(bytes(buf[16 * j:16 * j + 16]))
     def put(j, v, nb=16): buf[16 * j:16 * j + nb] = v2b(v, 16)[:nb]
     m = n if last_len == 16 else n - 1
@@ -498,10 +500,10 @@ check("update_mask_inv inverts update_mask (SM4_XEX)", True,
       all(kl_update_mask_inv_gb(kl_update_mask_gb(v)) == v == kl_update_mask_gb(kl_update_mask_inv_gb(v))
           for v in vs), True)
 k1, k2, i = CTS[0][1:4]
-dec = lambda pol=POL_ENC | POL_DEC: new_xex(k1, k2, pol).setst(DECRYPT, 'B', bin_(i, B), 128)
+dec = lambda pol=POL_ENC | POL_DEC: new_xex(k1, k2, pol).setst(DECRYPT, 'C', bin_(i, B), 128)
 def dl(**kw):
     cl = new_xex(k1, k2, **kw)
-    cl.setst(DECRYPT, 'B', bin_(i, B), 128)
+    cl.setst(DECRYPT, 'C', bin_(i, B), 128)
     return cl
 cl = dl()
 m0 = cl.mask
@@ -515,23 +517,23 @@ cl.exec1(0)
 check("... the next kl.exec: Success, StateExtension 0", True, (cl.state, cl.se), (SUCCESS, 0))
 cl.exec1(0)
 check("... a kl.exec in Success: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(DECRYPT, 'B', bin_(i, B), 128)
+cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
 check("Success -> Decrypt: Invalid", True, cl.state, INVALID)
 cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(READY, 'A')
 check("Success -> Ready: Ready, StateExtension 0, mask 0", True, (cl.state, cl.se, cl.mask), (READY, 0, 0))
 cl = new_xex(k1, k2); cl.setst(STEAL, 'A')
 check("kl_xex_state_steal in Ready: Invalid", True, cl.state, INVALID)
-cl = new_xex(k1, k2); cl.setst(ENCRYPT, 'B', bin_(i, B), 128); cl.setst(STEAL, 'A')
+cl = new_xex(k1, k2); cl.setst(ENCRYPT, 'C', bin_(i, B), 128); cl.setst(STEAL, 'A')
 check("kl_xex_state_steal in Encrypt: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'B', bin_(i, B), 128)
-check("kl_xex_state_steal of Form B: Invalid", True, cl.state, INVALID)
+cl = dl(); cl.setst(STEAL, 'C', bin_(i, B), 128)
+check("kl_xex_state_steal of Form C: Invalid", True, cl.state, INVALID)
 cl = dl(); cl.setst(STEAL, 'A'); cl.setst(STEAL, 'A')
 check("kl_xex_state_steal with StealSkip set: Invalid", True, cl.state, INVALID)
 cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(STEAL, 'A')
 check("kl_xex_state_steal with StealBack set: Invalid", True, cl.state, INVALID)
 cl = dl(); cl.setst(STEAL, 'A'); cl.exec(0, 256, klstart=16)
 check("kl.exec with StealSkip at klstart 16: not an interruption point, Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.setst(DECRYPT, 'B', bin_(i, B), 128)
+cl = dl(); cl.setst(STEAL, 'A'); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
 check("a same-State kl.setst into Decrypt clears StealSkip and takes a new tweak", True,
       (cl.state, cl.se, cl.mask), (DECRYPT, 0, m0))
 cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(READY, 'A')
@@ -539,7 +541,7 @@ check("Decrypt with StealBack -> Ready: StateExtension 0", True, (cl.state, cl.s
 name, k1c, k2c, ic, pc, cc = CTS[0]
 m, sb = divmod(len(cc), 16)
 src = new_xex(k1c, k2c)
-src.setst(DECRYPT, 'B', bin_(ic, B), 128)
+src.setst(DECRYPT, 'C', bin_(ic, B), 128)
 out = cl_run(src, cc[:16 * (m - 1)])[0]
 src.setst(STEAL, 'A')
 pp = src.exec1(b2v(cc[16 * (m - 1):16 * m]))
@@ -567,7 +569,7 @@ check("SCC with StealSkip narrowed to encrypt-only: the kl.exec -> Invalid (MR9)
 section("kl.clone")
 k1, k2, i = CTS[0][1:4]
 cl = new_xex(k1, k2)
-cl.setst(DECRYPT, 'B', bin_(i, B), 128)
+cl.setst(DECRYPT, 'C', bin_(i, B), 128)
 before, clone = cl.mask, cl.clone()
 clone.exec1(0)
 clone.exec1(0)
@@ -581,7 +583,7 @@ check("kl.clear: Unconfigured, no key material", True,
 
 section("States, transitions and general rules (vector 2)")
 name, k1, k2, i, data, c = FULL[1]
-tw = lambda cl, st=ENCRYPT, t=i: cl.setst(st, 'B', bin_(t, B), 128) or cl
+tw = lambda cl, st=ENCRYPT, t=i: cl.setst(st, 'C', bin_(t, B), 128) or cl
 check("state constants: Ready 1, Encrypt 7, Decrypt 8; Invalid: State 0, StateExtension 2", True,
       (READY, ENCRYPT, DECRYPT, state_fields(INVALID)), (1, 7, 8, {'State': 0, 'StateExtension': 2}))
 cl = new_xex(k1, k2)
@@ -617,11 +619,11 @@ check("SCC in Encrypt with MachinePolicy = 10b: kl.exec -> Invalid, window zeroe
 check("... a same-State kl.setst into Encrypt -> Invalid (MR9)", True, tw(narrowed()).state, INVALID)
 check("... a kl.setst naming Decrypt -> Decrypt (MR9)", True, tw(narrowed(), DECRYPT).state, DECRYPT)
 cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'B', bin_(i, B), 64)
+cl.setst(ENCRYPT, 'C', bin_(i, B), 64)
 check("kl.setst #kl_state_encrypt with KLLEN = 64 < b -> Invalid (MR5, MR1)", True, cl.state, INVALID)
 cl, c0 = new_xex(k1, k2), new_xex(k1, k2)
-cl.setst(ENCRYPT, 'A'); c0.setst(ENCRYPT, 'B', 0, 128)
-check("Form A kl.setst #kl_state_encrypt = Form B with a 128-bit zero tweak (<<KLE-instruction-setst>>)", True,
+cl.setst(ENCRYPT, 'A'); c0.setst(ENCRYPT, 'C', 0, 128)
+check("Form A kl.setst #kl_state_encrypt = Form C with a 128-bit zero tweak (<<KLE-instruction-setst>>)", True,
       (cl.state, cl.mask), (ENCRYPT, c0.mask))
 cl = tw(new_xex(k1, k2))
 cl_run(cl, data)
@@ -634,11 +636,11 @@ cl_run(cl, data)
 check("same-State kl.setst (GR21) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'B', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
+cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
 check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MR5)", True, cl_run(cl, data)[0], c)
 cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'C', bin_(i, B))
-check("Form C kl.setst (128-bit Xs as the tweak) and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
+cl.setst(ENCRYPT, 'D', bin_(i, B))
+check("Form D kl.setst (128-bit Xs as the tweak) and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
 for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MR1): Invalid, window zeroed"),
                             (256, 8, (INVALID, b2v(data[:8]), 0), "klstart = 8, no interruption point: Invalid"),
                             (256, 32, (ENCRYPT, b2v(data), 0), "klstart = KLLEN/8: empty window, only klstart = 0"),

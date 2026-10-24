@@ -225,9 +225,9 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 | `kl.size` / `kl.avail`   | `Zkl` common       | Forms A–C   | Forms A and B
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D; Forms A–C via the substitutions of <<KLE-usage-input-output>>
 | `kl.mvin`, `kl.mvout`    | `Zklmv`         2+<| When `Zklmv` is implemented; mandatory in hardware if `Zklmem` is emulated
-| `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A, B and C | Forms A and C
+| `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D
 | `kl.setste`              | `Zkl` common    2+<| Available
-| `kl.mgmt`                | `Zkl` common       | Forms A, B and C | Forms A and C
+| `kl.mgmt`                | `Zkl` common       | Forms A, C and D | Forms A and D
 | `kl.getmdl`, `kl.getmd` (and the pseudo-instructions `kl.getst`,
 `kl.getstx`)               | `Zkl` common    2+<| Available
 | `kl.getmdv`              | `Zklv`             | Available    | —
@@ -955,7 +955,7 @@ A non-zero locker register field that `r` or `R` replaces is a reserved encoding
 
 [[KLE-GR-vector-legality,GR7]]GR7:: A vector register (group) operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
 Every KLE instruction with a vector operand sets `vstart` to 0 when it retires, and on a precise halt sets it as Rules <<KLE-GR-precise-halt>> and <<KLE-GR-klstart-vstart>> prescribe.
-An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size` and `kl.avail`, Form B of `kl.setst` and `kl.mgmt`) raises an illegal-instruction exception if issued with `vstart` {ne} 0, as RVV 1.0 {sect}3.7 permits for a `vstart` value that the instruction can never produce.
+An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size`, `kl.avail`, `kl.setst` and `kl.mgmt`) raises an illegal-instruction exception if issued with `vstart` {ne} 0, as RVV 1.0 {sect}3.7 permits for a `vstart` value that the instruction can never produce.
 
 [[KLE-GR-klstart-vstart,GR8]]GR8:: KLE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each by its own semantics; except for `kl.mvin` and `kl.mvout`, both denote the same point of progress, `klstart` in bytes and `vstart` in elements of the width in effect.
 Issuing a Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW`/8 raises an illegal-instruction exception.
@@ -1256,12 +1256,14 @@ Synopsis::
 Change the state of the Machine encoded in the CC in a locker.
 
 Mnemonic::
-`kl.setst` has three Forms:
+`kl.setst` has four Forms:
 (((KLE, instruction, kl.setst)))
 +
-. `kl.setst Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `kl.setst Kd, #immed7, Vs{nbsp}` — in a vector register.
-. `kl.setst Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+[upperalpha]
+. `kl.setst  Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `kl.setst  Kd, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
+. `kl.setst  Kd, #immed7, Vs{nbsp}` — in a vector register.
+. `kl.setstq Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
 
 //
 
@@ -1289,15 +1291,16 @@ Encoding::
 
 `#immed7` = `kl_cfg_clearall` (65) is valid only in Form A, with `Kd` = 0 and `r` = 0, where it encodes `kl.clearall` (<<KLE-instruction-clearall>>); every other encoding with `#immed7` = 65 is reserved.
 
-The encodings of the three Forms are:
+The encodings of the four Forms are:
 
 * `F` = `0b00`, `rs1` = `0b00000`: Form A, whose auxiliary operand reads as zero (Rule <<KLE-GR-x0-operand>>).
-* `F` = `0b00`, `rs1` {ne} `0b00000`: Form C, with a 128-bit auxiliary operand in two (RV64) or four (RV32) GPRs starting at `Xs` = `rs1` (Rule <<KLE-GR-multiple-GPRs>>).
-* `F` = `0b01`: Form B.
-* `F` = `0b10` and `F` = `0b11` are reserved (Rule <<KLE-GR-reserved-encodings>>).
+* `F` = `0b00`, `rs1` {ne} `0b00000`: Form B, with a 64-bit auxiliary operand in `Xs` = `rs1` (RV64) or in `X[s+1] @ Xs` (RV32, Rule <<KLE-GR-multiple-GPRs>>).
+* `F` = `0b01`: Form C.
+* `F` = `0b10`: Form D, with a 128-bit auxiliary operand in two (RV64) or four (RV32) GPRs starting at `Xs` = `rs1` (Rule <<KLE-GR-multiple-GPRs>>).
+* `F` = `0b11` is reserved (Rule <<KLE-GR-reserved-encodings>>).
 
-Form A is thus Form C with `X0`: where a Machine expects Form C, a Form A supplies an operand of zero; where it expects Form A, a Form C is a wrong Form (Rule <<KLE-GR-form-mismatch>>).
-Where a Machine expects Form B, a Form A or C is admitted too, and its 128-bit operand, zero for Form A, is the `INPUT` of the Machine (<<Zkl-ISA-machines.adoc#KLE-algo-notation>>).
+Form A is thus Form B with `X0`: where a Machine expects Form B or D, a Form A supplies an operand of zero; where it expects Form A, a Form B or D is a wrong Form (Rule <<KLE-GR-form-mismatch>>).
+Where a Machine expects Form C, a Form A or D is admitted too, and its 128-bit operand, zero for Form A, is the `INPUT` of the Machine (<<Zkl-ISA-machines.adoc#KLE-algo-notation>>).
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1326,7 +1329,7 @@ The State class of the locker decides the outcome of an immediate in 1–55, 64 
 * in a Configuration State, Rule <<KLE-GR-outcome-config-state>> applies: a usage instruction raises a KLE privilege-violation exception and leaves the _State_ unchanged;
 * on an _inert locker_ (Unconfigured, in an Error State or `KLNL` while `klnamedlocker` = 32), the instruction performs no operation (Rule <<KLE-GR-outcome-inert>>).
 
-Some values require an auxiliary operand, in GPRs (Form C) or in a vector register (group) `Vs` (Form B).
+Some values require an auxiliary operand, in GPRs (Forms B and D) or in a vector register (group) `Vs` (Form C).
 
 `Kd` may be `KLNL`, except for `kl.clearall` (Rules <<KLE-GR-klnamedlocker-override>> and <<KLE-GR-outcome-inert>>).
 --
@@ -1423,11 +1426,11 @@ Synopsis::
 Open or complete a management operation on a locker.
 
 Mnemonics::
-(((KLE, instruction, kl.mgmt)))`kl.mgmt` uses the encoding and the Forms of `kl.setst`, but is a distinct instruction.
+(((KLE, instruction, kl.mgmt)))`kl.mgmt` uses the encoding of only Forms A, C and D of `kl.setst`, but is a distinct instruction.
 +
-. `kl.mgmt Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `kl.mgmt Kd, #immed7, Vs{nbsp}` — in a vector register.
-. `kl.mgmt Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+* Form A: `kl.mgmt Kd, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+* Form C: `kl.mgmt Kd, #immed7, Vs{nbsp}` — in a vector register.
+* Form D: `kl.mgmt Kd, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
 
 //
 
@@ -1455,11 +1458,12 @@ Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: whe
 The Forms supply the MDH as follows:
 
 * Form A carries no auxiliary operand, and supplies an all-zero MDH (Rule <<KLE-GR-x0-operand>>).
-* Form B carries it in the lowest 128 bits of `Vs`. `VL` {times} `SEW` < 128 raises an illegal-instruction exception
+* Form C carries it in the lowest 128 bits of `Vs`. `VL` {times} `SEW` < 128 raises an illegal-instruction exception
   (Rule <<KLE-GR-vector-MDH-operand>>) after the `klnamedlocker` check and before any change to the locker, the
   _State_ kept, whatever the operation and the _State_, and even if it would fall through (Rule <<KLE-GR-management-check-order>>).
-* Form C carries it as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
+* Form D carries it as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
   <<KLE-GR-multiple-GPRs>>).
+* Form B is a reserved encoding (Rule <<KLE-GR-reserved-encodings>>).
 
 <<KLE-locker-management>> gives the precise semantics of each operation.
 --
@@ -1964,7 +1968,7 @@ The following Rules protect the Content of a CC in two ways: it leaves a locker 
 [[KLE-usage-input-output]]
 === Zklio
 
-With `Zklio`, the KLIOBUF can replace the vector operands of `kl.exec`, so that code runs on cores without vector registers; `kl.setst` and `kl.mgmt` use Form C instead of Form B.
+With `Zklio`, the KLIOBUF can replace the vector operands of `kl.exec`, so that code runs on cores without vector registers; `kl.setst` and `kl.mgmt` use Form D instead of Form C.
 
 [horizontal]
 [[KLE-GR-substitution,GR11]]GR11:: With `Zklio`, every Form of `kl.exec` that reads inputs from or writes outputs to vector registers, the _native_ Form in its Machine and State, admits a _substitution_: a Form D `kl.exec`, which uses the KLIOBUF in their place, however the Machine describes the use of the native Form.
@@ -2920,7 +2924,7 @@ The next six subsections describe the semantics of `kl.mgmt`:
 [[KLE-MVR-open]]
 ==== Provisioning- and Import-Opening kl.mgmt
 
-Software first obtains the MDH, `ml`, and supplies it with a Form B or C `kl.mgmt`.
+Software first obtains the MDH, `ml`, and supplies it with a Form C or D `kl.mgmt`.
 
 NOTE: For an import, software first saves `ml` in its local state and supplies it to the import-completing `kl.mgmt`, to restore the _State_ the locker had when it was exported (Rule <<KLE-GR-completion-state>>).
 
@@ -2964,7 +2968,7 @@ The capacity check then counts the locker's own allocation as free.
 ==== Export-Opening kl.mgmt
 
 Software first saves a copy, `ml`, of the locker's MDH, to restore the _State_ when completing the export.
-`kl.mgmt` can be of Form A, B or C, and ignores its auxiliary input. Depending on `ml`._State_:
+`kl.mgmt` can be of Form A, C or D, and ignores its auxiliary input. Depending on `ml`._State_:
 
 .. _Unconfigured_: no operation and no exception. No management operation is opened, the authentication registers are unchanged, and only the common steps above take effect (Rule <<KLE-GR-outcome-inert>>).
 
@@ -3005,7 +3009,7 @@ The completing `kl.mgmt` admits these values of `ml`._State_ (<<KLE-management-f
 
 ==== Provisioning-Completing kl.mgmt
 
-No MDH saved at provisioning start is needed: `kl.mgmt` can be of Form A, B or C, and ignores its auxiliary input.
+No MDH saved at provisioning start is needed: `kl.mgmt` can be of Form A, C or D, and ignores its auxiliary input.
 It transfers no data to or from memory, vector registers, the KLIOBUF or another locker, so the random generation of keys for _KeyType_ = 2 never waits on, or delays, a data transfer (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-atomic-randomness>>).
 
 Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if locker.MDH._State_ is `kl_cfg_provisioning` and either field is non-zero, the locker transitions to Error State _Invalid_, and the instruction terminates.
@@ -3022,7 +3026,7 @@ Within a provisioning, only its completing `kl.mgmt` may therefore generate secr
 
 ==== Import-Completing kl.mgmt
 
-Software uses Form B or C of `kl.mgmt` to supply the value `ml` saved when the import started.
+Software uses Form C or D of `kl.mgmt` to supply the value `ml` saved when the import started.
 The image authenticated as ``AD[0]`` is the MDH held in the target locker, i.e., the one carried in the SCC and loaded when the import started, with its _State_ restored from `ml` and _ADSDropped_ cleared only in the copy used for authentication (<<KLE-SCC-import>>).
 
 ... If locker.MDH._Version_ is 3 and `ml`._State_ is 0, the instruction completes the system-specific import as <<KLE-system-specific-import>> states.
@@ -3038,7 +3042,7 @@ This makes the locker available to software.
 [[KLE-mgmt-completes-export]]
 ==== Export-Completing kl.mgmt
 
-Software uses Form B or C of `kl.mgmt` to supply the MDH value `ml` saved when the export began. Then:
+Software uses Form C or D of `kl.mgmt` to supply the MDH value `ml` saved when the export began. Then:
 
 . The _State_ of the locker is set to `ml`._State_.
 . If `ml`._State_ is a Valid State, the instruction restores the locker to the clear format it had when the export began, and makes it accessible to software:
@@ -3413,7 +3417,7 @@ Neither direction produces an SCC or a PCCC, opens a management operation, uses 
 *Exporting* such a locker needs no `kl.mgmt`: `kl.getst` (<<KLE-instruction-getst>>) finds an Error State, and `kl.getmd` or `kl.getmdv` (<<KLE-instruction-getmd>>) reads the MDH, which software stores; `kl.size` reports 16.
 A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on such a locker is permitted but useless: it leaves the locker unchanged and opens no management operation, and only its common steps take effect, `klnamedlocker` naming the locker and `klstart` becoming 0 (<<KLE-locker-management>>).
 
-*Importing* the image takes one uninterruptible `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand, carried whole by Form B or C.
+*Importing* the image takes one uninterruptible `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand, carried whole by Form C or D.
 It zeroizes the locker that it names and copies the MDH into it, with _AuxDataLen_ and _ADSDropped_ set to 0, and a _Version_ of 3 to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>). It also replaces a _StateExtension_ of 6 without `Zklexpire`, or any _StateExtension_ of an MDH with _Version_ 3, by the code of _Invalid_, and transfers nothing else.
 A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and performs no operation (Rule <<KLE-GR-outcome-inert>>).
 

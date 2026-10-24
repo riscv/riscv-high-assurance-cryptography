@@ -443,7 +443,7 @@ class HashPort:
     <<Zkl-software.adoc#KLE-pseudocode-hash>> does.  A subclass provides:
       b, msb               the block size in bits, and whether a partial byte is MSB-first
       bitwise              whether the final piece may have a non-byte length
-      setst(immed, form='A', xs=None)   form 'A', 'B' or 'C' (setst_form); xs is the Form C operand
+      setst(immed, form='A', xs=None)   form 'A' to 'D' (setst_form); xs is the Form B or D operand
       exec_in(data, halt_at=None) -> str   Form B kl.exec from byte klstart: 'done', 'empty',
           'invalid' or 'interrupted' (precise halt at the first interruption point after byte
           halt_at, klstart set)
@@ -500,7 +500,7 @@ def _piece_bits(port, piece, nbits):
     return r
 
 def hash_run(port, msg, nbits, out_len, chunks=None, halt=False, migrate=False, out_split=None,
-             end=('C', None), piece='listing', start=None):
+             end=('B', None), piece='listing', start=None):
     """The listing on `port` for the first nbits bits of msg: `start` (default: Form A into
     _Hash_Absorb_), the head in `chunks` transfers (each halted at every interruption point and
     resumed with halt; export and import after every transfer and halt with migrate), the final
@@ -522,13 +522,13 @@ def hash_run(port, msg, nbits, out_len, chunks=None, halt=False, migrate=False, 
             st = port.exec_in(ch, port.klstart if halt else None)
         port = mig(port)
     if r is not None:
-        port.setst(KL_STATE_HASH_LAST_BLOCK, 'C', r)
+        port.setst(KL_STATE_HASH_LAST_BLOCK, 'B', r)
         port = mig(port)
         if r:
             port.exec_in(msg[len(head):len(head) + -(-r // 8)])
             port = mig(port)
     form, xs = end
-    port.setst(KL_STATE_HASH_OUTPUT, form, (8 * out_len if xs is None else xs) if form == 'C' else None)
+    port.setst(KL_STATE_HASH_OUTPUT, form, (8 * out_len if xs is None else xs) if form == 'B' else None)
     port = mig(port)
     out = b''
     for n in _out_sizes(out_len, out_split):
@@ -541,7 +541,7 @@ def hash_run(port, msg, nbits, out_len, chunks=None, halt=False, migrate=False, 
     return out, port.st, halts
 
 def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_plans=None,
-               pieces=('listing', None, 0, 8, 'b-8', 'b'), splits=None, end=('C', None)):
+               pieces=('listing', None, 0, 8, 'b-8', 'b'), splits=None, end=('B', None)):
     """One check per message: one factor at a time, every chunk plan, every final-piece variant,
     every output split, halts, export/import, and both together on odd chunks, give
     ref(msg, nbits, out_len) and the final State."""
@@ -566,27 +566,29 @@ def check_hash(label, new, ref, msgs, out_len, final=KL_STATE_SUCCESS, chunk_pla
         check(f'{label}: {nbits}-bit message, {len(cfgs)} chunk/piece/halt/export/output plans -> reference, '
               f'final State {final}', not bad, bad[:3] or None, [] if bad else None)
     wrong = []
-    for form in ('C', 'B'):
+    for form in ('B', 'C'):
         p = new()
         p.setst(KL_STATE_HASH_ABSORB)
         p.setst(KL_STATE_READY, form, 8)
         wrong.append(p.st)
-    check(f'{label}: a Form C or B kl.setst naming _Ready_ is a wrong Form (GR23, GR13)', None, wrong,
+    check(f'{label}: a Form B or C kl.setst naming _Ready_ is a wrong Form (GR23, GR13)', None, wrong,
           [KL_STATEEXT_INVALID] * 2)
 
 def setst_form(F: int, rs1: int) -> str:
     """The Form of a kl.setst or kl.mgmt encoding (<<KLE-instruction-setst>>): F = 0b00 is Form A
-    with rs1 = X0, whose operand reads as zero (GR3), and Form C otherwise; F = 0b01 is Form B;
-    F = 0b10 and 0b11 are reserved (GR1) and raise ValueError."""
+    with rs1 = X0, whose operand reads as zero (GR3), and Form B otherwise; F = 0b01 is Form C;
+    F = 0b10 is Form D; F = 0b11 is reserved (GR1) and raises ValueError."""
     if F == 0b00:
-        return 'A' if rs1 == 0 else 'C'
-    if F == 0b01:
-        return 'B'
-    raise ValueError('reserved')
+        return 'A' if rs1 == 0 else 'B'
+    if F == 0b11:
+        raise ValueError('reserved')
+    return 'C' if F == 0b01 else 'D'
+
 
 def setst_operand(form: str, xs) -> int:
-    """The 128-bit auxiliary operand of a GPR Form: Form A is Form C with X0, so it reads 0."""
-    return 0 if form == 'A' else xs & ((1 << 128) - 1)
+    """The operand of a GPR Form: 64 bits for Form B, 128 for Form D; Form A is Form B with X0,
+    so it reads 0."""
+    return 0 if form == 'A' else (xs or 0) & ((1 << (64 if form == 'B' else 128)) - 1)
 
 # ---------------------------------------------------------------- self-tests
 
@@ -604,16 +606,18 @@ def selftest(verbose: bool = False) -> bool:
                 print(f"        want {want}")
 
     # kl.setst / kl.mgmt Forms
-    chk("setst F=0b00 rs1=X0 is Form A, rs1 != X0 Form C; F=0b01 Form B",
-        [setst_form(0, 0), setst_form(0, 5), setst_form(1, 0), setst_form(1, 7)], ['A', 'C', 'B', 'B'])
-    reserved = []
-    for F in (0b10, 0b11):
-        try:
-            setst_form(F, 0)
-        except ValueError:
-            reserved.append(F)
-    chk("setst F=0b10 and 0b11 are reserved (GR1)", reserved, [0b10, 0b11])
-    chk("Form A = Form C with X0: operand 0", [setst_operand('A', None), setst_operand('C', 0)], [0, 0])
+    chk("setst F=0b00 rs1=X0 is Form A, rs1 != X0 Form B; F=0b01 Form C; F=0b10 Form D",
+        [setst_form(0, 0), setst_form(0, 5), setst_form(1, 7), setst_form(2, 0), setst_form(2, 7)],
+        ['A', 'B', 'C', 'D', 'D'])
+    try:
+        setst_form(0b11, 0)
+        reserved = False
+    except ValueError:
+        reserved = True
+    chk("setst F=0b11 is reserved (GR1)", reserved, True)
+    chk("Form A = Form B with X0: operand 0; Form B 64 bits, Form D 128",
+        [setst_operand('A', None), setst_operand('B', 0), setst_operand('B', 1 << 64 | 5),
+         setst_operand('D', 1 << 64 | 5)], [0, 0, 5, 1 << 64 | 5])
 
     # FIPS 197 Appendix C
     pt = bytes.fromhex("00112233445566778899aabbccddeeff")

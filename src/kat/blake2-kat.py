@@ -162,7 +162,7 @@ class Blake2:
                 self.key_block()
             self.st, self.last_block_len = ABSORB, self.b
             return self
-        if t == LAST:                                     # Form A is Form C with Xs = 0
+        if t == LAST:                                     # Form A is Form B with Xs = 0
             if self.st != ABSORB or xs is not None and (xs % 8 or not 0 <= xs <= self.b):
                 return self.invalid()
             self.st, self.last_block_len = LAST, xs or 0
@@ -635,8 +635,8 @@ class Port(HashPort):
         p.b = p.cl.b
     st = property(lambda p: p.cl.st)
     klstart = property(lambda p: getattr(p.cl, 'klstart', 0))
-    def setst(p, immed, form='A', xs=None):  # no kl.setst of BLAKE2 is native in Form B
-        p.cl.invalid() if form == 'B' and not inert(p.cl.st) else p.cl.setst(immed, xs if form == 'C' else None)
+    def setst(p, immed, form='A', xs=None):  # no kl.setst of BLAKE2 is native in Form C
+        p.cl.invalid() if form == 'C' and not inert(p.cl.st) else p.cl.setst(immed, xs if form == 'B' else None)
     def exec_in(p, d, halt_at=None):
         k = getattr(p.cl, 'klstart', 0)
         p.cl.exec(d, halt=halt_at is not None, klstart=k)
@@ -660,10 +660,10 @@ for v in VARIANTS:
                    lambda m, nb, o, v=v, key=key: oracle(v, m[:nb // 8], nnmax, key)[:o], hash_msgs(bb), nnmax)
 for v in VARIANTS:
     nnmax = PARAMS[v][4]
-    p = Port(v); p.setst(ABSORB); p.exec_in(b'abc'); p.setst(LAST, 'C', 0); p.setst(OUTPUT)
+    p = Port(v); p.setst(ABSORB); p.exec_in(b'abc'); p.setst(LAST, 'B', 0); p.setst(OUTPUT)
     p.cl.klstart = 5
     s1, o1 = p.exec_out(nnmax, prior=b'\xa5' * nnmax)
-    q = Port(v); q.setst(ABSORB); q.exec_in(b'abc'); q.setst(LAST, 'C', 0); q.setst(OUTPUT)
+    q = Port(v); q.setst(ABSORB); q.exec_in(b'abc'); q.setst(LAST, 'B', 0); q.setst(OUTPUT)
     q.exec_out(8)
     q.cl.klstart = 1
     s2, o2 = q.exec_out(8, prior=b'\xa5' * 8)

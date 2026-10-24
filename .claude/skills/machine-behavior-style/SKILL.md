@@ -12,7 +12,7 @@ The model is the State Machine Behavior of the `process_VLI` procedure (`<<KLE-p
 Split a paragraph by what happens when, one `**` bullet per moment, with numbered steps (`.`) under it:
 
 - `** When entering State _X_:`
-  1. the expected `kl.setst`, named by Form, immediate and auxiliary operand without the locker: "a Form C `kl.setst` with immediate `kl_state_x` and auxiliary operand `Xs`", and what `Xs` sets (`len <- Xs`);
+  1. the expected `kl.setst`, named by Form, immediate and auxiliary operand without the locker: "a Form B `kl.setst` with immediate `kl_state_x` and auxiliary operand `Xs`", and what `Xs` sets (`len <- Xs`);
   2. the admissible values, stated positively: "`Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120`". Don't list exclusions such as "zero, larger than 127, or not a multiple of 8";
   3. the entry operations (fields set or zeroed), in one step;
   4. same-State `kl.setst`: "repeats these operations…", or "is forbidden" (Rule GR24).
