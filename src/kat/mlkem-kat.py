@@ -43,13 +43,13 @@ MLKEM = {512: mc(11, 0), 768: mc(11, 1), 1024: mc(11, 2)}
 SET_SCALAR = 3                                     # ECC _Set_Scalar_
 # kl.derive destination endpoints {State: (field, bits)}: <<KLE-derive-endpoints>>; the GCM IV, the CMAC input and
 # the ECC `Scalar` are not destinations (GR40 item 2)
-DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 4): ('AES192_GCM', key(192)),
-        mc(0, 4): ('AES128_GCM', key(128)), mc(2, 1): ('AES256_CTR', key(256)),
-        mc(3, 0): ('SM4_ECB', key(128)), mc(0, 7): ('AES128_CMAC', key(128)), mc(8, 0): ('Ascon-AEAD128', key(128)),
-        mc(0, 3): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {SET_KEY: ('K0', 512)}),
+DEST = {mc(0, 0): ('AES128_ECB', key(128)), mc(1, 7): ('AES192_GCM', key(192)),
+        mc(0, 7): ('AES128_GCM', key(128)), mc(2, 4): ('AES256_CTR', key(256)),
+        mc(3, 0): ('SM4_ECB', key(128)), mc(0, 10): ('AES128_CMAC', key(128)), mc(8, 0): ('Ascon-AEAD128', key(128)),
+        mc(0, 6): ('AES128_XEX', {READY: ('key1 || key2', 256)}), mc(4, 7): ('SHA2-256_HMAC', {SET_KEY: ('K0', 512)}),
         mc(6, 1): ('SHA3-256', {HASH_ABSORB: ('input', 0)}), mc(6, 10): ('KMAC128', {HASH_ABSORB: ('input', 0)}),
         mc(10, 0): ('secp256r1', {}), mc(10, 1): ('secp384r1', {}), mc(10, 3): ('x25519', {})}
-AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 4), mc(2, 1), mc(6, 1)
+AES128_ECB, AES128_GCM, AES256_CTR, SHA3_256 = mc(0, 0), mc(0, 7), mc(2, 4), mc(6, 1)
 FILL = b'\x5a'                                     # placeholder key of a provisioned destination
 USAGE_BIT = {'U': 0, 'VS': 1, 'HS': 2, 'M': 3}     # <<KLE-UsagePolicy>>
 ALL_MODES = 0b11111                                # every mode and Debug mode allowed
@@ -876,7 +876,7 @@ def t_derive():
     ps, v = 768, vec('encaps', 768)
     ss, ph, src = h(v['k']), FILL * 16, shared()
     check('sharedkey is the ACVP shared secret', src.sharedkey == ss)
-    for code in (mc(0, 0), mc(1, 4), mc(2, 1), mc(3, 0), mc(0, 7), mc(8, 0)):
+    for code in (mc(0, 0), mc(1, 7), mc(2, 4), mc(3, 0), mc(0, 10), mc(8, 0)):
         dest = Dest(code)
         n = len(dest.key)
         kl_derive(dest, src, n)
@@ -902,7 +902,7 @@ def t_derive():
     cd = decaps_ready(dv)
     cd.exec_D()
     sk = h(dv['k'])
-    xex, k0 = derived(Dest(mc(0, 3)), src, 64), derived(Dest(mc(4, 7), state=SET_KEY), src, 64)
+    xex, k0 = derived(Dest(mc(0, 6)), src, 64), derived(Dest(mc(4, 7), state=SET_KEY), src, 64)
     s3, s4 = derived(Dest(SHA3_256, state=HASH_ABSORB), cd, 32), shared(UsagePolicy=0b11001)
     km = derived(Dest(mc(6, 10), state=HASH_ABSORB), s4, 32)
     check('sharedkey (GR43): `key1 || key2` in _Ready_ gets all 32 B; HMAC `K0` (64 B) with length 64 _Invalid_ '
@@ -921,7 +921,7 @@ def t_derive():
           '(GR40 item 5: eff_length must be exactly the 32 B of the source)', True,
           [(d.state, d.key) for d in k0s], [(SET_KEY, ss + bytes(32)), (INVALID, bytes(64)), (INVALID, bytes(64))])
     s5, s6 = shared(), shared()
-    d5, d6 = derived(Dest(SHA3_256, state=HASH_ABSORB), s5, 16), derived(Dest(mc(0, 7), state=HASH_ABSORB), s6, 32)
+    d5, d6 = derived(Dest(SHA3_256, state=HASH_ABSORB), s5, 16), derived(Dest(mc(0, 10), state=HASH_ABSORB), s6, 32)
     check('sharedkey, 16 of 32 B, into SHA3-256 _Hash_Absorb_: destination _Invalid_ (GR40 item 5, GR43: the whole '
           'secret); into AES128-CMAC _Hash_Absorb_ (the CMAC input is no destination): destination _Invalid_ '
           '(GR40 item 2), source untouched', True,

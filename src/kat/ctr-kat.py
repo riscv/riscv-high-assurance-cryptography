@@ -15,7 +15,7 @@ RDY, OP, AUX, INV = KL_STATE_READY, KL_STATE_OPERATE, KL_STATE_SET_AUX_VALUE, KL
 HA = KL_STATE_HASH_ABSORB
 CIPHERS = {'AES-128': 128, 'AES-192': 192, 'AES-256': 256}
 MACHINE = {(c, m): t << 4 | mode for t, c in enumerate(CIPHERS)              # <<KLE-exec-encodings>>
-           for m, mode in (('CTR', 1), ('XCTR', 2))}
+           for m, mode in (('CTR', 4), ('XCTR', 5))}
 KIND = {v: k for k, v in MACHINE.items()}
 NJ = {'CTR': (96, 32), 'XCTR': (B, 64)}                                       # (n, j)
 

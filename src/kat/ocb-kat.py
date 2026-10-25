@@ -694,7 +694,7 @@ cl = last_done().imported(last_done().export())
 check("Hash_Absorb_Last_Block: the kl.exec clears last_block_len, so a second one, also after export/import, "
       "-> Invalid", cl.last_block_len == 0 and inval(cl.exec, 'B', 0, 64) and inval(last_done().exec, 'B', 0, 64))
 
-section("OCB with Set Nonce (Mode 9, `AES*_OCB_NONCE`, <<KLE-OCB-with-nonce-mode>>)")
+section("OCB with Set Nonce (Mode 12, `AES*_OCB_NONCE`, <<KLE-OCB-with-nonce-mode>>)")
 for lab, K, N, A, P, CT, t in VEC:
     ok = run(None, None, A, P, t, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == CT
     ok &= run(None, None, A, CT, t, dec=True, cl=OcbNonce.provisioned(K, b2v(N), 8 * len(N))) == (P, True)
