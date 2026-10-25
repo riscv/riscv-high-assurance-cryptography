@@ -31,7 +31,7 @@ class Chain:
     def set_s(s, xs):                                # Form B kl.setst into Set_Aux_Value (CFB)
         assert s.mode == 'CFB'
         if not 0 < xs <= s.B: s.st = 'Invalid'; return
-        s.st, s.s, s.iv = 'Set_Aux_Value', xs, bytes(16)
+        s.st, s.s = 'Set_Aux_Value', xs
 
     def setst(s, st, inp=None):                      # Form C with `inp`; Form A is a zero `inp`
         if s.st in ('Invalid',): return
@@ -87,7 +87,7 @@ for mode in ('CBC', 'CFB', 'OFB'):
     check(f'{mode}: returning to Ready zeroes IV', m.iv == bytes(16) and m.st == 'Ready')
     if mode == 'CFB':
         c = Chain('CFB')
-        check('CFB: s defaults to b = 128', c.s == 128)
+        check('CFB: u defaults to b = 128', c.s == 128)
         c.set_s(8); check('CFB: Set_Aux_Value admits no kl.exec', raises_exec(c))
         c.setst('Encrypt', IV0); pt = bytes.fromhex('6bc1bee22e409f96e93d7e117393172aae2d')
         ct = c.segments((int.from_bytes(pt, 'big'), 144), 'Encrypt').to_bytes(18, 'big')
@@ -98,11 +98,11 @@ for mode in ('CBC', 'CFB', 'OFB'):
         check('CFB1 encryption, SP 800-38A F.3.4', c.segments((0x6bc1, 16), "Encrypt") == 0x68b3)
         c = Chain('CFB'); c.set_s(1); c.setst('Decrypt', IV0)
         check('CFB1 decryption, SP 800-38A F.3.5', c.segments((0x68b3, 16), 'Decrypt') == 0x6bc1)
-        c.ready(); check('CFB: Ready restores s = b', c.s == 128 and c.st == 'Ready')
+        c.ready(); check('CFB: Ready restores u = b', c.s == 128 and c.st == 'Ready')
         for bad in (0, 129, 2**64 - 1):
-            c = Chain('CFB'); c.set_s(bad); check(f'CFB: s = {bad} is Invalid', c.st == 'Invalid')
+            c = Chain('CFB'); c.set_s(bad); check(f'CFB: u = {bad} is Invalid', c.st == 'Invalid')
         c = Chain('CFB'); c.set_s(64); c.setst('Encrypt', IV0); c.setst('Encrypt', IV0)
-        check('CFB: a same-State kl.setst in Encrypt keeps s', c.s == 64)
+        check('CFB: a same-State kl.setst in Encrypt keeps u', c.s == 64)
     if mode != 'OFB':
         d = run(mode, 'Decrypt', run(mode, 'Encrypt', PT, bytes(16)), bytes(16))
         check(f'{mode}: decryption inverts encryption under a zero IV', d == PT)

@@ -681,6 +681,7 @@ An interrupt may halt such a `kl.exec` after some blocks; on return, the same in
 === Chaining/Feedback Modes
 
 The `kl.setst` into _Encrypt_ or _Decrypt_ of a CBC or CFB CC takes the IV as a Form C operand (<<Zkl-ISA-machines.adoc#KLE-chaining>>), and the CC keeps the chaining value across `kl.exec` instructions, so the loop needs no code for it.
+An interrupt may halt a `kl.exec` after some blocks, with the chaining value of the last completed block; on return, the same instruction resumes from `klstart` (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>).
 The following listing encrypts with a CBC CC, one block per `kl.exec`.
 
 [[KLE-pseudocode-CBC-encryption]]
@@ -742,8 +743,8 @@ The following listing takes the number of blocks as a parameter; for the last gr
 2:
 ----
 
-A CFB CC takes its segment size `s` in the State _Set_Aux_Value_, in which it admits no `kl.exec`.
-The following listing encrypts with CFB8, that is `s` = 8, any number of bytes.
+A CFB CC takes its segment size `u` in the State _Set_Aux_Value_, in which it admits no `kl.exec`.
+The following listing encrypts with CFB8, that is `u` = 8, any number of bytes.
 
 [[KLE-pseudocode-CFB8-encryption]]
 .CFB8 Encryption
@@ -753,7 +754,7 @@ The following listing encrypts with CFB8, that is `s` = 8, any number of bytes.
 
   import_scc 0, a0
   li        t0, 8
-  kl.setst  K0, #kl_state_set_aux_value, t0 # s <- 8
+  kl.setst  K0, #kl_state_set_aux_value, t0 # u <- 8
   vsetivli  zero, 16, e8, m1, ta, ma
   vle8.v    v1, (a5)
   kl.setst  K0, #kl_state_encrypt, v1       # IV <- v1
@@ -761,7 +762,7 @@ The following listing encrypts with CFB8, that is `s` = 8, any number of bytes.
   li        t2, kl_state_encrypt
   bne       t1, t2, error         # the import failed, or s is invalid
 
-  li        t3, 128
+  li        t3, 128               # a full register group
   beqz      a3, 2f
 1:
   minu      t4, a3, t3            # whole segments: one byte each
@@ -776,7 +777,8 @@ The following listing encrypts with CFB8, that is `s` = 8, any number of bytes.
 2:
 ----
 
-An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with Form C `kl.exec` instructions that return keystream blocks.
+CBC and CFB8 decryption differ from the listings above only in the State: `kl_state_decrypt` replaces `kl_state_encrypt`.
+An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with Form C `kl.exec` instructions that return keystream blocks, except that OFB has no counter, so the `kl.setst` into _Set_Aux_Value_ is omitted.
 
 [[KLE-keystream-modes-example]]
 === CTR/XCTR Keystream Generation

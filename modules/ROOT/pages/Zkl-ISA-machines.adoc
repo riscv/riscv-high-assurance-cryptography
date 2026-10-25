@@ -568,14 +568,14 @@ block or eight blocks per `kl.exec`.
 === Chaining/Feedback Modes (CBC, CFB, and OFB)
 
 (((KLE, Machine, CBC))) Cipher Block Chaining (CBC), (((KLE, Machine, CFB))) Cipher Feedback (CFB) and (((KLE, Machine, OFB))) Output Feedback (OFB) cite:[nist-SP-800-38A-1] are defined here for a block cipher of block size `b`.
-CFB has a segment of `s` bits, 0 < `s` {le} `b`; CBC takes no padding or ciphertext stealing, so the caller supplies whole blocks.
+CFB has a segment of `u` bits, 0 < `u` {le} `b`; CBC takes no padding or ciphertext stealing, so the caller supplies whole blocks.
 CBC and CFB process data, and OFB, like CTR (<<KLE-keystream-modes>>), generates a keystream that the caller combines with the data.
 
 Parameters::
 * `b` = block size (8|`b`), with 64 {le} `b` {le} 128.
 * `k` = key size (8|`k`).
-* `s` = segment size in bits (CFB only), with 0 < `s` {le} `b`; its default is `b`.
-* Granularity: `b` bits in CBC and OFB, and lcm(8, `s`) bits in CFB, so that a `kl.exec` processes whole segments of whole bytes.
+* `u` = segment size in bits (CFB only), with 0 < `u` {le} `b`; its default is `b`.
+* Granularity: `b` bits in CBC and OFB, and lcm(8, `u`) bits in CFB, so that a `kl.exec` processes whole segments of whole bytes; for odd `u` up to 127 it is up to 1016 bits, and a `kl.exec` then needs `LMUL` = 8 on a `VLEN` of 128.
 
 Data Structures::
 * *Provisioning Input*:
@@ -591,7 +591,7 @@ Data Structures::
 * *Internal State*:
  ** `key`: `k` bits.
  ** `IV`: `b` bits, the chaining value: the initialization vector at first, then the last ciphertext block in CBC and CFB and the last keystream block in OFB.
- ** `s`: int (CFB only).
+ ** `u`: 8 bits (CFB only).
 
 * *Serialized Content*:
 +
@@ -601,7 +601,7 @@ Data Structures::
 |  Pos. | Size (Bits)   | Field
 |    i  | `k` or 64     | `key` or System Key Identifier
 |   ii  | `b`           | `IV`
-|  iii  | 16             | `s` (CFB only)
+|  iii  | 8              | `u` (CFB only)
 |===
 --
 
@@ -611,7 +611,7 @@ Machine-Specific Functions::
 State Machine::
 * *States:*
  ** _Ready_: The CC is ready.
- ** _Set_Aux_Value_ (CFB): The segment size `s` is being set; no `kl.exec` is admitted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>).
+ ** _Set_Aux_Value_ (CFB): The segment size `u` is being set; no `kl.exec` is admitted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>).
  ** _Encrypt_ and _Decrypt_ (CBC and CFB): Encrypting, resp. decrypting, blocks (CBC) or segments (CFB) of input.
  ** _Operate_ (OFB): The CC produces a keystream.
 
@@ -622,36 +622,33 @@ State Machine::
  ** _Set_Aux_Value_ (CFB), _Encrypt_, _Decrypt_ or _Operate_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior:*
- ** When entering _Ready_, `IV` {leftarrow} 0 and, in CFB, `s` {leftarrow} `b`.
+ ** When entering _Ready_, `IV` {leftarrow} 0 and, in CFB, `u` {leftarrow} `b`.
 
- ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `s` {leftarrow} `Xs`, the 64-bit auxiliary operand; a value outside 0 < `Xs` {le} `b` is _Invalid_.
-    The Machine allows a same-State `kl.setst` into _Set_Aux_Value_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which sets `s` again.
-    A transition from _Ready_ to _Encrypt_ or _Decrypt_ without it leaves `s` = `b`, the full-block CFB.
+ ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `u` {leftarrow} `Xs`, the 64-bit auxiliary operand; a value outside 0 < `Xs` {le} `b` is _Invalid_.
+    The Machine allows a same-State `kl.setst` into _Set_Aux_Value_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which sets `u` again.
+    A transition from _Ready_ to _Encrypt_ or _Decrypt_ without it leaves `u` = `b`, the full-block CFB.
 
  ** When entering _Encrypt_, _Decrypt_ or _Operate_, the Form C `kl.setst` with auxiliary operand `INPUT` sets `IV` {leftarrow} `INPUT`, truncated to its `b` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
-    The Machine allows a same-State `kl.setst` into these States (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which does the same: it replaces `IV` and keeps `key`.
+    The Machine allows a same-State `kl.setst` into these States (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which does the same: it replaces `IV` and keeps `key` and, in CFB, `u`.
 
  ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec` instructions are expected.
     In CBC, for each block, with `INPUT` the block of input:
 +
 --
-[%autowidth,cols="^1,<3,<3",options="header"]
+[%autowidth,options="header"]
 |===
-| Mode | _Encrypt_ | _Decrypt_
-| CBC
-| `OUTPUT <- enc_blk(key, INPUT xor IV)` +
-  `IV <- OUTPUT`
-| `OUTPUT <- dec_blk(key, INPUT) xor IV` +
-  `IV <- INPUT`
+| Mode    | Operation | Semantics
+.2+| CBC  | _Encrypt_ | `OUTPUT <- enc_blk(key, INPUT xor IV)`,  `IV <- OUTPUT`
+|           _Decrypt_ | `OUTPUT <- dec_blk(key, INPUT) xor IV`, `IV <- INPUT`
 |===
 --
 +
-In CFB, `INPUT` and `OUTPUT` are sequences of segments of `s` bits, the first bit of a segment being the most significant bit of its first byte.
-For each segment, with `O` the `s` most significant bits of `enc_blk(key, IV)`, and `C` the ciphertext segment, that is `OUTPUT` in _Encrypt_ and `INPUT` in _Decrypt_:
+In CFB, `INPUT` and `OUTPUT` are sequences of segments of `u` bits, the first bit of a segment being the most significant bit of its first byte.
+For each segment, with `Q` the `u` most significant bits of `enc_blk(key, IV)`, and `C` the ciphertext segment, that is `OUTPUT` in _Encrypt_ and `INPUT` in _Decrypt_:
 +
 --
- `OUTPUT <- INPUT xor O` +
- `IV <- (IV << s) mod 2^b^ | C`
+`OUTPUT <- INPUT xor Q` +
+`IV <- ((IV << u) mod 2^b^) | C`
 --
 +
 Both uses read `INPUT` before writing `OUTPUT`, so `OUTPUT` may be computed in place.
@@ -660,8 +657,10 @@ Both uses read `INPUT` before writing `OUTPUT`, so `OUTPUT` may be computed in p
     For each block, `IV <- enc_blk(key, IV)` and `OUTPUT <- IV`.
     As a `kl.derive` source (<<KLE-derive-endpoints>>), _Operate_ supplies the keystream as Form C `kl.exec` instructions of whole blocks would; the unused bytes of the last block are discarded.
 
-NOTE: The decryption of CFB uses `enc_blk` only. With `s` = `b` it is the full-block CFB; `s` = 8 and `s` = 1 are CFB8 and CFB1 of cite:[nist-SP-800-38A-1].
-No Machine here checks the uniqueness or the unpredictability of an `IV`, which the standard requires (Rule <<KLE-MGR-caller-limits>>).
+NOTE: The decryption of CFB uses `enc_blk` only. With `u` = `b` it is the full-block CFB; `u` = 8 and `u` = 1 are CFB8 and CFB1 of cite:[nist-SP-800-38A-1].
+No Machine here checks the uniqueness or the unpredictability of an `IV`, which the standard requires (Rule <<KLE-MGR-caller-limits>>); a `kl.setst` of Form A sets the `IV` to zero.
+
+The code examples in <<Zkl-software.adoc#KLE-pseudocode-CBC-encryption>>, <<Zkl-software.adoc#KLE-pseudocode-CBC-encryption-multi-block>> and <<Zkl-software.adoc#KLE-pseudocode-CFB8-encryption>> illustrate how to use a CBC or CFB CC.
 
 // ////////////////////////////////////////////////////////////////////
 
