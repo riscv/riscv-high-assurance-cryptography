@@ -274,7 +274,7 @@ def derive(src, dst, length, klstart=0):
     if dst.state != READY or isinstance(dst, OcbNonce):
         dst._invalid('GR40 item 2')                    # no endpoint in this State or Machine, `N` included
     if dst.skid is not None:
-        dst._invalid('GR77 (GR40 item 2)')
+        dst._invalid('GR76 (GR40 item 2)')
     if klstart or length < len(dst.key) or len(src) < len(dst.key):
         dst._invalid('GR40 item 5')                    # the key loaded in full
     dst.key = src[:len(dst.key)]
@@ -741,7 +741,7 @@ for name, mk, src, n, ks in [
         ("klstart = 8 (uninterruptible, GR47; GR40 item 7)", lambda: Ocb(bytes(16)), secret, 16, 8),
         ("into a locker in Hash_Absorb (GR40 item 2)", at_absorb, secret, 16, 0),
         ("into a locker in Success (GR40 item 2)", at_end, secret, 16, 0),
-        ("into the key of a KeyType 1 locker (GR77, GR40 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
+        ("into the key of a KeyType 1 locker (GR76, GR40 item 2)", lambda: Ocb(K128, skid=7), secret, 16, 0)]:
     cl = mk()
     check(f"{name} -> Invalid", inval(derive, src, cl, n, ks) and cl.key is None)
 res = []

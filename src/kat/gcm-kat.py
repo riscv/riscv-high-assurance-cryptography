@@ -82,7 +82,7 @@ class Gcm:
         if s.state not in ERROR_STATES and s.policy == 0:
             s._invalid()                             # GCM requires a set bit
 
-    def _load_key(s, v, k, key_type):                    # key or SKID (GR77)
+    def _load_key(s, v, k, key_type):                    # key or SKID (GR76)
         s.k, s.key_type = k, key_type
         kb = 64 if key_type else k
         f = sl(v, kb - 1, 0)
@@ -329,7 +329,7 @@ class Gcm:
         if isinstance(src, Gcm):
             return src._invalid()                        # GR40 item 1
         if s.set_iv or s.key_type == 1 or s.state != READY:
-            return s._invalid()                          # Set IV, GR77, Set_Aux_Value: no endpoint (GR40 item 2)
+            return s._invalid()                          # Set IV, GR76, Set_Aux_Value: no endpoint (GR40 item 2)
         if length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR40 item 5
         s.key = src[:s.k // 8]
@@ -519,7 +519,7 @@ for label, *hx in VECTORS:
     if len(IVx) == 12:                                   # GCM with Set IV provisions only a 96-bit IV
         c, t, cl = kl_encrypt(None, None, Ax, Px, cl=Gcm.provisioned(Kx, iv=b2v(IVx)))
         check(f'Set IV {label} -> Success', (c, t, cl.state) == (Cx, Tx, SUCC))
-check('key given by a SKID (GR77): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
+check('key given by a SKID (GR76): tc4', kl_encrypt(None, IV, A, P, cl=Gcm.provisioned(skid=SKID))[:2] == (RC, RT))
 res = []
 for t in TAG_LENS:
     cl, bad = to_dtf(), to_dtf()
@@ -951,7 +951,7 @@ for ctl in (False, True):
 for mid in (16, 32, 48):
     check(f'export in Set_Aux_Value after {mid} of 60 IV bytes, import, resume: tc6', res[False, mid])
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR40, GR77, GR39; MR7)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR40, GR76, GR39; MR7)')
 stale = []
 for k, n in ((16, 16), (16, 32), (32, 32)):
     for ctl in (False, True):
@@ -975,7 +975,7 @@ check('GCM with Set IV is not a kl.derive destination (<<KLE-GCM-with-IV-mode>>,
       cl.state == INV)
 for name, cl, n in (('in Hash_Absorb (GR40 item 2)', at('ha'), 16),
                     ('in Success (GR40 item 2)', at('success'), 16),
-                    ('into a key configured by a SKID (GR77, GR40 item 2)', Gcm.provisioned(skid=SKID), 16),
+                    ('into a key configured by a SKID (GR76, GR40 item 2)', Gcm.provisioned(skid=SKID), 16),
                     ('of 8 bytes into a 128-bit key (GR40 item 5)', at('ready'), 8),
                     ('of 16 bytes into a 256-bit key (GR40 item 5)', Gcm.provisioned(bytes(32)), 16),
                     ('of 0 bytes into a key (GR40 item 5)', at('ready'), 0)):

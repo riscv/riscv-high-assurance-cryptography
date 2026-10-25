@@ -12,7 +12,7 @@ import ecc_curves as EC                                                         
 
 (SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN, SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG,
  OUTPUT, MSG_ABSORB, SET_CTX) = range(2, 13)
-TIMEOUT = object()                                  # an RBG draw past the bound of GR67
+TIMEOUT = object()                                  # an RBG draw past the bound of GR66
 SET_FIELD = {SET_GEN: 'gen', SET_SCALAR: 'scalar', SET_HASH: 'hash', SET_SECONDPT: 'sec', SET_SIG: 'sig'}
 # <<KLE-ECC>> Parameters: b, h, j, u, v
 PARAMS = {'secp256r1': (256, 256, 256, 2, 2), 'secp384r1': (384, 384, 384, 2, 2),
@@ -30,7 +30,7 @@ class Invalid(Exception):
         self.who = who
 
 class RbgUnavailable(Exception):
-    """KLE RBG-unavailable exception (GR67): random bits unavailable past the bound; State unchanged."""
+    """KLE RBG-unavailable exception (GR66): random bits unavailable past the bound; State unchanged."""
 
 def targets(state, eddsa, sig_exit=True, xdh=False):
     """kl.setst targets (<<KLE-ECC>>, <<KLE-EdDSA>>, <<KLE-X25519-X448>>, GR23, GR22). A same-State kl.setst is
@@ -325,19 +325,19 @@ class Locker:
         return R
 
     def _sign(self, rbg, bad):
-        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR67)
+        entry = (self.rnd, 'rnd' in self.has)          # restored on an RBG timeout (GR66)
         c, n, d, e = self.c, self.c.n, b2v(self.scalar), b2v(self.hash)
         G = self.dec(self.gen)                      # the base point is `Generator`
         draws = iter(([b2v(self.rnd)] if self.progress and 'rnd' in self.has else []) + list(rbg))
         attempt = 0
         while True:
             k = next(draws, None)
-            if k is TIMEOUT:                        # GR67: KLE RBG-unavailable exception, State unchanged
+            if k is TIMEOUT:                        # GR66: KLE RBG-unavailable exception, State unchanged
                 self.rnd = entry[0]
                 if not entry[1]:
                     self.has.discard('rnd')
                 raise RbgUnavailable()
-            if k is None:                           # GR67: RBG failure
+            if k is None:                           # GR66: RBG failure
                 raise Invalid('RBG failure')
             self.rnd = v2b(k, self.j // 8)
             self.has.add('rnd')
@@ -810,13 +810,13 @@ check('SecondPt load left incomplete for another Set state: zeroed, HasSecondPt 
       cr.sec is None and 'sec' not in cr.has and cr.state == SET_HASH)
 cr = locker(P256, sc(5), (SET_GEN, off), hs(7, 32), to=SIGN_GEN)
 cr.exec_run([3])
-check('RBG failure in _Sign_Generate_ -> Invalid (GR67)',
+check('RBG failure in _Sign_Generate_ -> Invalid (GR66)',
       invalid(locker(P256, sc(5), hs(7, 32), to=SIGN_GEN).exec_run, []))
 ct = locker(P256, sc(5), hs(7, 32), to=SIGN_GEN)
 r = [raises(ct.exec_run, [TIMEOUT], exc=RbgUnavailable), ct.state, 'rnd' in ct.has, 'sig' in ct.has]
 ct.exec_run([3])
 check('RBG timeout in _Sign_Generate_: KLE RBG-unavailable exception, State unchanged, no RndNum; the reissue '
-      'signs (GR67)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
+      'signs (GR66)', r == [True, SIGN_GEN, False, False] and ct.state == OUTPUT and 'sig' in ct.has)
 check('off-curve Generator in _Sign_Generate_ -> Failure, no signature, RndNum not drawn',
       (cr.state, 'sig' in cr.has, 'rnd' in cr.has) == (FAILURE, False, False))
 pk = pt(P256, P256.mul_g(5))
@@ -1362,7 +1362,7 @@ def kl_derive(dest, src, length):
     if isinstance(dest, Locker) or dest.kind == 'none' \
             or dest.state != {'key': READY, 'k0': SET_KEY}.get(dest.kind, HASH_ABSORB) \
             or dest.kind != 'hash' and dest.mdh['KeyType'] == 1:
-        raise Invalid(who='destination')                            # GR40 item 2; GR77
+        raise Invalid(who='destination')                            # GR40 item 2; GR76
     sh = src.shared()                                               # GR40 item 3: every destination is admitted
     if dest.kind == 'hash':                                         # the whole secret, exactly (GR40 item 5)
         ok = length == len(sh)
@@ -1519,8 +1519,8 @@ for label, dest, src, n, who in (
         ('key destination outside _Ready_ (GR40 item 2)', Dest('key', HASH_ABSORB), ecdh()[0], 64, 'destination'),
         ('HMAC `K0` outside _Set_Key_ (GR40 item 2)', Dest('k0', READY, size=64), ecdh()[0], 32, 'destination'),
         ('key with length < key size (GR40 item 5)', Dest('key'), ecdh()[0], 16, 'destination'),
-        ('key of KeyType 1 (GR77)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
-        ('HMAC `K0` of KeyType 1 (GR77)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
+        ('key of KeyType 1 (GR76)', Dest('key', KeyType=1), ecdh()[0], 64, 'destination'),
+        ('HMAC `K0` of KeyType 1 (GR76)', Dest('k0', size=64, KeyType=1), ecdh()[0], 32, 'destination'),
         ('ECC `Scalar` with length b/8 (GR40 item 2)', scalar_dest(), ecdh()[0], 32, 'destination'),
         ('ECC destination in _Ready_ (GR40 item 2)', scalar_dest(READY), ecdh()[0], 64, 'destination'),
         ('Machine without a destination endpoint (GR40 item 2)', Dest('none'), ecdh()[0], 64, 'destination')):

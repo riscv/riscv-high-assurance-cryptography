@@ -260,7 +260,7 @@ class Siv:
         if isinstance(src, Siv):                         # GR40 item 1: GCM-SIV is no source, its tag included
             return src._invalid()
         if s.key_type or s.state != READY:
-            return s._invalid()                          # GR77; Ready only (GR40 item 2)
+            return s._invalid()                          # GR76; Ready only (GR40 item 2)
         if klstart or length < s.k // 8 or len(src) < s.k // 8:
             return s._invalid()                          # GR40 item 5: the key loaded in full
         s.key = src[:s.k // 8]
@@ -722,7 +722,7 @@ for key, skid, nblk in ((K, None, 5), (K256, None, 6), (None, SKID, 4)):
     kb = 64 if skid else 8 * len(key)
     check(f'Content for {"a SKID" if skid else f"k = {kb}"}: {kb} + 400 bits, {nblk} blocks',
           Siv.provisioned(key, skid).export()[1] == 128 * nblk == pad128(kb + 400))
-check('key given by a SKID (GR77): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
+check('key given by a SKID (GR76): C.1 #15', kl_encrypt(None, n5, a5, p5, m=Siv.provisioned(skid=SKID))[0] == w5)
 m = opened(k5, b2v(n5), a5)
 m.setst(ETF)
 siv = m.exec('A', len_block(a5, p5 + bytes(12)), 128)
@@ -760,7 +760,7 @@ WHERE = ('Hash_Absorb', 'Encrypt', 'Dec_Last_Block')
 for where in WHERE:
     check(f'export in {where}, import (enc_key, auth_key re-derived), completion: C.1 #15', resumed(where, False))
 
-section('kl.derive (<<KLE-derive-endpoints>>, GR40, GR77; MR7)')
+section('kl.derive (<<KLE-derive-endpoints>>, GR40, GR76; MR7)')
 src = bytes.fromhex(VECTORS[11]['key'])                 # the bytes of a listed source
 for i, n in ((6, 16), (6, 32), (11, 32)):
     kx, nx, ax, px, wx = vec(i)
@@ -771,7 +771,7 @@ P = Siv.provisioned
 for name, m, s_, n, ks in (('in Hash_Absorb (GR40 item 2)', at('ha'), src, 16, 0),
                            ('in Set_Aux_Value (nonce is no endpoint, GR40 item 2)', at('sav'), src, 12, 0),
                            ('in Success (GR40 item 2)', at('success'), src, 16, 0),
-                           ('into a key configured by a SKID (GR77, GR40 item 2)', P(skid=SKID), src, 16, 0),
+                           ('into a key configured by a SKID (GR76, GR40 item 2)', P(skid=SKID), src, 16, 0),
                            ('of 8 bytes into a 128-bit key (GR40 item 5)', P(K), src, 8, 0),
                            ('of 16 bytes into a 256-bit key (GR40 item 5)', P(K256), src, 16, 0),
                            ('of 0 bytes into a key (GR40 item 5)', P(K), src, 0, 0),

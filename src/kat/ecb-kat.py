@@ -131,7 +131,7 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return False
         if self.state != KL_STATE_READY or self.keytype == 1 or length < n or len(data) < n:
-            return self.invalidate()          # GR40 item 2 (GR77), item 5
+            return self.invalidate()          # GR40 item 2 (GR76), item 5
         if kind == 'shared':                  # only a restricted transfer narrows (GR41)
             if fld(self.mdh, 'SCProtection') < fld(src_mdh, 'SCProtection'):
                 return self.invalidate(KL_STATEEXT_PRIV_VIOLATION)      # GR41: never to a weaker level
@@ -375,7 +375,7 @@ for label, kw in (("length 16 < 24 (GR40 item 5, no zero-fill)", dict(length=16)
                   ("length 0 (GR40 item 5)", dict(length=0)),
                   ("source field of 16 bytes < 24 (GR40 item 5)", dict(data=secret[:16])),
                   ("destination in Encrypt (GR40 item 2)", dict(state=ENC)),
-                  ("KeyType 1 destination (GR77, GR40 item 2)", dict(keytype=1))):
+                  ("KeyType 1 destination (GR76, GR40 item 2)", dict(keytype=1))):
     eq(f"{label} -> destination Invalid, no key", derived(**kw)[1:3], (INV, None))
 eq("differing Boot Session entries (GR41, a failed narrowing) -> destination Privilege Violation, no key",
    derived(src=put(SRC, 'Locality', 0b0_10_00_00))[1:3], (KL_STATEEXT_PRIV_VIOLATION, None))

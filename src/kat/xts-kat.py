@@ -31,7 +31,7 @@ def kl_size(mdh, c1_size, pi_size):
     return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
 
 def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR77)."""
+    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR76)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
     return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
@@ -108,7 +108,7 @@ class XexLocker:
     def invalidate(s):                            # GR36
         s.mdh = fset(s.mdh, 'State', INVALID)
         s.key1 = s.key2 = s.skid = s.mask = None
-    def _install(s, field, key2, importing):     # one SKID, two keys (GR77); KeyType 2: both random
+    def _install(s, field, key2, importing):     # one SKID, two keys (GR76); KeyType 2: both random
         r = install_key(s.keytype, field, importing, s.sks, lambda: (s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)),
                         (field, key2))
         if r is None:
@@ -222,7 +222,7 @@ class XexLocker:
         if s.state in ERROR_STATES:
             return False
         n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1:   # GR40 item 2; GR77
+        if s.state != READY or s.keytype == 1:   # GR40 item 2; GR76
             s.invalidate()
             return False
         if length < n or not isinstance(src, Keystream) and len(src) < n:   # GR40 item 5 (a keystream is unbounded)
@@ -710,7 +710,7 @@ for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR40 item 5)", None, src
                         ("length 0 (GR40 item 5)", None, src, 0),
                         ("24-byte source (GR40 item 5)", None, src[:24], 32),
                         ("destination in Encrypt (GR40 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (GR77, GR40 item 2)", 'skid', src, 32)):
+                        ("KeyType 1 destination (GR76, GR40 item 2)", 'skid', src, 32)):
     if mk == 'skid':
         cl = XexLocker(sks=SKS)
         cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
