@@ -677,6 +677,107 @@ An interrupt may halt such a `kl.exec` after some blocks; on return, the same in
 2:
 ----
 
+[[KLE-chaining-example]]
+=== Chaining/Feedback Modes
+
+The `kl.setst` into _Encrypt_ or _Decrypt_ of a CBC or CFB CC takes the IV as a Form C operand (<<Zkl-ISA-machines.adoc#KLE-chaining>>), and the CC keeps the chaining value across `kl.exec` instructions, so the loop needs no code for it.
+The following listing encrypts with a CBC CC, one block per `kl.exec`.
+
+[[KLE-pseudocode-CBC-encryption]]
+.CBC Encryption
+----
+# a0 = SCC, a1 = plaintext, a2 = ciphertext buffer, a3 = number of blocks,
+# a5 = the 16-byte IV
+
+  import_scc 0, a0                # import the SCC into locker K0
+  vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
+  vle8.v    v1, (a5)
+  kl.setst  K0, #kl_state_encrypt, v1  # IV <- v1
+  kl.getst  t1, K0
+  li        t2, kl_state_encrypt
+  bne       t1, t2, error         # the import failed
+
+  beqz      a3, 2f
+1:
+  vle8.v    v0, (a1)
+  kl.exec   v0, K0, v0            # chained to the previous block
+  vse8.v    v0, (a2)
+  addi      a1, a1, 16
+  addi      a2, a2, 16
+  addi      a3, a3, -1
+  bnez      a3, 1b
+2:
+----
+
+With `VLEN` = 128 and LMUL = 8, a register group holds eight blocks, and one `kl.exec` chains them in order inside the KLE unit.
+The following listing takes the number of blocks as a parameter; for the last group, of fewer than eight blocks, it reduces `vl`.
+
+[[KLE-pseudocode-CBC-encryption-multi-block]]
+.CBC Encryption, Eight Blocks per Instruction
+----
+# a0 = SCC, a1 = plaintext, a2 = ciphertext buffer, a3 = number of blocks,
+# a5 = the 16-byte IV; VLEN = 128, so LMUL = 8 holds 8 blocks
+
+  import_scc 0, a0
+  vsetivli  zero, 16, e8, m1, ta, ma
+  vle8.v    v1, (a5)
+  kl.setst  K0, #kl_state_encrypt, v1  # IV <- v1
+  kl.getst  t1, K0
+  li        t2, kl_state_encrypt
+  bne       t1, t2, error         # the import failed
+
+  li        t3, 8                 # blocks per group
+  beqz      a3, 2f
+1:
+  minu      t4, a3, t3            # blocks in this group: 8, then the rest
+  slli      t5, t4, 4             # bytes: 16 * blocks
+  vsetvli   zero, t5, e8, m8, ta, ma # KLLEN = 128 * blocks
+  vle8.v    v8, (a1)
+  kl.exec   v8, K0, v8            # each block chained to the last
+  vse8.v    v8, (a2)
+  add       a1, a1, t5
+  add       a2, a2, t5
+  sub       a3, a3, t4
+  bnez      a3, 1b
+2:
+----
+
+A CFB CC takes its segment size `s` in the State _Set_Aux_Value_, in which it admits no `kl.exec`.
+The following listing encrypts with CFB8, that is `s` = 8, any number of bytes.
+
+[[KLE-pseudocode-CFB8-encryption]]
+.CFB8 Encryption
+----
+# a0 = SCC, a1 = plaintext, a2 = ciphertext buffer, a3 = length in bytes,
+# a5 = the 16-byte IV
+
+  import_scc 0, a0
+  li        t0, 8
+  kl.setst  K0, #kl_state_set_aux_value, t0 # s <- 8
+  vsetivli  zero, 16, e8, m1, ta, ma
+  vle8.v    v1, (a5)
+  kl.setst  K0, #kl_state_encrypt, v1       # IV <- v1
+  kl.getst  t1, K0
+  li        t2, kl_state_encrypt
+  bne       t1, t2, error         # the import failed, or s is invalid
+
+  li        t3, 128
+  beqz      a3, 2f
+1:
+  minu      t4, a3, t3            # whole segments: one byte each
+  vsetvli   zero, t4, e8, m8, ta, ma
+  vle8.v    v8, (a1)
+  kl.exec   v8, K0, v8
+  vse8.v    v8, (a2)
+  add       a1, a1, t4
+  add       a2, a2, t4
+  sub       a3, a3, t4
+  bnez      a3, 1b
+2:
+----
+
+An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with Form C `kl.exec` instructions that return keystream blocks.
+
 [[KLE-keystream-modes-example]]
 === CTR/XCTR Keystream Generation
 

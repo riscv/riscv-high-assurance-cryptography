@@ -96,6 +96,8 @@ for mode in ('CBC', 'CFB', 'OFB'):
         check('CFB8 decryption, SP 800-38A F.3.8', c.segments((int.from_bytes(ct, 'big'), 144), 'Decrypt').to_bytes(18, 'big') == pt)
         c = Chain('CFB'); c.set_s(1); c.setst('Encrypt', IV0)
         check('CFB1 encryption, SP 800-38A F.3.4', c.segments((0x6bc1, 16), "Encrypt") == 0x68b3)
+        c = Chain('CFB'); c.set_s(1); c.setst('Decrypt', IV0)
+        check('CFB1 decryption, SP 800-38A F.3.5', c.segments((0x68b3, 16), 'Decrypt') == 0x6bc1)
         c.ready(); check('CFB: Ready restores s = b', c.s == 128 and c.st == 'Ready')
         for bad in (0, 129, 2**64 - 1):
             c = Chain('CFB'); c.set_s(bad); check(f'CFB: s = {bad} is Invalid', c.st == 'Invalid')
