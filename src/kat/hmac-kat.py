@@ -248,13 +248,13 @@ class Hmac:
         allowed = {(KL_STATE_READY, KL_STATE_SET_KEY): s.variant == 'NIK',
                    (KL_STATE_READY, KL_STATE_HASH_ABSORB): s.variant == 'KIP' or s.has_key,  # NIK: K0 kept
                    (KL_STATE_SET_KEY, KL_STATE_SET_KEY): True,  # GR22: restarts the load
-                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key}  # MR9: K0 loaded; none from _Hash_Output_ (GR22)
+                   (KL_STATE_SET_KEY, KL_STATE_HASH_ABSORB): s.has_key}  # MR1: K0 loaded; none from _Hash_Output_ (GR22)
         if immed == KL_STATE_INERT or immed in ERROR_STATES:  # in any State
             if s.st != KL_STATE_INERT or immed:
                 s.reset(immed)
         elif inert(s.st):
             pass  # GR33
-        elif immed == KL_STATE_READY and form == 'A':  # GR23: Form A; K0 kept, unless its load was left incomplete (MR7)
+        elif immed == KL_STATE_READY and form == 'A':  # GR23: Form A; K0 kept, unless its load was left incomplete (MR14)
             if s.st == KL_STATE_SET_KEY and h.cumul_len < s.b:
                 s.K0 = 0
             h.ready()
@@ -316,7 +316,7 @@ class Hmac:
             return 'noop', bytes(nbytes)  # GR33, GR35
         if s.st in (KL_STATE_HASH_OUTPUT, KL_STATE_HASH_VERIFY) and not s.policy & (
                 1 if s.st == KL_STATE_HASH_OUTPUT else 2):
-            s.reset()  # MR9 1.a, GR26: the operation of the State is disabled
+            s.reset()  # MR1 1.a, GR26: the operation of the State is disabled
             HART.klstart = 0
             return 'invalid', bytes(nbytes)
         h, io = s.h, (b2v(data), 8 * len(data), halt, resume)
@@ -329,7 +329,7 @@ class Hmac:
                 r, HART.klstart = 'invalid', 0       # not an interruption point (<<KLE-process-VLI>>)
             else:
                 r = process_vli(s.b, s, 'K0', s.b, h, None, *io)
-                s.has_key = h.cumul_len == s.b  # MR7: set when the load completes
+                s.has_key = h.cumul_len == s.b  # MR14: set when the load completes
         elif form == 'B' and s.st == KL_STATE_HASH_ABSORB:
             if resume and HART.klstart >= len(data):
                 HART.klstart = 0
@@ -341,31 +341,31 @@ class Hmac:
         elif form == 'B' and s.st == KL_STATE_HASH_LAST_BLOCK:
             L, p = h.last_block_len, HART.klstart if resume else 0
             if 8 * len(data) < L:
-                r = 'invalid'  # MR1, GR53 item 1: the length first
+                r = 'invalid'  # MR6, GR53 item 1: the length first
             elif p >= len(data):
                 HART.klstart = 0
                 return 'empty', bytes(nbytes)  # GR53 item 2, also after Xs = 0
             elif p or not L:
-                r = 'invalid'  # interruption point 0 only (MR2); MR8
-            elif h.w:  # one atomic kl.exec (MR8). SHA-2/SM3: ceil(L/8) bytes, the last MSB-first, stored with
+                r = 'invalid'  # interruption point 0 only (MR13); MR10
+            elif h.w:  # one atomic kl.exec (MR10). SHA-2/SM3: ceil(L/8) bytes, the last MSB-first, stored with
                 nb, k = -(-L // 8), L % 8  # the pad bit (<<KLE-SHA-2>>)
                 piece = bytearray(data[:nb])
                 if k:
                     piece[-1] = (piece[-1] & (0xFF << (8 - k)) & 0xFF) | (1 << (7 - k))
                 r = process_vli(0, h, h.attr, h.b, h, h.process_block, b2v(bytes(piece)), 8 * nb, track=False)
                 h.cumul_len += L
-            else:  # SHA-3: the L least significant bits (MR5)
+            else:  # SHA-3: the L least significant bits (MR8)
                 r = process_vli(0, h, h.attr, h.b, h, h.process_block, sl(b2v(data), L - 1, 0), L, xor=True)
             h.last_block_len = 0
         elif form == 'B' and s.st == KL_STATE_HASH_VERIFY:
             t, p = s.tag_len, HART.klstart if resume else 0
             if 8 * len(data) < t:
-                r = 'invalid'  # MR1, GR53 item 1
+                r = 'invalid'  # MR6, GR53 item 1
             elif p >= len(data):
                 HART.klstart = 0
                 return 'empty', bytes(nbytes)  # GR53 item 2
             elif p:
-                r = 'invalid'  # interruption point 0 only (MR2)
+                r = 'invalid'  # interruption point 0 only (MR13)
             else:  # MR12: constant-time compare of the first tag_len/8 bytes of the HMAC
                 s.st = KL_STATE_SUCCESS if sl(b2v(data), t - 1, 0) == sl(h.state, t - 1, 0) else KL_STATE_FAILURE
                 return 'retired', b''
@@ -584,7 +584,7 @@ for label, variant, ops in [
         ('NIK _Ready_ -> _Hash_Absorb_', 'NIK', (A,)),
         ('NIK _Set_Key_ -> _Hash_Absorb_ with half of K0', 'NIK', (SK, B(K0_7[:32]), A)),
         ('NIK Form B kl.setst to _Set_Key_', 'NIK', (S(KL_STATE_SET_KEY, 'B'),)),
-        ('NIK kl.exec after K0 is complete (MR7)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
+        ('NIK kl.exec after K0 is complete (MR14)', 'NIK', (SK, B(K0_7), B(bytes(4)))),
         ('kl.exec in _Ready_ (GR22)', 'KIP', (B(data7),)),
         ('Form C kl.exec in _Hash_Absorb_ (GR21), output zeroed', 'KIP', (A, C(16))),
         ('same-State kl.setst to _Hash_Absorb_', 'KIP', (A, A)),
@@ -649,7 +649,7 @@ cl = fresh(variant='NIK', key=b'first key', ops=(SK, B(K0_7[:32]), R))
 check('NIK: entering _Set_Key_ clears HasKey; a load left incomplete keeps it clear: _Ready_ -> _Hash_Absorb_ -> Invalid',
       None, (cl.se, run(cl, A) or cl.st), (0, KL_STATEEXT_INVALID))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(K0_7[:32]), R))
-check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MR7)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
+check('NIK K0 load left incomplete for _Ready_: K0 zeroed (MR14)', None, (cl.st, cl.K0), (KL_STATE_READY, 0))
 cl = fresh(variant='NIK', key=None, ops=(SK, B(b'\x5a' * 40)))
 run(cl, SK)
 check('NIK same-State kl.setst to _Set_Key_ restarts the load (GR22): K0 and cumul_len zeroed',
@@ -860,7 +860,7 @@ for name in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
     for nb, L, what in ((0, 5, 'piece only'), (20, b - 160 - 3, 'two-block padding'),
                         (b // 8 - 4, 45, 'piece crosses a block boundary'), (b // 8, b, 'Xs = b: a full block')):
         mv = sl(b2v(pat), 8 * nb + L - 1, 0)
-        piece = v2b(sl(mv, 8 * nb + L - 1, 8 * nb) | 0xff << L, (L + 7) // 8 + 1)  # junk above L (MR5)
+        piece = v2b(sl(mv, 8 * nb + L - 1, 8 * nb) | 0xff << L, (L + 7) // 8 + 1)  # junk above L (MR8)
         cl = fresh(name, ops=(A, B(pat[:nb])))
         cl.setst(KL_STATE_HASH_LAST_BLOCK, 'B', L)
         r = cl.exec('B', piece)[0]
@@ -876,9 +876,9 @@ cl.exec('B', pat[3:5])
 check('HMAC-SHA3-256: export/import between the kl.setst and the kl.exec of a 13-bit piece', None,
       run(cl, O, C(32))[1], ref_hmac_bits('SHA3-256', b'key', b2v(pat[:5]), 37))
 for label, ops in [('_Hash_Output_ before the piece', (A, B(pat[:3]), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), O)),
-                   ('a second piece (MR8)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:2]), B(pat[:2]))),
+                   ('a second piece (MR10)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:2]), B(pat[:2]))),
                    ('Xs = b + 1', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089))),
-                   ('KLLEN < last_block_len (MR1)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:1])))]:
+                   ('KLLEN < last_block_len (MR6)', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13), B(pat[:1])))]:
     check(f'HMAC-SHA3-256 _Invalid_: {label}', fresh('SHA3-256', ops=ops).st == KL_STATEEXT_INVALID)
 cl = fresh('SHA-256', ops=(A, B(b'abc'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0)))
 r = cl.exec('B', b'')[0]
@@ -918,7 +918,7 @@ r = cv.exec('B', ref_hmac('SHA-256', b'key', b'abc'))[0]
 cz = fresh('SHA-256', policy=2, ops=(A,))
 cz.restrictl(0b01)
 check('kl.restrictl clearing bit 0 in _Hash_Output_: the tag kl.exec -> _Invalid_, OUTPUT zeroed; in _Hash_Absorb_ '
-      'verification still succeeds; clearing the only set bit -> _Invalid_ at once (GR26, MR9)', None,
+      'verification still succeeds; clearing the only set bit -> _Invalid_ at once (GR26, MR1)', None,
       (cg.exec('C', nbytes=32), cg.st, r, cv.st, cz.st),
       (('invalid', bytes(32)), KL_STATEEXT_INVALID, 'retired', KL_STATE_SUCCESS, KL_STATEEXT_INVALID))
 for name in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):

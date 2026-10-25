@@ -269,7 +269,7 @@ class Sha3:
             s.st, s.last_block_len = immed, s.b  # Form A: max_len is set by the Machine
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
                 form in ('A', 'B') and 0 <= setst_operand(form, xs) <= s.b):
-            s.st = immed  # Form A: Xs = 0; any bit length (MR14, FIPS 202 bit order)
+            s.st = immed  # Form A: Xs = 0; any bit length (MR11, FIPS 202 bit order)
             s.last_block_len = setst_operand(form, xs)
         elif form in ('A', 'B') and immed == KL_STATE_HASH_OUTPUT and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
@@ -306,7 +306,7 @@ class Sha3:
         halt = (interrupt_at,)
         if s.st == KL_STATE_HASH_ABSORB and form in 'BD' and inp is not None and out is None:
             if sew is not None and sew < GRANULARITY:
-                return s.fail(out)  # MR1
+                return s.fail(out)  # MR6
             if s.empty(len(inp)):
                 return 'empty'
             if HART.klstart and s.block_base:
@@ -314,13 +314,13 @@ class Sha3:
             r = s.process_vli(b2v(inp), 8 * len(inp), 8 * HART.klstart, *halt, klstart_bits)
         elif s.st == KL_STATE_HASH_LAST_BLOCK and form in 'BD' and inp is not None and out is None:
             if sew is not None and sew < GRANULARITY:
-                return s.fail(out)  # MR1
+                return s.fail(out)  # MR6
             if 8 * len(inp) < s.last_block_len:
-                return s.fail(out)  # MR1, GR53 item 1: the length first
+                return s.fail(out)  # MR6, GR53 item 1: the length first
             if s.empty(len(inp)):
                 return 'empty'
             if HART.klstart or s.last_block_len == 0:
-                return s.fail(out)  # only interruption point 0; MR8
+                return s.fail(out)  # only interruption point 0; MR10
             s.process_vli(sl(b2v(inp), s.last_block_len - 1, 0), s.last_block_len, 0, None, False)
             s.last_block_len, r = 0, 'done'  # process_last_block() = None; atomic: no halt
         elif s.st == KL_STATE_HASH_OUTPUT and form in 'CD' and inp is None and out is not None:
@@ -650,7 +650,7 @@ for label, name, prep, act in [
         ('Form B kl.setst to _Hash_Absorb_ (Form A required)', 'SHA3-256', new,
          lambda c: c.setst(KL_STATE_HASH_ABSORB, 'B', 0)),
         ('same-State kl.setst in _Hash_Absorb_', 'SHA3-256', ab, lambda c: c.setst(KL_STATE_HASH_ABSORB)),
-        ('a kl.exec after a Form B kl.setst to _Hash_Absorb_Last_Block_ with Xs = 0 (MR8)', 'SHA3-256', ab,
+        ('a kl.exec after a Form B kl.setst to _Hash_Absorb_Last_Block_ with Xs = 0 (MR10)', 'SHA3-256', ab,
          lambda c: (c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), c.exec('B', inp=b'x'))),
         ('Form C kl.exec in _Hash_Absorb_ (GR21)', 'SHA3-256', ab, lambda c: c.exec('C', out=bytearray(32))),
         ('Form A kl.exec in _Hash_Absorb_ (GR21)', 'SHA3-256', ab,
@@ -780,7 +780,7 @@ section('Final piece of any bit length: _Hash_Absorb_Last_Block_ (NIST CAVP bit-
 
 def piece_hash(name, nbits, nb, msg, nout, junk=True, msb_piece=False, split_at=None):
     """Whole bytes msg[:nb] in _Hash_Absorb_, then the final nbits - 8 nb bits in _Hash_Absorb_Last_Block_;
-    junk: the bits of INPUT above last_block_len set, plus one extra byte (MR5)."""
+    junk: the bits of INPUT above last_block_len set, plus one extra byte (MR8)."""
     L, cl = nbits - 8 * nb, absorbing(name, msg[:nb])
     pv = sl(b2v(msg[nb:]), L - 1, 0)
     if msb_piece:  # negative control: a partial last byte taken from its most significant bits
@@ -814,10 +814,10 @@ for label, prep, act in [
         ('Xs = b + 1', lambda: absorbing('SHA3-256', MSG_A3[:10]),
          lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 1089)),
         ('from _Ready_', lambda: new('SHA3-256'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8)),
-        ('KLLEN = 8 < last_block_len = 13 (MR1)', last, lambda c: c.exec('B', inp=b'\x01')),
+        ('KLLEN = 8 < last_block_len = 13 (MR6)', last, lambda c: c.exec('B', inp=b'\x01')),
         ('KLLEN = 0 < last_block_len = 16: the length before the empty window (GR53 item 1)',
          lambda: last(L=16), lambda c: c.exec('B', inp=b'')),
-        ('a second kl.exec (MR8)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
+        ('a second kl.exec (MR10)', last, lambda c: (c.exec('B', inp=b'\x01\x02'), c.exec('B', inp=b'\x01\x02'))),
         ('_Hash_Output_ before the piece (last_block_len != 0)', last, lambda c: c.setst(KL_STATE_HASH_OUTPUT)),
         ('same-State kl.setst (GR22)', last, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 13)),
         ('klstart = 1: not an interruption point', last,

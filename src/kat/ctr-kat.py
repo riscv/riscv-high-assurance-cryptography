@@ -75,7 +75,7 @@ class KsLocker:
     def provision(self, pi):
         self.mdh = b2v(pi[:16])
         if fld(self.mdh, 'MachinePolicy') == 0:
-            return self.invalidate()   # MR9: at least one bit
+            return self.invalidate()   # MR1: at least one bit
         self._install(sl(b2v(pi[16:]), self.kw - 1, 0), False)
         if self.state not in ERROR_STATES:
             self.enter_ready()
@@ -90,23 +90,23 @@ class KsLocker:
         _, _, n, j = self.params()
         self.IV, self.ctr = sl(v, self.kw + n - 1, self.kw), sl(v, self.kw + n + j - 1, self.kw + n)
         if fld(self.mdh, 'MachinePolicy') == 0:
-            return self.invalidate()   # MR9: at least one bit
+            return self.invalidate()   # MR1: at least one bit
         self._install(sl(v, self.kw - 1, 0), True)
 
     def setst(self, immed, form='A', operand=None, KLLEN=128):
-        """form: 'A' (operand 0), 'B' (128-bit Xs), 'C' (KLLEN-bit value)."""
+        """form: 'A' (operand 0), 'B' (64-bit Xs), 'C' (KLLEN-bit value), 'D' (128-bit Xs)."""
         if self.state in ERROR_STATES:
             return
         _, _, n, j = self.params()
         if immed == RDY and form == 'A':
             self.enter_ready()
         elif immed == OP and self.state in (RDY, OP):
-            if form not in ('A', 'C', 'D'):
+            if form not in ('A', 'B', 'C', 'D'):
                 return self.invalidate()                          # GR21: a wrong Form (GR13)
             if form != 'C':
-                KLLEN, operand = 128, setst_operand(form, operand)   # Form A or D: a 128-bit INPUT
+                KLLEN, operand = 128, setst_operand(form, operand)   # Form A, B or D: a 128-bit INPUT
             if KLLEN < n:
-                return self.invalidate()                          # MR5, MR1: INPUT narrower than IV
+                return self.invalidate()                          # MR8, MR6: INPUT narrower than IV
             self.IV, self.mdh = sl(operand, n - 1, 0), put(self.mdh, 'State', OP)
         elif immed == AUX and self.state in (RDY, OP) and form in ('A', 'B'):
             self.ctr = bin_(setst_operand(form, operand), j)      # bin(Xs, j), State unchanged
@@ -119,7 +119,7 @@ class KsLocker:
         window = ((1 << KLLEN) - 1) >> lo << lo if lo < KLLEN else 0
         if self.state in ERROR_STATES:
             return out & ~window, 0
-        if self.state != OP or KLLEN % B:     # GR22, GR21; MR1 (length first: GR53)
+        if self.state != OP or KLLEN % B:     # GR22, GR21; MR6 (length first: GR53)
             self.invalidate()
             return out & ~window, 0
         if lo >= KLLEN:
@@ -128,7 +128,7 @@ class KsLocker:
             self.invalidate()                 # not an interruption point
             return out & ~window, 0
         k, mode, n, j = self.params()
-        key, pos = v2b(self.key, k // 8), list(range(lo, KLLEN, B))   # MR2
+        key, pos = v2b(self.key, k // 8), list(range(lo, KLLEN, B))   # MR13
         for q, i in enumerate(pos if self.order == 'spec' else pos[::-1]):
             if q == halt_after:
                 return out, i // 8
@@ -154,7 +154,7 @@ class KsLocker:
         if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, unused bytes discarded
             src = keystream(src, n)
         self.key = b2v(src[:n])
-        self.enter_ready()                    # MR16, GR40 item 5: the operations of entering Ready
+        self.enter_ready()                    # MR17, GR40 item 5: the operations of entering Ready
         return True
 
 
@@ -266,7 +266,7 @@ for name, k, c in SP38A_F5:
 F51 = [(H(k), c) for _, k, c in SP38A_F5]
 control("counter without bswap (little-endian in the trailing bytes) misses F.5",
         all(kl_ctr(key, T1, PT, C0, variant='neg').hex() != c for key, c in F51))
-control("blocks filled most significant first (MR2 reversed) misses F.5",
+control("blocks filled most significant first (MR13 reversed) misses F.5",
         all(kl_ctr(key, T1, PT, C0, order='neg').hex() != c for key, c in F51))
 key, c = F51[0]
 
@@ -296,7 +296,7 @@ cl.setst(AUX, 'B', C0)
 eq("Form B in Operate leaves State 2", cl.state, OP)
 cr = ctr_cl(key, ctr0=C0)
 cr.setst(RDY)
-eq("Form B in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR16)",
+eq("Form B in Ready, then a kl.setst naming Ready in Ready: the operations of entering Ready, ctr = 0 (MR17)",
    (cr.state, cr.ctr), (RDY, 0))
 
 section("XCTR [reference-implementation anchor: google/hctr2; Ready sets HCTR2's initial ctr = 1]")
@@ -350,8 +350,11 @@ cl.setst(OP, 'D', b2v(SP38A_ICB))
 cl.setst(AUX, 'B', C0)
 eq("Form D kl.setst #kl_state_operate (128-bit Xs as INPUT), Form D kl.exec with the KLIOBUF (64): F.5.1",
    bxor(v2b(cl.exec(512)[0], 64), PT).hex(), c)
+cl = ctr_cl(key)
+cl.setst(OP, 'B', 0x0123456789abcdef)
+eq("Form B kl.setst #kl_state_operate (64-bit Xs zero-extended to 128 bits as INPUT): IV = Xs", cl.IV, 0x0123456789abcdef)
 cl = ctr_cl(key, T1, C0)
-eq("MR1 (vector): KLLEN = 136 -> Invalid, window zeroed",
+eq("MR6 (vector): KLLEN = 136 -> Invalid, window zeroed",
    (cl.exec(136, out=(1 << 136) - 1)[0], cl.state), (0, INV))
 rows = []
 for ks in (0, 8, 17):
@@ -400,19 +403,19 @@ eq("KeyType 2: PI of 32 B as with KeyType 0; random key, KeyType 0, Content1 32 
 cl.provision(build_pi('AES-128', ONES64, keytype=1))
 eq("the all-ones SKID is an ordinary SKID: unresolved -> Invalid", cl.state, INV)
 cl.provision(build_pi('AES-128', b2v(key), policy=0))
-eq("MachinePolicy = 0 -> Invalid at provisioning (MR9)", cl.state, INV)
+eq("MachinePolicy = 0 -> Invalid at provisioning (MR1)", cl.state, INV)
 cl2 = ctr_cl(key, T1, C0)
 cl.import_scc(put(cl2.mdh, 'MachinePolicy', 0), cl2.content1())
-eq("MachinePolicy = 0 -> Invalid at import (MR9)", cl.state, INV)
+eq("MachinePolicy = 0 -> Invalid at import (MR1)", cl.state, INV)
 for pol in (1, 2):
     cl = KsLocker(SKS)
     cl.provision(build_pi('AES-128', b2v(key), policy=pol))
-    eq(f"MachinePolicy {pol:02b}: Ready -> Operate passes the gate (MR9), then F.5.1",
+    eq(f"MachinePolicy {pol:02b}: Ready -> Operate passes the gate (MR1), then F.5.1",
        bxor(keystream(operate(cl, T1, C0), 64), PT).hex(), c)
 
 cl = ctr_cl(key)
 cl.setst(OP, 'C', T1, KLLEN=64)
-eq("kl.setst #kl_state_operate with KLLEN = 64 < n = 96 -> Invalid (MR5, MR1)", cl.state, INV)
+eq("kl.setst #kl_state_operate with KLLEN = 64 < n = 96 -> Invalid (MR8, MR6)", cl.state, INV)
 cl = ctr_cl(key)
 cl.setst(AUX, 'A')
 eq("Form A kl.setst #kl_state_set_aux_value: ctr <- 0 (Form B with X0)", (cl.state, cl.ctr), (RDY, 0))
@@ -422,7 +425,7 @@ ks_src = keystream(ctr_cl(key, T1, C0), 32)
 for mode, want in (('CTR', 0), ('XCTR', 1)):
     cl = ctr_cl(key, ctr0=5, mode=mode)
     cl.derive_key(ks_src, 32)
-    eq(f"{mode}: Form B ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR16, GR40 item 5)",
+    eq(f"{mode}: Form B ctr <- 5 in Ready, then kl.derive into key: IV = 0, ctr = {want} (MR17, GR40 item 5)",
        (cl.state, cl.IV, cl.ctr), (RDY, 0, want))
 
 def derived(length, keytype=0, state_op=False):

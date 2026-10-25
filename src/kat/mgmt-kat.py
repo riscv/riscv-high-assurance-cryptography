@@ -1074,7 +1074,7 @@ class Unit:
         for e in exp:
             self._enter_error(e, EXPIRED)
         if exp: return 'expired'
-        for e in ends:                                              # GR21 item 4, MR9 item 1.a: source first
+        for e in ends:                                              # GR21 item 4, MR1 item 1.a: source first
             m, mach = self.lockers[e].mdh, MACHINES.get(self.lockers[e].mdh['Machine'])
             if mach and m['State'] in mach.op_states and not m['MachinePolicy'] & mach.op_states[m['State']]:
                 self._enter_error(e, INVALID)
@@ -2858,7 +2858,7 @@ def t_derive():
     u = pair()
     key1 = bytes(u.lockers[1].c1)
     u.restrict(0, rq(MachinePolicy=2))
-    eq('MR9 item 1.a: a keystream source in a State that the narrowed MachinePolicy disables goes to Invalid, '
+    eq('MR1 item 1.a: a keystream source in a State that the narrowed MachinePolicy disables goes to Invalid, '
        'nothing moves', (u.derive(1, 0, 32), u.getst(0), u.getst(1), bytes(u.lockers[1].c1) == key1),
        ('invalid', INVALID, READY, True))
     u, u2 = pv(pair(), 4, xof()), pv(pair(), 4, xof())

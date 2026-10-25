@@ -116,11 +116,11 @@ class XexLocker:
         (s.key1, s.key2), s.skid, kt = r
         s.mdh = fset(s.mdh, 'KeyType', kt)
         if s.key1 == s.key2:
-            return s.invalidate()                 # key2 = key1: configuration error (MR10)
+            return s.invalidate()                 # key2 = key1: configuration error (MR2)
     def provision(s, pi):
         s.mdh = b2v(pi[:16])
         if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # MR9: at least one bit
+            return s.invalidate()   # MR1: at least one bit
         w1, w2 = s.widths
         c = b2v(pi[16:])
         s._install(sl(c, w1 - 1, 0), sl(c, w1 + w2 - 1, w1) if w2 else 0, False)
@@ -136,13 +136,13 @@ class XexLocker:
         w1, w2 = s.widths
         s.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
         if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # MR9: at least one bit
+            return s.invalidate()   # MR1: at least one bit
         if s.se and not (s.state == DECRYPT and s.se in (SKIP, BACK)):
             return s.invalidate()   # StateExtension @ State not supported
         s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
 
     def setst(s, immed, form='C', operand=0, KLLEN=128):
-        """form 'A' (no operand), 'C' (KLLEN-bit INPUT) or 'B' (128-bit Xs, admitted where B is expected)."""
+        """form 'A' (no operand), 'B' (64-bit Xs), 'C' (KLLEN-bit INPUT) or 'D' (128-bit Xs)."""
         if s.state in ERROR_STATES:               # GR33
             return
         pol = fget(s.mdh, 'MachinePolicy')
@@ -150,21 +150,21 @@ class XexLocker:
             s.goto(READY)
             s.mask = 0
         elif immed == STEAL:                      # an operation: State unchanged, not a transition
-            if s.state != DECRYPT or form != 'A' or s.se or not pol & POL_DEC:   # MR9: gated with Decrypt
+            if s.state != DECRYPT or form != 'A' or s.se or not pol & POL_DEC:   # MR1: gated with Decrypt
                 return s.invalidate()
             s.mask = s.dbl()(s.mask)              # skips the mask index
             s.mdh = fset(s.mdh, 'StateExtension', SKIP)
         elif (immed in (ENCRYPT, DECRYPT)
               and s.state in (READY, ENCRYPT, DECRYPT)    # also Encrypt <-> Decrypt and same State: sets the tweak
-              and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR9
-            if form not in ('A', 'C', 'D'):
+              and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR1
+            if form not in ('A', 'B', 'C', 'D'):
                 return s.invalidate()                          # GR21: a wrong Form (GR13)
             if form != 'C':
-                KLLEN, operand = 128, setst_operand(form, operand)   # Form A or D: a 128-bit INPUT
+                KLLEN, operand = 128, setst_operand(form, operand)   # Form A, B or D: a 128-bit INPUT
             if KLLEN < B:
-                return s.invalidate()                     # MR5, MR1: INPUT narrower than the tweak
+                return s.invalidate()                     # MR8, MR6: INPUT narrower than the tweak
             value = sl(operand, KLLEN - 1, 0)
-            s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(sl(value, B - 1, 0), 16)))   # MR5
+            s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(sl(value, B - 1, 0), 16)))   # MR8
             s.goto(immed)
         else:
             s.invalidate()                        # GR21
@@ -176,11 +176,11 @@ class XexLocker:
         window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
         if s.state in ERROR_STATES:
             return out & ~window, 0               # GR35
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR22, GR21; MR1 (length first: GR53)
+        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR22, GR21; MR6 (length first: GR53)
             s.invalidate()
             return out & ~window, 0
         if not fget(s.mdh, 'MachinePolicy') & (POL_ENC if s.state == ENCRYPT else POL_DEC):
-            s.invalidate()                        # MR9: issued in a State that MachinePolicy disables (GR26)
+            s.invalidate()                        # MR1: issued in a State that MachinePolicy disables (GR26)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                         # empty window: only klstart = 0
@@ -188,7 +188,7 @@ class XexLocker:
             s.invalidate()
             return out & ~window, 0
         f, key1 = BLOCK[s.cname][0 if s.state == ENCRYPT else 1], v2b(s.key1, s.k // 8)
-        if s.se:                                  # stealing: a single block (MR2), interruption point 0
+        if s.se:                                  # stealing: a single block (MR13), interruption point 0
             if lo:
                 s.invalidate()
                 return out & ~window, 0
@@ -198,9 +198,9 @@ class XexLocker:
                 s.mdh = fset(s.mdh, 'StateExtension', BACK)
             else:
                 s.goto(SUCCESS)
-            return (out & ~window) | res, 0       # MR6: rest of the window cleared
+            return (out & ~window) | res, 0       # MR9: rest of the window cleared
         dbl = s.dbl()
-        pos = list(range(lo, KLLEN, B))           # MR2
+        pos = list(range(lo, KLLEN, B))           # MR13
         for q, i in enumerate(reversed(pos) if s.msb_first else pos):
             if q == halt_after:
                 return out, i // 8                # precise halt
@@ -231,7 +231,7 @@ class XexLocker:
         src = src.take(n) if isinstance(src, Keystream) else src
         s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
         if s.key1 == s.key2:
-            s.invalidate()                        # MR10
+            s.invalidate()                        # MR2
             return False
         return True
 
@@ -443,10 +443,10 @@ check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
 section("KLE XEX locker, full blocks (tweak = bin(i, 128))")
 for name, k1, k2, i, p, c in FULL:
     if k1 == k2:                                  # IEEE 1619 vector 1: the Machine rejects equal keys
-        check(f"{name}: key2 = key1 -> _Invalid_ at provisioning (MR10); REF checked above", True,
+        check(f"{name}: key2 = key1 -> _Invalid_ at provisioning (MR2); REF checked above", True,
               new_xex(k1, k2).state, INVALID)
         continue
-    check(f"{name}: encrypt (one multi-block kl.exec, MR2), decrypt, one kl.exec per block", True,
+    check(f"{name}: encrypt (one multi-block kl.exec, MR13), decrypt, one kl.exec per block", True,
           (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
           (c, p, c))
 
@@ -511,7 +511,7 @@ cl.setst(STEAL, 'A')
 check("kl.setst #kl_xex_state_steal in Decrypt: State unchanged, StealSkip set, mask advanced", True,
       (cl.state, cl.se, cl.mask), (DECRYPT, SKIP, kl_update_mask(m0)))
 o = cl.exec(0, 256)[0]
-check("... kl.exec with KLLEN = 2b: one block (MR2), rest of the window cleared (MR6), StealBack, mask back", True,
+check("... kl.exec with KLLEN = 2b: one block (MR13), rest of the window cleared (MR9), StealBack, mask back", True,
       (cl.state, cl.se, cl.mask, o >> B), (DECRYPT, BACK, m0, 0))
 cl.exec1(0)
 check("... the next kl.exec: Success, StateExtension 0", True, (cl.state, cl.se), (SUCCESS, 0))
@@ -563,8 +563,8 @@ n.exec1(0)
 src = dl(); n = XexLocker()
 n.import_scc(fset(src.mdh, 'MachinePolicy', POL_ENC), src.content1())
 n.setst(STEAL, 'A')
-check("Decrypt narrowed to encrypt-only: kl_xex_state_steal -> Invalid (MR9)", True, n.state, INVALID)
-check("SCC with StealSkip narrowed to encrypt-only: the kl.exec -> Invalid (MR9)", True, n.state, INVALID)
+check("Decrypt narrowed to encrypt-only: kl_xex_state_steal -> Invalid (MR1)", True, n.state, INVALID)
+check("SCC with StealSkip narrowed to encrypt-only: the kl.exec -> Invalid (MR1)", True, n.state, INVALID)
 
 section("kl.clone")
 k1, k2, i = CTS[0][1:4]
@@ -598,13 +598,13 @@ out = tw(cl, DECRYPT).exec(b2v(c), 8 * len(c))[0]
 check("Encrypt -> Decrypt with the tweak again: Decrypt, the ciphertext decrypts to vector 2", True,
       (cl.state, out), (DECRYPT, b2v(data)))
 cl = tw(new_xex(k1, k2, POL_ENC))
-check("Encrypt -> Decrypt in an encrypt-only locker: Invalid (MR9)", True, tw(cl, DECRYPT).state, INVALID)
-check("MachinePolicy = 0 -> Invalid at provisioning (MR9)", True,
+check("Encrypt -> Decrypt in an encrypt-only locker: Invalid (MR1)", True, tw(cl, DECRYPT).state, INVALID)
+check("MachinePolicy = 0 -> Invalid at provisioning (MR1)", True,
       new_xex(k1, k2, 0).state, INVALID)
 cl = new_xex(k1, k2)
 cl2 = XexLocker()
 cl2.import_scc(fset(cl.mdh, 'MachinePolicy', 0), cl.content1())
-check("MachinePolicy = 0 -> Invalid at import (MR9)", True, cl2.state, INVALID)
+check("MachinePolicy = 0 -> Invalid at import (MR1)", True, cl2.state, INVALID)
 check("MachinePolicy decrypt-only: -> Encrypt gives Invalid", True,
       tw(new_xex(k1, k2, POL_DEC)).state, INVALID)
 check("MachinePolicy decrypt-only: -> Decrypt decrypts", True,
@@ -614,13 +614,13 @@ def narrowed():                                   # SCC in Encrypt, exported aft
     n.import_scc(fset(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
     return n
 cl = narrowed()
-check("SCC in Encrypt with MachinePolicy = 10b: kl.exec -> Invalid, window zeroed (MR9)", True,
+check("SCC in Encrypt with MachinePolicy = 10b: kl.exec -> Invalid, window zeroed (MR1)", True,
       (cl.exec(b2v(data[:16]), 128)[0], cl.state), (0, INVALID))
-check("... a same-State kl.setst into Encrypt -> Invalid (MR9)", True, tw(narrowed()).state, INVALID)
-check("... a kl.setst naming Decrypt -> Decrypt (MR9)", True, tw(narrowed(), DECRYPT).state, DECRYPT)
+check("... a same-State kl.setst into Encrypt -> Invalid (MR1)", True, tw(narrowed()).state, INVALID)
+check("... a kl.setst naming Decrypt -> Decrypt (MR1)", True, tw(narrowed(), DECRYPT).state, DECRYPT)
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'C', bin_(i, B), 64)
-check("kl.setst #kl_state_encrypt with KLLEN = 64 < b -> Invalid (MR5, MR1)", True, cl.state, INVALID)
+check("kl.setst #kl_state_encrypt with KLLEN = 64 < b -> Invalid (MR8, MR6)", True, cl.state, INVALID)
 cl, c0 = new_xex(k1, k2), new_xex(k1, k2)
 cl.setst(ENCRYPT, 'A'); c0.setst(ENCRYPT, 'C', 0, 128)
 check("Form A kl.setst #kl_state_encrypt = Form C with a 128-bit zero tweak (<<KLE-instruction-setst>>)", True,
@@ -637,11 +637,15 @@ check("same-State kl.setst (GR22) re-tweaks: mask index back to 0", True,
       (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
-check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MR5)", True, cl_run(cl, data)[0], c)
+check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MR8)", True, cl_run(cl, data)[0], c)
+cl, c0 = new_xex(k1, k2), new_xex(k1, k2)
+cl.setst(ENCRYPT, 'B', i); c0.setst(ENCRYPT, 'C', bin_(i, B), B)
+check("Form B kl.setst (64-bit Xs, zero-extended) = Form C with the data unit number as the tweak", True,
+      (cl.state, cl.mask), (ENCRYPT, c0.mask))
 cl = new_xex(k1, k2)
 cl.setst(ENCRYPT, 'D', bin_(i, B))
 check("Form D kl.setst (128-bit Xs as the tweak) and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
-for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MR1): Invalid, window zeroed"),
+for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MR6): Invalid, window zeroed"),
                             (256, 8, (INVALID, b2v(data[:8]), 0), "klstart = 8, no interruption point: Invalid"),
                             (256, 32, (ENCRYPT, b2v(data), 0), "klstart = KLLEN/8: empty window, only klstart = 0"),
                             (256, 48, (ENCRYPT, b2v(data), 0), "klstart = 48 > KLLEN/8: empty window"),
@@ -659,7 +663,7 @@ for q in (1, 7, 31):
 m0 = b2v(aes_encrypt(k1, v2b(bin_(i, B), 16)))
 m1 = kl_update_mask(m0)
 enc1 = lambda m: b2v(aes_encrypt(k1, v2b(b2v(data[:16]) ^ m, 16))) ^ m
-check("key2 = key1 -> _Invalid_ at provisioning and after a kl.derive (MR10): the single-key XEX without "
+check("key2 = key1 -> _Invalid_ at provisioning and after a kl.derive (MR2): the single-key XEX without "
       "alpha, whose mask would be the raw enc_blk(key1, T), cannot arise", True,
       (new_xex(k1, k1).state, derive(k1 + k1, fresh(), 2 * len(k1)), enc1(m0) != enc1(m1)),
       (INVALID, False, True))

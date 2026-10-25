@@ -228,13 +228,13 @@ check('bound Xs = t + 8 or 12 (not a multiple of 8) -> _Invalid_; Xs = 128 read 
       ([KL_STATEEXT_INVALID] * 2, DIG[:16] + bytes(8), KL_STATE_SUCCESS))
 res = []
 for label, ops in [
-        ('Xs = 0 then a kl.exec (MR8)', (A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), B(b'c'))),
+        ('Xs = 0 then a kl.exec (MR10)', (A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0), B(b'c'))),
         ('Xs = b + 8', (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 520))),
         ('_Hash_Output_ before the final piece (last_block_len != 0)',
          (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), O)),
         ('a second kl.exec in _Hash_Absorb_Last_Block_',
          (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8), B(b'a'), B(b'b'))),
-        ('a final piece of 16 bits in a KLLEN of 8 (MR1)',
+        ('a final piece of 16 bits in a KLLEN of 8 (MR6)',
          (A, lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 16), B(b'a'))),
         ('_Ready_ -> _Hash_Absorb_Last_Block_', (lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 8),))]:
     cl = Sha2().provision()
@@ -248,7 +248,7 @@ for d, ks in ((b'', 0), (b'a', 2)):
     HART.klstart = ks
     res.append((cl.exec('B', d, resume=ks != 0)[0], cl.st, HART.klstart))
 check('final piece of 16 bits, KLLEN = 0, or KLLEN = 8 with klstart = 2: the length is checked before the empty '
-      'window, _Invalid_ (MR1, GR53)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
+      'window, _Invalid_ (MR6, GR53)', None, res, [('invalid', KL_STATEEXT_INVALID, 0)] * 2)
 cl = Sha2().provision()
 run(cl, A, B(b'ab'), lambda c: c.setst(KL_STATE_HASH_LAST_BLOCK, 'B', 0))
 r = B(b'')(cl)[0], cl.st

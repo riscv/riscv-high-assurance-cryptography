@@ -24,7 +24,7 @@ STEPS = {GEN: K.keygen_internal_steps, ENC: K.encaps_internal_steps, DEC: K.deca
 IN_F = {EK_IN: 'encapsk', DK_IN: 'decapsk', CT_IN: 'ciphertext'}
 OUT_F = {EK_OUT: 'encapsk', CT_OUT: 'ciphertext'}
 FIELDS = ('decapsk', 'ciphertext', 'sharedkey')    # encapsk is the ek sub-field of decapsk
-# <<KLE-PQC-ML-KEM>> Behavior: fields zeroed on entering a State (MR7 zeroes a loaded field)
+# <<KLE-PQC-ML-KEM>> Behavior: fields zeroed on entering a State (MR14 zeroes a loaded field)
 ZEROED = {READY: ('sharedkey',), EK_IN: ('decapsk',), DK_IN: ('decapsk',), CT_IN: ('ciphertext', 'sharedkey'),
           ENC: ('sharedkey',), DEC: ('sharedkey',)}
 # <<KLE-ML-KEM-sizes>> (bytes); Internal State (bits: decapsk, its encapsk, ciphertext, sharedkey), the
@@ -139,7 +139,7 @@ class MLKEMLocker(Locker):
     def set_flags(self, ek, dk): self.put('StateExtension', self.se & ~3 | ek | dk << 1)
     def set_ct(self, v): self.put('StateExtension', self.se & ~4 | v << 2)     # HasCiphertext, bit 2
     def set_sk(self, v): self.put('StateExtension', self.se & ~8 | v << 3)     # HasSharedKey, bit 3
-    use = property(lambda self: self.get('MachineUse'),         # W of MR7 (bytes), P of GR57
+    use = property(lambda self: self.get('MachineUse'),         # W of MR14 (bytes), P of GR57
                    lambda self, v: self.put('MachineUse', v))
 
     @property
@@ -159,7 +159,7 @@ class MLKEMLocker(Locker):
         self.use = 0
 
     def transition(self, st):
-        if (st in (EK_OUT, ENC) and not self.se & 1 or st == DEC and self.se & 6 != 6       # MR9 entry conditions
+        if (st in (EK_OUT, ENC) and not self.se & 1 or st == DEC and self.se & 6 != 6       # MR1 entry conditions
                 or st == CT_OUT and not self.se & 4):
             return self.enter_error(INVALID)
         if self.state == SK_OUT and st != SK_OUT or self.state == CT_OUT and st != SK_OUT:
@@ -185,13 +185,13 @@ class MLKEMLocker(Locker):
             elif imm == READY or (GEN <= imm <= CT_OUT and self.state != FAILURE     # GR23
                                   and (imm != self.state or imm in IN_F)):          # GR22: only a load restarts
                 name = IN_F.get(self.state)
-                if name and self.use < self.size[name] and imm != self.state:   # left incomplete (MR7)
+                if name and self.use < self.size[name] and imm != self.state:   # left incomplete (MR14)
                     self.zero('ciphertext' if name == 'ciphertext' else 'decapsk')   # no State keeps a partial field
                 self.transition(imm)
             else:                                  # _sharedkey_Output_ is entered only on completion
                 self.enter_error(INVALID)          # GR21; #54, #55: GR25
 
-    def exec_B(self, data):                        # Form B in a loading State (MR7)
+    def exec_B(self, data):                        # Form B in a loading State (MR14)
         if not self.gate():
             return
         name, w = IN_F.get(self.state), self.use
@@ -211,21 +211,21 @@ class MLKEMLocker(Locker):
             self.set_ct(int(ok))
             self.transition(READY if ok else FAILURE)
         elif name == 'decapsk' and (excess or self.check_keys and not K.check_decaps_key(v, self.ps)):
-            self.enter_error(INVALID)              # configuration error (MR10)
+            self.enter_error(INVALID)              # configuration error (MR2)
         elif name == 'encapsk' and (excess or self.check_keys and not K.check_encaps_input(v, self.ps)):
-            self.zero('decapsk')                   # data error (MR10): a public key; flags stay clear
+            self.zero('decapsk')                   # data error (MR2): a public key; flags stay clear
             self.transition(FAILURE)
         else:                                      # a decapsk sets HasEncapsk only if its ek passes 7.2
             ek = name != 'decapsk' or not self.check_keys or K.check_encaps_input(self.encapsk, self.ps)
             self.set_flags(int(ek), name == 'decapsk')
 
-    def exec_C(self, n):                           # Form C in an emitting State (MR7)
+    def exec_C(self, n):                           # Form C in an emitting State (MR14)
         if self.gate():
             name, w = OUT_F.get(self.state), self.use
             if name and w + n <= self.size[name]:
                 self.use = w + n
                 out = getattr(self, name)[w:w + n]
-                if self.use == self.size[name]:    # MR7, with the Machine's transitions at completion
+                if self.use == self.size[name]:    # MR14, with the Machine's transitions at completion
                     self.transition(SK_OUT if self.state == CT_OUT and self.se & 8 else READY)
                 return out
             self.enter_error(INVALID)
@@ -280,11 +280,11 @@ class MLKEMLocker(Locker):
         if new.state == SK_OUT and not new.se & 8:  # an unsupported State | StateExtension: invalid Metadata
             new.enter_error(INVALID)
             return new
-        if new.check_keys and new.se & 2 and not K.check_decaps_key(new.decapsk, new.ps):    # MR11 on import:
+        if new.check_keys and new.se & 2 and not K.check_decaps_key(new.decapsk, new.ps):    # MR3 on import:
             new.enter_error(INVALID)               # a configuration error
             return new
         if new.check_keys and new.se & 1 and not K.check_encaps_input(new.encapsk, new.ps):
-            new.zero('decapsk')                    # a data error: _Failure_ (MR10)
+            new.zero('decapsk')                    # a data error: _Failure_ (MR2)
             new.set_flags(0, 0)
             new.transition(FAILURE)
             return new
@@ -480,7 +480,7 @@ def t_input_checks():
               K.check_encaps_input(h(v['ek']), v['pset']) == v['pass'])
         cc = load(MLKEMLocker(v['pset']), EK_IN, h(v['ek']))
         check(f"_encapsk_Input_ {v['src']}: " + ('State kept, MachineUse = size' if v['pass'] else
-                                                 '_Failure_ (data error, MR10), decapsk zeroed, flags clear'),
+                                                 '_Failure_ (data error, MR2), decapsk zeroed, flags clear'),
               cc.state == EK_IN and cc.use == cc.size['encapsk'] and cc.encapsk.hex() == v['ek'] if v['pass']
               else cc.state == FAILURE and zero(cc.decapsk) and not cc.se & 3 and cc.use == 0)
     for v in VECTORS['dkCheck']:
@@ -517,7 +517,7 @@ def t_input_checks():
             c0 = load(MLKEMLocker(ps, rbg=RBG(bytes(32))), st, data[:n])
             moves = [moved(c0, t) for t in (nxt, READY, PRIV_VIOLATION)]
             check(f'_{NAME[st]}_ left with {n} B loaded by kl.setst _{NAME[nxt]}_ / _Ready_ / an Error State: '
-                  'the field zeroed, flags clear (MR7); _Encapsulate_ needs HasEncapsk, _Decapsulate_ HasDecapsk and HasCiphertext (MR9)',
+                  'the field zeroed, flags clear (MR14); _Encapsulate_ needs HasEncapsk, _Decapsulate_ HasDecapsk and HasCiphertext (MR1)',
                   None, [(m.state, zero(getattr(m, IN_F[st])), 0 if inert(m.state) else m.se & 7) for m in moves[:2]] + [moves[2].state],
                   [(got_to, True, 0), (READY, True, 0), PRIV_VIOLATION])
         f, end = IN_F[st], READY if st == CT_IN else st     # c0 holds the first 16 B
@@ -539,10 +539,10 @@ def t_input_checks():
           all(K.check_ciphertext(v, ps) for v in (c, bytes(len(c)), b'\xff' * len(c))))
     c3 = load(copy.copy(dkl), CT_IN, c[:-16])
     c4 = to(copy.copy(c3), READY)
-    check('incomplete ciphertext left for _Ready_: ciphertext zeroed, HasCiphertext clear, decapsk kept (MR7)',
+    check('incomplete ciphertext left for _Ready_: ciphertext zeroed, HasCiphertext clear, decapsk kept (MR14)',
           c4.state == READY and c4.decapsk == dk and zero(c4.ciphertext) and c4.se == 3)
-    check('... then _Decapsulate_: _Invalid_, since HasCiphertext is clear (MR9)', moved(c4, DEC).state == INVALID)
-    check('... and _ciphertext_Output_: _Invalid_, since HasCiphertext is clear (MR9)', moved(c4, CT_OUT).state == INVALID)
+    check('... then _Decapsulate_: _Invalid_, since HasCiphertext is clear (MR1)', moved(c4, DEC).state == INVALID)
+    check('... and _ciphertext_Output_: _Invalid_, since HasCiphertext is clear (MR1)', moved(c4, CT_OUT).state == INVALID)
     load(c4, CT_IN, c)
     check('... the ciphertext reloaded passes its type check: _Ready_, ciphertext kept, HasCiphertext set, MachineUse zero',
           c4.state == READY and c4.ciphertext == c and c4.se & 4 and c4.use == 0)
@@ -550,21 +550,21 @@ def t_input_checks():
     check('... _Ready_ -> _Decapsulate_: _sharedkey_Output_ with the ACVP shared key',
           c4.state == SK_OUT and c4.sharedkey.hex() == dv['k'])
     cc = to(load(MLKEMLocker(ps, rbg=RBG(bytes(32))), EK_IN, bad[:-16]), READY)
-    check('a partly loaded encapsk, then _Ready_: decapsk zeroed, HasEncapsk false (MR7)',
+    check('a partly loaded encapsk, then _Ready_: decapsk zeroed, HasEncapsk false (MR14)',
           zero(cc.decapsk) and not cc.se & 1)
     run(cc, ENC)
     check('... and _Encapsulate_ _Invalid_', cc.state == INVALID and cc.rbg.draws == 0)
     cc = to(load(MLKEMLocker(ps), DK_IN, h(dv['dk'])[:-16]), READY)
-    check('a partly loaded decapsk, then _Ready_: decapsk zeroed, both flags false (MR7)',
+    check('a partly loaded decapsk, then _Ready_: decapsk zeroed, both flags false (MR14)',
           zero(cc.decapsk) and not cc.se & 3)
     cc = to(load(MLKEMLocker(ps), EK_IN, h(vec('encaps', ps)['ek'])), READY)
     cc.decapsk = cc.decapsk[:384 * cc.k] + malformed_ek(ps) + cc.decapsk[768 * cc.k + 32:]
     imp = cc.export_import()
-    check('import restoring an encapsk that fails its check, with HasEncapsk: _Failure_, decapsk zeroed (MR11, MR10)',
+    check('import restoring an encapsk that fails its check, with HasEncapsk: _Failure_, decapsk zeroed (MR3, MR2)',
           imp.state == FAILURE and zero(imp.decapsk) and not imp.se & 3)
 
 def t_state_machine():
-    section('State machine and long-field transfers (MR7)')
+    section('State machine and long-field transfers (MR14)')
     ps = 768
     v, kv = vec('encaps', ps), vec('keyGen', ps)
     ek, m, d, z, size = h(v['ek']), h(v['m']), h(kv['d']), h(kv['z']), SIZES[ps][0]
@@ -589,7 +589,7 @@ def t_state_machine():
           bool(cte.se & 4)) == (INVALID, FAILURE, True, False))
     cc = load(MLKEMLocker(ps), EK_IN, ek, (1024, 160))
     cc.setst(EK_IN)
-    check('same-State kl.setst zeroes MachineUse and the field (GR22, MR7)', cc.use == 0 and cc.encapsk == bytes(size))
+    check('same-State kl.setst zeroes MachineUse and the field (GR22, MR14)', cc.use == 0 and cc.encapsk == bytes(size))
     cc.exec_B(b'\x77' * 32)
     check('reloading replaces the field', cc.encapsk == b'\x77' * 32 + bytes(size - 32) and cc.use == 32)
     check('same-State kl.setst in _encapsk_Output_: _Invalid_, no re-emission (GR22, GR24)',
@@ -637,7 +637,7 @@ def t_state_machine():
           == (SK_OUT, 8, out.sharedkey))
     cc = encapsulated()
     part, over = emit(cc, (512, 512)), cc.exec_C(128)
-    check('emitting past the field size: _Invalid_, OUTPUT zeroed (MR7)',
+    check('emitting past the field size: _Invalid_, OUTPUT zeroed (MR14)',
           part.hex() == v['c'][:2048] and cc.state == INVALID and over == bytes(128))
     cc = encapsulated()
     cc.exec_C(512)
@@ -807,7 +807,7 @@ def t_long_running():
     cc = load(MLKEMLocker(ps, rbg=RBG(m, m2)), EK_IN, ek)
     run(cc, ENC, halt_after=1)
     run(load(cc, EK_IN, fresh[0]), ENC)
-    check('_Encapsulate_ halted, re-entered under another key: fresh draw (MR4)', cc.rbg.draws == 2
+    check('_Encapsulate_ halted, re-entered under another key: fresh draw (MR19)', cc.rbg.draws == 2
           and cc.state == CT_OUT and (cc.sharedkey, cc.ciphertext) == K.encaps_internal(fresh[0], m2, ps))
     cc, halts = to(load(MLKEMLocker(ps, rbg=RBG(m, m2)), EK_IN, ek), ENC), 0
     while cc.exec_D(halt_after=1) == 'halted':

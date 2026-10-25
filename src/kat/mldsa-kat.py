@@ -70,24 +70,24 @@ class MLDSALocker:
                 or not (st == READY or GEN <= st <= COMPUTE_PK) or st in (UNUSED5, UNUSED7)            # GR21
                 or aux is not None and st not in FORM_D or st == PK_OUT and not self.flag('HasPubKey')
                 or st == SIGN_GEN and not (pol & 1 and self.flag('HasPrivKey') and self.flag('HasMu'))
-                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR9
-                or st == SIGN_IN and not pol & 2                                   # MR9: _Sign_Input_ gated by [1]
+                or st == SIGN_VERIFY and not (pol & 2 and self.flag('HasPubKey') and self.flag('HasMu'))  # MR1
+                or st == SIGN_IN and not pol & 2                                   # MR1: _Sign_Input_ gated by [1]
                 or st == COMPUTE_PK and not self.flag('HasPrivKey')
                 or st == PK_IN and self.flag('HasPrivKey')                       # pubkey from compute_pubKey
                 or st == SIGN_OUT                                       # entered only from _Sign_Generate_
-                or st == self.state != READY and st not in IN_F):       # GR22: only a load restarts (MR7)
+                or st == self.state != READY and st not in IN_F):       # GR22: only a load restarts (MR14)
             return self.invalid()
         name = IN_F.get(self.state)
-        if name and st != self.state and self.use < self.size(name):     # MR7: a load left incomplete
+        if name and st != self.state and self.use < self.size(name):     # MR14: a load left incomplete
             setattr(self, name, b'')                                      # leaves the field unconfigured
         self.put('State', st)
-        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR57; MR7 W
+        self.use, self.rnd, self.kappa = 0, bytes(32), 0                  # GR57; MR14 W
         if st == READY:
             self.clear()
         if st in (READY, MU_IN):
             self.set_flag('HasMu', 0)
         if st in IN_F:
-            setattr(self, IN_F[st], b'')           # MR7: reloading replaces
+            setattr(self, IN_F[st], b'')           # MR14: reloading replaces
         if st == SIGN_GEN:
             self.set_flag('Hedged', not aux)       # Form A: Xs = 0
         elif st == SK_IN:
@@ -97,7 +97,7 @@ class MLDSALocker:
         elif st == PK_IN:
             self.set_flag('HasPubKey', 0)
 
-    GATE = {SIGN_GEN: 1, SIGN_OUT: 1, SIGN_IN: 2, SIGN_VERIFY: 2}   # MR9: the States that follow uniquely
+    GATE = {SIGN_GEN: 1, SIGN_OUT: 1, SIGN_IN: 2, SIGN_VERIFY: 2}   # MR1: the States that follow uniquely
 
     def gated(self):                               # GR26: a narrowing takes effect at the next instruction
         bit = self.GATE.get(self.state)
@@ -106,7 +106,7 @@ class MLDSALocker:
             return True
         return False
 
-    def exec_B(self, data):                        # Form B in a loading State (MR7, W in bytes)
+    def exec_B(self, data):                        # Form B in a loading State (MR14, W in bytes)
         if self.state in ERROR_STATES or self.gated():
             return 0
         name, w = IN_F.get(self.state), self.use
@@ -122,13 +122,13 @@ class MLDSALocker:
             self.put('State', FAILURE)
             return n
         flag = {'privkey': 'HasPrivKey', 'pubkey': 'HasPubKey', 'mu': 'HasMu'}.get(name)
-        if flag and self.use == self.size(name):   # MR7: the flag is set when the load completes
+        if flag and self.use == self.size(name):   # MR14: the flag is set when the load completes
             if name == 'privkey' and not D.sk_well_formed(self.privkey, self.ps):
                 return self.invalid()              # malformed privkey: configuration error
             self.set_flag(flag, 1)
         return n
 
-    def exec_C(self, n):                           # Form C in an emitting State (MR7)
+    def exec_C(self, n):                           # Form C in an emitting State (MR14)
         if self.state in ERROR_STATES or self.gated():
             return bytes(n)                        # GR35: the output window is zeroed
         name, w = OUT_F.get(self.state), self.use
@@ -137,7 +137,7 @@ class MLDSALocker:
             return bytes(n)
         self.use = w + n
         out = getattr(self, name)[w:w + n]
-        if self.use == self.size(name):            # MR7: a completely emitted field -> _Success_
+        if self.use == self.size(name):            # MR14: a completely emitted field -> _Success_
             self.put('State', SUCCESS)
             self.use = 0
         return out
@@ -213,7 +213,7 @@ class MLDSALocker:
         if not content2:
             new.use, new.rnd = 0, bytes(32)        # GR58, GR57: a restart zeroes P and destroys rnd
         if new.flag('HasPrivKey') and not D.sk_well_formed(new.privkey, new.ps):
-            new.invalid()                          # MR11: the privkey check on import
+            new.invalid()                          # MR3: the privkey check on import
         return new
 
 class KeyDest:
@@ -300,7 +300,7 @@ def t_mdh():
     cc.setst(MU_IN)
     check('entering _mu_Input_ clears HasMu', not cc.flag('HasMu'))
     cc.exec_B(bytes(64))
-    check('HasMu in StateExtension bit 3, set when the load of mu completes (MR7)', cc.get('StateExtension') == 0b1011)
+    check('HasMu in StateExtension bit 3, set when the load of mu completes (MR14)', cc.get('StateExtension') == 0b1011)
     cc.setst(SIGN_GEN, 0)
     check('Hedged in StateExtension bit 2', cc.get('StateExtension') == 0b1111)
     cc.setst(READY)
@@ -309,7 +309,7 @@ def t_mdh():
     c3.setst(SIGN_GEN, 1)
     c4 = generated()
     c4.setst(SIGN_VERIFY, None)
-    check('_Sign_Generate_ and _Sign_Verify_ without a loaded mu (HasMu clear, MR9): _Invalid_',
+    check('_Sign_Generate_ and _Sign_Verify_ without a loaded mu (HasMu clear, MR1): _Invalid_',
           (c3.state, c4.state) == (INVALID, INVALID))
     vals = (0x00, 0x43, 0x65, 0x61, 0x01, 0x46, 0x6A, 0x83, 0xFFFF)
     check('AuxInfo is never checked: pure, SHA2-512, SHAKE256, SHA3-256, AES128_CBC, SHA2-224_HMAC, KMAC128, '
@@ -344,7 +344,7 @@ def t_mdh():
     so.restrictl_policy(0b10)
     kept = so.state
     so.exec_C(16)
-    check('MR9: _Sign_Input_ gated by MachinePolicy[1] (sign-only -> _Invalid_); _Sign_Output_ by MachinePolicy[0]: '
+    check('MR1: _Sign_Input_ gated by MachinePolicy[1] (sign-only -> _Invalid_); _Sign_Output_ by MachinePolicy[0]: '
           'cleared there, the State is kept and the next kl.exec -> _Invalid_ (GR26)', (cc.state, kept, so.state)
           == (INVALID, SIGN_OUT, INVALID))
     for imm in (SUCCESS, FAILURE):
@@ -360,7 +360,7 @@ def t_mdh():
         cc = generated()
         cc.setst(st, aux)
         check(f'{why}: _Invalid_ (GR21)', cc.state == INVALID)
-    spec_note('the long-field transfers are recorded "in MachineUse" without the unit MR7 requires; the model '
+    spec_note('the long-field transfers are recorded "in MachineUse" without the unit MR14 requires; the model '
               'counts bytes')
 
 def t_fips204():
@@ -386,7 +386,7 @@ def t_fips204():
               D.verify_internal_mu(h(v['pk']), h(v['mu']), h(v['sig']), v['ps']) == v['pass'])
 
 def t_state_machine():
-    section('State machine, flags, MachineUse (MR7)')
+    section('State machine, flags, MachineUse (MR14)')
     kv = VECTORS['keyGen'][0]
     sk, pk = h(kv['sk']), h(kv['pk'])
     cc = MLDSALocker(44)
@@ -411,7 +411,7 @@ def t_state_machine():
     c3.exec_C(512)
     c3.setst(PK_OUT)
     check('same-State kl.setst in _pubkey_Output_: _Invalid_, no re-emission (GR22, GR24)', c3.state == INVALID)
-    check('_pubkey_Output_, entered by the Machine, emits the ACVP pubkey, then _Success_ (MR7)',
+    check('_pubkey_Output_, entered by the Machine, emits the ACVP pubkey, then _Success_ (MR14)',
           b''.join(cc.exec_C(n) for n in (512, 512, 288)) == pk and cc.state == SUCCESS)
     cc = generated()
     cc.setst(MU_IN)
@@ -438,7 +438,7 @@ def t_state_machine():
     check('privkey loaded in chunks; HasPrivKey set on completion', cc.privkey == sk and cc.flag('HasPrivKey')
           and cc.use == 2560)
     cc.setst(PK_IN)
-    check('entering _pubkey_Input_ with HasPrivKey set (MR9): _Invalid_; the key pair comes from _compute_pubKey_',
+    check('entering _pubkey_Input_ with HasPrivKey set (MR1): _Invalid_; the key pair comes from _compute_pubKey_',
           cc.state == INVALID)
     cc = loaded(44)
     cc.setst(PK_IN)
@@ -453,7 +453,7 @@ def t_state_machine():
                               (MU_IN, bytes(range(32)), 'mu', None)):
         cc = loaded(44, (st, data))
         cc.setst(READY)
-        check(f'{f} load left incomplete for _Ready_: {f} zeroed' + (f', {flag} false' if flag else '') + ' (MR7)',
+        check(f'{f} load left incomplete for _Ready_: {f} zeroed' + (f', {flag} false' if flag else '') + ' (MR14)',
               getattr(cc, f) == b'' and not (flag and cc.flag(flag)))
     bad = bytearray(sk)
     bad[128] = 0xFF                                # s1 coefficients outside [-eta, eta]
@@ -499,7 +499,7 @@ def t_compute_pubkey_and_import():
     bad = bytearray(sk)
     bad[128] = 0xFF                                # s1 coefficients outside [-eta, eta]
     cc.privkey = bytes(bad)                        # as restored from an image that carries it
-    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MR11)', cc.export_import().state == INVALID)
+    check('import restoring a malformed privkey with HasPrivKey: _Invalid_ (MR3)', cc.export_import().state == INVALID)
 
 def t_sign_verify():
     section('_Sign_Generate_ and _Sign_Verify_')
@@ -510,7 +510,7 @@ def t_sign_verify():
     cc.exec_D()
     check(f"deterministic _Sign_Generate_ = ACVP {det['src']}, rnd zero", cc.signature.hex() == det['sig']
           and cc.state == SIGN_OUT and cc.rnd == bytes(32))
-    check('_Sign_Generate_ leads to _Sign_Output_, which emits the signature, then _Success_ (MR7)',
+    check('_Sign_Generate_ leads to _Sign_Output_, which emits the signature, then _Success_ (MR14)',
           b''.join(cc.exec_C(n) for n in (1024, 1024, 372)).hex() == det['sig'] and cc.state == SUCCESS)
     def _to(cc, *sts):
         for st in sts: cc.setst(st)
@@ -632,7 +632,7 @@ def t_progress():
     cc.restrictl_policy(0b10)
     cc.exec_D()
     check('narrowed to verify-only during a halted _Sign_Generate_: the resuming kl.exec -> _Invalid_, no signature '
-          '(GR26, MR9)', cc.state == INVALID and cc.signature == b'')
+          '(GR26, MR1)', cc.state == INVALID and cc.signature == b'')
 
     def finish(x):
         while x.exec_D(halt_after=1) == 'halted':
@@ -736,7 +736,7 @@ def t_hints():
     check('non-zero hint padding byte rejected', not D.verify_internal_mu(pk, mu, tamper_hint_padding(sig, ps), ps))
     cc = loaded(ps, (PK_IN, pk), (MU_IN, mu), (SIGN_IN, tamper_hint_padding(sig, ps)))
     run(cc, SIGN_VERIFY)
-    check('a signature with a non-zero hint padding byte: _Sign_Verify_ -> _Failure_ (a data error), pubkey kept (MR10)',
+    check('a signature with a non-zero hint padding byte: _Sign_Verify_ -> _Failure_ (a data error), pubkey kept (MR2)',
           cc.state == FAILURE and cc.flag('HasPubKey') and cc.pubkey == pk)
     check('HintBitPack has exactly omega index slots', len(D.hint_bit_pack([[0] * 256] * k, omega, k)) == omega + k)
 

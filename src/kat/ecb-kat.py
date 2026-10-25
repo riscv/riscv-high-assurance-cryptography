@@ -68,7 +68,7 @@ class EcbLocker:
 
     def provision(self, pi):
         self.mdh, self.key, self.skid = b2v(pi[:16]), None, None
-        if fld(self.mdh, 'MachinePolicy') == 0:   # MR9: at least one bit
+        if fld(self.mdh, 'MachinePolicy') == 0:   # MR1: at least one bit
             return self.invalidate()
         self._install(sl(b2v(pi[16:]), self.key_width - 1, 0), False)
         if self.state not in ERROR_STATES:
@@ -102,10 +102,10 @@ class EcbLocker:
         if self.state in ERROR_STATES:
             return out & ~window, 0
         if self.state not in (KL_STATE_ENCRYPT, KL_STATE_DECRYPT) or KLLEN % B:
-            self.invalidate()                 # GR22, GR21; MR1 (length first: GR53)
+            self.invalidate()                 # GR22, GR21; MR6 (length first: GR53)
             return out & ~window, 0
         if not fld(self.mdh, 'MachinePolicy') & (POL_ENC if self.state == KL_STATE_ENCRYPT else POL_DEC):
-            self.invalidate()                 # MR9: issued in a State that MachinePolicy disables (GR26)
+            self.invalidate()                 # MR1: issued in a State that MachinePolicy disables (GR26)
             return out & ~window, 0
         if lo >= KLLEN:
             return out, 0                     # empty window: only klstart = 0
@@ -114,7 +114,7 @@ class EcbLocker:
             return out & ~window, 0
         enc, dec, k = self.cipher
         f, key = enc if self.state == KL_STATE_ENCRYPT else dec, v2b(self.key, k // 8)
-        for q, i in enumerate(range(lo, KLLEN, B)):   # MR2
+        for q, i in enumerate(range(lo, KLLEN, B)):   # MR13
             if q == halt_after:
                 return out, i // 8
             dst = i if self.order == 'spec' else KLLEN - B - i
@@ -221,12 +221,12 @@ for name, k, p, c in FIPS197:
     eq(f"{name} encrypt / decrypt", (aes_encrypt(H(k), H(p)).hex(), aes_decrypt(H(k), H(c)).hex()), (c, p))
     eq(f"{name} locker encrypt / decrypt", both(f"AES-{len(k) * 4}", k, p, c), (c, p))
 
-section("SP 800-38A F.1: four blocks, reference and one kl.exec with KLLEN = 4b (MR2)")
+section("SP 800-38A F.1: four blocks, reference and one kl.exec with KLLEN = 4b (MR13)")
 for name, ci, k, c in SP38A_F1:
     eq(f"{name} reference", (ref(aes_encrypt, H(k), pt).hex(), ref(aes_decrypt, H(k), H(c)).hex()),
        (c, SP38A_PT))
     eq(f"{name} locker encrypt / decrypt", both(ci, k, SP38A_PT, c), (c, SP38A_PT))
-control("most significant block first (MR2 order reversed) misses every F.1 vector",
+control("most significant block first (MR13 order reversed) misses every F.1 vector",
         all(run(new_cl(ci, k, state=ENC, order='neg'), pt)[0].hex() != c for _, ci, k, c in SP38A_F1))
 
 section("SM4 (GB/T 32907-2016)")
@@ -274,18 +274,18 @@ eq("decrypt-only locker decrypts F.1.2", run(new_cl(ci, k, POL_DEC, state=DEC), 
 src = new_cl(ci, k, state=ENC)
 cl = EcbLocker()
 cl.import_scc(put(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
-eq("SCC in Encrypt with MachinePolicy = 10b (GR26): kl.exec -> Invalid, window zeroed (MR9)",
+eq("SCC in Encrypt with MachinePolicy = 10b (GR26): kl.exec -> Invalid, window zeroed (MR1)",
    (cl.exec(b2v(pt[:16]), 128)[0], cl.state), (0, INV))
 cl = EcbLocker()
 cl.import_scc(put(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
 cl.setst(DEC)
-eq("... a kl.setst naming Decrypt from it is admitted (MR9)", cl.state, DEC)
+eq("... a kl.setst naming Decrypt from it is admitted (MR1)", cl.state, DEC)
 cl = new_cl(ci, k, state=ENC)
-eq("MR1: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[:17]), 136)[0], cl.state),
+eq("MR6: KLLEN = 136 -> no operation, Invalid, window zeroed", (cl.exec(b2v(pt[:17]), 136)[0], cl.state),
    (0, INV))
 eq("Form D substitution (kliobuftop = 64): output in place of input",
    v2b(new_cl(ci, k, state=ENC).exec(b2v(pt), 512)[0], 64).hex(), c)
-for q in (1, 2, 3):                           # GR50, MR2: precise halt, resumption
+for q in (1, 2, 3):                           # GR50, MR13: precise halt, resumption
     cl = new_cl(ci, k, state=ENC)
     part, ks = run(cl, pt, halt_after=q)
     res, ks2 = cl.exec(b2v(part), 512, klstart=ks)

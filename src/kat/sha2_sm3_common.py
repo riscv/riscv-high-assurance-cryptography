@@ -91,7 +91,7 @@ class MdHash:
             s.st, s.last_block_len = immed, s.b  # Form A; last_block_len <- b (<<KLE-hash-functions-MACs-XOFs>>)
         elif (s.st, immed) == (KL_STATE_HASH_ABSORB, KL_STATE_HASH_LAST_BLOCK) and (
                 form == 'A' or form == 'B' and xs is not None and 0 <= xs <= s.b):
-            s.st = immed  # any bit length, MSB-first (MR14, second bullet); Form A is Xs = 0
+            s.st = immed  # any bit length, MSB-first (MR11, second bullet); Form A is Xs = 0
             s.last_block_len = setst_operand(form, xs)
         elif immed == KL_STATE_HASH_OUTPUT and form in 'AB' and (
                 s.st == KL_STATE_HASH_ABSORB or s.st == KL_STATE_HASH_LAST_BLOCK and s.last_block_len == 0):
@@ -119,14 +119,14 @@ class MdHash:
             return 'retired', s.output(nbytes, prior)
         if s.st == KL_STATE_HASH_LAST_BLOCK and form == 'B':
             L, p = s.last_block_len, HART.klstart if resume else 0
-            if 8 * len(data) < L:  # MR1 / GR53 item 1: length first
+            if 8 * len(data) < L:  # MR6 / GR53 item 1: length first
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)
             if p >= len(data):
                 HART.klstart = 0
                 return 'empty', bytes(nbytes)  # GR53 item 2
-            if p or not L:  # interruption point 0 only (MR2, GR53 item 3); MR8
+            if p or not L:  # interruption point 0 only (MR13, GR53 item 3); MR10
                 s.reset()
                 HART.klstart = 0
                 return 'invalid', bytes(nbytes)

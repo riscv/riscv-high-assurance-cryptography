@@ -123,7 +123,7 @@ class Blake2:
             self.F(final)
             self.block = bytearray(self.b // 8)
 
-    def gated(self):                                      # MR9, GR26: with a system key the only operation (the MAC)
+    def gated(self):                                      # MR1, GR26: with a system key the only operation (the MAC)
         return bool(self.syskey) and not self.policy & 1  # needs bit 0; every useful State leads only to it
 
     def restrict(self, rq):                               # kl.restrictl: AND-s _MachinePolicy_ with `rq` (GR26)
@@ -204,11 +204,11 @@ class Blake2:
             bits, final = 8 * len(data), False
         elif self.st == LAST:
             L = self.last_block_len
-            if 8 * len(data) < L:                         # the whole piece (MR1, GR53 item 1): length first
+            if 8 * len(data) < L:                         # the whole piece (MR6, GR53 item 1): length first
                 return self.invalid()
             if klstart >= len(data):                      # GR53 item 2: an empty window does not reach the Machine
                 return self
-            if not L or klstart:                          # MR8; interruption point 0 only (MR2, GR53 item 3)
+            if not L or klstart:                          # MR10; interruption point 0 only (MR13, GR53 item 3)
                 return self.invalid()
             bits, final = L, True
         else:
@@ -236,7 +236,7 @@ class Blake2:
         return self
 
     def output(self, nbytes, klstart=0, prior=None):
-        head = (prior or bytes(nbytes))[:klstart]         # MR6: the bytes below klstart are not written
+        head = (prior or bytes(nbytes))[:klstart]         # MR9: the bytes below klstart are not written
         if inert(self.st):                                # GR33, GR35
             return head.ljust(nbytes, b'\0')
         if self.st != OUTPUT or self.gated():             # GR26 in _Hash_Output_
@@ -254,7 +254,7 @@ class Blake2:
         self.out_len -= 8 * len(out)
         if self.out_len == 0:
             self.st = SUCCESS
-        return (head + out).ljust(nbytes, b'\0')          # [0, klstart-1] kept (MR6)
+        return (head + out).ljust(nbytes, b'\0')          # [0, klstart-1] kept (MR9)
 
     # -- Serialized Content: i the SKID if any, ii state, iii last_block_len (in _Hash_Output_: out_len),
     #    iv block_base, v nn, vi kk, vii cumul_len, viii block, zero-padded to 128 bits
@@ -280,7 +280,7 @@ class Blake2:
             c.out_len, c.last_block_len = c.last_block_len, 0
         c.cumul_len = int.from_bytes(img[o + 8:o + 16], 'little')
         c.block = bytearray(img[o + 16:o + 16 + c.b // 8])
-        if not 1 <= c.nn <= c.nnmax or c.kk > c.kkmax:    # MR11: the field checks of nn and kk
+        if not 1 <= c.nn <= c.nnmax or c.kk > c.kkmax:    # MR3: the field checks of nn and kk
             return c.invalid()
         if c.keytype == 1:                                # the SKID is resolved again after the import
             c.skid, c.syskey = b2v(img[:8]), c.sks.get(b2v(img[:8]))
@@ -486,7 +486,7 @@ for v in VARIANTS:
         'Xs[15:8] != 0 with a system key': system().setst(SET_AUX, 16 | 1 << 8),
         'a set bit of Xs above bit 15': fresh().setst(SET_AUX, 16 | 1 << 16),
         'the operation outside _Ready_': fresh().setst(ABSORB).setst(SET_AUX, 16),
-        'a kl.exec after Xs = 0 (MR8)': fresh().setst(ABSORB).setst(LAST, 0).exec(b'a'),
+        'a kl.exec after Xs = 0 (MR10)': fresh().setst(ABSORB).setst(LAST, 0).exec(b'a'),
         'the kl.setst into _Hash_Output_ with kk > 0 and no key block (finalize())':
             fresh().setst(SET_AUX, nnmax | 8 << 8).setst(ABSORB).setst(LAST, 0).setst(OUTPUT),
         '_Ready_ -> _Hash_Absorb_Last_Block_': fresh().setst(LAST, 8),
@@ -495,7 +495,7 @@ for v in VARIANTS:
         '_Ready_ -> _Hash_Output_': fresh().setst(OUTPUT),
         '_Hash_Output_ named before the final piece (system key)':
             system().setst(ABSORB).setst(LAST, 8).setst(OUTPUT),
-        'a last block of 16 bits in a KLLEN of 8 (one kl.exec, MR1)':
+        'a last block of 16 bits in a KLLEN of 8 (one kl.exec, MR6)':
             fresh().setst(ABSORB).setst(LAST, 16).exec(b'a'),
         'a same-State kl.setst into _Hash_Absorb_': fresh().setst(ABSORB).setst(ABSORB),
         'kl.exec in _Ready_': fresh().exec(b'x'),
@@ -505,7 +505,7 @@ for v in VARIANTS:
     }
     check(f'{v}: ' + '; '.join(cases) + ' -> _Invalid_', None, [k for k, c in cases.items() if c.st != INVALID], [])
 
-section('_MachinePolicy_ (Rule MR9)')
+section('_MachinePolicy_ (Rule MR1)')
 for v in VARIANTS:
     w, r, b, n, nnmax, kkmax, R = PARAMS[v]
     sks = {SKID: b's' * 24}
@@ -613,7 +613,7 @@ for v in VARIANTS:
     res.append([Blake2.imported(v, mdh, im).st for im in
                 (img, patched(0, 0), patched(0, nnmax + 1), patched(1, kkmax + 1))])
 check('an import of nn = 0, nn = nn_max + 1 or kk = kk_max + 1 -> _Invalid_; the unmodified Content imports as '
-      '_Ready_ (<<KLE-BLAKE2>>, MR11)', None, res, [[READY, INVALID, INVALID, INVALID]] * 2)
+      '_Ready_ (<<KLE-BLAKE2>>, MR3)', None, res, [[READY, INVALID, INVALID, INVALID]] * 2)
 for v in VARIANTS:
     c = Blake2(v).provision().setst(ABSORB).exec(b'ab').setst(LAST, 0)
     st = c.exec(b'').st
@@ -668,7 +668,7 @@ for v in VARIANTS:
     q.cl.klstart = 1
     s2, o2 = q.exec_out(8, prior=b'\xa5' * 8)
     check(f'{v}, through the Port: a Form C kl.exec resumed at klstart = 5 with block_base = 0 writes '
-          'digest[0:n-5] from byte 5, the bytes below kept (MR6); at klstart = 1 with block_base != 0 -> '
+          'digest[0:n-5] from byte 5, the bytes below kept (MR9); at klstart = 1 with block_base != 0 -> '
           '_Invalid_ (GR53 item 3), reported as such', None, (s1, o1, s2, q.st, o2),
           ('done', b'\xa5' * 5 + oracle(v, b'abc', nnmax)[:nnmax - 5], 'invalid', INVALID, b'\xa5' + bytes(7)))
 res = []

@@ -323,7 +323,7 @@ class Kmac:
             if (x % 8 == 0 and x < 1 << 32) if self.xof else 32 <= x < 1 << 32:  # KMAC: 32 <= L < 2^32 (SP 800-185)
                 self.L = x
                 return self._to_output()
-        if immed == VERIFY and done and form in ('A', 'B') and not self.xof and self.policy & 2:   # MR9
+        if immed == VERIFY and done and form in ('A', 'B') and not self.xof and self.policy & 2:   # MR1
             aux = setst_operand(form, aux)
             if aux % 8 == 0 and 32 <= aux <= self.b:   # SP 800-185 8.4.2
                 self.L = aux
@@ -364,9 +364,9 @@ class Kmac:
         if self.st == UNCONF or self.st in ERROR_STATES:                 # GR33
             return self._end('noop', out)
         if self.st in (OUTPUT, VERIFY) and not self.xof and not self.policy & (1 if self.st == OUTPUT else 2):
-            self.invalidate()                                            # MR9 1.a, GR26
+            self.invalidate()                                            # MR1 1.a, GR26
             return self._end('invalid', out)
-        if self.st == ABSORB and inp is not None and out is None and (sew or 8) >= 8:  # GR21, MR1
+        if self.st == ABSORB and inp is not None and out is None and (sew or 8) >= 8:  # GR21, MR6
             p, top = self.hart.klstart, len(inp)
             if p >= top:
                 return self._end('empty')                                # empty window: only klstart = 0
@@ -377,26 +377,26 @@ class Kmac:
             return st if st == 'interrupted' else self._end(st)
         if self.st == LAST and inp is not None and out is None and (sew or 8) >= 8:
             p, top, L = self.hart.klstart, len(inp), self.last_block_len
-            if 8 * top < L:                                              # MR1, GR53 item 1
+            if 8 * top < L:                                              # MR6, GR53 item 1
                 self.invalidate()
                 return self._end('invalid')
             if p >= top:
                 return self._end('empty')                                # GR53 item 2
-            if p or not L:                                               # point 0 only; MR8
+            if p or not L:                                               # point 0 only; MR10
                 self.invalidate()
                 return self._end('invalid')
-            self._vli(sl(b2v(inp), L - 1, 0), L, 0)                      # atomic, the L low bits (MR5)
+            self._vli(sl(b2v(inp), L - 1, 0), L, 0)                      # atomic, the L low bits (MR8)
             self.last_block_len = 0
             return self._end('done')
         if self.st == OUTPUT and inp is None and out is not None:
             return self._squeeze(out, halt)
         if self.st == VERIFY and inp is not None and out is None:
-            if 8 * len(inp) < self.L:                                    # MR1, GR53 item 1
+            if 8 * len(inp) < self.L:                                    # MR6, GR53 item 1
                 self.invalidate()
                 return self._end('invalid')
             if self.hart.klstart >= len(inp):
                 return self._end('empty')                                # GR53 item 2
-            if self.hart.klstart:                                        # point 0 only (MR2)
+            if self.hart.klstart:                                        # point 0 only (MR13)
                 self.invalidate()
                 return self._end('invalid')
             L = self.L                                                   # MR12: constant-time compare of L bits
@@ -435,7 +435,7 @@ class Kmac:
             ob, self.block_base = ob + amt, self.block_base + amt
             if bounded:
                 self.L -= amt
-                if self.L == 0:                                          # then MR6
+                if self.L == 0:                                          # then MR9
                     out[:] = v2b(OUT & ((1 << ob) - 1), top)
                     self.st = SUCCESS
                     return self._end('success')
@@ -660,7 +660,7 @@ for L in (32, 39, 255, 250, 257, 1000, 1001):
           (ref_kmac(128, KEY, DATA4, L, TAG), SUCCESS))
 c = squeezing(128, DATA4, 250)
 (st, o), = squeeze(c, 40, fill=0xEE)
-check('KMAC128 L=250 into 40 B: _Success_, OUTPUT bits [319:250] cleared (MR6)', True,
+check('KMAC128 L=250 into 40 B: _Success_, OUTPUT bits [319:250] cleared (MR9)', True,
       (st, bytes(o[:32]), o[32:], o[31] >> 2),
       ('success', ref_kmac(128, KEY, DATA4, 250, TAG), bytearray(8), 0))
 c = squeezing(256, DATA4, 512)
@@ -953,9 +953,9 @@ for sec, xof in ((128, False), (256, False), (128, True), (256, True)):
         got = bytes(squeeze(c, 32 if not xof else 64)[0][1])
         check(f'{kname(sec, xof)}: {nb} B, then a {Lp}-bit piece ({what}) = bit-level reference', True,
               (r, got), ('done', ref_kmac_bits(sec, KEY, xv, xbits, 256, xof=xof, n=64)))
-for label, act in (('a kl.exec after Xs = 0 (MR8)', lambda c: (c.setst(LAST, 'B', 0), c.exec(inp=DATA4))),
+for label, act in (('a kl.exec after Xs = 0 (MR10)', lambda c: (c.setst(LAST, 'B', 0), c.exec(inp=DATA4))),
                    ('_Hash_Output_ before the piece', lambda c: (c.setst(LAST, 'B', 13), to_output(c, 256))),
-                   ('a second piece (MR8)', lambda c: (c.setst(LAST, 'B', 13), c.exec(inp=DATA4), c.exec(inp=DATA4))),
+                   ('a second piece (MR10)', lambda c: (c.setst(LAST, 'B', 13), c.exec(inp=DATA4), c.exec(inp=DATA4))),
                    ('KLLEN = 0 < last_block_len = 16, the length before the empty window (GR53 item 1)',
                     lambda c: (c.setst(LAST, 'B', 16), c.exec(inp=b'')))):
     c = absorbing(128, DATA4)
@@ -1027,7 +1027,7 @@ cx.restrictl(0b10)
 c0.restrictl(0)
 check('kl.restrictl clearing bit 0 in _Hash_Output_: the output kl.exec -> _Invalid_, OUTPUT zeroed; in _Hash_Absorb_ '
       'verification still succeeds; clearing the only set bit -> _Invalid_; KMACXOF: the unused field stays zero, '
-      'whatever the request (GR26, MR9, <<KLE-instruction-restrict>>)', True,
+      'whatever the request (GR26, MR1, <<KLE-instruction-restrict>>)', True,
       (rg, bytes(og), cg.st, cv.st, cz.st, cx.st, c0.st), ('invalid', bytes(32), INVALID, SUCCESS, INVALID, READY, READY))
 
 section('kl.clear and kl.setst naming an Error State (<<KLE-instruction-setst>>, GR33, GR37)')
