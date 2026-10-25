@@ -24,24 +24,27 @@ other groups of Machines may subdivide _Machine_ differently.
 |===
 | Type | Mode | Machine name                                          | Extension
 | 0    | 0    | `AES128_ECB`                                          | `Zklaes128p`
-| 0    | 1    | `AES128_CTR`                                          | `Zklaes128pctrm`
-| 0    | 2    | `AES128_XCTR`                                         | `Zklaes128pxctrm`
-| 0    | 3    | `AES128_XEX`                                          | `Zklaes128pxexm`
-| 0    | 4    | `AES128_GCM`                                          | `Zklaes128pgcmm`
-| 0    | 5    | `AES128_GCM_IV`                                       | `Zklaes128pgcmm`
-| 0    | 6    | `AES128_GCM_SIV`                                      | `Zklaes128pgcmsivm`
-| 0    | 7    | `AES128_CMAC`                                         | `Zklaes128pcmacm`
-| 0    | 8    | `AES128_OCB`                                          | `Zklaes128pocbm`
-| 0    | 9    | `AES128_OCB_NONCE`                                    | `Zklaes128pocbm`
+| 0    | 1    | `AES128_CBC`                                          | `Zklaes128pcbcm`
+| 0    | 2    | `AES128_CFB`                                          | `Zklaes128pcfbm`
+| 0    | 3    | `AES128_OFB`                                          | `Zklaes128pofbm`
+| 0    | 4    | `AES128_CTR`                                          | `Zklaes128pctrm`
+| 0    | 5    | `AES128_XCTR`                                         | `Zklaes128pxctrm`
+| 0    | 6    | `AES128_XEX`                                          | `Zklaes128pxexm`
+| 0    | 7    | `AES128_GCM`                                          | `Zklaes128pgcmm`
+| 0    | 8    | `AES128_GCM_IV`                                       | `Zklaes128pgcmm`
+| 0    | 9    | `AES128_GCM_SIV`                                      | `Zklaes128pgcmsivm`
+| 0    | 10   | `AES128_CMAC`                                         | `Zklaes128pcmacm`
+| 0    | 11   | `AES128_OCB`                                          | `Zklaes128pocbm`
+| 0    | 12   | `AES128_OCB_NONCE`                                    | `Zklaes128pocbm`
 //
 | 1    | 0    | `AES192_ECB`                                          | `Zklaes192p`
-| 1    | 1--2, 4--5, 7--9 2+| _Analogous to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 3: cite:[IEEE-1619-2018] defines XTS-AES only for 128-bit and 256-bit keys; and no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
+| 1    | 1--5, 7--8, 10--12 2+| _Analogous to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[IEEE-1619-2018] defines XTS-AES only for 128-bit and 256-bit keys; and no Mode 9: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
 //
 | 2    | 0    | `AES256_ECB`                                          | `Zklaes256p`
-| 2    | 1--9 2+| _Analogous to Modes 1--9 for `AES128`, but with 256 replacing 128._
+| 2    | 1--12 2+| _Analogous to Modes 1--12 for `AES128`, but with 256 replacing 128._
 //
 | 3    | 0    | `SM4_ECB`                                             | `Zklsm4p`
-| 3    | 1--5, 7 2+| _Analogous to the corresponding Modes for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`; Mode 3, `SM4_XEX`, multiplies the mask as GB/T 17964-2021 does (<<KLE-XEX-XTS-modes>>). There are no Modes 6, 8 and 9: neither SM4-GCM-SIV nor SM4-OCB is standardized._
+| 3    | 1--8, 10 2+| _Analogous to the corresponding Modes for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`; Mode 6, `SM4_XEX`, multiplies the mask as GB/T 17964-2021 does (<<KLE-XEX-XTS-modes>>). There are no Modes 9, 11 and 12: neither SM4-GCM-SIV nor SM4-OCB is standardized._
 //
 | 4    | 0     | `SHA2-224`                                           | `Zklesha2h`
 | 4    | 1     | `SHA2-256`                                           | `Zklesha2h`
@@ -564,13 +567,101 @@ block or eight blocks per `kl.exec`.
 [[KLE-chaining]]
 === Chaining/Feedback Modes
 
-KLE does not architect chaining modes, such as (((KLE, Machine, CBC))) Cipher Block Chaining (CBC), (((KLE, Machine, CFB))) Cipher Feedback (CFB) and (((KLE, Machine, OFB))) Output Feedback (OFB) cite:[nist-SP-800-38A-1].
-Software builds them on ECB: each intermediate value needs no more protection than the plaintext that software already holds.
+(((KLE, Machine, CBC))) Cipher Block Chaining (CBC), (((KLE, Machine, CFB))) Cipher Feedback (CFB) and (((KLE, Machine, OFB))) Output Feedback (OFB) cite:[nist-SP-800-38A-1] are defined here for a block cipher of block size `b`.
+CFB has a segment of `s` bits, 0 < `s` {le} `b`; CBC takes no padding or ciphertext stealing, so the caller supplies whole blocks.
+CBC and CFB process data, and OFB, like CTR (<<KLE-keystream-modes>>), generates a keystream that the caller combines with the data.
 
-[WARNING]
-====
-For performance reasons, we may consider defining (some of) these modes.
-====
+Parameters::
+* `b` = block size (8|`b`), with 64 {le} `b` {le} 128.
+* `k` = key size (8|`k`).
+* `s` = segment size in bits (CFB only), with 0 < `s` {le} `b`; its default is `b`.
+* Granularity: `b` bits in CBC and OFB, and lcm(8, `s`) bits in CFB, so that a `kl.exec` processes whole segments of whole bytes.
+
+Data Structures::
+* *Provisioning Input*:
++
+--
+[%autowidth,cols="^1,<2,<3",options="header"]
+|===
+| Pos. | Size (Bits)   | Field
+|  ii  | `k` or 64     | `key` or System Key Identifier
+|===
+--
+
+* *Internal State*:
+ ** `key`: `k` bits.
+ ** `IV`: `b` bits, the chaining value: the initialization vector at first, then the last ciphertext block in CBC and CFB and the last keystream block in OFB.
+ ** `s`: int (CFB only).
+
+* *Serialized Content*:
++
+--
+[%autowidth,cols="^1,<2,<3",options="header"]
+|===
+|  Pos. | Size (Bits)   | Field
+|    i  | `k` or 64     | `key` or System Key Identifier
+|   ii  | `b`           | `IV`
+|  iii  | 16             | `s` (CFB only)
+|===
+--
+
+Machine-Specific Functions::
+* `enc_blk(K,p) -> c` and `dec_blk(K,c) -> p` are those of <<KLE-ECB-mode>>.
+
+State Machine::
+* *States:*
+ ** _Ready_: The CC is ready.
+ ** _Set_Aux_Value_ (CFB): The segment size `s` is being set; no `kl.exec` is admitted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>).
+ ** _Encrypt_ and _Decrypt_ (CBC and CFB): Encrypting, resp. decrypting, blocks (CBC) or segments (CFB) of input.
+ ** _Operate_ (OFB): The CC produces a keystream.
+
+* *Allowed State Transitions:*
+ ** CBC and CFB: _Ready_, _Encrypt_ or _Decrypt_ -> _Encrypt_, if encryption is allowed, and -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
+ ** CFB: _Ready_ or _Set_Aux_Value_ -> _Set_Aux_Value_; _Set_Aux_Value_ -> _Encrypt_ or _Decrypt_, under the same condition as above.
+ ** OFB: _Ready_ or _Operate_ -> _Operate_, if encryption or decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
+ ** _Set_Aux_Value_ (CFB), _Encrypt_, _Decrypt_ or _Operate_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
+
+* *Behavior:*
+ ** When entering _Ready_, `IV` {leftarrow} 0 and, in CFB, `s` {leftarrow} `b`.
+
+ ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `s` {leftarrow} `Xs`, the 64-bit auxiliary operand; a value outside 0 < `Xs` {le} `b` is _Invalid_.
+    The Machine allows a same-State `kl.setst` into _Set_Aux_Value_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which sets `s` again.
+    A transition from _Ready_ to _Encrypt_ or _Decrypt_ without it leaves `s` = `b`, the full-block CFB.
+
+ ** When entering _Encrypt_, _Decrypt_ or _Operate_, the Form C `kl.setst` with auxiliary operand `INPUT` sets `IV` {leftarrow} `INPUT`, truncated to its `b` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
+    The Machine allows a same-State `kl.setst` into these States (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which does the same: it replaces `IV` and keeps `key`.
+
+ ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec` instructions are expected.
+    In CBC, for each block, with `INPUT` the block of input:
++
+--
+[%autowidth,cols="^1,<3,<3",options="header"]
+|===
+| Mode | _Encrypt_ | _Decrypt_
+| CBC
+| `OUTPUT <- enc_blk(key, INPUT xor IV)` +
+  `IV <- OUTPUT`
+| `OUTPUT <- dec_blk(key, INPUT) xor IV` +
+  `IV <- INPUT`
+|===
+--
++
+In CFB, `INPUT` and `OUTPUT` are sequences of segments of `s` bits, the first bit of a segment being the most significant bit of its first byte.
+For each segment, with `O` the `s` most significant bits of `enc_blk(key, IV)`, and `C` the ciphertext segment, that is `OUTPUT` in _Encrypt_ and `INPUT` in _Decrypt_:
++
+--
+ `OUTPUT <- INPUT xor O` +
+ `IV <- (IV << s) mod 2^b^ | C`
+--
++
+Both uses read `INPUT` before writing `OUTPUT`, so `OUTPUT` may be computed in place.
+
+ ** In _Operate_ (OFB), (multi-block) Form C `kl.exec` instructions are expected.
+    For each block, `IV <- enc_blk(key, IV)` and `OUTPUT <- IV`.
+    As a `kl.derive` source (<<KLE-derive-endpoints>>), _Operate_ supplies the keystream as Form C `kl.exec` instructions of whole blocks would; the unused bytes of the last block are discarded.
+
+NOTE: The decryption of CFB uses `enc_blk` only. With `s` = `b` it is the full-block CFB; `s` = 8 and `s` = 1 are CFB8 and CFB1 of cite:[nist-SP-800-38A-1].
+No Machine here checks the uniqueness or the unpredictability of an `IV`, which the standard requires (Rule <<KLE-MGR-caller-limits>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2913,7 +3004,7 @@ where `g` is the granularity of `H`;
   . a `kl.derive` into `K0` (<<KLE-derive-endpoints>>) transfers a whole key `K` of `eff_length` {le} `b`/8 bytes
     (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> items 5 and 7):
   .. it requires `klstart` = 0 and a source of exactly `eff_length` bytes: a source field, or the remaining `kl.exec` output of the source;
-  .. otherwise, the destination locker transitions to Error State _Invalid_, and the source is unchanged; a keystream of a keystream Machine (<<KLE-keystream-modes>>) has no length of its own and never meets the requirement of the previous step, so its `kl.derive` into `K0` always has this outcome;
+  .. otherwise, the destination locker transitions to Error State _Invalid_, and the source is unchanged; a keystream of a keystream Machine (<<KLE-keystream-modes>>, OFB of <<KLE-chaining>>) has no length of its own and never meets the requirement of the previous step, so its `kl.derive` into `K0` always has this outcome;
   .. it replaces all of `K0`, whatever a `kl.exec` loaded before it: `K0` {leftarrow} `K` zero-filled to `b` bits (cite:[nist-fips-198-1] {sect}4, Step 3);
   .. it sets `block_base` {leftarrow} 0 and `cumul_len` {leftarrow} `b`, and sets `HasKey`.
 
@@ -5066,7 +5157,7 @@ ML-DSA Machines define:
 |===
 | Machine(s) | Field/Operation | Role  |  State
 
-| <<KLE-ECB-mode,ECB mode>>, <<KLE-keystream-modes,Keystream generation>>, <<KLE-GCM-mode,GCM mode>>, <<KLE-GCM-SIV-mode,GCM-SIV mode>>, <<KLE-CMAC-mode,CMAC mode>>, <<KLE-OCB-mode,OCB mode>>, <<KLE-Ascon-AEAD128,Ascon-AEAD128>> | `key` | destination | _Ready_
+| <<KLE-ECB-mode,ECB mode>>, <<KLE-chaining,Chaining/feedback modes>>, <<KLE-keystream-modes,Keystream generation>>, <<KLE-GCM-mode,GCM mode>>, <<KLE-GCM-SIV-mode,GCM-SIV mode>>, <<KLE-CMAC-mode,CMAC mode>>, <<KLE-OCB-mode,OCB mode>>, <<KLE-Ascon-AEAD128,Ascon-AEAD128>> | `key` | destination | _Ready_
 
 | <<KLE-XEX-XTS-modes,XEX/XTS modes>> | `key1 {vvert} key2`    | destination | _Ready_
 
@@ -5093,7 +5184,7 @@ ML-DSA Machines define:
 
 | <<KLE-PQC-ML-KEM,ML-KEM>>       | `sharedkey`            | source      | _sharedkey_Output_
 
-| <<KLE-keystream-modes,Keystream generation>> | the keystream (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Operate_
+| <<KLE-keystream-modes,Keystream generation>>, <<KLE-chaining,OFB>> | the keystream (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Operate_
 
 | <<KLE-CMAC-mode,CMAC>> | the CMAC (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Hash_Output_
 // Before the simplification of the admissible pairs:
