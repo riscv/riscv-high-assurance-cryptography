@@ -101,9 +101,29 @@ for mode in ('CBC', 'CFB', 'OFB'):
         c.ready(); check('CFB: Ready restores u = b', c.s == 128 and c.st == 'Ready')
         for bad in (0, 129, 2**64 - 1):
             c = Chain('CFB'); c.set_s(bad); check(f'CFB: u = {bad} is Invalid', c.st == 'Invalid')
+        def bits_cfb(u, data, st):                   # independent model on strings of '0'/'1'
+            bs = lambda x: ''.join(f'{v:08b}' for v in x)
+            iv, p, out = bs(IV0), bs(data), ''
+            for j in range(0, len(p), u):
+                ks = bs(aes_encrypt(KEY, int(iv, 2).to_bytes(16, 'big')))[:u]
+                o = ''.join(str(int(x) ^ int(y)) for x, y in zip(p[j:j + u], ks))
+                iv, out = iv[u:] + (o if st == 'Encrypt' else p[j:j + u]), out + o
+            return out
+        for u, g in ((3, 24), (7, 56)):              # two granules of lcm(8, u) bits
+            n, pt = 2 * g, bytes.fromhex('6bc1bee22e409f96e93d7e117393172a')[:g // 4]
+            c = Chain('CFB'); c.set_s(u); c.setst('Encrypt', IV0)
+            ct = c.segments((int.from_bytes(pt, 'big'), n), 'Encrypt')
+            check(f'CFB{u} encryption over two granules of lcm(8, {u}) bits, independent bit model',
+                  format(ct, f'0{n}b') == bits_cfb(u, pt, 'Encrypt'))
+            c = Chain('CFB'); c.set_s(u); c.setst('Decrypt', IV0)
+            check(f'CFB{u} decryption inverts it', c.segments((ct, n), 'Decrypt') == int.from_bytes(pt, 'big'))
         c = Chain('CFB'); c.set_s(64); c.setst('Encrypt', IV0); c.setst('Encrypt', IV0)
         check('CFB: a same-State kl.setst in Encrypt keeps u', c.s == 64)
     if mode != 'OFB':
+        m = Chain(mode); m.setst('Encrypt', IV0); m.exec(PT[0])
+        blob = m.iv + bytes([m.s])                   # Serialized Content: IV (b bits), u (8 bits)
+        r = Chain(mode); r.st, r.iv, r.s = 'Encrypt', blob[:16], blob[16]
+        check(f'{mode}: Serialized Content (IV, u) round trip continues the stream', r.exec(PT[1]) == m.exec(PT[1]))
         d = run(mode, 'Decrypt', run(mode, 'Encrypt', PT, bytes(16)), bytes(16))
         check(f'{mode}: decryption inverts encryption under a zero IV', d == PT)
 done()
