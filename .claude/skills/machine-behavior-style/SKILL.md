@@ -34,7 +34,7 @@ Split a paragraph by what happens when, one `**` bullet per moment, with numbere
   - A length set by `kl.setst` is never `INPUT`.
   - Don't reuse a Parameter name (such as `t`) for a field; one quantity has one name, in the Internal State, the Serialized Content and the Behavior alike.
 - **Remove restatements:** what another Rule already says (entry operations repeated in a same-State sentence, outcomes already covered by MR1 or GR20.c) becomes a citation or goes.
-- **The usual citations:** MR1 (policy gate), MR6 (granularity, `KLLEN` limits), MR8 (fixed-width input), MR9 (clear the unwritten output), MR14 (load of a long field), MR12 (constant-time tag verification), GR24 (same-State `kl.setst`), GR65 (empty window).
+- **The usual citations:** MR1 (policy gate), MR6 (granularity, `KLLEN` limits), MR8 (fixed-width input), MR9 (clear the unwritten output), MR14 (load of a long field), MR12 (constant-time tag verification), GR24 (same-State `kl.setst`), GR66 (empty window).
 
 ## AsciiDoc mechanics
 

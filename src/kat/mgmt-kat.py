@@ -394,7 +394,7 @@ class Memory:
     def read(self, a, n):
         return bytes(self.buf[a:a + n])
     def fault(self, a, n, kind):
-        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR64
+        for rng, what in ((self.unmapped, 'page'), (self.nonidem, 'access')):     # GR65
             for lo, hi in rng:
                 if a < hi and a + n > lo: return f'{kind}_{what}_fault', max(a, lo)
 
@@ -650,7 +650,7 @@ class Unit:
             if supplied and 7 <= m['StateExtension'] <= 15: return 0   # invalid
             return 16                                               # Error State, whatever its other fields
         if supplied and (st > 60 or self.unsupported(m) or self.invalid(m, 'size', low)): return 0
-        if m['Version'] == 3: return 16 + 16 * m['AuxDataLen']     # GR73, kl.size item 3
+        if m['Version'] == 3: return 16 + 16 * m['AuxDataLen']     # GR74, kl.size item 3
         mach = MACHINES[m['Machine']]
         if st in VALID or st in (IMP, EXP):
             c1 = mach.content1_size(m)
@@ -1081,7 +1081,7 @@ class Unit:
                 return 'invalid'
         S, D = self.lockers[ks].mdh, self.lockers[kd].mdh
         se, de = SRC_EP.get(S['Machine']), DST_EP.get(D['Machine'])
-        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR40 items 1-2, GR76
+        ok = ((ks, bool(se) and S['State'] in se[0]),                                     # GR40 items 1-2, GR77
               (kd, bool(de) and D['State'] in de[1] and not (de[0] == 'key' and D['KeyType'] == 1)))
         bad = [e for e, good in ok if not good] or ([] if de[0] in ADMITTED[se[1]] else [ks, kd])   # GR40 item 3
         if bad:
@@ -1687,9 +1687,9 @@ def t_validity():
     eq('the short import of an Error-State MDH with Version 3, invalid, installs Invalid and Version 0 (GR36)',
        (u.mgmt(0, IMP, dict(odd, Version=3)), u.getst(0), u.getmd(0)['Version']), ('short import', INVALID, 0))
     v3 = md(Machine=M_ABSENT, Version=3, State=AUTH, AuxDataLen=4)
-    eq('kl.size of a supplied Error-State MDH with Version 3 is 16, as the short import reads (B, C; GR73)',
+    eq('kl.size of a supplied Error-State MDH with Version 3 is 16, as the short import reads (B, C; GR74)',
        [u.size('C', m=v3), u.size('B', lo=pack(v3) & MASK64)], [16, 16])
-    eq('kl.size of a supplied, otherwise invalid Error-State MDH is 16 (B, C; GR73)',
+    eq('kl.size of a supplied, otherwise invalid Error-State MDH is 16 (B, C; GR74)',
        [u.size('C', m=odd), u.size('B', lo=pack(odd) & MASK64)], [16, 16])
 
 def t_lengths():
@@ -2429,7 +2429,7 @@ def t_transfers():
     r += [trap_of(w.load, mem, BASE, restart=True), w.klstart]
     mem.unmapped.clear()
     w = opened()
-    eq('GR64: access fault at the byte, prefix committed; restart option for interrupts only (GR48)',
+    eq('GR65: access fault at the byte, prefix committed; restart option for interrupts only (GR48)',
        r + [w.load(mem, BASE, halt_after=16, restart=True), w.klstart, w.load(mem, BASE), img(w) == pc],
        [('load_access_fault', BASE + 20), 16, 'load_page_fault', 16, 'halted', 0, 'done', True])
     w = opened()

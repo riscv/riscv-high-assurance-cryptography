@@ -148,7 +148,7 @@ class KsLocker:
         if isinstance(src, KsLocker) and src.state != OP:
             return src.invalidate()           # GR40 item 1
         if self.state != RDY or self.keytype == 1:
-            return self.invalidate()          # GR40 item 2 (GR76)
+            return self.invalidate()          # GR40 item 2 (GR77)
         if length < n or not isinstance(src, KsLocker) and len(src) < n:
             return self.invalidate()          # GR40 item 5 (the keystream is unbounded)
         if isinstance(src, KsLocker):         # whole blocks as by Form C kl.exec, unused bytes discarded
@@ -436,7 +436,7 @@ def derived(length, keytype=0, state_op=False):
 
 eq("CTR keystream (GR44), length 32, into the 16-byte key (GR39, GR40 item 5), then the F.5.1 inputs under that key",
    derived(32), (RDY, ref_ctr(ks_src[:16], NONCE, 32, C0, PT).hex()))
-for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR76, GR40 item 2)", (32, 1)),
+for label, args in (("length 8 < 16", (8,)), ("length 0", (0,)), ("KeyType 1 destination (GR77, GR40 item 2)", (32, 1)),
                     ("destination in Operate (GR40 item 2)", (32, 0, True))):
     eq(f"{label} -> destination Invalid, no key", derived(*args), (INV, None))
 src, dst, twin = ctr_cl(key, T1, C0), ctr_cl(key), ctr_cl(key, T1, C0)

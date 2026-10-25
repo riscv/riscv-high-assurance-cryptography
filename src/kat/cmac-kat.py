@@ -202,7 +202,7 @@ def derive(src, dst, length):
     if isinstance(src, Cmac) and src.state != OUTPUT:
         src._invalid('GR40 item 1')
     if dst.state != READY or dst.skid is not None:
-        dst._invalid('GR40 item 2')               # the kl.exec input is no destination; GR76
+        dst._invalid('GR40 item 2')               # the kl.exec input is no destination; GR77
     # GR40 item 3 holds: GR43-GR44 admit every source here into a key
     avail = src.b // 8 if isinstance(src, Cmac) else len(src)
     if length < len(dst.key) or avail < len(dst.key):
@@ -479,7 +479,7 @@ for name, mk, src, n in [
         ("12-byte source into the 16-byte key (GR40 item 5)", new16, K128[:12], 16),
         ("into a locker in Hash_Absorb_Last_Block (GR40 item 2)", last_set, secret, 16),
         ("into a locker in Success (GR40 item 2)", done_ok, secret, 16),
-        ("into the key of a KeyType 1 locker (GR76, GR40 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
+        ("into the key of a KeyType 1 locker (GR77, GR40 item 2)", lambda: Cmac(K128, skid=7), secret, 16),
         ("keystream into Hash_Absorb: the kl.exec input is no destination (GR40 item 2)", at_absorb,
          Keystream(MSG[:32]), 32),
         ("a shared secret into Hash_Absorb (no destination; GR40 item 2)", at_absorb, secret, 32)]:
