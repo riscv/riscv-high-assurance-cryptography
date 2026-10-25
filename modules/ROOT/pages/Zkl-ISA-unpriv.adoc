@@ -2611,10 +2611,8 @@ Code examples (<<Zkl-software.adoc#KLE-pseudocode-examples>>) include no such im
 == Error Handling Architecture
 
 An error condition has one of three outcomes:
-
-* it raises an exception;
-* it is recorded in the locker as an Error State, which travels with the CC and stays readable until the locker is reconfigured; or
-* on an inert locker, _Unconfigured_ or in an Error State, or with no named locker, an instruction has only the outcome that <<KLE-insn-outcomes-inert>> gives it (Rule <<KLE-GR-outcome-inert>>); most fall through and raise no exception, so that software checks the _State_ once, after its last step.
+it raises an exception; it is recorded in the locker as an Error State, which travels with the CC and stays readable until the locker is reconfigured; or on an inert locker, it lets instructions have only the outcome described in <<KLE-insn-outcomes-inert>>, i.e., most fall through and raise no exception.
+In this Section, we describe when exceptions are raised and when Error States are set.
 
 // This section lists the error conditions by outcome, as a checklist for implementers and a reference for handler writers; the referenced sections specify them, and Rules <<KLE-GR-management-check-order>> and <<KLE-GR-outcome-valid-state>> give the order in which they are checked.
 
@@ -2690,6 +2688,29 @@ Memory exceptions:: The load/store address breakpoint, address-misaligned, and p
 
 // ////////////////////////////////////////////////////////////////////
 
+[[KLE-error-states]]
+=== Error States
+
+These conditions set an Error State without an exception:
+
+* _Invalid_:
+** invalid Metadata or SKID (<<KLE-Metadata-validity>>, <<KLE-system-keys>>);
+** an instruction that the Machine, its State or _MachinePolicy_ does not admit, a wrong Form and a `kl.setst` with a non-allowed immediate included (Rules <<KLE-GR-form-mismatch>>, <<KLE-GR-same-state>>, <<KLE-GR-to-ready>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-GR-checks>> and <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
+** a transfer window of a length that the Machine does not admit, or a `klstart` inside it that is not an interruption point (Rule <<KLE-GR-transfer-window-checks>>);
+** a permanent RBG failure (Rule <<KLE-GR-rbg-failure>>);
+** a configuration error of the Machine (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>);
+** a field that fails its check when a `kl.derive` transfer completes, unless its Machine specifies another outcome (Rule <<KLE-GR-derive-rule-both-fixed-size>>);
+** a provisioning completion with a non-zero _AuxDataLen_ or _ADSDropped_ (<<KLE-locker-management>>);
+** a system-specific import whose MDH does not match its format, or whose format check fails when the format does not authenticate its data (Rules <<KLE-GR-sysfmt-mdh>> and <<KLE-GR-sysfmt-completion>>).
+* _Expired_: an _ExpirationDate_ that has passed (<<KLE-Metadata-expiration-date>>).
+* _Privilege Violation_: a failed narrowing (<<KLE-Metadata-narrowing>>, <<KLE-instruction-restrict>>, Rule <<KLE-GR-narrowing>>), a SKID resolution below the minimum _SCProtection_ that the SKS associates with the SKID (Rule <<KLE-GR-skid-resolution>>), a restricted `kl.derive` into a destination of lower _SCProtection_ (Rule <<KLE-GR-narrowing>>), or a system-specific import whose format requires a higher side-channel protection level than the declared _SCProtection_ (Rule <<KLE-GR-sysfmt-completion>>).
+* _Authentication Failed_: a failed SCC authentication, at the completion of an import (<<KLE-SCC-import>>) or of an export (<<KLE-mgmt-completes-export>>), so software checks the _State_ after both; and a failed check that a system-specific format defines, when the format authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
+* Any Error State: the one that a `kl.setste` names (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
+
+Two outcomes are not Error States: a Machine enters _Failure_ on a data error (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>) or on a failed verification of an AEAD tag or a signature, which is a result, not an error; and an ADS that fails its check at import is dropped, the SCC accepted (<<KLE-SCC-import>>).
+
+// ////////////////////////////////////////////////////////////////////
+
 [[KLE-error-exception-correspondence]]
 === Correspondence of Exceptions to Error States
 
@@ -2712,28 +2733,6 @@ Memory exceptions:: The load/store address breakpoint, address-misaligned, and p
 |===
 For `kl.clone` and `kl.derive`, which name two lockers, that State is set on the locker on which the exception is raised: for `kl.clone`, the destination of a KLE out-of-memory exception; for `kl.derive`, the endpoint where the failing check is detected, the source being checked first (Rule <<KLE-GR-derive-check-order>>).
 
-// ////////////////////////////////////////////////////////////////////
-
-[[KLE-error-states]]
-=== Error States
-
-These conditions set an Error State without an exception:
-
-* _Invalid_:
-** invalid Metadata or SKID (<<KLE-MVR-open>>, <<KLE-system-keys>>, <<KLE-instruction-restrict>>);
-** an instruction that the Machine, its State or _MachinePolicy_ does not admit, a wrong Form and a `kl.setst` with a non-allowed immediate included (Rules <<KLE-GR-same-state>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-GR-form-mismatch>>, <<KLE-GR-to-ready>>, <<KLE-GR-checks>> and <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>>);
-** a transfer window of a length that the Machine does not admit, or a `klstart` inside it that is not an interruption point (Rule <<KLE-GR-transfer-window-checks>>);
-** a permanent RBG failure (Rule <<KLE-GR-rbg-failure>>);
-** a configuration error of the Machine (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>);
-** a field that fails its check when a `kl.derive` transfer completes, unless its Machine specifies another outcome (Rule <<KLE-GR-derive-rule-both-fixed-size>>);
-** a provisioning completion with a non-zero _AuxDataLen_ or _ADSDropped_ (<<KLE-locker-management>>);
-** a system-specific import whose MDH does not match its format, or whose format check fails when the format does not authenticate its data (Rules <<KLE-GR-sysfmt-mdh>> and <<KLE-GR-sysfmt-completion>>).
-* _Expired_: an _ExpirationDate_ that has passed (<<KLE-Metadata-expiration-date>>).
-* _Privilege Violation_: a failed narrowing (<<KLE-Metadata-narrowing>>, <<KLE-instruction-restrict>>, Rule <<KLE-GR-narrowing>>), a SKID resolution below the minimum _SCProtection_ that the SKS associates with the SKID (Rule <<KLE-GR-skid-resolution>>), a restricted `kl.derive` into a destination of lower _SCProtection_ (Rule <<KLE-GR-narrowing>>), or a system-specific import whose format requires a higher side-channel protection level than the declared _SCProtection_ (Rule <<KLE-GR-sysfmt-completion>>).
-* _Authentication Failed_: a failed SCC authentication, at the completion of an import (<<KLE-SCC-import>>) or of an export (<<KLE-mgmt-completes-export>>), so software checks the _State_ after both; and a failed check that a system-specific format defines, when the format authenticates its data (Rule <<KLE-GR-sysfmt-completion>>).
-* Any Error State: the one that a `kl.setste` names (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
-
-Two outcomes are not Error States: a Machine enters _Failure_ on a data error (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>>) or on a failed verification of an AEAD tag or a signature, which is a result, not an error; and an ADS that fails its check at import is dropped, the SCC accepted (<<KLE-SCC-import>>).
 
 // ////////////////////////////////////////////////////////////////////
 
