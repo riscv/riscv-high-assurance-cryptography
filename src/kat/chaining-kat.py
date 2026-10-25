@@ -117,6 +117,25 @@ for mode in ('CBC', 'CFB', 'OFB'):
                   format(ct, f'0{n}b') == bits_cfb(u, pt, 'Encrypt'))
             c = Chain('CFB'); c.set_s(u); c.setst('Decrypt', IV0)
             check(f'CFB{u} decryption inverts it', c.segments((ct, n), 'Decrypt') == int.from_bytes(pt, 'big'))
+        # The KLE formulation of the spec (little-endian values, brev8, segments from the LSBs)
+        # must give the byte string that the standard's big-endian model gives.
+        def brev8(v, n): return int.from_bytes(bytes(int(f'{x:08b}'[::-1], 2) for x in v.to_bytes(n, 'little')), 'little')
+        def kle_cfb(u, data, st):
+            n, iv, out = len(data), IV0, 0
+            X = brev8(int.from_bytes(data, 'little'), n)
+            for j in range(8 * n // u):
+                W = brev8(int.from_bytes(iv, 'little'), 16)
+                Q = brev8(int.from_bytes(aes_encrypt(KEY, iv), 'little'), 16) & (2**u - 1)
+                Xj = X >> (j * u) & (2**u - 1); Y = Xj ^ Q; out |= Y << (j * u)
+                iv = brev8((Y if st == 'Encrypt' else Xj) << (128 - u) | W >> u, 16).to_bytes(16, 'little')
+            return brev8(out, n).to_bytes(n, 'little')
+        from math import lcm
+        for u in (1, 3, 7, 8, 12, 64, 127, 128):
+            data = bytes(range(1, 1 + 2 * lcm(8, u) // 8)) if u < 128 else bytes(range(1, 33))
+            for st in ('Encrypt', 'Decrypt'):
+                c = Chain('CFB'); c.set_s(u); c.setst(st, IV0)
+                ref = c.segments((int.from_bytes(data, 'big'), 8 * len(data)), st).to_bytes(len(data), 'big')
+                check(f'CFB{u} {st}: the spec formulas (brev8, LSB segments) match the standard', kle_cfb(u, data, st) == ref)
         c = Chain('CFB'); c.set_s(64); c.setst('Encrypt', IV0); c.setst('Encrypt', IV0)
         check('CFB: a same-State kl.setst in Encrypt keeps u', c.s == 64)
     if mode != 'OFB':

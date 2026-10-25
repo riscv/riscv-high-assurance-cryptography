@@ -624,7 +624,8 @@ State Machine::
 * *Behavior:*
  ** When entering _Ready_, `IV` {leftarrow} 0 and, in CFB, `u` {leftarrow} `b`.
 
- ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `u` {leftarrow} `Xs`, the 64-bit auxiliary operand; a value outside 0 < `Xs` {le} `b` is _Invalid_.
+ ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `u` {leftarrow} `Xs`, the 64-bit auxiliary operand; a value outside 0 < `Xs` {le} `b` transitions the locker to Error State _Invalid_.
+    The check on `u` is made whenever `u` is written, also by an import (Rule <<KLE-MGR-check-on-write>>), where `u` = `b` in _Ready_ and 0 < `u` {le} `b` in the other States.
     The Machine allows a same-State `kl.setst` into _Set_Aux_Value_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which sets `u` again.
     A transition from _Ready_ to _Encrypt_ or _Decrypt_ without it leaves `u` = `b`, the full-block CFB.
 
@@ -643,13 +644,18 @@ State Machine::
 |===
 --
 +
-In CFB, `INPUT` and `OUTPUT` are sequences of segments of `u` bits, the first bit of a segment being the most significant bit of its first byte.
-For each segment, with `Q` the `u` most significant bits of `enc_blk(key, IV)`, and `C` the ciphertext segment, that is `OUTPUT` in _Encrypt_ and `INPUT` in _Decrypt_:
+In CFB, cite:[nist-SP-800-38A-1] numbers the bits of a byte string from the most significant bit of its first byte, and processes `INPUT` in segments of `u` bits from its first bit.
+Let `X` = `brev8(INPUT)`, `W` = `brev8(IV)` and `E` = `brev8(enc_blk(key, IV))`, so that bit `t` of each is the standard's bit number `t`; segment `j` of `INPUT`, for `0` {le} `j` < `KLLEN`/`u`, is `X[(j+1)u-1:ju]`, and `Q` = `E[u-1:0]` is the first `u` bits of the encrypted `IV`.
+For each segment `X~j~`, with `C` the ciphertext segment, that is `Y~j~` in _Encrypt_ and `X~j~` in _Decrypt_:
 +
 --
-`OUTPUT <- INPUT xor Q` +
-`IV <- ((IV << u) mod 2^b^) | C`
+`Y~j~ <- X~j~ xor Q` +
+`IV <- brev8(C @ W[b-1:u])`, with `W[b-1:u]` empty if `u` = `b`
 --
++
+and `OUTPUT` = `brev8(Y)`, where `Y` is the `KLLEN`-bit value with `Y[(j+1)u-1:ju]` = `Y~j~`.
+The iterations of Rule <<KLE-MGR-one-klexec-per-block>> are over these segments.
+For `u` a multiple of 8 the `brev8` applications cancel, and `Q` = `enc_blk(key, IV)[u-1:0]`, `IV` {leftarrow} `C @ IV[b-1:u]` (`C` if `u` = `b`) with `C` the bytes of `OUTPUT` or `INPUT`.
 +
 For each block or segment, `INPUT` is read before `OUTPUT` is written, so `OUTPUT` may be computed in place.
 
