@@ -177,8 +177,9 @@ for st in (61, 62, 63):
 e = KLE(); e.mgmt(2, 58, md=0); check('import of an Unconfigured MDH invalid', stx(e, 2) == INV)
 e = KLE(); e.mgmt(2, 58, md=mdh_pack(State=0, StateExtension=9)); check('import State 0 with StateExtension 7-15 invalid', stx(e, 2) == INV)
 e2 = KLE(); r = trap(e2.mgmt, 2, 58, md=mk(mach=0x99, State=1)); check('import of unsupported Machine -> kl_exc_unsupported', r == 'unsupported' and e2.md(2) == 0)
-e = KLE(); e.mgmt(2, 58, md=mdh_pack(Machine=M_ENC, State=0, StateExtension=3)); check('short import: Error-State MDH installed, no operation opened, no capacity', stx(e, 2) == (0, 3) and e.slots == 8)
-e = KLE(); e.mgmt(2, 58, md=mdh_pack(Machine=0x99, Version=1, State=0, StateExtension=3)); check('short import applies no validity check', stx(e, 2) == (0, 3) and mdh_get(e.md(2), 'Version') == 1)
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3)); check('short import: Error-State MDH installed, no operation opened, no capacity', stx(e, 2) == (0, 3) and e.slots == 8)
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, MachineUse=5)); check('short import installs a valid MDH as is', e.md(2) == mk(State=0, StateExtension=3, MachineUse=5))
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, SCProtection=3)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
 e = KLE(); e.mgmt(2, 58, md=im); c = 0xABCD; e.mvin(c, toy_tag(c)); e.mgmt(2, 63, form='C', md=im); check('import completion with valid tag: State = ml.State', stx(e, 2) == (1, 0) and e.L[2].content == c)
 e = KLE(); e.mgmt(2, 58, md=im); e.mvin(0xABCD, 1); e.mgmt(2, 63, form='C', md=im); check('import completion with bad tag: Error State Authentication Failed, no exception', stx(e, 2) == (0, SE_MGMT_AUTH))
 control('a wrong tag is detected (negative control)', e.getstx(2) == SE_MGMT_AUTH)
@@ -341,9 +342,11 @@ e.kliobuftop = 32; e.iobuf[:32] = d; e.buf_in(); check('KLIOBUF mvin moves bytes
 e = E2(); e.zklio = True; e.kliobuflen = 64; e.kliobuftop = 32; e.iobuf[:40] = bytes([9]) * 40; e.buf_out()
 check('KLIOBUF mvout on nl=32 writes zeros to [0, kliobuftop-1] only', e.iobuf[:32] == bytes(32) and e.iobuf[32:40] == bytes([9]) * 8)
 e = E2(); e.iobuf[:8] = bytes([9]) * 8; e.buf_out(); check('KLIOBUF mvout on nl=32 with unconfigured buffer: no access, no exception', e.iobuf[:8] == bytes([9]) * 8)
+e = E2(); e.zklio = True; e.kliobuflen = 64; e.kliobuftop = 20; check('KLIOBUF mvin/mvout with kliobuftop not a multiple of 16 -> illegal even on an inert locker (second group, like the vector check)', trap(e.buf_in) == 'illegal' and trap(e.buf_out) == 'illegal')
 
 section('kl.load / kl.store / kl.input / kl.output  <<KLE-instruction-load>>, <<KLE-instruction-store>>, <<KLE-GR-management-check-order>>')
 mem = Mem(); mem.b[0x100:0x120] = d
+e = opened(E2()); e.start = 16; check('kl.load misalignment checks the effective address; klstart 16 is the offset of the first component access (GR17 item 8, m14)', trap(e.load, mem, 0x108) == 'load_misaligned' and trap(e.load, mem, 0x100) is None)
 e = opened(E2()); e.start = 5
 check('kl.load: klstart not a multiple of 16 -> illegal', trap(e.load, mem, 0x100) == 'illegal')
 e = opened(E2()); e.load(mem, 0x100)
@@ -438,6 +441,7 @@ e = dv(); e.setnl(32); check('klnamedlocker 32: falls through, nothing changes',
 e = dv(dup=0); check('dest UsagePolicy forbids: privilege violation exception, nothing changed', trap(e.derive, 2, 1, 32) == 'privilege_violation' and e.getst(1) == 2)
 e = dv(sst=1, dup=0); check('GR38: conditions in order, source then dest per condition: dest UsagePolicy violation (condition 2) precedes source endpoint Invalid (GR40)', trap(e.derive, 2, 1, 32) == 'privilege_violation' and stx(e, 1) == (1, 0))
 e = dv(); e.L[2].mdh = mdh_put(e.md(2), 'State', 56); check('Configuration State locker as dest -> privilege violation', trap(e.derive, 2, 1, 32) == 'privilege_violation')
+e = dv(); e.L[2].mdh = mdh_put(e.md(2), "State", 56); e.setnl(32); check("KLNL source with klnamedlocker 32 falls through even with a Configuration State dest (GR33, GR17 item 5)", e.derive(2, "NL", 32) == "inert")
 e = dv(); e.L[1].mdh = mdh_put(e.md(1), 'ExpirationDate', 5); e.clock = 9; r = e.derive(2, 1, 32); check('expired source: Error State Expired, nothing transferred', stx(e, 1) == (0, SE_EXPIRED) and e.L[2].content == 0)
 e = dv(); e.clear(2); check('inert destination: no operation', e.derive(2, 1, 32) == 'inert' and e.getst(1) == 2)
 
@@ -488,7 +492,7 @@ check('kl.size Forms B and C of a Version 3 MDH', e.size(form='C', md=sf) == 64 
 for nm, kw in (('AuxDataLen 0', dict(AuxDataLen=0)), ('StateExtension != 0 (State 0)', dict(StateExtension=1)), ('KeyType != 0', dict(KeyType=1)),
                ('ADSDropped', dict(ADSDropped=1)), ('MachineUse', dict(MachineUse=1)), ('State 1', dict(State=1))):
     f = dict(Version=3, AuxDataLen=3); f.update(kw); e = E2(); e.mgmt(0, 58, md=mk(**f))
-    if nm.startswith('StateExtension'): check('Version 3 import with an Error-State MDH takes the short import: Error State, Version 0 (GR36)', stx(e, 0) == (0, 1) and mdh_get(e.md(0), 'Version') == 0)
+    if nm.startswith('StateExtension'): check('Version 3 import with an Error-State MDH is invalid Metadata: Error State Invalid', e.md(0) == mdh_pack(State=0, StateExtension=SE_INVALID))
     elif nm == 'State 1': check('Version 3 import with State 1 -> invalid', stx(e, 0) == INV)
     else: check('Version 3 import with ' + nm + ' -> Invalid', stx(e, 0) == INV)
 check('Version 3 at provisioning -> Invalid (GR67)', (lambda e: (e.mgmt(0, 56, md=mk(Version=3, AuxDataLen=3)), stx(e, 0))[1])(E2()) == INV)
@@ -648,15 +652,27 @@ e.kleemu = True; check('earlier items do not depend on the implemented Machines:
 e = E2(); e0 = E2(); prov(e, 1); prov(e0, 1); e.kleemu = True; e0.kleemu = False
 check('kleemulation does not affect Form A; kl.size item 7: Valid State, AuxDataLen 0 gives 32 + content1_size (toy M_ENC content1_size 16)', e.size(1) == e0.size(1) == 32 + CONTENT[M_ENC] == 48 and e.avail(1) == e0.avail(1) == 1)
 e = E2(); e.kleemu = True; check('control: a Version 3 MDH with a non-native Machine still reaches the lookup and traps', trap(e.size, form='C', md=mk(mach=0x99, Version=3, AuxDataLen=2)) == 'illegal')
-e = E2(); check('without Zklio the KLIOBUF CSRs have no effect and klmaxiobuflen reads 0', (e.w_kliobuflen(64), e.w_kliobuftop(32), e.w_maxiobuflen(32))[0] is None and e.kliobuflen == 0 and e.kliobuftop == 0 and e.r_maxiobuflen() == 0)
+e = E2(); check('without Zklio the KLIOBUF CSRs have no effect and mklmaxiobuflen reads 0', (e.w_kliobuflen(64), e.w_kliobuftop(32), e.w_maxiobuflen(32))[0] is None and e.kliobuflen == 0 and e.kliobuftop == 0 and e.r_maxiobuflen() == 0)
 e = E2(); e.zklio = True; e.iobuf[:64] = bytes([7]) * 64; e.w_kliobuflen(32)
 check('every kliobuflen write zeroes the buffer below the new length and sets kliobuftop; bytes beyond need not be erased', e.iobuf[:32] == bytes(32) and e.kliobuftop == 32 and e.iobuf[32:40] == bytes([7]) * 8)
 e.iobuf[:32] = bytes([5]) * 32; e.w_kliobuflen(32); check('even a write of the current value zeroes the buffer', e.iobuf[:32] == bytes(32))
 e.iobuf[:8] = bytes([5]) * 8; e.w_kliobuftop(16); check('a kliobuftop write leaves the buffer unchanged and is capped by kliobuflen', e.iobuf[:8] == bytes([5]) * 8 and e.kliobuftop == 16 and (e.w_kliobuftop(99), e.kliobuftop)[1] == 32)
 e.w_kliobuflen(0); check('kliobuflen = 0 leaves the KLIOBUF unconfigured (GR15)', trap(e.buf_in) is None and (setattr(e, 'nl', 0), True)[1] and e.kliobuflen == 0)
-e = E2(); e.zklio = True; e.w_maxiobuflen(1 << 20); check('klmaxiobuflen: a value above the reset value sets it; below the lower bound (16) sets 16', e.r_maxiobuflen() == 256 and (e.w_maxiobuflen(4), e.r_maxiobuflen())[1] == 16)
-e.w_maxiobuflen(128); e.w_kliobuflen(100); e.w_maxiobuflen(64); check('reducing klmaxiobuflen below kliobuflen zeroes kliobuflen, kliobuftop and the whole KLIOBUF; no other state', e.kliobuflen == 0 and e.kliobuftop == 0 and e.iobuf == bytearray(256))
-e = E2(); e.zklio = True; e.w_kliobuflen(512); check('kliobuflen is capped at klmaxiobuflen', e.kliobuflen == 256)
+section('getters and setters  <<KLE-instruction-getter-setter>>')
+e = E2(); e.zklio = True; e.iobuf[:64] = bytes([7]) * 64
+e.setiobl(1 << 20); check('kl.setiobl above the maximum, read back with kl.getiobl: the maximum, as vsetvl', e.getiobl() == e.maxiobuf and e.getiobt() == e.maxiobuf)
+e.setiobl(32); check('kl.setiobl zeroes the buffer below the length and sets the top', e.getiobl() == 32 and e.getiobt() == 32 and e.iobuf[:32] == bytes(32))
+e.iobuf[:8] = bytes([5]) * 8; e.setiobt(16); check('kl.setiobt: top capped by the length, buffer unchanged', e.getiobt() == 16 and e.iobuf[:8] == bytes([5]) * 8)
+e.setiobt(99); check('kl.setiobt above the length: capped', e.getiobt() == 32)
+e.setklst(9); check('kl.setklst / kl.getklst', e.getklst() == 9 and e.start == 9)
+e = E2(); check('without Zklio kl.getiobl, getiobt, setiobl and setiobt are reserved (GR1)', all(trap(f, *a) == 'illegal' for f, a in ((e.getiobl, ()), (e.getiobt, ()), (e.setiobl, (8,)), (e.setiobt, (8,)))))
+e.setklst(4); check('kl.getklst, kl.setklst are Zkl common: available without Zklio', e.getklst() == 4)
+_w = setst_encode('B', 2, 0, rs1=5, g=2); _i = setst_encode('C', 3, 77, g=2)
+check('setters: register form is G=2, F=0, r=0, immed7=0, rd=CSR, rs1=Xs1', setst_decode(_w)['G'] == 2 and setst_decode(_w)['F'] == 0 and setst_decode(_w)['r'] == 0 and setst_decode(_w)['immed7'] == 0 and setst_decode(_w)['kd'] == 2 and setst_decode(_w)['rs1'] == 5)
+check('setters: immediate form is G=2, F=1, r=0, rs1=0, immed7=uimm7, rd=CSR', setst_decode(_i)['G'] == 2 and setst_decode(_i)['F'] == 1 and setst_decode(_i)['r'] == 0 and setst_decode(_i)['rs1'] == 0 and setst_decode(_i)['immed7'] == 77 and setst_decode(_i)['kd'] == 3)
+e = E2(); e.zklio = True; e.w_maxiobuflen(1 << 20); check('mklmaxiobuflen: a value above the reset value sets it; below the lower bound (16) sets 16', e.r_maxiobuflen() == 256 and (e.w_maxiobuflen(4), e.r_maxiobuflen())[1] == 16)
+e.w_maxiobuflen(128); e.w_kliobuflen(100); e.w_maxiobuflen(64); check('reducing mklmaxiobuflen below kliobuflen zeroes kliobuflen, kliobuftop and the whole KLIOBUF; no other state', e.kliobuflen == 0 and e.kliobuftop == 0 and e.iobuf == bytearray(256))
+e = E2(); e.zklio = True; e.w_kliobuflen(512); check('kliobuflen is capped at mklmaxiobuflen', e.kliobuflen == 256)
 
 section('GR35 zeroing, GR23/GR25, Unconfigured no-ops  <<KLE-GR-zero-unwritten-output>>, <<KLE-GR-to-ready>>, <<KLE-GR-success-failure-cannot-be-set-directly>>')
 e = enc(); e.zklio = True; e.kliobuflen = 64; e.kliobuftop = 32; e.iobuf[:48] = bytes([0xAA]) * 48; e.L[1].mdh = mdh_put(e.md(1), 'UsagePolicy', 0x4)

@@ -214,6 +214,10 @@ def main():
     check('kl.size of that MDH is 16', scc_size(E['mdh']) == 16 == len(img))
     Em = dict(E, mdh=mdh_put(mdh_put(E['mdh'], 'AuxDataLen', 9), 'ADSDropped', 1))
     check('short import sets AuxDataLen and ADSDropped to 0', scc_import(v2b(Em['mdh'], 16), 0, [0] * 11, 0)[1] == E)
+    X6 = v2b(mdh_pack(Machine=0x20, MachinePolicy=3, State=0, StateExtension=SE_EXPIRED), 16)
+    check('StateExtension 6 short-imports only with Zklexpire (m6); without it the image is invalid', scc_import(X6, 0, [0] * 11, 0, zklexpire=True)[0] == 'ok' and scc_import(X6, 0, [0] * 11, 0)[0] == 'invalid')
+    XI = v2b(mdh_put(E['mdh'], 'SCProtection', 3), 16)
+    check('short import of invalid Metadata gives Error State Invalid (M8)', scc_import(XI, 0, [0] * 11, 0)[1]['mdh'] == mdh_pack(State=0, StateExtension=SE_INVALID))
     check('same MDH in a Valid State is checked: authentication of a 16-byte image impossible (invalid)', scc_size(mdh_put(E['mdh'], 'StateExtension', 0)) == 0)
     control('negative: a corrupted SCC image (wrong CSK) is not accepted', scc_import(scc_export(mk(), CSKV, LSTV, IMPQ), CSKV ^ 2, LSTV, IMPQ)[0] != 'ok')
 

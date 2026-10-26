@@ -286,7 +286,9 @@ class KLE:
         if immed == 57: return s._export_open(k)
         s.start = 0; s.free(k)
         if immed == 58 and mdh_get(md, 'State') == 0 and 1 <= mdh_get(md, 'StateExtension') <= 6:
-            s.L[k].mdh = md; s.err(k, mdh_get(md, 'StateExtension')); return   # short import; GR36 clears Version 3
+            # short import: invalid Metadata gives Invalid; otherwise the MDH is kept as is, but for GR36
+            if s.val(md, 'import') == 'invalid': s.L[k].mdh = mdh_pack(State=0, StateExtension=SE_INVALID); return
+            s.L[k].mdh = md; s.err(k, mdh_get(md, 'StateExtension')); return
         v = s.val(md, 'provision' if immed == 56 else 'import')
         if v == 'invalid': s.L[k].mdh = mdh_pack(State=0, StateExtension=SE_INVALID); return
         if v == 'unsupported': raise Trap('unsupported')

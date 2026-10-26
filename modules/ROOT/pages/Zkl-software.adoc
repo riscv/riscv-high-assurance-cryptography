@@ -39,7 +39,7 @@ It includes every exception and interrupt handler, in any mode, that of the inte
 === Requirements on the KLIOBUF
 
 [horizontal]
-[[KLE-SR-kliobuflen-zero,SR2]]SR2:: Software should set `kliobuflen` to zero once it no longer needs the KLIOBUF contents, which context-switch code must otherwise save and restore (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>); setting `kliobuftop` to zero instead keeps them accessible.
+[[KLE-SR-kliobuflen-zero,SR2]]SR2:: Software should set `kliobuflen`, with `kl.setiobl` or `kl.setiobli`, to zero once it no longer needs the KLIOBUF contents, which context-switch code must otherwise save and restore (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>); setting `kliobuftop` to zero instead, with `kl.setiobt` or `kl.setiobti`, keeps them accessible.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -150,20 +150,20 @@ Where an item cites a Rule SR__n__ (<<KLE-software-requirements>>), that Rule ta
 
 <<KLE-interposed-software,Interposed software>> is bound by Rules <<KLE-SR-klstart-save>>, <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>>.
 
-On entry, before its first KLE instruction, the handler:
+On entry, before its first KLE instruction, the handler (which reads and writes `klstart` and `klnamedlocker` with the getter and setter instructions, <<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>):
 
-. saves `klstart` (Rule <<KLE-SR-klstart-save>>);
-. saves `klnamedlocker` (Rule <<KLE-SR-klnamedlocker-write>>);
-. writes 0 to `klstart` before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
+. saves `klstart` (`kl.getklst`, Rule <<KLE-SR-klstart-save>>);
+. saves `klnamedlocker` (`kl.getnl`, Rule <<KLE-SR-klnamedlocker-write>>);
+. writes 0 to `klstart` (`kl.setklsti 0`) before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
 . saves the vector state, and writes 0 to `vstart`, before its first vector KLE instruction (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-vector-legality>>).
 
 Before each instruction that Rule <<KLE-SR-klnamedlocker-write>> lists, it sets `klnamedlocker` as that Rule requires.
 
 On exit, the handler:
 
-. restores `klnamedlocker` to its saved value, or to 32 if it has cleared, instead of saving, the locker that value named (<<KLE-save-order>>);
+. restores `klnamedlocker` (`kl.setnl`) to its saved value, or to 32 if it has cleared, instead of saving, the locker that value named (<<KLE-save-order>>);
 . restores the vector state, `vstart` included; and
-. restores `klstart` last, exactly as saved (Rules <<KLE-SR-klstart-save>> and <<KLE-SR-klstart-no-reset>>).
+. restores `klstart` last (`kl.setklst`), exactly as saved (Rules <<KLE-SR-klstart-save>> and <<KLE-SR-klstart-no-reset>>).
 
 A handler that skips the trapping instruction applies its retirement effects to `klstart` and `vstart` instead of restoring them (Rule <<KLE-SR-handler-duty>>).
 
@@ -195,19 +195,22 @@ A handler that skips the trapping instruction applies its retirement effects to 
 [[KLE-save-order]]
 === Context Save Order
 
-. Save `klstart`.
-. Save `klnamedlocker`.
+. Save `klstart` (`kl.getklst`).
+. Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
 If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is under management.
 . With `Zklio`:
-.. save `kliobuflen` and `kliobuftop`;
-.. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`, then write 0 to `kliobuflen`.
+.. save `kliobuflen` and `kliobuftop` (`kl.getiobl`, `kl.getiobt`);
+.. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setklsti 0`, `kl.setiobt` of the saved length), then write 0 to `kliobuflen` (`kl.setiobli 0`).
 . Save every locker other than the managed locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
+
+Software does not read or compare `IMPQUAL`: the unit does, on import.
+An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted long-running operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
 
 The handler may clear a locker being provisioned or imported instead of saving it (Rule <<KLE-SR-no-unconditional-clear>>); the interrupted software then restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and the handler restores 32 in place of a saved `klnamedlocker` that named that locker (<<KLE-restore-order>>).
 
@@ -219,12 +222,22 @@ The handler may clear a locker being provisioned or imported instead of saving i
 . Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
-.. restore `kliobuflen`;
+.. restore `kliobuflen` (`kl.setiobl`), which zeroes the buffer and sets `kliobuftop` to it;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
-.. restore `kliobuftop`.
+.. restore `kliobuftop` (`kl.setiobt`), after the buffer, since a write of `kliobuflen` resets it.
 . If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
-. Restore `klstart` last.
+. Restore `klstart` last (`kl.setklst`).
+
+The getter and setter instructions are the recommended way for software to access `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>).
+As with `vsetvl`, the same instructions give the maximum KLIOBUF length: write a large value with `kl.setiobl`, then read it back with `kl.getiobl`.
+
+[source,asm]
+----
+  kl.getiobl  t1      # save the current length
+  kl.setiobl  a0      # zeroes the buffer, clamps to the maximum
+  kl.getiobl  t0      # t0 <- length granted
+----
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -527,7 +540,7 @@ success:
   kl.setnl  s8                    # restore the caller's value
 ----
 
-The opening `kl.mgmt` of provisioning and import receives the MDH in Form D (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>) and checks all of it; for the image of a locker in an Error State it checks only the _State_ (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
+The opening `kl.mgmt` of provisioning and import receives the MDH in Form D (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>) and checks all of it, also for the image of a locker in an Error State (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
 The completing `kl.mgmt KLNL, #kl_cfg_management_end` can still transition the locker to an Error State, at SKS resolution (provisioning) or authentication (import); the `kl.getst` after it detects this, and also a clear or an Error State set earlier.
 A data error found by a Machine check on a field of the PI or SCC leaves the locker in _Failure_ instead (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>); these listings do not test for it.
 

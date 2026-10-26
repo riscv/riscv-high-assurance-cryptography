@@ -55,6 +55,17 @@ class KLE2(KLE):
     def getst(s, kd, r=0): s._pre1(); return KLE.getst(s, kd, r)
     def getstx(s, kd, r=0): s._pre1(); return KLE.getstx(s, kd, r)
     def setnl(s, v): s._pre1(); KLE.setnl(s, v)
+    # getters/setters of <<KLE-instruction-getter-setter>>: the iob ones are reserved without Zklio; the privilege of the M-mode CSR is not checked
+    def getnl(s): s._pre1(); return s.nl
+    def getklst(s): s._pre1(); return s.start
+    def setklst(s, v): s._pre1(); s.start = v
+    def _iob(s):
+        s._pre1()
+        if not s.zklio: raise IllegalInstruction('GR1: Zklio')
+    def getiobl(s): s._iob(); return s.kliobuflen
+    def getiobt(s): s._iob(); return s.kliobuftop
+    def setiobl(s, v): s._iob(); s.w_kliobuflen(v)
+    def setiobt(s, v): s._iob(); s.w_kliobuftop(v)
     def clear(s, kd, r=0): s._exm = True; r_ = KLE.clear(s, kd, r) if True else None; s._exm = False; return r_
     def mgmt(s, kd, immed, r=0, form='C', md=0):
         s._exm = immed in (56, 58)
@@ -82,7 +93,7 @@ class KLE2(KLE):
             if s.priv != 'M':       # <<KLE-CSR-llockerstatus>>: an instruction that modifies K(i) sets the field to Dirty
                 for i, l in enumerate(s.L):
                     if (l.mdh, l.content) != lb[i] and s.lstat[i]: s.lstat[i] = 3
-    # ---- CSR writes (<<KLE-CSR-kliobuflen>>, <<KLE-CSR-kliobuftop>>, <<KLE-CSR-klmaxiobuflen>>)
+    # ---- CSR writes (<<KLE-CSR-kliobuflen>>, <<KLE-CSR-kliobuftop>>, <<KLE-CSR-mklmaxiobuflen>>)
     def w_kliobuflen(s, v):
         if not s.zklio: return
         v = min(v, s.maxiobuf); s.iobuf[:v] = bytes(v); s.kliobuflen = v; s.kliobuftop = v
@@ -201,15 +212,17 @@ class KLE2(KLE):
         n = (vl - vstart) * sew // 8
         if k is None or vstart >= vl: return bytes(max(n, 0))
         return b''.join(s._blk_out(k) for _ in range(n // 16))
+    def _top(s):  # second group, like the vector alignment check (<<KLE-second-group-ILL-grounds>>)
+        if s.kliobuftop % 16: raise IllegalInstruction('kliobuftop not a multiple of 16')
     def _buf(s):
-        if not s.zklio or s.kliobuflen == 0 or s.kliobuftop % 16: raise IllegalInstruction('KLIOBUF')
+        if not s.zklio or s.kliobuflen == 0: raise IllegalInstruction('KLIOBUF')
     def buf_in(s):
-        s.common(); k = s._lock(True)
+        s._pre1(); s._top(); s.common(); k = s._lock(True)
         if k is None: return
         s._buf()
         for j in range(0, s.kliobuftop, 16): s._blk_in(k, bytes(s.iobuf[j:j + 16]))
     def buf_out(s):
-        s.common(); k = s._lock(False)
+        s._pre1(); s._top(); s.common(); k = s._lock(False)
         if k is None:
             if s.zklio and s.kliobuflen: s.iobuf[:s.kliobuftop] = bytes(s.kliobuftop)
             return

@@ -53,7 +53,7 @@ MDH (Zkl-ISA-unpriv KLE-metadata-header; 128-bit value)
   setst immed7 constants: KL_CFG_PROVISIONING=56, KL_CFG_EXPORTING=57, KL_CFG_IMPORTING=58, KL_CFG_MANAGEMENT_END=63,
   KL_CFG_CLEAR_ADS=64, KL_CFG_CLEARALL=65  (also: KL_STATE_INERT=0 = kl.clear, KL_STATE_READY=1)
   setst_encode(form, kd, immed7, rs1=0, r=0, g=0) -> int  32-bit instruction word of kl.setst (g=0), kl.setste (g=1),
-                              kl.setnl/i (g=2), kl.mgmt (g=3).  form 'A'|'B'|'C'|'D' -> F field (A,B: 0; C: 1; D: 2);
+                              kl.set* getters/setters (g=2: register form F=0 'A'/'B', immediate form F=1 'C'), kl.mgmt (g=3).  form 'A'|'B'|'C'|'D' -> F field (A,B: 0; C: 1; D: 2);
                               Form A forces rs1=0, Form B requires rs1 != 0 (rs1 = Xs / vector reg number in C, D)
   setst_decode(word) -> dict(opcode, kd, funct3, rs1, r, F, G, immed7, form)  form None if F=3 (reserved)
 

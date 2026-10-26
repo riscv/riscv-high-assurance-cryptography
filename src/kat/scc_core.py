@@ -137,10 +137,12 @@ def scc_export(L, csk, lst, impq):
         img += v2b(impq, 16) + v2b(siv2, 16)
     else: c2 = []
     return img + _bytes(c1) + _bytes(c2)
-def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None):
+def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None, zklexpire=False):
     """Returns ('ok', L) | ('invalid', None) | ('unsupported', None) | ('authfail', L_error)."""
     M = b2v(img[:16]); f = mdh_unpack(M)
-    if f['State'] == 0 and 1 <= f['StateExtension'] <= 6:         # short import of an Error State
+    if f['State'] == 0 and 1 <= f['StateExtension'] <= (6 if zklexpire else 5):   # short import of an Error State
+        if scc_invalid(mdh_put(mdh_put(mdh_put(M, 'State', 1), 'StateExtension', 0), 'AuxDataLen', 0)):   # M8: invalid Metadata
+            return 'ok', dict(mdh=mdh_pack(State=0, StateExtension=SE_INVALID), c1=b'', c2=b'')
         return 'ok', dict(mdh=mdh_put(mdh_put(M, 'AuxDataLen', 0), 'ADSDropped', 0), c1=b'', c2=b'')
     if f['Machine'] not in SCC_MACHINES and not scc_invalid(M): return 'unsupported', None
     st = f['State'] if ml_state is None else ml_state
