@@ -166,7 +166,7 @@ Rule <<KLE-GR-rbg-failure>> covers RBG failure.
 [[KLE-Notation-endianness]]
 === Endianness
 
-A PI, an SCC and a PCCC (cf. <<KLE-management-formats-and-states>>) are byte strings: a value `V` of `8n` bits in them, the MDH (cf. <<KLE-Metadata>>) included, occupies `n` consecutive bytes, byte `i` holding `V[8i+7:8i]`, whatever the data endianness (`mstatus.MBE`, `SBE` and `UBE`, and with the H extension `hstatus.VSBE` and `vsstatus.UBE`) of the hart.
+As defined in <<Zkl-notation.adoc#KLE-Notation-values>>, a PI, an SCC and a PCCC (cf. <<KLE-management-formats-and-states>>) are byte strings: a value `V` of `8n` bits in them, the MDH (cf. <<KLE-Metadata>>) included, occupies `n` consecutive bytes, byte `i` holding `V[8i+7:8i]`, whatever the data endianness (`mstatus.MBE`, `SBE` and `UBE`, and with the H extension `hstatus.VSBE` and `vsstatus.UBE`) of the hart.
 KLE memory instructions follow this mapping, and those bits do not affect them.
 Software on a hart with big-endian data accesses that moves an MDH between memory and GPRs, or vector elements wider than 8 bits, converts its byte order, for instance with `rev8`, or uses byte accesses.
 This convention lets CCs migrate between harts of different endianness.
@@ -225,7 +225,7 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 | Instruction / CSR        | Defined by         | With `Zklv` | With `Zklio`
 | `kl.size` / `kl.avail`   | `Zkl` common       | Forms A–C   | Forms A and B
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D, natively or as the substitution (Rule <<KLE-GR-substitution>>) of a Form A–C
-| `kl.mvin`, `kl.mvout`    | `Zklmv`         2+<| When `Zklmv` is implemented; mandatory in hardware if `Zklmem` is emulated
+| `kl.mvin`, `kl.mvout`    | `Zklmv`         | GPR and vector variants | GPR and KLIOBUF variants; each only when `Zklmv` is implemented, which is mandatory in hardware if `Zklmem` is emulated
 | `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D
 | `kl.setste`              | `Zkl` common    2+<| Available
 | `kl.mgmt`                | `Zkl` common       | Forms A, C and D | Forms A and D
@@ -335,9 +335,9 @@ KLV requires the listed instructions only with `vm` = 1; their masked encodings 
 
 Floating-point, fixed-point and general arithmetic vector operations are not required.
 
-NOTE: KLE has no concept of an element, and it is not part of the vector unit: it sees a vector register (including a vector register group if `LMUL` > 1) as a bit string of length `KLLEN` = `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
+NOTE: KLE has no concept of an element, and it is not part of the vector unit: it sees a vector register (including a vector register group if `LMUL` > 1) as a bit string of length `KLLEN` = `VL` {times} `SEW`, where `VL` is the vector length in effect (`vl`).
 
-KLE takes the length of a vector operand from `VL*SEW` alone (`VL` = 2 with `SEW` = 64 and `VL` = 4 with `SEW` = 32, for example, both give 128 bits): the CPU decode side uses `VL` and `SEW` to determine how much data to send to the KLE unit, which needs only their product.
+KLE takes the length of a vector operand from `VL` {times} `SEW` alone (`VL` = 2 with `SEW` = 64 and `VL` = 4 with `SEW` = 32, for example, both give 128 bits): the CPU decode side uses `VL` and `SEW` to determine how much data to send to the KLE unit, which needs only their product.
 
 [[KLE-KLIOBUF]]
 === KLIOBUF
@@ -353,7 +353,7 @@ The `Zklio` instructions `kl.input` and `kl.output` transfer data between the KL
 [[KLE-Metadata]]
 == Metadata
 
-A CC carries two kinds of metadata:
+An SCC carries two kinds of metadata:
 
 . the 128-bit _MDH_, always present, which determines the Machine, the key type and the key's usage policies; its first 64 bits determine the length of a PI or SCC; and
 . the optional 128-bit _Implementation Qualifier_ `IMPQUAL`, which copies the three KLE analogues of the hart's `mvendorid`, `marchid` and `mimpid` CSRs, namely `mklvendorid`, `mklarchid` and `mklimpid` (<<KLE-Auxiliary-Data-Section>> gives the format of `IMPQUAL`).
@@ -821,7 +821,7 @@ A zero `kliobuflen` leaves the KLIOBUF _unconfigured_: an operation that expects
 (((CSR, `kliobuftop`)))`kliobuftop` is an XLEN-bit URW CSR that sets the upper bound, in bytes, of the buffer range that `kl.input` and `kl.output` use; its maximum is `kliobuflen`, and `kl.exec` never modifies it.
 It is the KLIOBUF counterpart of `VL` in the V extension: it defines the operand length `KLLEN` as `kliobuftop` {times} 8 and the transfer window [0, `kliobuftop`-1].
 
-Writing `kliobuftop` leaves the buffer unchanged, so software can set the length per operation without writing `kliobuflen`, which clears the buffer; this mirrors the use of `VL*SEW` to supply a partial last block, or a short IV or nonce, to a Machine.
+Writing `kliobuftop` leaves the buffer unchanged, so software can set the length per operation without writing `kliobuflen`, which clears the buffer; this mirrors the use of `VL` {times} `SEW` to supply a partial last block, or a short IV or nonce, to a Machine.
 
 A value invalid for a Machine is detected only when an instruction that uses the KLIOBUF is later issued or restarted, with the outcomes given in <<KLE-usage-input-output>>.
 
@@ -1134,7 +1134,7 @@ Synopsis::
 Mnemonics::
 +
 --
-`kl.mvin` and `kl.mvout` are one instruction with six variants:
+`kl.mvin` and `kl.mvout` have three variants each:
 (((KLE, instruction, kl.mvin)))(((KLE, instruction, kl.mvout)))
 
 [upperroman]
@@ -1186,11 +1186,11 @@ If one management operation combines `kl.mvin` or `kl.mvout` with `kl.load` or `
 
 Vector variants (II and V)::
 They also track progress in `vstart`: each 16-byte block advances it by 128/`SEW` elements, for instance by 4 for 32-bit and by 2 for 64-bit elements.
-Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `klstart` + (_k_ − `vstart`) × `SEW`/8 of `S`.
+Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `klstart` + (_k_ − `vstart`) {times} `SEW`/8 of `S`.
 The transfer can halt only at a block boundary: `klstart` then holds the image offset reached, and `vstart` the first unprocessed element; if `vstart` {ge} `vl`, the instruction, after the checks of Rule <<KLE-GR-management-check-order>> and the Locker Checks above, transfers nothing and leaves `klstart` unchanged.
 
 KLIOBUF variants (III and VI)::
-They use the KLIOBUF in place of a vector register: they transfer bytes 0 to `kliobuftop` − 1 of the KLIOBUF to or from offsets `klstart` to `klstart` + `kliobuftop` − 1 of `S`, as a vector variant with `vstart` = 0 and `vl` × `SEW`/8 = `kliobuftop` does.
+They use the KLIOBUF in place of a vector register: they transfer bytes 0 to `kliobuftop` − 1 of the KLIOBUF to or from offsets `klstart` to `klstart` + `kliobuftop` − 1 of `S`, as a vector variant with `vstart` = 0 and `vl` {times} `SEW`/8 = `kliobuftop` does.
 Like the GPR variants (I and IV), they are architecturally uninterruptible (Rule <<KLE-GR-interruptibility-classes>>), although they may transfer several blocks: their length is bounded by the maximum length of the KLIOBUF.
 +
 NOTE: The KLIOBUF variants give an implementation without `Zklv` multi-block transfers: `kl.input` fills the KLIOBUF from memory, with `klnamedlocker` = 32, and `kl.mvin KLIOBUF` moves it into the locker, with `klnamedlocker` naming that locker, as `kl.input` and `kl.exec` cooperate for the inputs of a Machine (<<KLE-usage-input-output>>).
@@ -1200,7 +1200,7 @@ Their window is the KLIOBUF up to `kliobuftop`, so they need no element position
 
 Exceptions and no-operation cases::
 The checks are made in the order of Rule <<KLE-GR-management-check-order>>.
-A vector variant whose vector extension is not enabled, or whose `vl` × `SEW`/8 or `vstart` × `SEW`/8 is not a multiple of 16, raises an illegal-instruction exception (<<KLE-second-group-ILL-grounds>>), on any locker.
+A vector variant whose vector extension is not enabled, or whose `vl` {times} `SEW`/8 or `vstart` {times} `SEW`/8 is not a multiple of 16, raises an illegal-instruction exception (<<KLE-second-group-ILL-grounds>>), on any locker.
 So does a KLIOBUF variant if `kliobuftop` is not a multiple of 16.
 +
 After the locker-state-independent checks, on an _Unconfigured_ or Error-State locker, or when `klnamedlocker` = 32, every variant performs no operation, whatever `klstart` is, and raises no exception (Rules <<KLE-GR-outcome-inert>>, <<KLE-GR-fall-through-operands>>); `kl.mvout` writes zeros to its destination.
@@ -1429,8 +1429,7 @@ The Forms supply the MDH as follows:
 
 * Form A carries no auxiliary operand, and supplies an all-zero MDH (Rule <<KLE-GR-x0-operand>>).
 * Form C carries it in the lowest 128 bits of `Vs`. `VL` {times} `SEW` < 128 raises an illegal-instruction exception
-  (Rule <<KLE-GR-vector-MDH-operand>>) in the order of Rule <<KLE-GR-management-check-order>>, the
-  _State_ kept, whatever the operation and the _State_, and even if it would fall through (Rule <<KLE-GR-management-check-order>>).
+  (Rule <<KLE-GR-vector-MDH-operand>>) at its place in the order of Rule <<KLE-GR-management-check-order>>, whatever the operation and the _State_ and even if the instruction would fall through; the _State_ is kept.
 * Form D carries it as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
   <<KLE-GR-multiple-GPRs>>).
 
@@ -1732,7 +1731,7 @@ Description::
 Clones source locker `Ks` into destination locker `Kd`, either of which, not both, may be `KLNL` (Rule <<KLE-GR-klnamedlocker-override>>):
 
 * If source and destination are the same locker, the instruction performs no operation and sets no `*llockerstatus` or `KLS` field to Dirty (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), even if the locker is _Unconfigured_, _Off_, or in a Configuration State; in the last case, Rule <<KLE-GR-outcome-config-state>> does not apply.
-* If they are different lockers, neither of them `KLNL` while `klnamedlocker` = 32, the instruction first clears the destination, as `kl.clear` would, even if it then raises an exception (<<KLE-destructive-config>>); if `klnamedlocker` named the destination, it becomes 32. The `*llockerstatus` field in effect for the destination and the `KLS` field in effect are set to Dirty, whatever the outcome. The source then decides the result:
+* If they are different lockers and neither of them is `KLNL` while `klnamedlocker` = 32, the instruction first clears the destination, as `kl.clear` would, even if it then raises an exception (<<KLE-destructive-config>>); if `klnamedlocker` named the destination, it becomes 32. The `*llockerstatus` field in effect for the destination and the `KLS` field in effect are set to Dirty, whatever the outcome. The source then decides the result:
 ** An _Unconfigured_ source leaves the destination _Unconfigured_.
 ** A source in a Configuration State raises a KLE privilege-violation exception (Rule <<KLE-GR-outcome-config-state>>).
 ** A source in an Error State is cloned as its MDH alone (Rule <<KLE-GR-clear-locker-content-error-state>>).
@@ -2078,7 +2077,6 @@ Unless the Machine defines another Form for it, a `kl.setst` naming _Ready_ is o
 
 [[KLE-GR-policy-narrowing-state,GR25]]GR25:: A `kl.restrictl` or `kl.restrictv` (<<KLE-instruction-restrict>>) that narrows _MachinePolicy_ to a value that the Machine forbids transitions the locker to Error State _Invalid_.
 Any other narrowing changes no State; from the next instruction on, Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> checks each `kl.exec`, `kl.derive` and usage `kl.setst` against the narrowed _MachinePolicy_, at issue and on entering a State.
-Otherwise the narrowing itself invalidates no instruction.
 
 //
 
@@ -3229,7 +3227,8 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 
   foreach(i from 0 to len_PC - 1) do:
     C[i] ← P[i] xor AESE256(keys.enc_key,
-             ones(1) @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+             ones(1) @ sep @ SIV[125:32]
+               @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   return ( SIV, C[] );
 }
@@ -3257,7 +3256,8 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 
   foreach(i from 0 to len_PC - 1) do:
     P[i] ← C[i] xor AESE256(keys.enc_key,
-             ones(1) @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+             ones(1) @ sep @ SIV[125:32]
+               @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   s ← POLYVAL(keys.auth_key, AD_auth[] ‖ P[], len_AD + len_PC);
   tmp ← s;
