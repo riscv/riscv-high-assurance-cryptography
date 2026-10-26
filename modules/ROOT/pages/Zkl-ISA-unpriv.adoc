@@ -1591,6 +1591,8 @@ The encodings are variants of those of `kl.getmd*` (<<KLE-instruction-getmd>>) a
 * `kl.setnli #uimm7`: the `kl.setst` encoding with `G` = `0b10`, `Kd` = 0, `r` = 0, `F` = `0b00` and `rs1` = 0; `#immed7` holds `#uimm7`.
 * `kl.setnl Xs1`: the `kl.setst` encoding with `G` = `0b10`, `Kd` = 0, `r` = 0, `F` = `0b01` and `#immed7` = 0; `rs1` holds `Xs1`.
 
+In this group, `F` only separates `kl.setnli` (`0b00`) from `kl.setnl` (`0b01`); it is not a Form of `kl.setst`.
+
 Every other encoding with `v` = `h` = 1 in the `kl.getmd*` encoding, or with `G` = `0b10` in the `kl.setst` encoding, is reserved.
 --
 
@@ -2309,8 +2311,8 @@ writes only `klnamedlocker` <- locker number, and `klstart` <- 0.
 [[KLE-GR-fall-through-operands,GR34]]GR34:: An instruction that falls through makes no check beyond the locker-state-independent checks of Rule <<KLE-GR-management-check-order>>, among them the vector MDH operand of a Form C `kl.mgmt` (Rule <<KLE-GR-vector-MDH-operand>>) and the effective-address alignment of `kl.load` and `kl.store`, and reads no operand other than its locker designators and those that these checks inspect: it accesses no memory, and needs neither a configured KLIOBUF nor `Zklio`.
 The exceptions are a Form D `kl.exec` and a KLIOBUF `kl.mvout`, which write zeros to a configured KLIOBUF (Rule <<KLE-GR-zero-unwritten-output>>).
 
-[[KLE-GR-zero-unwritten-output,GR35]]GR35:: A `kl.exec` that performs no operation under Rule <<KLE-GR-outcome-inert>> or <<KLE-GR-outcome-valid-state>>, or that transitions its locker to an Error State, whether before or during execution (including under items 1 and 3 of Rule <<KLE-GR-transfer-window-checks>>), writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output; a Form D `kl.exec` that falls through, or that item 4 of Rule <<KLE-GR-outcome-valid-state>> transitions to _Invalid_, takes a configured KLIOBUF as its output window whatever its former native Form, with no length or granularity check.
-An instruction that raises an exception, or whose window is empty (item 2 of Rule <<KLE-GR-transfer-window-checks>>), leaves its output unchanged.
+[[KLE-GR-zero-unwritten-output,GR35]]GR35:: A `kl.exec` that performs no operation under Rule <<KLE-GR-outcome-inert>> or <<KLE-GR-outcome-valid-state>>, or that transitions its locker to an Error State, whether before or during execution (including under items 2 and 3 of Rule <<KLE-GR-transfer-window-checks>>), writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output; a Form D `kl.exec` that falls through, or that item 4 of Rule <<KLE-GR-outcome-valid-state>> transitions to _Invalid_, takes a configured KLIOBUF as its output window whatever its former native Form, with no length or granularity check.
+An instruction that raises an exception, or whose window is empty (item 1 of Rule <<KLE-GR-transfer-window-checks>>), leaves its output unchanged.
 
 [[KLE-GR-clear-locker-content-error-state,GR36]]GR36:: On transitioning to an Error State, a locker clears its Content beyond the MDH and releases the internal resources that held it, any ADS included; _AuxDataLen_ and _ADSDropped_ are set to 0, and a _Version_ of 3 to 0 (<<KLE-system-specific-import>>).
 
@@ -2348,7 +2350,7 @@ If a field fails a check when its transfer completes (Rule <<Zkl-ISA-machines.ad
 . The pair must be admitted; otherwise both transition.
 . The effective length (Rule <<KLE-GR-derive-rule-both-fixed-size>>) must meet the length constraints of the destination, a final partial input unit included, and the untransferred suffix must fit its remaining capacity; otherwise the destination transitions.
 . A destination that receives a whole value has the following length conditions; otherwise the destination transitions:
-** A destination key field of `dest_length` bytes is loaded in full: it requires `length` {ge} `dest_length` and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes, unless its Machine admits a shorter key under conditions that it states, as <<Zkl-ISA-machines.adoc#KLE-HMAC,HMAC>> does; a key field that receives a shared secret (Rule <<KLE-GR-shared-secret>>) receives all of it, so `length` equals the length of the secret. The `eff_length` bytes it receives (Rule <<KLE-GR-derive-rule-both-fixed-size>>) replace whatever a `kl.exec` loaded into it and complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
+** A destination key field of `dest_length` bytes is loaded in full: it requires `length` {ge} `dest_length` and a source field, or remaining `kl.exec` output, of at least `dest_length` bytes, unless its Machine admits a shorter key under conditions that it states, as <<Zkl-ISA-machines.adoc#KLE-HMAC,HMAC>> does; a key field that receives a shared secret (Rule <<KLE-GR-shared-secret>>) is never zero-padded by it: the secret has at least `dest_length` bytes, and the field receives the first `dest_length` of them. The `eff_length` bytes it receives (Rule <<KLE-GR-derive-rule-both-fixed-size>>) replace whatever a `kl.exec` loaded into it and complete its loading; a key written in State _Ready_ is followed by the initialization that the Machine performs in that State.
 ** A message input receiving a shared secret (Rule <<KLE-GR-shared-secret>>) requires a `length` equal to the length of the secret.
 // Before byte-granular hash inputs:
 // A message input receiving a shared secret (Rule <<KLE-GR-shared-secret>>) requires `klstart` = 0 and a `length` at least the length of the secret and at most that length rounded up to a multiple of the granularity of the destination; otherwise the destination transitions.
@@ -2426,8 +2428,8 @@ For a `kl.exec` with a vector operand, an interruption point is also a multiple 
 
 [[KLE-GR-transfer-window-checks,GR53]]GR53:: A Form A–C `kl.exec`, or a Form D `kl.exec` that substitutes for one (<<KLE-usage-input-output>>), checks its transfer window after the conditions of Rule <<KLE-GR-outcome-valid-state>>, in this order:
 +
-. A length invalid for the Machine transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-granularity>>).
-. A `klstart` {ge} the length makes the window _empty_: the instruction writes 0 to `klstart` and does not reach the Machine, so it is not the `kl.exec` that a State admits (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-single-last-block>>).
+. A `klstart` {ge} the length, which includes a length of 0, makes the window _empty_: the instruction writes 0 to `klstart` and does not reach the Machine, which keeps its State.
+. Otherwise, a length invalid for the Machine transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-granularity>>).
 . Any other `klstart` that is not an interruption point (Rule <<KLE-GR-interruption-point>>) transitions the locker to Error State _Invalid_.
 
 [[KLE-GR-conflicting-access-rule,GR54]]GR54:: Under every option of Rule <<KLE-GR-resumability-options>>, before the issuing hart performs a _conflicting access_, the in-flight operation must have completed, or have halted precisely with `klstart` set as Rule <<KLE-GR-prefix-complete>> requires.
@@ -3002,7 +3004,7 @@ An Error State never reaches a completion: its image is the MDH alone, imported 
 On completing an SCC import or a locker export, authentication is checked only if setting locker.MDH._State_ to `ml`._State_ restores a Valid State; the probability of accepting an incorrect _State_ is negligible.
 A nested completion checks only the base type, without authentication.
 
-The completing `kl.mgmt` admits these values of `ml`._State_ (<<KLE-management-formats-and-states>>); any other, 61–63 included, raises an illegal-instruction exception:
+The `kl.mgmt` completing an import or an export admits these values of `ml`._State_ (<<KLE-management-formats-and-states>>); any other, 61–63 included, raises an illegal-instruction exception:
 
 * a locker whose MDH has _Version_ = 3: `kl_cfg_importing` or `kl_cfg_exporting`, and, for a locker in `kl_cfg_importing`, also _State_ 0, which completes the system-specific import (Rule <<KLE-GR-sysfmt-completion>>);
 * otherwise, a locker of base type `scc` (`kl_cfg_importing` or `kl_cfg_exporting`): a Valid State (1–55), `kl_cfg_importing` or `kl_cfg_exporting`;

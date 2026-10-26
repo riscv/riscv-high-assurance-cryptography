@@ -1,788 +1,237 @@
-#!/usr/bin/env python3
-"""XEX/XTS KAT: the Machine of <<KLE-XEX-XTS-modes>> and the <<KLE-XTS-from-XEX>> procedure
-against the IEEE 1619-2007 / SP 800-38E vectors (as in Botan's xts.vec, whose Nonce is bin(i, 128))."""
-import os, random, sys
+#!/usr/bin/env pypy3.12
+"""KAT of the XEX Machines (AES128/AES256/SM4_XEX) and of XTS built from them, incl. ciphertext stealing
+(Zkl-ISA-machines.adoc KLE-XEX-XTS-modes).  Standards: IEEE 1619-2007/2018 App. B vectors 2,3 (and 1 for the reference),
+SP 800-38E, GB/T 17964-2021 (SM4 variant, cross-checked against OpenSSL 3.6.2 `SM4-XTS` with xts_standard=GB, vectors embedded).
+Run: cd src && pypy3.12 kat/xts-kat.py"""
+import hashlib, os, random, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (state_fields, mdh_get, mdh_put, install_key, aes_decrypt, aes_encrypt, sm4_encrypt, sm4_decrypt,
-                    b2v, bin_, bxor, cat, double_ocb, sl, update_mask, v2b,
-                    MASK128, MDH_FIELD, mdh_pack, setst_operand,
-                    KL_STATE_INERT as UNCONFIGURED, KL_STATE_READY as READY,
-                    KL_STATE_ENCRYPT as ENCRYPT, KL_STATE_DECRYPT as DECRYPT, KL_STATE_OPERATE as OPERATE,
-                    KL_STATEEXT_INVALID as INVALID, KL_STATE_SUCCESS as SUCCESS, ERROR_STATES,
-                    IllegalInstruction, raises, section, check, control, done)
+from common import *
+from sym_model import *
 
+H = bytes.fromhex
+def xor(a, b): return bytes(x ^ y for x, y in zip(a, b))
+def lk(t, k1, k2, policy=3): return Locker(machine(t, 6), policy, k1, k2)
 
-B = 128
-STEAL = 66                                        # kl_xex_state_steal, Form A, in Decrypt only
-SKIP, BACK = 1, 2                                 # StealSkip, StealBack: bits 0 and 1 of StateExtension
-POL_ENC, POL_DEC = 0b01, 0b10                     # <<KLE-Machine-field>>
-CIPHERS = {'AES-128': 128, 'AES-256': 256, 'SM4': 128}   # XTS-AES: 128- and 256-bit keys (IEEE 1619); SM4: GB/T 17964
-XEX_MACHINES = {0x06: 'AES-128', 0x26: 'AES-256', 0x36: 'SM4'}   # <<KLE-exec-encodings>> Mode 6; Type 1 has none
-BLOCK = {'AES-128': (aes_encrypt, aes_decrypt), 'AES-256': (aes_encrypt, aes_decrypt), 'SM4': (sm4_encrypt, sm4_decrypt)}
-XEX_OF = {v: k for k, v in XEX_MACHINES.items()}
-fget = mdh_get
-padded = lambda bits: -(-bits // 128) * 16
-
-fset = mdh_put
-
-def kl_size(mdh, c1_size, pi_size):
-    """<<KLE-instruction-size>> from an MDH, AuxDataLen = 0."""
-    st = fget(mdh, 'State')
-    return 16 if st in ERROR_STATES else 16 + pi_size if st == UNCONFIGURED else 32 + c1_size
-
-def build_pi(mach, keytype, key1, key2=0, policy=POL_ENC | POL_DEC):
-    """MDH (i), then `key1` or the SKID (ii), then `key2` (iii, empty with a SKID: GR76)."""
-    k = CIPHERS[XEX_MACHINES[mach]]
-    content, w = (key1, 64) if keytype == 1 else (cat((key2, k), (key1, k)), 2 * k)
-    return v2b(mdh_pack(Machine=mach, MachinePolicy=policy, KeyType=keytype), 16) + v2b(content, padded(w))
-
-def kl_update_mask_gb(V):
-    """<<KLE-XEX-XTS-modes>> update_mask of SM4_XEX (GB/T 17964-2021), transcribed: byte j = V[8j+7:8j]."""
-    B_ = [(V >> 8 * j) & 0xFF for j in range(16)]
-    out = [(B_[j] >> 1) | ((B_[j - 1] & 1) << 7 if j else 0) for j in range(16)]
-    if B_[15] & 1:
-        out[0] ^= 0xE1
-    return sum(b << 8 * j for j, b in enumerate(out))
-
-def kl_update_mask(V):
-    """<<KLE-XEX-XTS-modes>> update_mask, b = 128, transcribed."""
-    if sl(V, 127, 127) == 0:
-        return (V << 1) & MASK128
-    return ((V << 1) & MASK128) ^ cat((0, 120), (0b10000111, 8))
-
-def kl_update_mask_inv(V):
-    """<<KLE-XEX-XTS-modes>> update_mask_inv, b = 128, transcribed."""
-    if sl(V, 0, 0) == 0:
-        return V >> 1
-    return ((V ^ cat((0, 120), (0b10000111, 8))) >> 1) ^ cat((1, 1), (0, 127))
-
-def kl_update_mask_inv_gb(V):
-    """<<KLE-XEX-XTS-modes>> update_mask_inv of SM4_XEX, transcribed: byte j = V[8j+7:8j]."""
-    B_ = [(V >> 8 * j) & 0xFF for j in range(16)]
-    c = B_[0] >> 7
-    A = B_[0] ^ 0xE1 if c else B_[0]
-    out = [((A if j == 0 else B_[j]) & 0x7F) << 1 | (B_[j + 1] >> 7 if j < 15 else c) for j in range(16)]
-    return sum(b << 8 * j for j, b in enumerate(out))
-
-# ---------------------------------------------------------------- REF (IEEE 1619-2007, byte strings)
-def ref_mul_alpha(t):
-    """IEEE 1619-2007 5.2: multiplication of the tweak byte array by alpha."""
-    t, cin = bytearray(t), 0
-    for j in range(16):
-        t[j], cin = ((t[j] << 1) + cin) & 0xFF, t[j] >> 7
-    t[0] ^= 0x87 * cin
-    return bytes(t)
-
-def ref_xts(key1, key2, seq, data, encrypt=True):
-    f = aes_encrypt if encrypt else aes_decrypt
-    m, s = divmod(len(data), 16)
-    tw = [aes_encrypt(key2, seq.to_bytes(16, 'little'))]
-    for _ in range(m):
-        tw.append(ref_mul_alpha(tw[-1]))
-    tbc = lambda x, t: bxor(f(key1, bxor(x, t)), t)
-    blk = lambda q: data[16 * q:16 * q + 16]
-    if s == 0:
-        return b''.join(tbc(blk(q), tw[q]) for q in range(m))
-    out = b''.join(tbc(blk(q), tw[q]) for q in range(m - 1))
-    a, b = (m - 1, m) if encrypt else (m, m - 1)      # decryption swaps the last two tweaks
-    cc = tbc(blk(m - 1), tw[a])
-    return out + tbc(data[16 * m:] + cc[s:], tw[b]) + cc[:s]
-
-# ---------------------------------------------------------------- KLE model
-class XexLocker:
-    def __init__(s, sks=None, doubling=kl_update_mask, rng=None, msb_first=False):
-        s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
-        s.sks, s.doubling, s.rng, s.msb_first = sks or {}, doubling, rng or random.Random(2026), msb_first
-    state = property(lambda s: fget(s.mdh, 'State'))
-    se = property(lambda s: fget(s.mdh, 'StateExtension'))
-    def goto(s, st):                              # every transition clears StealSkip and StealBack
-        s.mdh = fset(fset(s.mdh, 'State', st), 'StateExtension', 0)
-    def dbl(s, inverse=False):                    # SM4_XEX: reflected bit order
-        if s.cname == 'SM4' and s.doubling is kl_update_mask:
-            return kl_update_mask_inv_gb if inverse else kl_update_mask_gb
-        return kl_update_mask_inv if inverse else s.doubling
-    keytype = property(lambda s: fget(s.mdh, 'KeyType'))
-    k = property(lambda s: CIPHERS[XEX_MACHINES[fget(s.mdh, 'Machine')]])
-    cname = property(lambda s: XEX_MACHINES[fget(s.mdh, 'Machine')])
-    widths = property(lambda s: (64, 0) if s.keytype == 1 else (s.k, s.k))
-    def invalidate(s):                            # GR36
-        s.mdh = fset(s.mdh, 'State', INVALID)
-        s.key1 = s.key2 = s.skid = s.mask = None
-    def _install(s, field, key2, importing):     # one SKID, two keys (GR76); KeyType 2: both random
-        r = install_key(s.keytype, field, importing, s.sks, lambda: (s.rng.getrandbits(s.k), s.rng.getrandbits(s.k)),
-                        (field, key2))
-        if r is None:
-            return s.invalidate()                 # <<KLE-MVR-open>>
-        (s.key1, s.key2), s.skid, kt = r
-        s.mdh = fset(s.mdh, 'KeyType', kt)
-        if s.key1 == s.key2:
-            return s.invalidate()                 # key2 = key1: configuration error (MR2)
-    def provision(s, pi):
-        s.mdh = b2v(pi[:16])
-        if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # MR1: at least one bit
-        w1, w2 = s.widths
-        c = b2v(pi[16:])
-        s._install(sl(c, w1 - 1, 0), sl(c, w1 + w2 - 1, w1) if w2 else 0, False)
-        if s.state not in ERROR_STATES:
-            s.mdh, s.mask = fset(s.mdh, 'State', READY), 0
-    def content1(s):
-        """key1 or SKID (i), key2 (ii, empty with a SKID), mask (iii)."""
-        w1, w2 = s.widths
-        first = s.skid if s.keytype == 1 else s.key1
-        return v2b(cat((s.mask, B), (s.key2 if w2 else 0, w2), (first, w1)), padded(w1 + w2 + B))
-    def import_scc(s, mdh, c1):
-        s.mdh, v = mdh, b2v(c1)
-        w1, w2 = s.widths
-        s.mask = sl(v, w1 + w2 + B - 1, w1 + w2)
-        if fget(s.mdh, 'MachinePolicy') == 0:
-            return s.invalidate()   # MR1: at least one bit
-        if s.se and not (s.state == DECRYPT and s.se in (SKIP, BACK)):
-            return s.invalidate()   # StateExtension @ State not supported
-        s._install(sl(v, w1 - 1, 0), sl(v, w1 + w2 - 1, w1) if w2 else 0, True)
-
-    def setst(s, immed, form='C', operand=0, KLLEN=128):
-        """form 'A' (no operand), 'B' (64-bit Xs), 'C' (KLLEN-bit INPUT) or 'D' (128-bit Xs)."""
-        if s.state in ERROR_STATES:               # GR33
-            return
-        pol = fget(s.mdh, 'MachinePolicy')
-        if immed == READY and form == 'A':
-            s.goto(READY)
-            s.mask = 0
-        elif immed == STEAL:                      # an operation: State unchanged, not a transition
-            if s.state != DECRYPT or form != 'A' or s.se or not pol & POL_DEC:   # MR1: gated with Decrypt
-                return s.invalidate()
-            s.mask = s.dbl()(s.mask)              # skips the mask index
-            s.mdh = fset(s.mdh, 'StateExtension', SKIP)
-        elif (immed in (ENCRYPT, DECRYPT)
-              and s.state in (READY, ENCRYPT, DECRYPT)    # also Encrypt <-> Decrypt and same State: sets the tweak
-              and pol & (POL_ENC if immed == ENCRYPT else POL_DEC)):   # MR1
-            if form not in ('A', 'B', 'C', 'D'):
-                return s.invalidate()                          # GR21: a wrong Form (GR13)
-            if form != 'C':
-                KLLEN, operand = 128, setst_operand(form, operand)   # Form A, B or D: a 128-bit INPUT
-            if KLLEN < B:
-                return s.invalidate()                     # MR8, MR6: INPUT narrower than the tweak
-            value = sl(operand, KLLEN - 1, 0)
-            s.mask = b2v(BLOCK[s.cname][0](v2b(s.key2, s.k // 8), v2b(sl(value, B - 1, 0), 16)))   # MR8
-            s.goto(immed)
-        else:
-            s.invalidate()                        # GR21
-
-    def exec(s, inp, KLLEN, klstart=0, out=None, halt_after=None):
-        """Form A kl.exec (or its Form D substitution, Vd = Vs2); returns (output operand, klstart)."""
-        out = inp if out is None else out
-        lo = 8 * klstart
-        window = (((1 << KLLEN) - 1) >> lo) << lo if lo < KLLEN else 0
-        if s.state in ERROR_STATES:
-            return out & ~window, 0               # GR35
-        if s.state not in (ENCRYPT, DECRYPT) or KLLEN % B:   # GR22, GR21; MR6 (length first: GR53)
-            s.invalidate()
-            return out & ~window, 0
-        if not fget(s.mdh, 'MachinePolicy') & (POL_ENC if s.state == ENCRYPT else POL_DEC):
-            s.invalidate()                        # MR1: issued in a State that MachinePolicy disables (GR26)
-            return out & ~window, 0
-        if lo >= KLLEN:
-            return out, 0                         # empty window: only klstart = 0
-        if lo % B:                                # not an interruption point
-            s.invalidate()
-            return out & ~window, 0
-        f, key1 = BLOCK[s.cname][0 if s.state == ENCRYPT else 1], v2b(s.key1, s.k // 8)
-        if s.se:                                  # stealing: a single block (MR13), interruption point 0
-            if lo:
-                s.invalidate()
-                return out & ~window, 0
-            res = s.mask ^ b2v(f(key1, v2b(sl(inp, B - 1, 0) ^ s.mask, 16)))
-            if s.se == SKIP:
-                s.mask = s.dbl(inverse=True)(s.mask)
-                s.mdh = fset(s.mdh, 'StateExtension', BACK)
-            else:
-                s.goto(SUCCESS)
-            return (out & ~window) | res, 0       # MR9: rest of the window cleared
-        dbl = s.dbl()
-        pos = list(range(lo, KLLEN, B))           # MR13
-        for q, i in enumerate(reversed(pos) if s.msb_first else pos):
-            if q == halt_after:
-                return out, i // 8                # precise halt
-            res = s.mask ^ b2v(f(key1, v2b(sl(inp, i + B - 1, i) ^ s.mask, 16)))
-            s.mask = dbl(s.mask)
-            out = (out & ~(MASK128 << i)) | (res << i)
-        return out, 0
-    def exec1(s, value):
-        return s.exec(value, B)[0]
-    def clone(s):
-        c = XexLocker(s.sks, s.doubling, s.rng, s.msb_first)
-        c.mdh, c.key1, c.key2, c.skid, c.mask = s.mdh, s.key1, s.key2, s.skid, s.mask
-        return c
-    def clear(s):
-        s.mdh, s.key1, s.key2, s.skid, s.mask = 0, None, None, None, None
-
-    def derive_dest(s, src, length):
-        """kl.derive into `key1 || key2` (<<KLE-derive-endpoints>>), in Ready."""
-        if s.state in ERROR_STATES:
-            return False
-        n = s.k // 4                              # dest_length: both keys
-        if s.state != READY or s.keytype == 1:   # GR40 item 2; GR76
-            s.invalidate()
-            return False
-        if length < n or not isinstance(src, Keystream) and len(src) < n:   # GR40 item 5 (a keystream is unbounded)
-            s.invalidate()
-            return False
-        src = src.take(n) if isinstance(src, Keystream) else src
-        s.key1, s.key2 = b2v(src[:n // 2]), b2v(src[n // 2:n])
-        if s.key1 == s.key2:
-            s.invalidate()                        # MR2
-            return False
-        return True
-
-class Keystream:
-    """A CTR locker (<<KLE-keystream-modes>>) as a kl.derive source (GR44): in _Operate_ it supplies the blocks
-    E(key, bswap(ctr) @ nonce), i.e. the bytes nonce || BE32(ctr), of Form C kl.exec, whole blocks, ctr advancing by each."""
-    def __init__(s, key, nonce, ctr, state=OPERATE):
-        s.key, s.nonce, s.ctr, s.state = key, nonce, ctr, state
-    def take(s, n):
-        nb = -(-n // 16)
-        out = b''.join(aes_encrypt(s.key, s.nonce + ((s.ctr + q) % (1 << 32)).to_bytes(4, 'big')) for q in range(nb))
-        s.ctr = (s.ctr + nb) % (1 << 32)
-        return out[:n]                            # the unused bytes of the last block discarded
-
-def derive(src, dst, length):
-    """kl.derive into an XEX locker; an XEX locker is no source endpoint (GR40 item 1)."""
-    if isinstance(src, XexLocker):
-        return src.invalidate() or False
-    if isinstance(src, Keystream) and src.state != OPERATE:
-        src.state = INVALID                       # GR40 item 1: a CTR locker outside _Operate_
-        return False
-    return dst.derive_dest(src, length)
-
-def new_xex(key1, key2, policy=POL_ENC | POL_DEC, cipher=None, **kw):
-    cl = XexLocker(**kw)
-    cl.provision(build_pi(XEX_OF[cipher or f"AES-{len(key1) * 8}"], 0, b2v(key1), b2v(key2), policy))
-    return cl
-
-fresh = lambda nb=16: new_xex(bytes(nb), b'\x01' * nb)    # a destination in Ready
-
-def cl_run(cl, data, per_block=False, klstart=0, halt_after=None):
-    if not data:
-        return b'', 0
-    if per_block:
-        return b''.join(v2b(cl.exec1(b2v(data[i:i + 16])), 16) for i in range(0, len(data), 16)), 0
-    out, ks = cl.exec(b2v(data), 8 * len(data), klstart, halt_after=halt_after)
-    return v2b(out, len(data)), ks
-
-def kl_xts(key1, key2, seq, data, encrypt=True, per_block=False, **kw):
-    """<<KLE-XTS-from-XEX>>, step by step; s = 0 is the plain XEX sequence."""
-    m, sb = divmod(len(data), 16)
-    s = 8 * sb
-    cl = new_xex(key1, key2, **kw)
-    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)   # the tweak is bin(i, b)
-    if s == 0:
-        return cl_run(cl, data, per_block)[0]
-    out = cl_run(cl, data[:16 * (m - 1)], per_block)[0]      # mask at index m-1
-    last, tail = b2v(data[16 * (m - 1):16 * m]), b2v(data[16 * m:])
-    if encrypt:
-        cc = cl.exec1(last)                                  # index m-1
-        c_m1 = cl.exec1(cat((sl(cc, 127, s), B - s), (tail, s)))   # CP @ P_m at index m
-        return out + v2b(c_m1, 16) + v2b(sl(cc, s - 1, 0), sb)
-    cl.setst(STEAL, 'A')                                     # skips index m-1
-    pp = cl.exec1(last)                                      # C_{m-1} at index m, back to m-1
-    p_m1 = cl.exec1(cat((sl(pp, 127, s), B - s), (tail, s)))  # CP @ C_m at index m-1
-    if cl.state != SUCCESS:
-        return None
-    return out + v2b(p_m1, 16) + v2b(sl(pp, s - 1, 0), sb)
-
-# IEEE 1619-2007 XTS-AES vectors (Botan src/tests/data/modes/xts.vec)
-_PATTERN = (bytes(range(256)) * 2).hex()
-
-# (label, key1||key2, sequence-number encoding (little-endian, 16 B), plaintext, ciphertext)
-IEEE1619 = [
-    ("vector 1 (32 B, XTS-AES-128)",
-     "0000000000000000000000000000000000000000000000000000000000000000",
-     "00000000000000000000000000000000",
-     "0000000000000000000000000000000000000000000000000000000000000000",
-     "917cf69ebd68b2ec9b9fe9a3eadda692cd43d2f59598ed858c02c2652fbf922e"),
-    ("vector 2 (32 B, XTS-AES-128)",
-     "1111111111111111111111111111111122222222222222222222222222222222",
-     "33333333330000000000000000000000",
-     "4444444444444444444444444444444444444444444444444444444444444444",
-     "c454185e6a16936e39334038acef838bfb186fff7480adc4289382ecd6d394f0"),
-    ("vector 3 (32 B, XTS-AES-128)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f022222222222222222222222222222222",
-     "33333333330000000000000000000000",
-     "4444444444444444444444444444444444444444444444444444444444444444",
-     "af85336b597afc1a900b2eb21ec949d292df4c047e0b21532186a5971a227a89"),
-    ("vector 15 (32 B, XTS-AES-128)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0",
-     "9a785634120000000000000000000000",
-     "4444444444444444444444444444444444444444444444444444444444444444",
-     "b01f86f8edc1863706fa8a4253e34f28af319de38334870f4dd1f94cbe9832f1"),
-    ("vector 4 (512 B, XTS-AES-128)",
-     "2718281828459045235360287471352631415926535897932384626433832795",
-     "00000000000000000000000000000000", _PATTERN,
-     "27a7479befa1d476489f308cd4cfa6e2a96e4bbe3208ff25287dd3819616e89c"
-     "c78cf7f5e543445f8333d8fa7f56000005279fa5d8b5e4ad40e736ddb4d35412"
-     "328063fd2aab53e5ea1e0a9f332500a5df9487d07a5c92cc512c8866c7e860ce"
-     "93fdf166a24912b422976146ae20ce846bb7dc9ba94a767aaef20c0d61ad0265"
-     "5ea92dc4c4e41a8952c651d33174be51a10c421110e6d81588ede82103a252d8"
-     "a750e8768defffed9122810aaeb99f9172af82b604dc4b8e51bcb08235a6f434"
-     "1332e4ca60482a4ba1a03b3e65008fc5da76b70bf1690db4eae29c5f1badd03c"
-     "5ccf2a55d705ddcd86d449511ceb7ec30bf12b1fa35b913f9f747a8afd1b130e"
-     "94bff94effd01a91735ca1726acd0b197c4e5b03393697e126826fb6bbde8ecc"
-     "1e08298516e2c9ed03ff3c1b7860f6de76d4cecd94c8119855ef5297ca67e9f3"
-     "e7ff72b1e99785ca0a7e7720c5b36dc6d72cac9574c8cbbc2f801e23e56fd344"
-     "b07f22154beba0f08ce8891e643ed995c94d9a69c9f1b5f499027a78572aeebd"
-     "74d20cc39881c213ee770b1010e4bea718846977ae119f7a023ab58cca0ad752"
-     "afe656bb3c17256a9f6e9bf19fdd5a38fc82bbe872c5539edb609ef4f79c203e"
-     "bb140f2e583cb2ad15b4aa5b655016a8449277dbd477ef2c8d6c017db738b18d"
-     "eb4a427d1923ce3ff262735779a418f20a282df920147beabe421ee5319d0568"),
-    ("vector 10 (512 B, XTS-AES-256)",
-     "2718281828459045235360287471352662497757247093699959574966967627"
-     "3141592653589793238462643383279502884197169399375105820974944592",
-     "ff000000000000000000000000000000", _PATTERN,
-     "1c3b3a102f770386e4836c99e370cf9bea00803f5e482357a4ae12d414a3e63b"
-     "5d31e276f8fe4a8d66b317f9ac683f44680a86ac35adfc3345befecb4bb188fd"
-     "5776926c49a3095eb108fd1098baec70aaa66999a72a82f27d848b21d4a741b0"
-     "c5cd4d5fff9dac89aeba122961d03a757123e9870f8acf1000020887891429ca"
-     "2a3e7a7d7df7b10355165c8b9a6d0a7de8b062c4500dc4cd120c0f7418dae3d0"
-     "b5781c34803fa75421c790dfe1de1834f280d7667b327f6c8cd7557e12ac3a0f"
-     "93ec05c52e0493ef31a12d3d9260f79a289d6a379bc70c50841473d1a8cc81ec"
-     "583e9645e07b8d9670655ba5bbcfecc6dc3966380ad8fecb17b6ba02469a020a"
-     "84e18e8f84252070c13e9f1f289be54fbc481457778f616015e1327a02b140f1"
-     "505eb309326d68378f8374595c849d84f4c333ec4423885143cb47bd71c5edae"
-     "9be69a2ffeceb1bec9de244fbe15992b11b77c040f12bd8f6a975a44a0f90c29"
-     "a9abc3d4d893927284c58754cce294529f8614dcd2aba991925fedc4ae74ffac"
-     "6e333b93eb4aff0479da9a410e4450e0dd7ae4c6e2910900575da401fc07059f"
-     "645e8b7e9bfdef33943054ff84011493c27b3429eaedb4ed5376441a77ed4385"
-     "1ad77f16f541dfd269d50d6a5f14fb0aab1cbb4c1550be97f7ab4066193c4caa"
-     "773dad38014bd2092fa755c824bb5e54c4f36ffda9fcea70b9c6e693e148c151"),
-    ("vector 19 (512 B, XTS-AES-128)",
-     "e0e1e2e3e4e5e6e7e8e9eaebecedeeefc0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
-     "21436587a90000000000000000000000", _PATTERN,
-     "38b45812ef43a05bd957e545907e223b954ab4aaf088303ad910eadf14b42be6"
-     "8b2461149d8c8ba85f992be970bc621f1b06573f63e867bf5875acafa04e42cc"
-     "bd7bd3c2a0fb1fff791ec5ec36c66ae4ac1e806d81fbf709dbe29e471fad3854"
-     "9c8e66f5345d7c1eb94f405d1ec785cc6f6a68f6254dd8339f9d84057e01a177"
-     "41990482999516b5611a38f41bb6478e6f173f320805dd71b1932fc333cb9ee3"
-     "9936beea9ad96fa10fb4112b901734ddad40bc1878995f8e11aee7d141a2f5d4"
-     "8b7a4e1e7f0b2c04830e69a4fd1378411c2f287edf48c6c4e5c247a19680f7fe"
-     "41cefbd49b582106e3616cbbe4dfb2344b2ae9519391f3e0fb4922254b1d6d2d"
-     "19c6d4d537b3a26f3bcc51588b32f3eca0829b6a5ac72578fb814fb43cf80d64"
-     "a233e3f997a3f02683342f2b33d25b492536b93becb2f5e1a8b82f5b88334272"
-     "9e8ae09d16938841a21a97fb543eea3bbff59f13c1a18449e398701c1ad51648"
-     "346cbc04c27bb2da3b93a1372ccae548fb53bee476f9e9c91773b1bb19828394"
-     "d55d3e1a20ed69113a860b6829ffa847224604435070221b257e8dff783615d2"
-     "cae4803a93aa4334ab482a0afac9c0aeda70b45a481df5dec5df8cc0f423c77a"
-     "5fd46cd312021d4b438862419a791be03bb4d97c0e59578542531ba466a83baf"
-     "92cefc151b5cc1611a167893819b63fb8a6b18e86de60290fa72b797b0ce59f3"),
-]
-
-# Ciphertext-stealing vectors: data unit not a multiple of 16 bytes.
-IEEE1619_CTS = [
-    ("vector 15 (17 B)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0",
-     "9a785634120000000000000000000000",
-     "000102030405060708090a0b0c0d0e0f10",
-     "6c1625db4671522d3d7599601de7ca09ed"),
-    ("vector 16 (18 B)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0",
-     "9a785634120000000000000000000000",
-     "000102030405060708090a0b0c0d0e0f1011",
-     "d069444b7a7e0cab09e24447d24deb1fedbf"),
-    ("vector 17 (19 B)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0",
-     "9a785634120000000000000000000000",
-     "000102030405060708090a0b0c0d0e0f101112",
-     "e5df1351c0544ba1350b3363cd8ef4beedbf9d"),
-    ("vector 18 (20 B)",
-     "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0",
-     "9a785634120000000000000000000000",
-     "000102030405060708090a0b0c0d0e0f10111213",
-     "9d84c813f719aa2c7be3f66171c7c5c2edbf9dac"),
-    ("vector 19 (520 B, 32 blocks + 8 B)",
-     "e0e1e2e3e4e5e6e7e8e9eaebecedeeefc0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
-     "21436587a90000000000000000000000",
-     _PATTERN + "0001020304050607",
-     "38b45812ef43a05bd957e545907e223b954ab4aaf088303ad910eadf14b42be6"
-     "8b2461149d8c8ba85f992be970bc621f1b06573f63e867bf5875acafa04e42cc"
-     "bd7bd3c2a0fb1fff791ec5ec36c66ae4ac1e806d81fbf709dbe29e471fad3854"
-     "9c8e66f5345d7c1eb94f405d1ec785cc6f6a68f6254dd8339f9d84057e01a177"
-     "41990482999516b5611a38f41bb6478e6f173f320805dd71b1932fc333cb9ee3"
-     "9936beea9ad96fa10fb4112b901734ddad40bc1878995f8e11aee7d141a2f5d4"
-     "8b7a4e1e7f0b2c04830e69a4fd1378411c2f287edf48c6c4e5c247a19680f7fe"
-     "41cefbd49b582106e3616cbbe4dfb2344b2ae9519391f3e0fb4922254b1d6d2d"
-     "19c6d4d537b3a26f3bcc51588b32f3eca0829b6a5ac72578fb814fb43cf80d64"
-     "a233e3f997a3f02683342f2b33d25b492536b93becb2f5e1a8b82f5b88334272"
-     "9e8ae09d16938841a21a97fb543eea3bbff59f13c1a18449e398701c1ad51648"
-     "346cbc04c27bb2da3b93a1372ccae548fb53bee476f9e9c91773b1bb19828394"
-     "d55d3e1a20ed69113a860b6829ffa847224604435070221b257e8dff783615d2"
-     "cae4803a93aa4334ab482a0afac9c0aeda70b45a481df5dec5df8cc0f423c77a"
-     "5fd46cd312021d4b438862419a791be03bb4d97c0e59578542531ba466a83baf"
-     "92cefc151b5cc1611a167893819b63fb37ec662bc0fc907db74a94468a55a7bc"
-     "8a6b18e86de60290"),
-]
-
-def split_keys(k):
-    kb = bytes.fromhex(k)
-    return kb[:len(kb) // 2], kb[len(kb) // 2:]
-
-VEC = [(name, *split_keys(k), int.from_bytes(bytes.fromhex(nonce), 'little'), bytes.fromhex(p),
-        bytes.fromhex(c)) for name, k, nonce, p, c in IEEE1619 + IEEE1619_CTS]
-FULL, CTS = VEC[:len(IEEE1619)], VEC[len(IEEE1619):]
-
-section("REF against IEEE 1619-2007 / SP 800-38E")
-for name, k1, k2, i, p, c in VEC:
-    check(f"{name} encrypt, decrypt", True, (ref_xts(k1, k2, i, p), ref_xts(k1, k2, i, c, False)), (c, p))
-rnd = random.Random(7)
-check("update_mask transcribed from <<KLE-XEX-XTS-modes>> == common.update_mask",
-      all(kl_update_mask(v) == update_mask(v)
-          for v in [0, 1, 1 << 127, MASK128] + [rnd.getrandbits(128) for _ in range(64)]))
-check("update_mask on the value view == IEEE 1619 5.2 on the byte view", True,
-      [v2b(kl_update_mask(b2v(bytes([q]) + bytes(15))), 16) for q in (1, 0x80, 0xff)],
-      [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
-
-section("KLE XEX locker, full blocks (tweak = bin(i, 128))")
-for name, k1, k2, i, p, c in FULL:
-    if k1 == k2:                                  # IEEE 1619 vector 1: the Machine rejects equal keys
-        check(f"{name}: key2 = key1 -> _Invalid_ at provisioning (MR2); REF checked above", True,
-              new_xex(k1, k2).state, INVALID)
-        continue
-    check(f"{name}: encrypt (one multi-block kl.exec, MR13), decrypt, one kl.exec per block", True,
-          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False), kl_xts(k1, k2, i, p, per_block=True)),
-          (c, p, c))
-
-section("<<KLE-XTS-from-XEX>> ciphertext stealing")
-for name, k1, k2, i, p, c in CTS:
-    check(f"{name}: encrypt, decrypt (kl_xex_state_steal, ends in Success)", True,
-          (kl_xts(k1, k2, i, p), kl_xts(k1, k2, i, c, False)), (c, p))
-
-def listing_xts(key1, key2, seq, buf, n, last_len, encrypt=True):
-    """<<Zkl-software.adoc#KLE-pseudocode-basic-IV-mode>> and <<Zkl-software.adoc#KLE-pseudocode-XEX-decryption>>,
-    line by line, in place (CT = PT)."""
-    cl = new_xex(key1, key2)
-    cl.setst(ENCRYPT if encrypt else DECRYPT, 'C', bin_(seq, B), 128)
-    blk = lambda j: b2v(bytes(buf[16 * j:16 * j + 16]))
-    def put(j, v, nb=16): buf[16 * j:16 * j + nb] = v2b(v, 16)[:nb]
-    m = n if last_len == 16 else n - 1
-    w = m if encrypt or last_len == 16 else m - 1
-    for j in range(w):
-        put(j, cl.exec1(blk(j)))
-    if last_len < 16:
-        s = last_len
-        if not encrypt:
-            cl.setst(STEAL, 'A')                             # skip mask index m-1
-            v0 = cl.exec1(blk(m - 1))                        # PP, at mask index m
-        else:
-            v0 = blk(m - 1)                                  # CC, at mask index m-1
-        v1 = (v0 >> 8 * s << 8 * s) | b2v(bytes(buf[16 * m:16 * m + s]))   # CP @ P_m, or CP @ C_m
-        put(m, v0, s)                                        # C_m, or P_m
-        put(m - 1, cl.exec1(v1))                             # C_{m-1}, or P_{m-1}
-    return bytes(buf), cl.state
-
-ok = True
-r = random.Random(11)
-for size in [16, 17, 31, 32, 33, 47, 48, 63, 64, 100, 255, 256]:
-    k1, k2 = r.randbytes(16), r.randbytes(16)
-    pt = r.randbytes(size)
-    n, last_len = -(-size // 16), size - 16 * (-(-size // 16) - 1)
-    ct, st1 = listing_xts(k1, k2, 5, bytearray(pt), n, last_len)
-    back, st2 = listing_xts(k1, k2, 5, bytearray(ct), n, last_len, False)
-    ok &= (ct == ref_xts(k1, k2, 5, pt) and back == pt and st1 == ENCRYPT
-           and st2 == (DECRYPT if last_len == 16 else SUCCESS))
-check("the software listings, in place, for 16..256 bytes: SP 800-38E ciphertext; decryption ends in Decrypt, "
-      "or in Success after stealing", True, ok, True)
-
-section("kl_xex_state_steal")
-r = random.Random(7)
-vs = [r.getrandbits(128) for _ in range(2000)]
-check("update_mask_inv inverts update_mask (AES128_XEX, AES256_XEX)", True,
-      all(kl_update_mask_inv(kl_update_mask(v)) == v == kl_update_mask(kl_update_mask_inv(v)) for v in vs), True)
-check("update_mask_inv inverts update_mask (SM4_XEX)", True,
-      all(kl_update_mask_inv_gb(kl_update_mask_gb(v)) == v == kl_update_mask_gb(kl_update_mask_inv_gb(v))
-          for v in vs), True)
-k1, k2, i = CTS[0][1:4]
-dec = lambda pol=POL_ENC | POL_DEC: new_xex(k1, k2, pol).setst(DECRYPT, 'C', bin_(i, B), 128)
-def dl(**kw):
-    cl = new_xex(k1, k2, **kw)
-    cl.setst(DECRYPT, 'C', bin_(i, B), 128)
-    return cl
-cl = dl()
-m0 = cl.mask
-cl.setst(STEAL, 'A')
-check("kl.setst #kl_xex_state_steal in Decrypt: State unchanged, StealSkip set, mask advanced", True,
-      (cl.state, cl.se, cl.mask), (DECRYPT, SKIP, kl_update_mask(m0)))
-o = cl.exec(0, 256)[0]
-check("... kl.exec with KLLEN = 2b: one block (MR13), rest of the window cleared (MR9), StealBack, mask back", True,
-      (cl.state, cl.se, cl.mask, o >> B), (DECRYPT, BACK, m0, 0))
-cl.exec1(0)
-check("... the next kl.exec: Success, StateExtension 0", True, (cl.state, cl.se), (SUCCESS, 0))
-cl.exec1(0)
-check("... a kl.exec in Success: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
-check("Success -> Decrypt: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.exec1(0); cl.setst(READY, 'A')
-check("Success -> Ready: Ready, StateExtension 0, mask 0", True, (cl.state, cl.se, cl.mask), (READY, 0, 0))
-cl = new_xex(k1, k2); cl.setst(STEAL, 'A')
-check("kl_xex_state_steal in Ready: Invalid", True, cl.state, INVALID)
-cl = new_xex(k1, k2); cl.setst(ENCRYPT, 'C', bin_(i, B), 128); cl.setst(STEAL, 'A')
-check("kl_xex_state_steal in Encrypt: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'C', bin_(i, B), 128)
-check("kl_xex_state_steal of Form C: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.setst(STEAL, 'A')
-check("kl_xex_state_steal with StealSkip set: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(STEAL, 'A')
-check("kl_xex_state_steal with StealBack set: Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec(0, 256, klstart=16)
-check("kl.exec with StealSkip at klstart 16: not an interruption point, Invalid", True, cl.state, INVALID)
-cl = dl(); cl.setst(STEAL, 'A'); cl.setst(DECRYPT, 'C', bin_(i, B), 128)
-check("a same-State kl.setst into Decrypt clears StealSkip and takes a new tweak", True,
-      (cl.state, cl.se, cl.mask), (DECRYPT, 0, m0))
-cl = dl(); cl.setst(STEAL, 'A'); cl.exec1(0); cl.setst(READY, 'A')
-check("Decrypt with StealBack -> Ready: StateExtension 0", True, (cl.state, cl.se), (READY, 0))
-name, k1c, k2c, ic, pc, cc = CTS[0]
-m, sb = divmod(len(cc), 16)
-src = new_xex(k1c, k2c)
-src.setst(DECRYPT, 'C', bin_(ic, B), 128)
-out = cl_run(src, cc[:16 * (m - 1)])[0]
-src.setst(STEAL, 'A')
-pp = src.exec1(b2v(cc[16 * (m - 1):16 * m]))
-dst = XexLocker()
-dst.import_scc(src.mdh, src.content1())
-s_ = 8 * sb
-p_m1 = dst.exec1(cat((sl(pp, 127, s_), B - s_), (b2v(cc[16 * m:]), s_)))
-check(f"{name}: export with StealBack, import, last kl.exec: the plaintext, Success", True,
-      (out + v2b(p_m1, 16) + v2b(sl(pp, s_ - 1, 0), sb), dst.state), (pc, SUCCESS))
-for st, se in ((ENCRYPT, SKIP), (READY, BACK), (DECRYPT, 3)):
-    src = new_xex(k1, k2)
-    dst = XexLocker()
-    dst.import_scc(fset(fset(src.mdh, 'State', st), 'StateExtension', se), src.content1())
-    check(f"import with StateExtension {se} in State {st}: not supported, Invalid", True, dst.state, INVALID)
-src = dl(); src.setst(STEAL, 'A')
-n = XexLocker()
-n.import_scc(fset(src.mdh, 'MachinePolicy', POL_ENC), src.content1())
-n.exec1(0)
-src = dl(); n = XexLocker()
-n.import_scc(fset(src.mdh, 'MachinePolicy', POL_ENC), src.content1())
-n.setst(STEAL, 'A')
-check("Decrypt narrowed to encrypt-only: kl_xex_state_steal -> Invalid (MR1)", True, n.state, INVALID)
-check("SCC with StealSkip narrowed to encrypt-only: the kl.exec -> Invalid (MR1)", True, n.state, INVALID)
-
-section("kl.clone")
-k1, k2, i = CTS[0][1:4]
-cl = new_xex(k1, k2)
-cl.setst(DECRYPT, 'C', bin_(i, B), 128)
-before, clone = cl.mask, cl.clone()
-clone.exec1(0)
-clone.exec1(0)
-check("two kl.exec on the clone: original mask unchanged, clone advanced twice", True,
-      (cl.mask, clone.mask), (before, kl_update_mask(kl_update_mask(before))))
-check("the clone is a perfect copy (MDH, keys)", True, (clone.mdh, clone.key1, clone.key2),
-      (cl.mdh, cl.key1, cl.key2))
-clone.clear()
-check("kl.clear: Unconfigured, no key material", True,
-      (clone.state, clone.key1, clone.key2, clone.mask), (UNCONFIGURED, None, None, None))
-
-section("States, transitions and general rules (vector 2)")
-name, k1, k2, i, data, c = FULL[1]
-tw = lambda cl, st=ENCRYPT, t=i: cl.setst(st, 'C', bin_(t, B), 128) or cl
-check("state constants: Ready 1, Encrypt 7, Decrypt 8; Invalid: State 0, StateExtension 2", True,
-      (READY, ENCRYPT, DECRYPT, state_fields(INVALID)), (1, 7, 8, {'State': 0, 'StateExtension': 2}))
-cl = new_xex(k1, k2)
-check("provisioning completes in Ready with mask = 0", True, (cl.state, cl.mask), (READY, 0))
-res = cl.exec(b2v(data), 256)[0]
-check("kl.exec in Ready: Invalid, window zeroed, Content cleared", True,
-      (cl.state, res, cl.key1, cl.mask), (INVALID, 0, None, None))
-cl = tw(new_xex(k1, k2))
-check("kl.setst #kl_state_encrypt: State 7, mask = enc_blk(key2, bin(i, b))", True,
-      (cl.state, cl.mask), (ENCRYPT, b2v(aes_encrypt(k2, v2b(bin_(i, B), 16)))))
-out = tw(cl, DECRYPT).exec(b2v(c), 8 * len(c))[0]
-check("Encrypt -> Decrypt with the tweak again: Decrypt, the ciphertext decrypts to vector 2", True,
-      (cl.state, out), (DECRYPT, b2v(data)))
-cl = tw(new_xex(k1, k2, POL_ENC))
-check("Encrypt -> Decrypt in an encrypt-only locker: Invalid (MR1)", True, tw(cl, DECRYPT).state, INVALID)
-check("MachinePolicy = 0 -> Invalid at provisioning (MR1)", True,
-      new_xex(k1, k2, 0).state, INVALID)
-cl = new_xex(k1, k2)
-cl2 = XexLocker()
-cl2.import_scc(fset(cl.mdh, 'MachinePolicy', 0), cl.content1())
-check("MachinePolicy = 0 -> Invalid at import (MR1)", True, cl2.state, INVALID)
-check("MachinePolicy decrypt-only: -> Encrypt gives Invalid", True,
-      tw(new_xex(k1, k2, POL_DEC)).state, INVALID)
-check("MachinePolicy decrypt-only: -> Decrypt decrypts", True,
-      cl_run(tw(new_xex(k1, k2, POL_DEC), DECRYPT), c)[0], data)
-def narrowed():                                   # SCC in Encrypt, exported after kl.restrictl to 10b (GR26)
-    src, n = tw(new_xex(k1, k2)), XexLocker()
-    n.import_scc(fset(src.mdh, 'MachinePolicy', POL_DEC), src.content1())
-    return n
-cl = narrowed()
-check("SCC in Encrypt with MachinePolicy = 10b: kl.exec -> Invalid, window zeroed (MR1)", True,
-      (cl.exec(b2v(data[:16]), 128)[0], cl.state), (0, INVALID))
-check("... a same-State kl.setst into Encrypt -> Invalid (MR1)", True, tw(narrowed()).state, INVALID)
-check("... a kl.setst naming Decrypt -> Decrypt (MR1)", True, tw(narrowed(), DECRYPT).state, DECRYPT)
-cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'C', bin_(i, B), 64)
-check("kl.setst #kl_state_encrypt with KLLEN = 64 < b -> Invalid (MR8, MR6)", True, cl.state, INVALID)
-cl, c0 = new_xex(k1, k2), new_xex(k1, k2)
-cl.setst(ENCRYPT, 'A'); c0.setst(ENCRYPT, 'C', 0, 128)
-check("Form A kl.setst #kl_state_encrypt = Form C with a 128-bit zero tweak (<<KLE-instruction-setst>>)", True,
-      (cl.state, cl.mask), (ENCRYPT, c0.mask))
-cl = tw(new_xex(k1, k2))
-cl_run(cl, data)
-cl.setst(READY, 'A')
-zeroed = (cl.state, cl.mask)
-check("Encrypt -> Ready zeroes the mask; the CC is reusable with another tweak", True,
-      (zeroed, cl_run(tw(cl), data)[0]), ((READY, 0), c))
-cl = tw(new_xex(k1, k2), t=0xdead)
-cl_run(cl, data)
-check("same-State kl.setst (GR22) re-tweaks: mask index back to 0", True,
-      (tw(cl).state, cl_run(cl, data)[0]), (ENCRYPT, c))
-cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'C', (b2v(bytes.fromhex("5a" * 16)) << B) | bin_(i, B), 256)
-check("KLLEN = 256 > b: only the b low bits of INPUT are the tweak (MR8)", True, cl_run(cl, data)[0], c)
-cl, c0 = new_xex(k1, k2), new_xex(k1, k2)
-cl.setst(ENCRYPT, 'B', i); c0.setst(ENCRYPT, 'C', bin_(i, B), B)
-check("Form B kl.setst (64-bit Xs, zero-extended) = Form C with the data unit number as the tweak", True,
-      (cl.state, cl.mask), (ENCRYPT, c0.mask))
-cl = new_xex(k1, k2)
-cl.setst(ENCRYPT, 'D', bin_(i, B))
-check("Form D kl.setst (128-bit Xs as the tweak) and Form D kl.exec through the KLIOBUF", True, cl_run(cl, data)[0], c)
-for kl_, ks, want, what in ((136, 0, (INVALID, 0, 0), "KLLEN = 136 (MR6): Invalid, window zeroed"),
-                            (256, 8, (INVALID, b2v(data[:8]), 0), "klstart = 8, no interruption point: Invalid"),
-                            (256, 32, (ENCRYPT, b2v(data), 0), "klstart = KLLEN/8: empty window, only klstart = 0"),
-                            (256, 48, (ENCRYPT, b2v(data), 0), "klstart = 48 > KLLEN/8: empty window"),
-                            (136, 17, (INVALID, b2v(data[:17]), 0), "KLLEN = 136, klstart = 17: invalid length first")):
-    cl = tw(new_xex(k1, k2))
-    res = cl.exec(b2v(data[:kl_ // 8]), kl_, ks)
-    check(what, True, (cl.state, *res), want)
-_, k41, k42, i4, p4, c4 = FULL[4]                 # vector 4: 32 blocks
-for q in (1, 7, 31):
-    cl = tw(new_xex(k41, k42), t=i4)
-    part, ks = cl_run(cl, p4, halt_after=q)
-    whole, ks2 = cl.exec(b2v(part), 8 * len(p4), klstart=ks)
-    check(f"vector 4: kl.exec halted after {q} block(s), resumed at klstart {16 * q}", True,
-          (ks, v2b(whole, len(p4)), ks2), (16 * q, c4, 0))
-m0 = b2v(aes_encrypt(k1, v2b(bin_(i, B), 16)))
-m1 = kl_update_mask(m0)
-enc1 = lambda m: b2v(aes_encrypt(k1, v2b(b2v(data[:16]) ^ m, 16))) ^ m
-check("key2 = key1 -> _Invalid_ at provisioning and after a kl.derive (MR2): the single-key XEX without "
-      "alpha, whose mask would be the raw enc_blk(key1, T), cannot arise", True,
-      (new_xex(k1, k1).state, derive(k1 + k1, fresh(), 2 * len(k1)), enc1(m0) != enc1(m1)),
-      (INVALID, False, True))
-
-section("Provisioning Input and Serialized Content")
-SKID = 0x0123456789abcdef
-SKS = {SKID: (b2v(k1), b2v(k2))}
-for cipher, kt, size in (('AES-128', 0, 48), ('AES-256', 0, 80), ('AES-128', 1, 32)):
-    kk = CIPHERS[cipher]
-    pi = build_pi(XEX_OF[cipher], kt, SKID if kt else (1 << kk) - 1, 0 if kt else (1 << kk) - 2)
-    cl = XexLocker(sks=SKS)
-    cl.provision(pi)
-    check(f"{cipher} {'SKID' if kt else 'by value'}: PI {size} B, Content1 {size} B, kl.size", True,
-          (len(pi), kl_size(b2v(pi[:16]), 0, len(pi) - 16), len(cl.content1()),
-           kl_size(cl.mdh, len(cl.content1()), 0)), (size, size, size, 32 + size))
-mask2 = ref_mul_alpha(ref_mul_alpha(aes_encrypt(k2, v2b(bin_(i, B), 16))))
-for label, kt, want in (("by value", 0, k1 + k2 + mask2), ("by SKID", 1, v2b(SKID, 8) + mask2 + bytes(8))):
-    cl = XexLocker(sks=SKS)
-    cl.provision(build_pi(XEX_OF['AES-128'], kt, SKID if kt else b2v(k1), 0 if kt else b2v(k2)))
-    head = cl_run(tw(cl), data)[0]
-    cl2 = XexLocker(sks=SKS)
-    cl2.import_scc(cl.mdh, cl.content1())
-    check(f"{label}: vector 2, Content1 = key(s) | mask after 2 blocks; import, 2 more blocks", True,
-          (head, cl.content1(), cl2.state, cl_run(cl2, data)[0]),
-          (c, want, ENCRYPT, ref_xts(k1, k2, i, data + data)[32:]))
-cl = XexLocker(sks=SKS)
-cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID + 1))
-check("unresolved SKID at provisioning -> Invalid", True, cl.state, INVALID)
-cl = XexLocker(sks=SKS)
-cl.provision(build_pi(XEX_OF['AES-128'], 2, 0))
-rand_ct = cl_run(tw(cl), data)[0]
-check("KeyType 2: two independent random keys, KeyType 0, Content1 48 B", True,
-      (cl.keytype, cl.key1 != cl.key2, len(cl.content1()),
-       rand_ct == ref_xts(v2b(cl.key1, 16), v2b(cl.key2, 16), i, data)), (0, True, 48, True))
-
-section("kl.derive: `key1 || key2` in Ready")
-src = k1 + k2 + bytes.fromhex("5a" * 16)
-for length in (32, 48):
-    cl = fresh()
-    ok = derive(src, cl, length)
-    check(f"length {length}: key1 || key2 = the first 32 bytes, then vector 2", True,
-          (ok, cl_run(tw(cl), data)[0]), (True, c))
-for what, mk, s_, n in (("length 16 < 32, no zero-fill (GR40 item 5)", None, src, 16),
-                        ("length 0 (GR40 item 5)", None, src, 0),
-                        ("24-byte source (GR40 item 5)", None, src[:24], 32),
-                        ("destination in Encrypt (GR40 item 2)", tw, src, 32),
-                        ("KeyType 1 destination (GR76, GR40 item 2)", 'skid', src, 32)):
-    if mk == 'skid':
-        cl = XexLocker(sks=SKS)
-        cl.provision(build_pi(XEX_OF['AES-128'], 1, SKID))
+# ---- independent reference: polynomial arithmetic in GF(2)[x]/(x^128+x^7+x^2+x+1)
+def to_poly(blk, gb):      # AES/IEEE: bit i of the LE integer = coefficient of x^i; GB: byte j bit (7-i) = x^(8j+i)
+    p = 0
+    for i in range(128):
+        bit = (blk[i // 8] >> (i % 8)) & 1 if not gb else (blk[i // 8] >> (7 - i % 8)) & 1
+        p |= bit << i
+    return p
+def from_poly(p, gb):
+    out = bytearray(16)
+    for i in range(128):
+        if (p >> i) & 1: out[i // 8] |= (1 << (i % 8)) if not gb else (1 << (7 - i % 8))
+    return bytes(out)
+def tweaks(cipher, k2, tw, n, gb):
+    p = to_poly(cipher_enc(cipher, k2, tw), gb); res = []
+    for _ in range(n):
+        res.append(from_poly(p, gb)); p <<= 1
+        if p >> 128: p ^= (1 << 128) | 0x87
+    return res
+def xts_ref(cipher, k1, k2, tw, data, enc, gb=False):
+    m, s = divmod(len(data), 16); T = tweaks(cipher, k2, tw, m + 1, gb)
+    E = (lambda b: cipher_enc(cipher, k1, b)) if enc else (lambda b: cipher_dec(cipher, k1, b))
+    blk = lambda x, t: xor(E(xor(x, t)), t)
+    B = [data[16 * i:16 * i + 16] for i in range(m)]; tail = data[16 * m:]
+    if s == 0: return b''.join(blk(b, T[i]) for i, b in enumerate(B))
+    out = [blk(b, T[i]) for i, b in enumerate(B[:-1])]
+    if enc:
+        cc = blk(B[-1], T[m - 1]); out += [blk(tail + cc[s:], T[m]), cc[:s]]
     else:
-        cl = fresh()
-        mk and mk(cl)
-    check(f"{what} -> Invalid", True, (derive(s_, cl, n), cl.state, cl.key1), (False, INVALID, None))
-src_l, dst = new_xex(k1, k2), fresh()
-check("an XEX locker as a kl.derive source (no source endpoint, GR40 item 1) -> only the source Invalid", True,
-      (derive(src_l, dst, 32), src_l.state, dst.state), (False, INVALID, READY))
-NONCE, C0 = bytes(range(0xF0, 0xFC)), 0xFFFFFFFF  # ctr wraps within the transfer
-ctr_blk = lambda k, q: aes_encrypt(k, NONCE + ((C0 + q) % (1 << 32)).to_bytes(4, 'big'))
-for kk in (k1, k41 + k42[:16]):
-    n = 2 * len(kk)                               # dest_length = 2 * k/8
-    ks = b''.join(ctr_blk(kk, q) for q in range(n // 16))
-    src_ks, cl = Keystream(kk, NONCE, C0), fresh(n // 2)
-    ok = derive(src_ks, cl, n + 8)
-    check(f"CTR keystream (GR44) into AES-{4 * n} `key1 || key2`, length {n + 8}: {n // 16} whole blocks, ctr "
-          f"advanced by {n // 16} (mod 2^32), then vector 2 under those keys", True,
-          (ok, src_ks.ctr, src_ks.take(16), cl_run(tw(cl), data)[0]),
-          (True, (C0 + n // 16) % (1 << 32), ctr_blk(kk, n // 16), ref_xts(ks[:n // 2], ks[n // 2:], i, data)))
-for what, mk, n in (("length 16 < 32 (GR40 item 5)", None, 16), ("destination in Encrypt (GR40 item 2)", tw, 32)):
-    src_ks, cl = Keystream(k1, NONCE, C0), fresh()
-    mk and mk(cl)
-    check(f"CTR keystream, {what} -> only the destination Invalid, ctr unchanged", True,
-          (derive(src_ks, cl, n), cl.state, src_ks.state, src_ks.ctr), (False, INVALID, OPERATE, C0))
-src_ks, cl = Keystream(k1, NONCE, C0, state=READY), fresh()
-check("CTR locker in Ready as a source (no source endpoint, GR40 item 1) -> only the source Invalid", True,
-      (derive(src_ks, cl, 32), src_ks.state, cl.state), (False, INVALID, READY))
-cl = fresh()
-check("a CMAC in Hash_Output (GR44) supplies b/8 = 16 bytes < 32 (GR40 item 5) -> destination Invalid", True,
-      (derive(ctr_blk(k1, 0), cl, 32), cl.state, cl.key1), (False, INVALID, None))
+        pp = blk(B[-1], T[m]); out += [blk(tail + pp[s:], T[m - 1]), pp[:s]]
+    return b''.join(out)
 
-section("round trip over many lengths")
-rt = True
-for length in list(range(16, 80)) + [128, 129, 255, 256]:
-    payload = bytes((7 * n + 1) & 0xFF for n in range(length))
-    for seq in (0, 1, 0x123456789A):
-        ref = ref_xts(k41, k42, seq, payload)
-        rt &= (kl_xts(k41, k42, seq, payload) == ref == kl_xts(k41, k42, seq, payload, per_block=True)
-               and kl_xts(k41, k42, seq, ref, False) == payload == ref_xts(k41, k42, seq, ref, False))
-check("KLE == REF and round trips, lengths 16..79, 128, 129, 255, 256", rt)
+# ---- XTS software on top of the Machine (spec recipe, KLE-XTS-from-XEX)
+def xts_locker(L, tweak, data, enc, steal_check=None):
+    m, s = divmod(len(data), 16); L.setst(S_ENC if enc else S_DEC, 'C', vec=tweak)
+    blocks = [data[16 * i:16 * i + 16] for i in range(m)]
+    run = lambda bl: v2b(L.exec(b2v(b''.join(bl)), 128 * len(bl))[0], 16 * len(bl))
+    if s == 0: return run(blocks)
+    head = run(blocks[:-1]) if m > 1 else b''
+    if enc:
+        cc = run([blocks[-1]]); cm, cp = cc[:s], cc[s:]
+        return head + run([data[16 * m:] + cp]) + cm
+    L.setst(66)
+    pp = run([blocks[-1]]); pm, cp = pp[:s], pp[s:]
+    return head + run([data[16 * m:] + cp]) + pm
 
-check("kl.setst #48-#53, which the Machine does not define -> Invalid (<<KLE-instruction-setst>>)", True,
-      [(raises(c.setst, i), c.state) for i in range(48, 54) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 6)
-check("kl.setst #kl_state_success, #kl_state_failure -> Invalid (GR25, GR24, GR21)", True,
-      [(raises(c.setst, i), c.state) for i in (54, 55) for c in [new_xex(k1, k2)]], [(False, INVALID)] * 2)
+section('Reference algorithm against IEEE 1619-2007 App. B vectors')
+V1 = H('917cf69ebd68b2ec9b9fe9a3eadda692cd43d2f59598ed858c02c2652fbf922e')
+V2 = (H('11' * 16 + '22' * 16), H('3333333333' + '00' * 11), bytes([0x44]) * 32,
+      H('c454185e6a16936e39334038acef838bfb186fff7480adc4289382ecd6d394f0'))
+V3 = (H('fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0' + '22' * 16), V2[1], V2[2],
+      H('af85336b597afc1a900b2eb21ec949d292df4c047e0b21532186a5971a227a89'))
+check('vector 1 (key1 = key2 = 0, tweak 0, 32 zero bytes)', xts_ref('AES128', bytes(16), bytes(16), bytes(16), bytes(32), True) == V1)
+for i, (k, tw, pt, ct) in enumerate((V2, V3), 2):
+    check('vector %d encrypt (reference)' % i, xts_ref('AES128', k[:16], k[16:], tw, pt, True) == ct)
+    check('vector %d decrypt (reference)' % i, xts_ref('AES128', k[:16], k[16:], tw, ct, False) == pt)
 
-section("negative controls")
-control("OCB3 big-endian `double` for update_mask",
-        all(kl_xts(*v[1:5], doubling=double_ocb) != v[5] for v in FULL[:4] + CTS[:4]))
-control("multi-block kl.exec, most significant block first (2-block units)",
-        all(kl_xts(*v[1:5], msb_first=True) != v[5] for v in FULL[:4]))
-section('SM4_XEX (<<KLE-XEX-XTS-modes>>): the XTS mode of GB/T 17964-2021')
-# OpenSSL 3.2.0 test/recipes/30-test_evp_data/evpciph_sm4.txt: one key, IV and plaintext, two standards
-SM4K = bytes.fromhex('2B7E151628AED2A6ABF7158809CF4F3C000102030405060708090A0B0C0D0E0F')
-SM4IV = bytes.fromhex('F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF')
-SM4P = bytes.fromhex('6BC1BEE22E409F96E93D7E117393172AAE2D8A571E03AC9C9EB76FAC45AF8E5130C81C46A35CE411E5FBC1191A0A52EF'
-                     'F69F2445DF4F9B17')
-SM4C_GB = bytes.fromhex('E9538251C71D7B80BBE4483FEF497BD12C5C581BD6242FC51E08964FB4F60FDB0BA42F63499279213D318D2C11F6886E'
-                        '903BE7F93A1B3479')
-SM4C_IEEE = bytes.fromhex('E9538251C71D7B80BBE4483FEF497BD1B3DB1A3E60408C575D63FF7DB39F83260869F9E2585FEC9F0B863BF8FD784B86'
-                          '27D16C0DB6D2CFC7')
-seq_iv = int.from_bytes(SM4IV, 'little')              # INPUT holds the tweak bytes in order (byte j = V[8j+7:8j])
-c = kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4P, cipher='SM4')
-check('SM4_XEX, 3.5 blocks with ciphertext stealing: the GB/T 17964-2021 vector (XTSStandard = GB)', True, c.hex(),
-      SM4C_GB.hex())
-check('SM4_XEX decrypts it back', True, kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4C_GB, encrypt=False, cipher='SM4'),
-      SM4P)
-control('SM4_XEX is not the IEEE 1619 construction with SM4 (XTSStandard = IEEE differs from block 1 on)',
-        c != SM4C_IEEE and c[:16] == SM4C_IEEE[:16])
-control('the AES update_mask applied to SM4 gives the IEEE vector instead',
-        kl_xts(SM4K[:16], SM4K[16:], seq_iv, SM4P, cipher='SM4', doubling=lambda v: update_mask(v)) == SM4C_IEEE)
+section('update_mask transcription (spec Machine-Specific Functions) against polynomial arithmetic')
+rnd = random.Random(7); bad = {False: 0, True: 0}; inv = {False: 0, True: 0}
+cases = [0, 1, 1 << 127, MASK128, 0x87, 1 << 7, 1 << 8, 1 << 120, 0x80 << 120 | 1]
+cases += [rnd.getrandbits(128) for _ in range(400)]
+for gb in (False, True):
+    for v in cases:
+        want = b2v(from_poly((to_poly(v2b(v, 16), gb) << 1) ^ (((to_poly(v2b(v, 16), gb) >> 127) & 1) * ((1 << 128) | 0x87)), gb))
+        bad[gb] += update_mask(v, gb) != want; inv[gb] += update_mask_inv(update_mask(v, gb), gb) != v or update_mask(update_mask_inv(v, gb), gb) != v
+check('update_mask (AES, IEEE 1619 5.2) equals multiplication by x, V[i] = coefficient of x^i', bad[False] == 0)
+check('update_mask (SM4_XEX, GB/T 17964: byte 0 bit 7 = x^0) equals multiplication by x', bad[True] == 0)
+check('update_mask_inv inverts update_mask (AES and SM4_XEX, carry cases included)', inv[False] == 0 and inv[True] == 0)
+check('SM4_XEX update_mask: carry out of byte 15 bit 0 xors 0xE1 into byte 0', update_mask(1 << 120, True) == 0xE1)
+check('SM4_XEX update_mask: byte 0 bit 0 moves to byte 1 bit 7', update_mask(1, True) == 1 << 15)
+check('AES update_mask: carry xors 0x87', update_mask(1 << 127) == 0x87)
+control('AES and SM4 update_mask differ (wrong variant is detected)', update_mask(0x1234, False) != update_mask(0x1234, True))
+control('OCB3 big-endian double instead of update_mask is detected', double(0x1234 | 1 << 127) != update_mask(0x1234 | 1 << 127))
 
+section('SM4_XEX: GB/T 17964-2021 cross-check (OpenSSL 3.6.2 SM4-XTS, xts_standard=GB, embedded vectors)')
+SK = bytes(range(32)); ST = bytes(range(16, 32)); SD = bytes(range(100, 200))
+GB = {48: 'dac447dce6c6ec13d334f662a24d9fa09bb19b60e5b8b929c5108e6a49270f8bbbf89ddc252af3f9f8557559d960a53f',
+      17: '483440d347c850b350d9c2fdf7f3f32fda', 31: '6942750e238dbc3b57f4f56d0103a109dac447dce6c6ec13d334f662a24d9f',
+      40: 'dac447dce6c6ec13d334f662a24d9fa0cbe121d6f7769080cacea87d470e056b9bb19b60e5b8b929',
+      47: 'dac447dce6c6ec13d334f662a24d9fa08f1e49e4f158d2aadf8ee5c1474744a69bb19b60e5b8b929c5108e6a49270f',
+      64: 'dac447dce6c6ec13d334f662a24d9fa09bb19b60e5b8b929c5108e6a49270f8bbbf89ddc252af3f9f8557559d960a53f00d20f54e1bdf0b67181897478c3bc87'}
+for n, c in GB.items():
+    c = H(c); pt = SD[:n]
+    check('SM4_XEX/GB %d bytes: reference (GB mask) equals GB/T 17964 vector' % n, xts_ref('SM4', SK[:16], SK[16:], ST, pt, True, True) == c)
+    check('SM4_XEX/GB %d bytes: locker encrypt' % n, xts_locker(lk(3, SK[:16], SK[16:]), b2v(ST), pt, True) == c)
+    check('SM4_XEX/GB %d bytes: locker decrypt' % n, xts_locker(lk(3, SK[:16], SK[16:]), b2v(ST), c, False) == pt)
+control('IEEE (AES-style) mask update gives a different SM4 ciphertext', xts_ref('SM4', SK[:16], SK[16:], ST, SD[:48], True, False) != H(GB[48]))
+check('SM4_XEX first block equals the IEEE one (block 0 uses the unmultiplied mask)', xts_ref('SM4', SK[:16], SK[16:], ST, SD[:16], True, False) == H(GB[48])[:16])
+L = lk(3, SK[:16], SK[16:]); L.setst(S_ENC, 'C', vec=b2v(ST))
+check('SM4_XEX mask after Encrypt setst = SM4_enc(key2, tweak) as a byte string', v2b(L.mask, 16) == sm4_enc(SK[16:], ST))
+
+section('XEX Machine, full blocks: IEEE 1619 vectors 2, 3 through the locker')
+for i, (k, tw, pt, ct) in enumerate((V2, V3), 2):
+    L = lk(0, k[:16], k[16:])
+    check('AES128_XEX vector %d encrypt, tweak = Form C INPUT' % i, v2b(L.exec(b2v(pt), 256)[0] if L.setst(S_ENC, 'C', vec=b2v(tw)) is None else 0, 32) == ct)
+    L = lk(0, k[:16], k[16:]); L.setst(S_DEC, 'C', vec=b2v(tw)); check('AES128_XEX vector %d decrypt' % i, v2b(L.exec(b2v(ct), 256)[0], 32) == pt)
+    L = lk(0, k[:16], k[16:]); L.setst(S_ENC, 'B', xs=b2v(tw)); check('Form B tweak (Xs zero-extended) gives the same result', v2b(L.exec(b2v(pt), 256)[0], 32) == ct)
+check('vector 1 (key2 = key1): Invalid Metadata, Error State Invalid', lk(0, bytes(16), bytes(16)).err == SE_INVALID)
+L = lk(0, bytes(16), bytes(16)); L.setst(S_ENC); check('... the Error-State locker stays inert', L.exec(0, 256) == (0, 0) and L.err == SE_INVALID)
+L = lk(0, V2[0][:16], V2[0][16:]); L.setst(S_ENC, 'C', vec=b2v(V2[1])); o1 = L.exec(b2v(V2[2]), 128)[0]
+check('mask evolves per block: two kl.exec of one block equal one of two', o1 | L.exec(b2v(V2[2][16:]), 128)[0] << 128 == b2v(V2[3]))
+Lr = lk(0, V2[0][:16], V2[0][16:]); Lr.setst(S_ENC, 'C', vec=b2v(V2[1]))
+control('reversed block order (MR13) is detected', Lr.exec(b2v(V2[2][:16] + bytes(range(16))), 256)[0] != b2v(V2[3][:16] + V2[3][16:]) and
+        v2b(Lr.exec(0, 0 + 128)[0], 16) != b'')
+
+section('XTS-AES-256 with the IEEE 1619 vector 15-19 keys/tweak/data: embedded OpenSSL vectors, ciphertext stealing')
+K1 = H('2718281828459045235360287471352662497757247093699959574966967627'); K2 = H('3141592653589793238462643383279502884197169399375105820974944592')
+TW = bytes([0xff]) + bytes(15); D = bytes(i % 256 for i in range(512))
+AES = {17: '990b3d5708499ecacac51584606f5d761c', 18: '22198698e5b15908a03bb6311e2af2b01c3b', 19: '7b3392c4b71bc01bf8a7d3d40120a6621c3b3a',
+       20: 'bf4c6230fd0b520912383064f121273e1c3b3a10', 31: 'b7a469d9a0a8237d178ad4323b2746321c3b3a102f770386e4836c99e370cf',
+       33: '1c3b3a102f770386e4836c99e370cf9b9bee4cdc56e3a896a412a76f007c85f9ea',
+       47: '1c3b3a102f770386e4836c99e370cf9b9cd1c0d093eb321fe784b6fb478d1602ea00803f5e482357a4ae12d414a3e6',
+       48: '1c3b3a102f770386e4836c99e370cf9bea00803f5e482357a4ae12d414a3e63b5d31e276f8fe4a8d66b317f9ac683f44'}
+for n, c in AES.items():
+    c = H(c); pt = D[:n]
+    check('XTS-AES-256 (IEEE keys 15-19): %d bytes, reference' % n, xts_ref('AES256', K1, K2, TW, pt, True) == c)
+    check('%d bytes encrypt via Machine (steal recipe)' % n, xts_locker(lk(2, K1, K2), b2v(TW), pt, True) == c)
+    check('%d bytes decrypt via Machine (kl_xex_state_steal)' % n, xts_locker(lk(2, K1, K2), b2v(TW), c, False) == pt)
+c520 = xts_locker(lk(2, K1, K2), b2v(TW), (D + D)[:520], True)
+check('520 bytes (32 blocks + 8): SHA-256 of ciphertext', hashlib.sha256(c520).hexdigest() == 'f4e58dddc53736fe76523a88ff6699028e112193828008e219f4844776b828b9')
+K3 = bytes(range(64)); a31 = H('012603e6a9a883164c5b6c445dc2f73775de381013f2a09b6655cf5e407ca7'); a33 = H('75de381013f2a09b6655cf5e407ca71cc797b85292be938d811051e250dd876dcb')
+check('AES256 key, 31 and 33 bytes: encrypt', xts_locker(lk(2, K3[:32], K3[32:]), b2v(TW), D[:31], True) == a31 and xts_locker(lk(2, K3[:32], K3[32:]), b2v(TW), D[:33], True) == a33)
+
+section('Round trips and reference agreement for all lengths (AES128, AES256, SM4)')
+bad = 0; cnt = 0
+for t, (a, kl_) in ((0, ('AES128', 16)), (2, ('AES256', 32)), (3, ('SM4', 16))):
+    for n in list(range(16, 80)) + [128, 129, 255, 256]:
+        k1 = bytes(rnd.getrandbits(8) for _ in range(kl_)); k2 = bytes(rnd.getrandbits(8) for _ in range(kl_)); d = bytes(rnd.getrandbits(8) for _ in range(n))
+        tw = bytes(rnd.getrandbits(8) for _ in range(16)); gb = t == 3
+        c = xts_locker(lk(t, k1, k2), b2v(tw), d, True); cnt += 1
+        bad += c != xts_ref(a, k1, k2, tw, d, True, gb) or xts_locker(lk(t, k1, k2), b2v(tw), c, False) != d or len(c) != n
+check('%d (cipher, length) pairs: locker = reference, decrypt inverts' % cnt, bad == 0)
+
+section('StealSkip / StealBack, States and transitions')
+k1, k2 = V2[0][:16], V2[0][16:]; tw = b2v(V2[1]); P = bytes(range(32))
+def dec_locker():
+    L = lk(0, k1, k2); L.setst(S_DEC, 'C', vec=tw); return L
+L = dec_locker(); L.setst(66)
+check('kl_xex_state_steal in Decrypt: State unchanged, StealSkip (StateExtension bit 0) set', L.state == S_DEC and mdh_get(L.mdh(), 'StateExtension') == 1 and not L.inert())
+L.setst(66); check('second steal while StealSkip set: Invalid', L.err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=tw); L.setst(66); check('kl_xex_state_steal in Encrypt: Invalid', L.err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(66); check('kl_xex_state_steal in Ready: Invalid', L.err == SE_INVALID)
+L = dec_locker(); L.setst(66, 'B', xs=1); check('kl_xex_state_steal needs Form A', L.err == SE_INVALID)
+L = dec_locker(); L.setst(66); L.exec(b2v(P), 256)
+check('StealSkip: kl.exec with KLLEN 256 processes exactly one block; StealBack set, StealSkip clear',
+      mdh_get(L.mdh(), 'StateExtension') == 2 and L.state == S_DEC)
+o = L.exec(b2v(P), 128)[0]; check('StealBack: next kl.exec leaves State Success (54)', L.state == S_SUCCESS and mdh_get(L.mdh(), 'State') == 54)
+L.exec(b2v(P), 128); check('kl.exec in Success: Invalid', L.err == SE_INVALID)
+L = dec_locker(); L.setst(66); L.exec(b2v(P), 256); L.exec(b2v(P), 128); L.setst(S_READY)
+check('Success -> Ready: mask 0, StealSkip/StealBack clear', L.state == S_READY and L.mask == 0 and L.steal == 0)
+L = dec_locker(); L.setst(66); o, ks = L.exec(b2v(P), 256, 0); L = dec_locker(); L.setst(66); L.exec(b2v(P), 256, 16)
+check('StealSkip: klstart 16 (not the single interruption point 0) is Invalid', L.err == SE_INVALID)
+L = dec_locker(); L.setst(66); o, ks = L.exec(b2v(P), 256, 0, stop=1)
+check('StealSkip: one-block kl.exec completes in a single step (klstart 0)', ks == 0)
+L = dec_locker(); L.setst(66); L.setst(S_DEC, 'C', vec=tw)
+check('same-State setst after steal clears StealSkip and re-tweaks', L.steal == 0 and not L.inert())
+L = dec_locker(); L.setst(66); L.exec(b2v(P), 128); L.setst(S_DEC, 'C', vec=tw); check('... also clears StealBack', L.steal == 0 and L.state == S_DEC)
+L = dec_locker(); L.setst(66); mdh, c1 = L.export(); L2 = Locker.import_(mdh, c1)
+check('export/import with StealSkip keeps it', L2.steal == 1 and L2.mask == L.mask)
+check('import with StealSkip and StealBack both set: Invalid', Locker.import_(mdh_put(mdh, 'StateExtension', 3), c1).err == SE_INVALID)
+check('import with other StateExtension (4): Invalid (unsupported)', Locker.import_(mdh_put(mdh, 'StateExtension', 4), c1).err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=tw); mdh, c1 = L.export()
+check('import of StealSkip in State Encrypt: Invalid', Locker.import_(mdh_put(mdh, 'StateExtension', 1), c1).err == SE_INVALID)
+check('import with key2 = key1: Invalid', Locker.import_(mdh, c1[:16] + c1[:16] + c1[32:]).err == SE_INVALID)
+L = lk(0, k1, k2, 2); L.setst(S_DEC, 'C', vec=tw); mdh, c1 = L.export(); L = Locker.import_(mdh_put(mdh, 'MachinePolicy', 1), c1); L.setst(66)
+check('Decrypt SCC narrowed to encrypt-only: kl_xex_state_steal -> Invalid (MR1)', L.err == SE_INVALID)
+L = dec_locker(); L.setst(66); mdh, c1 = L.export(); L = Locker.import_(mdh_put(mdh, 'MachinePolicy', 1), c1); L.exec(b2v(P), 256)
+check('SCC with StealSkip narrowed to encrypt-only: kl.exec -> Invalid (MR1)', L.err == SE_INVALID)
+# cross transitions, AES and SM4
+for t, kk1, kk2, gb in ((0, k1, k2, False), (2, K1, K2, False), (3, SK[:16], SK[16:], True)):
+    n = TYPES[t]; Pd = bytes(range(48)); L = lk(t, kk1, kk2); L.setst(S_DEC, 'C', vec=5); L.setst(66); L.exec(b2v(Pd), 128)
+    check(n + ': Decrypt with StealBack -> Encrypt: admitted, StealSkip/StealBack cleared', (L.setst(S_ENC, 'C', vec=9), L.state == S_ENC and L.steal == 0 and not L.inert())[1])
+    c = v2b(L.exec(b2v(Pd), 384)[0], 48)
+    check(n + ': ... Encrypt after cross transition uses the new tweak (reference)', c == xts_ref(n, kk1, kk2, (9).to_bytes(16, 'little'), Pd, True, gb))
+    L.setst(S_DEC, 'C', vec=9); check(n + ': Encrypt -> Decrypt, then decrypts what was encrypted', v2b(L.exec(b2v(c), 384)[0], 48) == Pd)
+    L = lk(t, kk1, kk2); L.setst(S_DEC, 'C', vec=5); L.setst(66); L.setst(S_ENC, 'C', vec=5)
+    check(n + ': Decrypt with StealSkip -> Encrypt clears StealSkip', L.steal == 0 and L.state == S_ENC and not L.inert())
+    L.exec(0, 128); L.setst(S_DEC); check(n + ': Encrypt -> Decrypt Form A: tweak 0, mask reset', v2b(L.mask, 16) == cipher_enc(n, kk2, bytes(16)))
+    L = lk(t, kk1, kk2, 1); L.setst(S_ENC); L.setst(S_DEC); check(n + ': policy gate: encrypt-only Encrypt -> Decrypt Invalid', L.err == SE_INVALID)
+    L = lk(t, kk1, kk2, 2); L.setst(S_DEC); L.setst(S_ENC); check(n + ': policy gate: decrypt-only Decrypt -> Encrypt Invalid', L.err == SE_INVALID)
+    L = lk(t, kk1, kk2); L.setst(S_DEC, 'C', vec=5); L.setst(66); L.exec(b2v(Pd), 128); L.exec(b2v(Pd), 128); L.setst(S_ENC)
+    check(n + ': Success -> Encrypt/Decrypt still Invalid (only -> Ready listed)', L.err == SE_INVALID)
+# transitions
+L = lk(0, k1, k2); check('provisioned: Ready, mask 0', L.state == S_READY and L.mask == 0)
+L.setst(S_ENC, 'C', vec=7); check('Encrypt: mask = enc_blk(key2, tweak) with tweak bin(7,128) LE', v2b(L.mask, 16) == aes_enc(k2, (7).to_bytes(16, 'little')))
+m0 = L.mask; L.setst(S_ENC, 'C', vec=7); check('same-State setst re-tweaks (mask restored)', L.mask == m0 and L.state == S_ENC)
+L.exec(0, 128); L.setst(S_ENC); check('Form A tweak = 0: mask = enc_blk(key2, 0)', v2b(L.mask, 16) == aes_enc(k2, bytes(16)))
+L.setst(S_DEC, 'C', vec=11)
+check('Encrypt -> Decrypt directly (spec table): admitted, new tweak, mask recomputed', L.state == S_DEC and not L.inert() and v2b(L.mask, 16) == aes_enc(k2, (11).to_bytes(16, 'little')))
+L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=7); L.setst(S_READY); check('-> Ready: mask 0', L.mask == 0 and L.state == S_READY)
+L.setst(S_DEC); check('Ready -> Decrypt (Form A)', L.state == S_DEC)
+L = lk(0, k1, k2); L.exec(0, 128); check('kl.exec in Ready: Invalid', L.err == SE_INVALID)
+for imm in (S_OPERATE, S_AUX, 54, 55, 50):
+    L = lk(0, k1, k2); L.setst(imm); check('kl.setst immediate %d: Invalid' % imm, L.err == SE_INVALID)
+for pol, e, d in ((1, 1, 0), (2, 0, 1), (3, 1, 1)):
+    a = lk(0, k1, k2, pol); a.setst(S_ENC); b = lk(0, k1, k2, pol); b.setst(S_DEC)
+    check('MachinePolicy %d: encrypt %s, decrypt %s' % (pol, bool(e), bool(d)), (not a.inert(), not b.inert()) == (bool(e), bool(d)))
+check('MachinePolicy 0: Invalid', lk(0, k1, k2, 0).err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(S_ENC); L.exec(0, 136); check('MR6: KLLEN 136 Invalid', L.err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(S_ENC); L.exec(0, 256, 8); check('klstart 8 Invalid', L.err == SE_INVALID)
+L = lk(0, k1, k2); L.setst(S_ENC); check('klstart >= KLLEN/8: empty window', L.exec(0, 256, 32) == (0, 0) and not L.inert())
+for stop in (1, 3, 7):
+    L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=9); d = bytes(i * 7 % 256 for i in range(16 * 31)); acc = 0; ks = 0
+    while True:
+        o, ks = L.exec(b2v(d), 16 * 8 * 31, ks, stop=stop); acc |= o
+        if ks == 0: break
+    check('31 blocks, halting every %d blocks, resume: result equals reference' % stop, v2b(acc, len(d)) == xts_ref('AES128', k1, k2, (9).to_bytes(16, 'little'), d, True))
+
+section('PI and Content sizes, kl.derive of key1 || key2')
+check('AES128_XEX PI 48, AES256_XEX PI 80, by SKID PI 32', pi_size(machine(0, 6)) == 48 and pi_size(machine(2, 6)) == 80 and pi_size(machine(0, 6), 1) == 32)
+check('AES128_XEX Content1 = key1|key2|mask = 48, SCC 80; AES256 80/112', len(lk(0, k1, k2).content1()) == 48 and len(lk(2, K1, K2).content1()) == 80)
+KS = bytes(range(1, 97))
+for t, need in ((0, 32), (2, 64), (3, 32)):
+    L = lk(t, bytes(need // 2), bytes([1]) * (need // 2)); ok = L.load_key(KS, 96)
+    check(TYPES[t] + '_XEX derive length 96: key1||key2 = first %d bytes' % need, ok and L.key == KS[:need // 2] and L.key2 == KS[need // 2:need])
+    L = lk(t, bytes(need // 2), bytes([1]) * (need // 2)); check(TYPES[t] + '_XEX derive length %d < %d: Invalid' % (need - 1, need), not L.load_key(KS, need - 1) and L.err == SE_INVALID)
+    L = lk(t, bytes(need // 2), bytes([1]) * (need // 2)); check(TYPES[t] + '_XEX derive with key1 = key2 in the source: Invalid', not L.load_key(bytes(need), 96))
+L = lk(0, k1, k2); L.setst(S_ENC); check('derive into key in Encrypt: Invalid', not L.load_key(KS, 96))
+L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=3); src = Locker(machine(0, 4), 3, bytes(16)); src.setst(S_OPERATE)
+L = lk(0, k1, k2); L.setst(S_ENC, 'C', vec=3); L.setst(S_READY); L.load_key(src.derive_out(32), 32)
+check('CTR keystream into XEX keys (32 bytes = 2 blocks consumed); ctr 2', L.key + L.key2 == b''.join(cipher_enc('AES128', bytes(16), bytes(12) + i.to_bytes(4, 'big')) for i in range(2)) and src.ctr == 2)
+L = lk(0, k1, k2); L.load_key(KS, 96); L.setst(S_ENC, 'C', vec=0)
+check('derived keys work: Encrypt result equals reference with those keys', v2b(L.exec(b2v(P), 256)[0], 32) == xts_ref('AES128', KS[:16], KS[16:32], bytes(16), P, True))
 done()

@@ -41,7 +41,7 @@ Split a paragraph by what happens when, one `**` bullet per moment, with numbere
 - Never write an instruction's operand syntax (`kl.setst Kn, …`, `kl.exec OUTPUT, Kn, INPUT`) in a Machine. Name the Form and describe the effect on the operands: "`kl.exec` instructions are expected to be of Form A, decrypting `INPUT` into `OUTPUT` as follows:"; a Form D `kl.exec` is just "a Form D `kl.exec`".
 - Use `{le}`, `{ge}`, `{times}` and `<-` (inline). In listings use `←` and keep lines ≤ 80 characters.
 - A NOTE, paragraph or open block placed after a step list *inside a list item* needs a `+` continuation line before it. Otherwise the list ends, and the next `**` bullet starts a new list.
-- After editing, render and check: build `src/Zkl.adoc` with `--require=../scripts/cross-page-xrefs.rb` (no warnings), run `pypy3.10 scripts/check-cross-page-refs.py`, and, for a moved block, check in the HTML that it renders as `admonitionblock` and that no list closes early.
+- After editing, render and check: build `src/Zkl.adoc` with `--require=../scripts/cross-page-xrefs.rb` (no warnings), run `pypy3.12 scripts/check-cross-page-refs.py`, and, for a moved block, check in the HTML that it renders as `admonitionblock` and that no list closes early.
 
 ## Process
 
