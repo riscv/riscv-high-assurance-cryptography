@@ -127,9 +127,9 @@ class KLE2(KLE):
             if k is not None: s.siv = s.impqual = s.siv2 = 0       # <<KLE-GR-exception-state-change>> zeroization
         return KLE.mgmt(s, kd, immed, r, form, md)
     def usage_gate(s, k):
-        if s.debug:      # <<KLE-UsagePolicy>>: Debug needs bit 4 and, outside authenticated Debug, the bit of the mode
+        if s.debug:      # <<KLE-UsagePolicy>>: Debug needs bit 4 and, outside authenticated Debug, the bits of the debug access privilege (s.mode) and of every mode below it
             up = mdh_get(s.md(k), 'UsagePolicy')
-            if not (up >> 4 & 1) or not (s.debug_auth or up >> s.mode & 1): raise Trap('privilege_violation')
+            if not (up >> 4 & 1) or not (s.debug_auth or up & ((2 << s.mode) - 1) == (2 << s.mode) - 1): raise Trap('privilege_violation')
             return True       # shortcut: ExpirationDate is not evaluated under Debug in this model
         return KLE.usage_gate(s, k)
     def _complete(s, k, ml):
@@ -176,7 +176,7 @@ class KLE2(KLE):
         s._pre1()
         if form != 'A' and s.kleemu:
             m = md & (mask(64) if form == 'B' else mask(128))
-            early = mdh_get(m, 'Version') or mdh_get(m, 'SCProtection') == 3 or mdh_get(m, 'KeyType') == 3
+            early = mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'SCProtection') == 3 or mdh_get(m, 'KeyType') == 3
             if not early and mdh_get(m, 'Machine') not in CONTENT: raise IllegalInstruction('kleemulation')
         return KLE.avail(s, kd, r, form, md)
     # ---- Locker checks of mv / load / store (<<KLE-mv-locker-checks>>)

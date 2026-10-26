@@ -208,7 +208,7 @@ for nm, md, w in (('Form C PI', mk(), 32), ('Form B PI', mk(), 32), ('Form C Val
 check('kl.size Form B ignores bits above 63 (reserved bit 116)', KLE().size(form='B', md=mk() | 1 << 120) == 32 and KLE().size(form='C', md=mk() | 1 << 120) == 0)
 check('kl.size ignores UsagePolicy/Locality/KeyType 2 as 0', KLE().size(form='C', md=mk(KeyType=0)) == KLE().size(form='C', md=mk(mach=M_KEY, KeyType=2)))
 e = KLE(); prov(e, 1); check('kl.avail A: 1 for implemented Machine, 0 Unconfigured, 0 KLNL 32', e.avail(1) == 1 and e.avail(2) == 0 and (setattr(e, 'nl', 32), e.avail(0, r=1))[1] == 0)
-check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version != 0; reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(SCProtection=3)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
+check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(SCProtection=3)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
 check('kl.avail examines no field but Machine/Version/reserved: State 61 still 1', KLE().avail(form='C', md=mk(State=61)) == 1)
 check('kl.avail B ignores bits above 63', KLE().avail(form='B', md=mk() | 1 << 120) == 1)
 
@@ -537,7 +537,8 @@ e = E2(); e.csk_hardwired = True; e.reset(); check('a hardwired CSK survives the
 section('Debug UsagePolicy, check order, RBG failure')
 def dbg(up, auth=False, mode=2):
     e = E2(mode=mode); prov(e, 1, up=up); e.debug = True; e.debug_auth = auth; return e
-check('Debug: UsagePolicy bit 4 and the bit of the mode are both needed', trap(dbg(0x14).setst, 1, 2) is None and trap(dbg(0x10).setst, 1, 2) == 'privilege_violation' and trap(dbg(0x04).setst, 1, 2) == 'privilege_violation')
+check('Debug: UsagePolicy bit 4 and the bits of the debug access privilege (S, bit 2) and of every mode below it are all needed', trap(dbg(0x17).setst, 1, 2) is None and all(trap(dbg(up).setst, 1, 2) == 'privilege_violation' for up in (0x07, 0x14, 0x13, 0x15, 0x10, 0x04)))
+check('Debug: a debug access privilege of VS needs bits 0 and 1 only, one of U needs bit 0', trap(dbg(0x13, mode=1).setst, 1, 2) is None and trap(dbg(0x12, mode=1).setst, 1, 2) == 'privilege_violation' and trap(dbg(0x11, mode=0).setst, 1, 2) is None and trap(dbg(0x10, mode=0).setst, 1, 2) == 'privilege_violation')
 check('Debug: bit 4 alone suffices in authenticated Debug', trap(dbg(0x10, True).setst, 1, 2) is None and trap(dbg(0x04, True).setst, 1, 2) == 'privilege_violation')
 check('UsagePolicy zero admits no mode, including Debug', all(trap(dbg(0, a).setst, 1, 2) == 'privilege_violation' for a in (False, True)))
 e = E2(csk=False)

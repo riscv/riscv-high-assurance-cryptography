@@ -140,7 +140,7 @@ class KLE:
             if k is None or is_unconfigured(s.md(k)): return 0
             return int(mdh_get(s.md(k), 'Machine') in CONTENT)
         if form == 'B': md &= mask(64)
-        if mdh_get(md, 'Version') or mdh_get(md, 'SCProtection') == 3 or mdh_get(md, 'KeyType') == 3: return 0
+        if mdh_get(md, 'Version') in (1, 2) or mdh_get(md, 'SCProtection') == 3 or mdh_get(md, 'KeyType') == 3: return 0
         return int(mdh_get(md, 'Machine') in CONTENT and not (mdh_get(md, 'KeyType') == 1 and s.sks is None) and not (mdh_get(md, 'KeyType') == 2 and not s.has_rng))
     # ---- destructive configuration
     def clear(s, kd, r=0):
