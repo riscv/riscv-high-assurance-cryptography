@@ -575,7 +575,7 @@ Parameters::
 * `b` = block size (8|`b`), with 64 {le} `b` {le} 128.
 * `k` = key size (8|`k`).
 * `u` = segment size in bits (CFB only), with 0 < `u` {le} `b`; its default is `b`.
-* Granularity: `b` bits in CBC and OFB, and lcm(8, `u`) bits in CFB, so that a `kl.exec` processes whole segments of whole bytes; for odd `u` up to 127 it is up to 1016 bits, and a `kl.exec` then needs `LMUL` = 8 on a `VLEN` of 128.
+* Granularity: `b` bits in CBC and OFB; 8 bits in CFB, where a `KLLEN` below `u` violates it (Rule <<KLE-MGR-granularity>>).
 
 Data Structures::
 * *Provisioning Input*:
@@ -645,7 +645,7 @@ State Machine::
 --
 +
 In CFB, cite:[nist-SP-800-38A-1] numbers the bits of a byte string from the most significant bit of its first byte, and processes `INPUT` in segments of `u` bits from its first bit.
-Let `X` = `brev8(INPUT)`, `W` = `brev8(IV)` and `E` = `brev8(enc_blk(key, IV))`, so that bit `t` of each is the standard's bit number `t`; segment `j` of `INPUT`, for `0` {le} `j` < `KLLEN`/`u`, is `X[(j+1)u-1:ju]`, and `Q` = `E[u-1:0]` is the first `u` bits of the encrypted `IV`.
+Let `X` = `brev8(INPUT)`, `W` = `brev8(IV)` and `E` = `brev8(enc_blk(key, IV))`, so that bit `t` of each is the standard's bit number `t`; segment `j` of `INPUT`, for `0` {le} `j` < `n` = {lfloor}`KLLEN`/`u`{rfloor}, is `X[(j+1)u-1:ju]`; the `KLLEN` − `nu` bits of `INPUT` beyond the last segment are ignored, and software shifts the remaining payload into the next `kl.exec`; and `Q` = `E[u-1:0]` is the first `u` bits of the encrypted `IV`.
 For each segment `X~j~`, with `C` the ciphertext segment, that is `Y~j~` in _Encrypt_ and `X~j~` in _Decrypt_:
 +
 --
@@ -653,8 +653,8 @@ For each segment `X~j~`, with `C` the ciphertext segment, that is `Y~j~` in _Enc
 `IV <- brev8(C @ W[b-1:u])`, with `W[b-1:u]` empty if `u` = `b`
 --
 +
-and `OUTPUT` = `brev8(Y)`, where `Y` is the `KLLEN`-bit value with `Y[(j+1)u-1:ju]` = `Y~j~`.
-The iterations of Rule <<KLE-MGR-one-klexec-per-block>> are over these segments.
+and `OUTPUT` = `brev8(Y)`, where `Y` is the `KLLEN`-bit value with `Y[(j+1)u-1:ju]` = `Y~j~` and `Y[KLLEN-1:nu]` = 0.
+The iterations of Rule <<KLE-MGR-one-klexec-per-block>> are over these segments, and the interruption points of a `kl.exec` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>) are the multiples of lcm(8, `u`)/8 bytes, where a whole number of segments ends on a byte boundary.
 For `u` a multiple of 8 the `brev8` applications cancel, and `Q` = `enc_blk(key, IV)[u-1:0]`, `IV` {leftarrow} `C @ IV[b-1:u]` (`C` if `u` = `b`) with `C` the bytes of `OUTPUT` or `INPUT`.
 +
 For each block or segment, `INPUT` is read before `OUTPUT` is written, so `OUTPUT` may be computed in place.

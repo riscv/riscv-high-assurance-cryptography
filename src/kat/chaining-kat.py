@@ -53,8 +53,7 @@ class Chain:
         return out
 
     def segments(s, data, st):                       # CFB-s over a bit string: data is (int, nbits)
-        v, n = data; assert n % s.s == 0
-        o = 0
+        v, n = data; o = 0                       # the n - n // u * u tail bits are ignored
         for j in range(n // s.s):
             seg = (v >> (n - (j + 1) * s.s)) & ((1 << s.s) - 1)
             ks = int.from_bytes(aes_encrypt(KEY, s.iv), 'big') >> (128 - s.s)
@@ -62,7 +61,7 @@ class Chain:
             c = r if st == 'Encrypt' else seg
             s.iv = (((int.from_bytes(s.iv, 'big') << s.s) | c) & (2**128 - 1)).to_bytes(16, 'big')
             o = o << s.s | r
-        return o
+        return o << n - n // s.s * s.s           # OUTPUT zero beyond the last segment
 
 
 def run(mode, st, data, iv=IV0):
@@ -109,11 +108,11 @@ for mode in ('CBC', 'CFB', 'OFB'):
                 o = ''.join(str(int(x) ^ int(y)) for x, y in zip(p[j:j + u], ks))
                 iv, out = iv[u:] + (o if st == 'Encrypt' else p[j:j + u]), out + o
             return out
-        for u, g in ((3, 24), (7, 56)):              # two granules of lcm(8, u) bits
+        for u, g in ((3, 24), (7, 56)):              # whole segments over 2*lcm(8, u) bits
             n, pt = 2 * g, bytes.fromhex('6bc1bee22e409f96e93d7e117393172a')[:g // 4]
             c = Chain('CFB'); c.set_s(u); c.setst('Encrypt', IV0)
             ct = c.segments((int.from_bytes(pt, 'big'), n), 'Encrypt')
-            check(f'CFB{u} encryption over two granules of lcm(8, {u}) bits, independent bit model',
+            check(f'CFB{u} encryption over 2*lcm(8, {u}) bits, independent bit model',
                   format(ct, f'0{n}b') == bits_cfb(u, pt, 'Encrypt'))
             c = Chain('CFB'); c.set_s(u); c.setst('Decrypt', IV0)
             check(f'CFB{u} decryption inverts it', c.segments((ct, n), 'Decrypt') == int.from_bytes(pt, 'big'))
@@ -136,6 +135,15 @@ for mode in ('CBC', 'CFB', 'OFB'):
                 c = Chain('CFB'); c.set_s(u); c.setst(st, IV0)
                 ref = c.segments((int.from_bytes(data, 'big'), 8 * len(data)), st).to_bytes(len(data), 'big')
                 check(f'CFB{u} {st}: the spec formulas (brev8, LSB segments) match the standard', kle_cfb(u, data, st) == ref)
+        # Byte granularity: a KLLEN that is no multiple of u processes floor(KLLEN/u) segments and ignores the tail.
+        c = Chain('CFB'); c.set_s(3); c.setst('Encrypt', IV0)
+        full = c.segments((0x6bc1be, 24), 'Encrypt')                       # 8 segments
+        c = Chain('CFB'); c.set_s(3); c.setst('Encrypt', IV0)
+        part = c.segments((0x6bc1, 16), 'Encrypt')                         # 5 segments, 1 tail bit
+        check('CFB3: a 16-bit KLLEN processes 5 segments, ignores 1 bit, zeroes it in OUTPUT',
+              part >> 1 == full >> 9 and part & 1 == 0)
+        rest = c.segments((0x6bc1be & 0x1FF, 9), 'Encrypt')  # software shifts the tail in: 3 segments
+        check('CFB3: shifting the tail into the next kl.exec continues the stream', rest == (full & 0x1FF))
         c = Chain('CFB'); c.set_s(64); c.setst('Encrypt', IV0); c.setst('Encrypt', IV0)
         check('CFB: a same-State kl.setst in Encrypt keeps u', c.s == 64)
     if mode != 'OFB':

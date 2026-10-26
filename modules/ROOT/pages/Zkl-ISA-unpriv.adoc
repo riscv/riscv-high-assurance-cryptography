@@ -282,8 +282,8 @@ What an implementation achieves is established only by the certifications that i
 
 NOTE: The KLF resists rollback, but an SCC does not: it can be imported again, under the same CSK and Localities, as long as it exists.
 Any party that holds an SCC can therefore replay an earlier CC state: the software that stores it, and any mode that could export the locker.
-This may enable multi-time-pad attacks on CTR, XCTR and GCM.
-A CC owner must trust the party that stores its SCCs for freshness, clear its lockers before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>), use a Machine whose security survives replay (CTR, XCTR and GCM do not), or accept the risk.
+This may enable multi-time-pad or nonce-reuse attacks on every Machine whose security rests on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB and, for message equality only, GCM-SIV.
+A CC owner must trust the party that stores its SCCs for freshness, clear its lockers before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>), use a Machine whose security survives replay (a hash, a MAC or XEX), or accept the risk.
 Re-import also has legitimate uses, such as retrying an operation after payload corruption, that policies cannot readily distinguish from misuse.
 
 
@@ -770,7 +770,6 @@ Narrowing never changes _SCProtection_.
 == CSRs
 
 KLE provides the following unprivileged CSRs.
-// The privileged CSRs are documented in <<KLE-priv>>.
 
 [[KLE-CSRs-unpriv]]
 .KLE Unprivileged CSRs.
@@ -961,6 +960,7 @@ An instruction with a vector operand that produces no `vstart` value (`kl.getmdv
 [[KLE-GR-klstart-vstart,GR8]]GR8:: KLE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each by its own semantics; except for `kl.mvin` and `kl.mvout`, both denote the same point of progress, `klstart` in bytes and `vstart` in elements of the width in effect.
 Issuing a Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW`/8 raises an illegal-instruction exception.
 Each unit thus keeps its own information, and the two values can still be explicitly "`desynced`", as in locker management operations.
+A Machine whose interruption points are not multiples of `SEW`/8, such as CFB with `u` not a multiple of 8, is resumable at all of them only with `SEW` = 8 (Rule <<KLE-GR-interruption-point>>).
 +
 `kl.mvin` and `kl.mvout` keep the two independent by design: their `klstart` is a locker offset that accumulates across instructions, while `vstart` tracks the vector register.
 
@@ -2419,6 +2419,7 @@ The failing and subsequent units have no effect, except as Rule <<KLE-GR-prefix-
 If the instruction transitions its locker to an Error State after partial progress, the completed prefix stays committed, the unwritten part of its output window is zeroed (Rule <<KLE-GR-zero-unwritten-output>>), and the instruction retires (Rule <<KLE-GR-klstart-updates>>).
 
 [[KLE-GR-interruption-point,GR51]]GR51:: An _interruption point_ of a KLE instruction in a State of a Machine is a `klstart` value at which the instruction may halt precisely in that State: a whole multiple of the Machine's granularity within the transfer window, unless the Machine, or a macro such as `PROCESS_VLI` (<<Zkl-ISA-machines.adoc#KLE-process-VLI>>), defines another set.
+For a `kl.exec` with a vector operand, an interruption point is also a multiple of `SEW`/8; where no non-zero point of the set is, the only interruption point is 0.
 
 [[KLE-GR-klstart-updates,GR52]]GR52:: Apart from a precise halt (Rule <<KLE-GR-precise-halt>>), <<KLE-CSR-klstart,an instruction that honors `klstart`>> writes 0 to it when it retires, whether it performs its operation or falls through (Rule <<KLE-GR-outcome-inert>>; so does a `kl.exec` of any Form that falls through), except `kl.mvin` and `kl.mvout`, which keep it (<<KLE-instruction-mv>>).
 `kl.clearall` and a `kl.mgmt` that passes items 1–6 of the locker-state-independent checks (<<KLE-locker-management>>) also write 0 to it; every other instruction leaves it unchanged.
@@ -2463,18 +2464,18 @@ A `kl.exec` or `kl.setst` that accesses only its lockers and the values of the o
 [horizontal]
 [[KLE-GR-long-running-preemption,GR55]]GR55:: On preemption, a long-running operation behaves as an option of Rule <<KLE-GR-resumability-options>> that the interrupt or exception allows; the implementation supports option 3, 4 or 5.
 
-[[KLE-GR-long-running-progress,GR56]]GR56:: A long-running operation that halts records its progress in a _progress field_ _P_ of the MDH, which is _MachineUse_ or a subfield of it: the one that the Machine specification designates for the State, or else an implementation-defined one (<<KLE-MachineUse>>).
-_P_ is non-zero from the first precise halt of the operation until its completion, and zero otherwise; its format is implementation-defined, and the operation may halt at implementation-defined points.
+[[KLE-GR-long-running-progress,GR56]]GR56:: A long-running operation that halts at implementation-defined points records its progress in a _progress field_ _P_ of the MDH, which is _MachineUse_ or a subfield of it.
+_P_ is non-zero and monotonically increasing from the first precise halt of the operation until its completion, and zero otherwise; its format is implementation-defined.
 +
-The set of these points, and the progress recorded at each,
+The set of the interruption points, and the progress recorded at each,
 never depends on key material, a secret field, plaintext or ciphertext, or the value of any ephemeral random value drawn for the operation, with one exception: where the Machine's standard allows the execution time to reveal the number of iterations of a loop, such as a rejection loop (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>), they may depend on that number.
 Only the timing of the halt determines the interruption point.
 +
 The operation keeps its intermediate results in the ADS and updates architected Content only at completion.
-Apart from changes in the MDH at issue or at retirement of the instruction as its semantics define, no other changes are made to the MDH during the operation except for _P_ and _AuxDataLen_; the _AuxDataLen_ at each halt point depends only on what the set of halt points and the progress recorded at each may depend on.
+Apart from changes in the MDH at issue or at retirement of the instruction as its semantics define, no other changes are made to the MDH during the operation except for _P_ and _AuxDataLen_; _AuxDataLen_ depends only on the State and on the halt point.
 +
 A long-running operation takes no input after it starts: all its inputs are those in its lockers and its scalar or vector operands when the instruction that starts it is issued.
-It may consume them at any point, and keeps in the ADS any that it has not consumed at a halt point, so that a resumed instruction never reads its operands again.
+It keeps copies of these initial inputs in the ADS, and a resumed instruction does not re-read the operands.
 +
 The random and intermediate values that the operation keeps in a state field or in the ADS are its _material_, meaningful only while _P_ is non-zero.
 A Machine may nevertheless write such a random value, an _ephemeral random value_, and its flag to architected Content before completion, such as ECC's `RndNum` and `HasRndNum` (<<Zkl-ISA-machines.adoc#KLE-ECC>>) or ML-DSA's `rnd` (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>); a restart discards it (Rule <<KLE-GR-long-running-restart>>).
@@ -2720,10 +2721,10 @@ Two outcomes are not Error States: a Machine enters _Failure_ on a data error (R
 .Error State that a handler that neither resolves nor forwards an exception sets
 [cols="<2,<3",options="header"]
 |===
-| Exception | Error State (Rule <<Zkl-software.adoc#KLE-SR-handler-duty>>)
+| Exception | Error State
 | KLE fatal-error | None: the condition is not recoverable.
-| KLE missing-CSK | None: Rule <<Zkl-software.adoc#KLE-SR-handler-duty>> does not apply.
-| KLE locker-Off | None: Rule <<Zkl-software.adoc#KLE-SR-handler-duty>> does not apply.
+| KLE missing-CSK | None.
+| KLE locker-Off | None.
 | KLE unsupported-Metadata | _Unsupported_
 | KLE privilege-violation | _Privilege Violation_; a locker in a Configuration State keeps its _State_.
 | KLE clock-unavailable | _Expired_
