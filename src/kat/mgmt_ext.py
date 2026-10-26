@@ -95,10 +95,11 @@ class KLE2(KLE):
                     if (l.mdh, l.content) != lb[i] and s.lstat[i]: s.lstat[i] = 3
     # ---- CSR writes (<<KLE-CSR-kliobuflen>>, <<KLE-CSR-kliobuftop>>, <<KLE-CSR-mklmaxiobuflen>>)
     def w_kliobuflen(s, v):
-        if not s.zklio: return
+        if not s.zklio: raise IllegalInstruction('m9: kliobuflen does not exist without Zklio')
         v = min(v, s.maxiobuf); s.iobuf[:v] = bytes(v); s.kliobuflen = v; s.kliobuftop = v
     def w_kliobuftop(s, v):
-        if s.zklio: s.kliobuftop = min(v, s.kliobuflen)
+        if not s.zklio: raise IllegalInstruction('m9: kliobuftop does not exist without Zklio')
+        s.kliobuftop = min(v, s.kliobuflen)
     def w_maxiobuflen(s, v):
         if not s.zklio: return
         s.maxiobuf = max(16, min(v, s.maxiobuf_reset))

@@ -655,7 +655,7 @@ e.kleemu = True; check('earlier items do not depend on the implemented Machines:
 e = E2(); e0 = E2(); prov(e, 1); prov(e0, 1); e.kleemu = True; e0.kleemu = False
 check('kleemulation does not affect Form A; kl.size item 7: Valid State, AuxDataLen 0 gives 32 + content1_size (toy M_ENC content1_size 16)', e.size(1) == e0.size(1) == 32 + CONTENT[M_ENC] == 48 and e.avail(1) == e0.avail(1) == 1)
 e = E2(); e.kleemu = True; check('control: a Version 3 MDH with a non-native Machine still reaches the lookup and traps', trap(e.size, form='C', md=mk(mach=0x99, Version=3, AuxDataLen=2)) == 'illegal')
-e = E2(); check('without Zklio the KLIOBUF CSRs have no effect and mklmaxiobuflen reads 0', (e.w_kliobuflen(64), e.w_kliobuftop(32), e.w_maxiobuflen(32))[0] is None and e.kliobuflen == 0 and e.kliobuftop == 0 and e.r_maxiobuflen() == 0)
+e = E2(); check('without Zklio kliobuflen and kliobuftop do not exist (access raises illegal-instruction, m9); mklmaxiobuflen ignores writes and reads 0', trap(e.w_kliobuflen, 64) == 'illegal' and trap(e.w_kliobuftop, 32) == 'illegal' and e.w_maxiobuflen(32) is None and e.kliobuflen == 0 and e.kliobuftop == 0 and e.r_maxiobuflen() == 0)
 e = E2(); e.zklio = True; e.iobuf[:64] = bytes([7]) * 64; e.w_kliobuflen(32)
 check('every kliobuflen write zeroes the buffer below the new length and sets kliobuftop; bytes beyond need not be erased', e.iobuf[:32] == bytes(32) and e.kliobuftop == 32 and e.iobuf[32:40] == bytes([7]) * 8)
 e.iobuf[:32] = bytes([5]) * 32; e.w_kliobuflen(32); check('even a write of the current value zeroes the buffer', e.iobuf[:32] == bytes(32))
