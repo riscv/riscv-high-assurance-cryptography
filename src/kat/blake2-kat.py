@@ -69,7 +69,7 @@ for fn in FN:
     for n in (0, 5, bs, bs + 3, 2 * bs):
         L = cfg(fn); L.setst('absorb'); run(L, [msg_of(n)]); L.setst('output')
         check('%s %d bytes ended by kl.setst Hash_Output from Hash_Absorb (block_base=%d held)' % (fn, n, L.bb if False else 0), out_all(L, R.B2[fn][3]) == HLIB[fn](msg_of(n)).digest())
-    L = _ab(fn); L.exec('B', b'ab'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR21)' % fn, inv(L))
+    L = _ab(fn); L.exec('B', b'ab'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR20)' % fn, inv(L))
     L = _ab(fn); L.exec('B', b'ab'); L.setst('last', 'B', 8); L.exec('B', b'c', 1); check('%s Xs=8, klstart=KLLEN/8: empty window, State kept' % fn, L.st == 'Last')
     L = cfg(fn, None, 3); L.setst('absorb'); L.setst('output'); check('%s kk != 0, no key block, empty message -> Invalid' % fn, inv(L))
     L = cfg(fn, None, 3); L.setst('absorb'); run(L, [pad(fn, b'abc')]); L.setst('output'); check('%s kk = 3, key block only (empty message): final key block' % fn, out_all(L, R.B2[fn][3]) == HLIB[fn](b'', key=b'abc').digest())

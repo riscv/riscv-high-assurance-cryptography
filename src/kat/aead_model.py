@@ -10,7 +10,7 @@ Interface (all Machines):
         interrupted (only at the architected interruption points); the position is then in m.klstart.
   m.export() -> (SC value, width); Cls.from_sc(st, sc, ...) imports it.
   m.derive_dest(keybytes)  kl.derive into the key field; m.restrict(mask) narrows MachinePolicy.
-Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR36).
+Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR35).
 """
 from common import *
 
@@ -63,8 +63,8 @@ class Base:
             cur = self.st
             if st == READY:
                 need(form == 'A'); self.st = READY; self._ready(); return
-            need(cur not in (SUCCESS, FAILURE))                      # GR23
-            need(st in self.TRANS.get(cur, ()) or st == cur and cur in self.SAMEOK)   # GR21/22/24
+            need(cur not in (SUCCESS, FAILURE))                      # GR22
+            need(st in self.TRANS.get(cur, ()) or st == cur and cur in self.SAMEOK)   # GR20/22/24
             need(self._formok(self.SETF.get(st), form, xs, inp))     # GR13
             if st in self.GATE: need(self.policy >> self.GATE[st] & 1)
             if st != cur: self._leave(cur, st)
@@ -81,7 +81,7 @@ class Base:
             if self.zklio and form == 'D': form = self._expform(self.st)   # KLIOBUF substitution of the native Form
             if self.st in self.GATE: need(self.policy >> self.GATE[self.st] & 1)   # MR1 at issue
             need(form == self._expform(self.st))
-            if kllen is not None and klstart * 8 >= kllen and not self._noexec(self.st): return 0   # GR53 item 1: empty window
+            if kllen is not None and klstart * 8 >= kllen and not self._noexec(self.st): return 0   # GR52 item 1: empty window
             out = self._exec(self.st, inp, kllen, klstart, halt_at)
             return out & mask(kllen) if kllen is not None else out
         except Inv:
@@ -95,7 +95,7 @@ class Base:
     def _multi(self, inp, kllen, klstart, halt_at, fn):
         b = self.B
         need(kllen is not None and kllen % b == 0)      # MR6 granularity
-        need(klstart * 8 % b == 0)                                    # GR53 item 3
+        need(klstart * 8 % b == 0)                                    # GR52 item 3
         out = 0; self.out_partial = 0
         for i in range(klstart * 8 // b, kllen // b):
             if halt_at is not None and i * b == 8 * halt_at and i * b > 8 * klstart:

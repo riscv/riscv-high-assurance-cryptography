@@ -11,7 +11,7 @@ RDY, SGEN, SSCAL, PMUL, SGN, SVER, SHASH, S2ND, SIN, OUT, MABS, SCTX = 1, 2, 3, 
 SETS = (SGEN, SSCAL, SHASH, S2ND, SIN, SCTX)
 MODES = ['secp256r1', 'secp384r1', 'secp521r1', 'x25519', 'x448', 'ed25519', 'ed448',
          'brainpoolP256r1', 'brainpoolP384r1', 'brainpoolP512r1', 'sm2']
-class RbgFailure(Exception): pass       # GR66: the RBG failed -> Invalid
+class RbgFailure(Exception): pass       # GR65: the RBG failed -> Invalid
 class RbgUnavailable(Exception): pass   # KLE RBG-unavailable exception, locker unchanged
 
 class EccLocker:
@@ -113,12 +113,12 @@ class EccLocker:
         if self.kind != 'ed': self.RndNum[:] = bytes(len(self.RndNum)); self.setf('rnd', False)
     def setst(self, target, form='A', xs=0):
         self._live()
-        if form not in ('A', 'B'):                        # Forms C and D never name a State (GR21)
+        if form not in ('A', 'B'):                        # Forms C and D never name a State (GR20)
             return self._inv()
         if target in (54, 55, OUT) or target not in self._states() | {0}: return self._inv()
         if target == 0: raise NotImplementedError('kl.clear is out of scope')
         st = self.state
-        # Forms (GR21): Ready, Set_Generator, Set_Scalar take A or B; Set_Ctx, Msg_Absorb take B; the rest A
+        # Forms (GR20): Ready, Set_Generator, Set_Scalar take A or B; Set_Ctx, Msg_Absorb take B; the rest A
         need = {RDY: 'AB', SGEN: 'AB', SSCAL: 'AB', SCTX: 'B', MABS: 'B'}.get(target, 'A')
         if form not in need: return self._inv()
         if form == 'B' and xs == 0 and target not in (RDY, SGEN, SSCAL, MABS): return self._inv()
@@ -126,10 +126,10 @@ class EccLocker:
         # admitted source/target pairs
         if target != RDY:
             ok_src = st == RDY or st in SETS or (st == MABS)
-            if st == target and st not in SETS and st != MABS: ok_src = False       # GR22
+            if st == target and st not in SETS and st != MABS: ok_src = False       # GR21
             if st == MABS and target not in (MABS, SGN, SVER): ok_src = False
             if not ok_src: return self._inv()
-        # MR14 / GR57: leaving a Set State drops an incomplete load; any setst drops Progress and RndNum
+        # MR14 / GR56: leaving a Set State drops an incomplete load; any setst drops Progress and RndNum
         if st == MABS and target in (MABS, SGN, SVER):
             if self._finalize_pass() == 'invalid': return 'invalid'
         elif st == MABS: self.msg = b''
@@ -357,13 +357,13 @@ class EccLocker:
         if self.block_base == len(o): self.state = 54
         return chunk
     def derive_source(self):
-        """kl.derive source: Output with OutputType shared secret, unrestricted (GR43); anything else is not a source."""
+        """kl.derive source: Output with OutputType shared secret, unrestricted (GR42); anything else is not a source."""
         if self.state == OUT and self.outtype == 2: return self.shared_secret()
         return None
     # ------------------------------------------------------------ restrict / clearads / clone
     def restrictl(self, pol):
         self._live()
-        if pol & ~self.policy or (self.kind == 'ed' and pol == 0): return self._inv()   # GR26: narrowing only
+        if pol & ~self.policy or (self.kind == 'ed' and pol == 0): return self._inv()   # GR25: narrowing only
         self.policy = pol
         if pol == 0:
             self.Signature[:] = bytes(len(self.Signature)); self.Hash[:] = bytes(len(self.Hash)); self.setf('sig', False); self.setf('hash', False)

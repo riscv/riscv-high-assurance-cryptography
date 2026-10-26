@@ -83,7 +83,7 @@ for fn in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
         wo = wo if isinstance(wo, bytes) else v2b(wo, Locker(fn).f.t // 8)
         check('%s %d bytes then %d-bit piece (block_base %% b = %d)' % (fn, N, M, (8 * N) % b), got == wo, got, wo)
 for fn in FNS:
-    L = mkkip(fn, b'key'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR21)' % fn, inv(L))
+    L = mkkip(fn, b'key'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR20)' % fn, inv(L))
 section('Set_Key (NIK), HasKey, kl.derive')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)
@@ -163,9 +163,9 @@ check('_Machine_ encodings (KIP Type/Mode, NIK Type/Mode): HMAC-SHA-256 5/7 and 
 for fn in ('SHA-256', 'SHA3-512', 'SM3'):
     L = mkkip(fn, b'key'); L.clear(); S0 = (L.S, L.K0)
     L.setst('success'); L.setst('absorb'); L.exec('B', b'x'); L.setst('failure'); L.setst('ready')
-    check('%s kl.clear: Unconfigured, later kl.setst/kl.exec change nothing (GR33)' % fn, L.st == 'Inert' and (L.S, L.K0) == S0 and L.exec('C', kllen=64) == bytes(8))
-    L = mkkip(fn, b'key'); L.setst('absorb'); L.setst('success'); check('%s kl.setst naming Success -> Invalid (GR25)' % fn, inv(L))
-section('kl.restrictl (GR26, MR1) and the gates of Output and Verify')
+    check('%s kl.clear: Unconfigured, later kl.setst/kl.exec change nothing (GR32)' % fn, L.st == 'Inert' and (L.S, L.K0) == S0 and L.exec('C', kllen=64) == bytes(8))
+    L = mkkip(fn, b'key'); L.setst('absorb'); L.setst('success'); check('%s kl.setst naming Success -> Invalid (GR24)' % fn, inv(L))
+section('kl.restrictl (GR25, MR1) and the gates of Output and Verify')
 for fn in ('SHA-256', 'SHA3-256'):
     k = b'key'; m = b'abc'
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('output'); L.restrictl(2)
@@ -174,27 +174,27 @@ for fn in ('SHA-256', 'SHA3-256'):
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.restrictl(1); L.setst('verify', 'B', 64); check('%s restrictl clearing bit 1: Hash_Verify refused (Invalid)' % fn, inv(L))
     L = mkkip(fn, k, 2); L.restrictl(1); check('%s restrictl clearing the only set bit -> Invalid at once' % fn, inv(L))
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); L.restrictl(1); L.exec('B', ref(fn, k, m)[:8]); check('%s restrictl clearing bit 1 in Hash_Verify: the compare kl.exec -> Invalid' % fn, inv(L))
-section('kl.derive source and pair rules (GR40, GR43)')
+section('kl.derive source and pair rules (GR39, GR42)')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)
     L = mknik(fn, k); L.setst('absorb'); S0 = (L.S, L.cum); ok = L.derive(msg_of(32), src='hmac_tag')
-    check('%s an HMAC tag is not a source (GR40 item 1): source Invalid, destination Hash_Absorb unchanged' % fn, not ok and L.srcinv and L.st == 'Absorb' and (L.S, L.cum) == S0)
+    check('%s an HMAC tag is not a source (GR39 item 2): source Invalid, destination Hash_Absorb unchanged' % fn, not ok and L.srcinv and L.st == 'Absorb' and (L.S, L.cum) == S0)
     L = mknik(fn, k); L.setst('absorb'); ok = L.derive(msg_of(16), src='cmac')
-    check('%s CMAC -> HMAC Hash_Absorb: pair not admitted (GR40 item 3), both Invalid' % fn, not ok and L.srcinv and inv(L))
+    check('%s CMAC -> HMAC Hash_Absorb: pair not admitted (GR39 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(msg_of(32), src='hmac_tag')
     check('%s HMAC tag -> K0: source Invalid, destination stays in Set_Key without HasKey' % fn, not ok and L.srcinv and L.st == 'SetKey' and not L.haskey)
     L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(msg_of(32), src='xof')
-    check('%s XOF output -> K0: not a source (GR40 item 1)' % fn, not ok and L.srcinv and L.st == 'SetKey' and not L.haskey)
+    check('%s XOF output -> K0: not a source (GR39 item 2)' % fn, not ok and L.srcinv and L.st == 'SetKey' and not L.haskey)
     for sz, nm in ((16, 'CMAC-AES'), (8, 'CMAC-TDEA')):
         L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(msg_of(sz), src='cmac')
         check('%s %s (%d B) -> K0 with length = source length: K0 zero-filled, HasKey' % (fn, nm, sz), ok and L.haskey and L.K0 == b2v(msg_of(sz)))
     for st_ in ('Ready',):
         for v in ('NIK', 'KIP'):
-            L = Locker(fn, 'NIK') if v == 'NIK' else mkkip(fn, k); check('%s %s: K0 is not a destination in Ready (GR40 item 2) -> Invalid' % (fn, v), not L.derive(msg_of(16)) and inv(L))
+            L = Locker(fn, 'NIK') if v == 'NIK' else mkkip(fn, k); check('%s %s: K0 is not a destination in Ready (GR39 item 3) -> Invalid' % (fn, v), not L.derive(msg_of(16)) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte field, length %d < field -> K0 dest Invalid (source must be exactly eff_length)' % (fn, b, b // 2), not L.derive(msg_of(b), length=b // 2) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte secret, length %d > secret -> K0 dest Invalid' % (fn, b // 2, b), not L.derive(msg_of(b // 2), length=b) and inv(L))
     for ln in (0, 29, 31, 2**60):
-        L = mknik(fn, k); L.setst('absorb'); check('%s shared secret (30 B) into Hash_Absorb with length %d != 30 -> dest Invalid (GR40 item 5)' % (fn, ln), not L.derive(msg_of(30), length=ln) and inv(L))
+        L = mknik(fn, k); L.setst('absorb'); check('%s shared secret (30 B) into Hash_Absorb with length %d != 30 -> dest Invalid (GR39 item 6)' % (fn, ln), not L.derive(msg_of(30), length=ln) and inv(L))
     L = mknik(fn, k); L.setst('absorb'); L.exec('B', b'prefix'); L.derive(msg_of(30)); L.exec('B', b'suffix'); L.setst('output')
     check('%s shared secret (30 B) between "prefix" and "suffix" in Hash_Absorb' % fn, out_all(L, L.f.t // 8) == ref(fn, k, b'prefix' + msg_of(30) + b'suffix'))
 section('Negative controls')

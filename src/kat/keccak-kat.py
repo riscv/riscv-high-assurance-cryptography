@@ -142,7 +142,7 @@ L, _ = digest('SHA3-256', b'q'); L.setst(2, 'A'); check('Success -> Hash_Absorb 
 L, _ = digest('SHA3-256', b'q'); L.setst(54, 'A'); check('setst Success -> Invalid', L.se == SE_INV)
 L = fresh(); L.setst(55, 'A'); check('setst Failure -> Invalid', L.se == SE_INV)
 L, _ = digest('SHA3-256', b'q'); L.setst(1, 'A'); check('Success -> Ready', L.st == READY and L.s == 0)
-_l = fresh(); _l.setst(1, 'B', 3); check('setst Ready with Form B -> wrong Form, Invalid, no exception (GR23, GR21.4)', _l.se == SE_INV)
+_l = fresh(); _l.setst(1, 'B', 3); check('setst Ready with Form B -> wrong Form, Invalid, no exception (GR22, GR20.4)', _l.se == SE_INV)
 L = fresh(); L.setst(2, 'A'); L.exec('B', b'a'); L.setst(0, 'A'); L.exec('B', b'a'); L.setst(2, 'A')
 check('kl.clear then exec/setst: no-op, stays inert', L.inert())
 L = fresh(); L.setst(2, 'A'); L.exec('B', b'a'); L.setst(1, 'A'); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'A'); o = bytearray(32); L.exec('C', out=o)
@@ -154,8 +154,8 @@ L = fresh(); L.setst(2, 'A'); L.exec('B', b'a'); L.setst(13, 'B', 5); check('set
 L = fresh(); L.setst(2, 'A'); L.exec('B', msg(10)); L.setst(6, 'A'); o = bytearray(4); L.exec('C', out=o)
 L.invalid()
 check('Invalid: content cleared, state zero, locker not Inert', L.s == 0 and L.se == SE_INV)
-L.exec('C', out=(o := bytearray(b'\xff' * 4))); check('exec on Error State zeroes output window (GR35)', o == bytes(4))
-L.setst(1, 'A'); check('setst on Error State is a no-op (GR33)', L.is_error())
+L.exec('C', out=(o := bytearray(b'\xff' * 4))); check('exec on Error State zeroes output window (GR34)', o == bytes(4))
+L.setst(1, 'A'); check('setst on Error State is a no-op (GR32)', L.is_error())
 
 section('Interrupted absorption (klstart)')
 for k in ('SHA3-256', 'SHAKE128', 'SHA3-512'):
@@ -205,7 +205,7 @@ L, g = piece_digest('SHA3-256', b'\xff', 5); control('piece uses LSBs: ignoring 
 L, g = digest('SHA3-256', m); bad = bytearray(g); bad[0] ^= 1; control('digest comparison detects a flipped bit', bytes(bad) != hashlib.sha3_256(m).digest())
 control('SHAKE128 is not SHAKE256 on the same input', ref('SHAKE128', m, 32) != ref('SHAKE256', m, 32))
 
-section('kl.derive into SHA-3 / SHAKE (GR38-GR44, shared secret as message)')
+section('kl.derive into SHA-3 / SHAKE (GR37-GR43, shared secret as message)')
 def drv(kind, data=b'S' * 32, length=None, restricted=True, shared=True, ks=0, st=None):
     d = Locker(kind); d.setst(2, 'A')
     if st == 'last': d.setst(3, 'A')
@@ -218,11 +218,11 @@ d = Locker('SHA3-256'); d.setst(2, 'A'); d.exec('B', b'ab'); derive(Secret(b'S' 
 check('derive appends to an earlier message prefix', bytes(o) == hashlib.sha3_256(b'ab' + b'S' * 32).digest())
 for nm, kw in (('length 0', dict(length=0)), ('length 31', dict(length=31)), ('length 33', dict(length=33)), ('klstart 8', dict(ks=1))):
     d, s = drv('SHA3-256', **kw); check('derive %s -> destination Invalid, source untouched' % nm, d.se == SE_INV and not s.bad)
-d, s = drv('SHA3-256', st='last'); check('destination in Last_Block -> dest Invalid (GR40.2)', d.se == SE_INV)
+d, s = drv('SHA3-256', st='last'); check('destination in Last_Block -> dest Invalid (GR39.3)', d.se == SE_INV)
 d = Locker('SHA3-256'); derive(Secret(b'S' * 32), d, 32); check('destination in Ready (hash) -> Invalid', d.se == SE_INV)
-d, s = drv('SHA3-256', shared=False); check('CMAC-type output into a hash input: pair not admitted, both Invalid (GR40.3)', d.se == SE_INV and s.bad)
+d, s = drv('SHA3-256', shared=False); check('CMAC-type output into a hash input: pair not admitted, both Invalid (GR39.4)', d.se == SE_INV and s.bad)
 o = Locker('SHAKE128'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('SHA3-256'); d.setst(2, 'A'); derive(o, d, 32)
-check('SHAKE128 Hash_Output is not a source: source Invalid, dest untouched (GR40.1)', o.se == SE_INV and d.st == ABSORB)
+check('SHAKE128 Hash_Output is not a source: source Invalid, dest untouched (GR39.2)', o.se == SE_INV and d.st == ABSORB)
 d = Locker('SHA3-256'); d.setst(2, 'A'); d.clear(); derive(Secret(b'S' * 32), d, 32); check('inert destination: no-op', d.inert())
 section('Provisioning with MachinePolicy != 0 and restrictl (ungated Machine)')
 for k in ('SHA3-256', 'SHAKE128'):
@@ -236,7 +236,7 @@ l = Locker('SHAKE128'); l.setst(2, 'A'); l.exec_d(bytearray(b'abc'), 3); l.setst
 check('Form D output over a dirty KLIOBUF = SHAKE128 stream', bytes(io) == hashlib.shake_128(b'abc').digest(300))
 l = Locker('SHA3-256'); l.setst(2, 'A'); io = bytearray(b'\x55' * 8); l.exec_d(io, 8); check('Form D exec in Hash_Absorb at klstart=0 absorbs', l.st == ABSORB)
 l = Locker('SHA3-256'); io = bytearray(b'\x55' * 8); l.exec_d(io, 8); check('Form D in Ready -> Invalid, window zeroed', l.se == SE_INV and bytes(io) == bytes(8))
-l = Locker('SHA3-256'); l.clear(); io = bytearray(b'\x55' * 8); l.exec_d(io, 8, klstart=3); check('Form D on inert locker zeroes [klstart, top-1] only (GR35)', bytes(io) == b'\x55' * 3 + bytes(5))
-check('Form D with unconfigured KLIOBUF -> illegal instruction (GR15)', raises(lambda: Locker('SHA3-256').exec_d(bytearray(8), 0), exc=IllegalInstruction))
+l = Locker('SHA3-256'); l.clear(); io = bytearray(b'\x55' * 8); l.exec_d(io, 8, klstart=3); check('Form D on inert locker zeroes [klstart, top-1] only (GR34)', bytes(io) == b'\x55' * 3 + bytes(5))
+check('Form D with unconfigured KLIOBUF -> illegal instruction (GR14)', raises(lambda: Locker('SHA3-256').exec_d(bytearray(8), 0), exc=IllegalInstruction))
 
 done()

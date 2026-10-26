@@ -125,7 +125,7 @@ for nm in ('secp256r1', 'brainpoolP256r1', 'sm2'):
     check(nm + ': Output 24+24+16 bytes of 64-byte field -> Success', (lambda L: (L.exec_out(24) + L.exec_out(24) + L.exec_out(16) if W == 32 else 0) and L.state == 54)(pt_mul(nm, 5)[0]) if W == 32 else True)
     L, r = pt_mul(nm, 5); L.exec_out(60); check(nm + ': excess emit -> Invalid', L.exec_out(8) == 'invalid')
 L = EccLocker('secp256r1', rbg=lambda n: (_ for _ in ()).throw(RbgFailure()))
-check('GR66: RBG failure on random Scalar -> Invalid', L.setst(SSCAL, 'B', 1) == 'invalid' and L.invalid)
+check('GR65: RBG failure on random Scalar -> Invalid', L.setst(SSCAL, 'B', 1) == 'invalid' and L.invalid)
 L = EccLocker('secp256r1', rbg=lambda n: (_ for _ in ()).throw(RbgUnavailable()))
 check('RBG unavailable raises, locker unchanged', raises(L.setst, SSCAL, 'B', 1, exc=RbgUnavailable) and not L.invalid)
 L = EccLocker('secp256r1', rbg=rbg_k(7)); L.setst(SSCAL, 'B', 1)
@@ -184,7 +184,7 @@ check('SM2 verify with wrong e -> Failure', verify(EccLocker('sm2'), xy(Q, 32), 
 check('SM2 verify t = (r+s) mod n = 0 -> Failure', verify(EccLocker('sm2'), xy(Q, 32), le(sm2r, 32) + le(C.n - sm2r, 32), le(e, 32)) == 'failure')
 
 # ------------------------------------------------------------------ 6
-section('Progress, halting, resume (GR57), clone (GR58), clearads')
+section('Progress, halting, resume (GR56), clone (GR57), clearads')
 def sign_setup(nm='secp256r1', k=5):
     L = EccLocker(nm, rbg=rbg_k(k)); load(L, SSCAL, le(0x1234, L.W)); load(L, SHASH, le(0x777, L.W)); L.setst(SGN); return L
 ref = M.ecdsa_sign(M.Wei('secp256r1'), 0x1234, 0x777, 5)
@@ -194,7 +194,7 @@ check('MachineUse: Progress in [13:2], OutputType in [1:0]', mdh_get(L.mdh, 'Mac
 L.rbg = rbg_k(9); r = L.exec_D()
 check('resume uses held RndNum (not a fresh k)', r == 'output' and (b2v(drain(L)[:32]), ) == (ref[0],))
 L = sign_setup(); L.exec_D(halt=True)
-check('same-State setst into Sign_Generate is not admitted (GR22) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
+check('same-State setst into Sign_Generate is not admitted (GR21) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
 L = sign_setup(); L.exec_D(halt=True)
 check('from halted Sign_Generate, a Set State is not admitted (only Ready/clearads) -> Invalid', L.setst(SHASH) == 'invalid')
 L = sign_setup(); L.exec_D(halt=True); L.clearads()

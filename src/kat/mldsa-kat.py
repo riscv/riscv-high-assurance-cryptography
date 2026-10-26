@@ -183,7 +183,7 @@ v = mk(); load_pub(v, pk44); load_mu(v, mu44); v.setst(S_SIN); v.exec('B', sg + 
 v = mk(); v.setst(S_PKIN); v.exec('B', pk44 + b'x'); check('excess in pubkey -> Failure, pubkey zeroed', v.st == S_FAILURE and v.pubkey == bytes(P44['pk']))
 v.setst(S_READY); load_pub(v, pk44); load_mu(v, mu44); put(v, S_SIN, sg); v.setst(S_READY); v.setst(S_SVER); v.exec('D')
 check('Failure -> Ready -> reload works', v.st == S_SUCCESS)
-v = mk(); v.setst(S_PKIN); v.exec('B', pk44 + b'x'); v.setst(S_SIN); check('Failure -> Sign_Input -> Invalid (GR23)', v.error)
+v = mk(); v.setst(S_PKIN); v.exec('B', pk44 + b'x'); v.setst(S_SIN); check('Failure -> Sign_Input -> Invalid (GR22)', v.error)
 
 # ------------------------------------------------------------------ 7
 section('7 Interrupted Sign_Generate')
@@ -249,7 +249,7 @@ control('default limits do not trigger on same input', ver(pk44, mu44, sg).st ==
 
 # ------------------------------------------------------------------ 9
 section('9 kl.derive')
-spec_note('kl.derive (GR40) with an ML-DSA source/destination: not modelled (no derive entry in mldsa_locker.py); UNVERIFIED')
+spec_note('kl.derive (GR39) with an ML-DSA source/destination: not modelled (no derive entry in mldsa_locker.py); UNVERIFIED')
 
 # ------------------------------------------------------------------ 10
 section('10 Hint decoding (Algorithm 21)')

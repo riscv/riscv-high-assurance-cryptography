@@ -156,7 +156,7 @@ class KLE2(KLE):
         if nm is None or mdh_get(m, 'SCProtection') < ent.get('minprot', 0): s.err(k, SE_PRIV_VIOLATION); return
         l.mdh = nm; l.skid = skid; l.content = ent['key']
     def _sysfmt_complete(s, k):
-        """Toy GR72: S = tag(8) || payload; payload[:c1] is the key."""
+        """Toy GR71: S = tag(8) || payload; payload[:c1] is the key."""
         l = s.L[k]; im = bytes(s.img(k)); m = l.mdh; c1 = CONTENT[mdh_get(m, 'Machine')]
         pay = int.from_bytes(im[8:], 'little')
         if int.from_bytes(im[:8], 'little') != toy_tag(pay): s.err(k, SE_MGMT_AUTH); return
@@ -265,10 +265,10 @@ class KLE2(KLE):
             if store: mem.b[addr + j] = s.iobuf[j]
             else: s.iobuf[j] = mem.b[addr + j]
         s.start = 0
-    # ---- kl.exec with transfer window (GR11-16, GR21, GR53)
+    # ---- kl.exec with transfer window (GR11-16, GR20, GR52)
     def execw(s, kd=0, r=0, form='A', data=None, halt_after=None):
         res = s._execw(kd, r, form, data, halt_after)
-        if res in ('invalid', 'inert') or (isinstance(res, bytes) and False):   # GR35: zero the unwritten output window
+        if res in ('invalid', 'inert') or (isinstance(res, bytes) and False):   # GR34: zero the unwritten output window
             if form == 'D' and s.zklio and s.kliobuflen: s.iobuf[s.start:s.kliobuftop] = bytes(max(s.kliobuftop - s.start, 0))
             s.vout = bytes(len(data)) if data is not None else None
         return res
@@ -281,15 +281,15 @@ class KLE2(KLE):
         m = s.md(k)
         if s.config(m): raise Trap('privilege_violation')
         subst = form == 'D'
-        if subst and s.zklio and s.kliobuflen == 0: raise IllegalInstruction('GR21 item 1')
+        if subst and s.zklio and s.kliobuflen == 0: raise IllegalInstruction('GR20 item 1')
         if not s.usage_gate(k): return 'expired'
         if mdh_get(m, 'State') != 2 or not s.machine_admits(k, None) or form not in ('A', 'D') or (subst and not s.zklio):
             s.err(k, SE_INVALID); return 'invalid'
         win = bytearray(s.iobuf[:s.kliobuftop]) if subst else bytearray(data)
         n = len(win)
-        if s.start >= n: s.start = 0; return bytes(0) if subst else bytes(n)                                   # GR53.1
-        if n % 16: s.err(k, SE_INVALID); return 'invalid'   # GR16, GR53.2
-        if s.start % 16: s.err(k, SE_INVALID); return 'invalid'                                                  # GR53.3
+        if s.start >= n: s.start = 0; return bytes(0) if subst else bytes(n)                                   # GR52.1
+        if n % 16: s.err(k, SE_INVALID); return 'invalid'   # GR15, GR52.2
+        if s.start % 16: s.err(k, SE_INVALID); return 'invalid'                                                  # GR52.3
         key = v2b(s.L[k].content, 16); out = bytearray(win); blocks = 0; j = s.start
         while j < n:
             if halt_after is not None and blocks == halt_after:
@@ -307,7 +307,7 @@ class KLE2(KLE):
         if r != 'ok': return r
         l = s.L[kd]; ok = v2b(l.content, 16) == bytes(tag)
         l.mdh = mdh_put(l.mdh, 'State', 54 if ok else 55); return mdh_get(l.mdh, 'State')
-    # ---- long-running operation (GR55-58): M_SIG State 3
+    # ---- long-running operation (GR54-58): M_SIG State 3
     def lr(s, kd=0, budget=2):
         l0 = s.L[kd]
         r = s.usage(kd, 0, None)
@@ -331,7 +331,7 @@ class KLE2(KLE):
         d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
         if d != src and d != NONE and mdh_get(s.md(d), 'Machine') == M_SIG and mdh_get(s.md(d), 'State') in (2, 3):
             s.L[d].steps = 0; s.L[d].mdh = mdh_put(s.md(d), 'MachineUse', 0)
-    # ---- kl.derive (GR38-GR44)
+    # ---- kl.derive (GR37-GR43)
     def derive(s, d, src, length):
         s.common()
         d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
@@ -339,7 +339,7 @@ class KLE2(KLE):
         if d == NONE or src == NONE: return 'inert'
         ms, md_ = s.md(src), s.md(d)
         if mdh_get(ms, 'State') == 0 or mdh_get(md_, 'State') == 0: return 'inert'
-        for k in (src, d):                                    # GR38: State class, source first
+        for k in (src, d):                                    # GR37: State class, source first
             if s.config(s.md(k)): raise Trap('privilege_violation')
         for k in (src, d):
             if not (mdh_get(s.md(k), 'UsagePolicy') >> s.mode & 1): raise Trap('privilege_violation')
@@ -349,26 +349,26 @@ class KLE2(KLE):
                 if min(max(s.clock, 0), mask(20)) >= mdh_get(s.md(k), 'ExpirationDate'): s.err(k, SE_EXPIRED); return 'expired'
         sm, dm = mdh_get(ms, 'Machine'), mdh_get(md_, 'Machine')
         sst, dst = mdh_get(ms, 'State'), mdh_get(md_, 'State')
-        # GR40 1: source endpoint
+        if s.start != 0: s.err(d, SE_INVALID); return 'invalid'   # GR39 1: klstart = 0
+        # 2: source endpoint
         if not (sst == 2 and sm in (M_KEM, M_ENC)) or mdh_get(ms, 'KeyType') == 1 and False:
             s.err(src, SE_INVALID); return 'invalid'
-        # 2: destination endpoint (key field in Ready, never SKID; hash input in State 2)
+        # 3: destination endpoint (key field in Ready, never SKID; hash input in State 2)
         keyf = dst == 1 and dm in (M_ENC, M_KEY, M_KEY32) and mdh_get(md_, 'KeyType') != 1
         hin = dst == 2 and dm == M_HASH
         if not (keyf or hin): s.err(d, SE_INVALID); return 'invalid'
-        # 3: admitted pair (GR43 secret -> key field or hash input, restricted; GR44 cipher output -> key field, unrestricted)
+        # 4: admitted pair (GR42 secret -> key field or hash input, restricted; GR43 cipher output -> key field, unrestricted)
         if sm == M_ENC and not keyf: s.err(d, SE_INVALID); s.err(src, SE_INVALID); return 'invalid'
         restricted = sm == M_KEM
         dl = CONTENT[dm] if keyf else None
         eff = min(length, dl) if keyf else length
-        # 4: effective length meets the destination constraints
+        # 5: effective length meets the destination constraints
         if hin and eff % 16: s.err(d, SE_INVALID); return 'invalid'
-        # 5: whole-value destinations
+        # 6: whole-value destinations
         if keyf and (length < dl or (sm == M_KEM and CONTENT[M_KEM] < dl)): s.err(d, SE_INVALID); return 'invalid'
         if hin and sm == M_KEM and length != CONTENT[M_KEM]: s.err(d, SE_INVALID); return 'invalid'
-        # 6: source supplies the suffix: both toy sources supply any length
-        if s.start != 0: s.err(d, SE_INVALID); return 'invalid'
-        if restricted and eff:                                # GR41
+        # 7: source supplies the bytes: both toy sources supply any length
+        if restricted and eff:                                # GR40
             if mdh_get(md_, 'SCProtection') < mdh_get(ms, 'SCProtection'): s.err(d, SE_PRIV_VIOLATION); return 'pv'
             nm = narrow(md_, ms)
             if nm is None: s.err(d, SE_PRIV_VIOLATION); return 'pv'

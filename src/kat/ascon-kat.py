@@ -270,7 +270,7 @@ for k in HASHES:
         if not ok: bad.append((s, nbits, bound, L.st, bytes(o).hex()[:16], want.hex()[:16]))
     check('%s: 40 random plans (chunks, halts, export/import, piece, bound)' % k, not bad, bad[:4])
 
-section('Tag is not a derive source; out_len on entering Ready; Error-State setst; GR41')
+section('Tag is not a derive source; out_len on entering Ready; Error-State setst; GR40')
 L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', 100); ct, t = enc(L, b'', b'abc')
 L2 = Locker('ASCON-AEAD128', key=KEY); L2.setst(2, 'C', inp=NONCE); L2.setst(7, 'A'); L2.setst(9, 'B', 0)
 d = Locker('ASCON-AEAD128', key=bytes(16)); derive(L2, d, 13)
@@ -285,9 +285,9 @@ for k in HASHES:
     check('%s: kl.clear -> Unconfigured; later setst/exec/restrictl change nothing' % k, st0 == (0, 0) and (L.st, L.se) == (0, 0))
 for scd, scs, want in ((1, 2, 5), (2, 1, 0), (2, 2, 0)):
     d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = scd; s = Secret(bytes(range(32)), restricted=True, scprot=scs); derive(s, d, 32)
-    check('GR41 restricted transfer, dst SCProtection %d, src %d -> %s' % (scd, scs, 'Privilege Violation' if want else 'transferred'), (d.se == 5) if want else (d.st == READY and d.se == 0 and d.key == b2v(bytes(range(16)))), (d.st, d.se))
+    check('GR40 restricted transfer, dst SCProtection %d, src %d -> %s' % (scd, scs, 'Privilege Violation' if want else 'transferred'), (d.se == 5) if want else (d.st == READY and d.se == 0 and d.key == b2v(bytes(range(16)))), (d.st, d.se))
 d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; s = Secret(bytes(range(32)), restricted=False, scprot=2); derive(s, d, 32)
-check('GR42 unrestricted transfer applies no SCProtection check', d.se == 0 and d.key != 0)
+check('GR41 unrestricted transfer applies no SCProtection check', d.se == 0 and d.key != 0)
 
 section('Negative controls')
 m = msg(12)
@@ -334,7 +334,7 @@ for kind, kw, setup in (('ASCON-AEAD128_NONCE', dict(nonce=NN), (2, 'A')), ('ASC
     for X, o in ((L, a), (L2, b)): X.exec('A', msg(16, 2), out=o)
     check(kind + ' export/import mid-encryption: same continuation', a == b)
 
-section('kl.derive into AEAD key fields (GR38-GR44)')
+section('kl.derive into AEAD key fields (GR37-GR43)')
 def dk(kind='ASCON-AEAD128', data=bytes(range(40)), length=None, restricted=True, shared=True, ks=0, **kw):
     d = Locker(kind, **kw); s = Secret(data, restricted, shared); derive(s, d, len(data) if length is None else length, ks); return d, s
 d, s = dk(restricted=False, data=KEY + b'x' * 8); c, nb, tg = R.ref_ascon_aead(KEY, NONCE, b'', b'abc')
@@ -342,14 +342,14 @@ check('16-byte key from a 24-byte unrestricted secret: first 16 B become the key
 d, s = dk(data=KEY + K2 + b'z' * 8, restricted=False, kind='ASCON-AEAD128_NONCE_MASK')
 c, nb, tg = R.ref_ascon_aead(KEY, bytes(a ^ b for a, b in zip(NONCE, K2)), b'', b'abc')
 check('K1|K2 from a 40-byte unrestricted secret into _Nonce_Mask', full(d, (2, 'C', 0, NONCE), b'', b'abc') == (v2b(c, 3), v2b(tg, 16)))
-d, s = dk(kind='ASCON-AEAD128_NONCE_MASK'); check('restricted shared secret into K1|K2: both Invalid (GR40.3)', d.se == SE_INV and s.bad)
+d, s = dk(kind='ASCON-AEAD128_NONCE_MASK'); check('restricted shared secret into K1|K2: both Invalid (GR39.4)', d.se == SE_INV and s.bad)
 d, s = dk(kind='ASCON-AEAD128_NONCE', restricted=False, nonce=NN, key=KEY); check('_Nonce is not a destination -> dest Invalid', d.se == SE_INV and not s.bad)
 for nm, kw in (('length 15', dict(length=15)), ('length 0', dict(length=0)), ('klstart 8', dict(ks=1))):
     d, s = dk(restricted=False, **kw); check('derive %s -> destination Invalid' % nm, d.se == SE_INV and not s.bad)
-d, s = dk(data=bytes(12), length=16, restricted=False); check('12-byte source shorter than the key -> source Invalid (GR40.6)', s.bad and d.se == 0 and d.st == READY)
-d = Locker('ASCON-AEAD128', key=KEY); d.setst(2, 'C', inp=NONCE); derive(Secret(bytes(16), False), d, 16); check('destination not in Ready -> Invalid (GR40.2)', d.se == SE_INV)
+d, s = dk(data=bytes(12), length=16, restricted=False); check('12-byte source shorter than the key -> source Invalid (GR39.7)', s.bad and d.se == 0 and d.st == READY)
+d = Locker('ASCON-AEAD128', key=KEY); d.setst(2, 'C', inp=NONCE); derive(Secret(bytes(16), False), d, 16); check('destination not in Ready -> Invalid (GR39.3)', d.se == SE_INV)
 d = Locker('ASCON-AEAD128', skid=0x0101010101010101, sks={0x0101010101010101: KEY}); derive(Secret(bytes(16), False), d, 16); check('SKID-keyed destination refuses derive (KeyType 1) -> Invalid', d.se == SE_INV)
-d, s = dk(shared=False, restricted=False, data=bytes(range(16))); check('CMAC-type output into AEAD key: admitted (GR44)', d.se == 0 and d.key == b2v(bytes(range(16))))
+d, s = dk(shared=False, restricted=False, data=bytes(range(16))); check('CMAC-type output into AEAD key: admitted (GR43)', d.se == 0 and d.key == b2v(bytes(range(16))))
 d, s = dk(kind='ASCON-AEAD128_NONCE_MASK', shared=False, restricted=False, data=bytes(16)); check('16-byte CMAC-type output into K1|K2 (32 B needed): dest Invalid', d.se == SE_INV)
 o = Locker('ASCON-XOF128'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128'); derive(o, d, 16); check('sponge Hash_Output is not a source: source Invalid, dest untouched', o.se == SE_INV and d.st == READY)
 t2 = Locker('ASCON-AEAD128', key=KEY); ct, t_ = enc(t2, b'', b'x'); d = Locker('ASCON-AEAD128'); derive(t2, d, 16); check('AEAD tag output is not a source', t2.se == SE_INV and d.st == READY)
@@ -367,7 +367,7 @@ section('MachinePolicy, restrictl, SKID, unsupported policy, Form D')
 for k in HASHES: check(k + ' MachinePolicy=1 -> unsupported Metadata (0, 1)', (Locker(k, policy=1).st, Locker(k, policy=1).se) == (0, 1))
 L = Locker('ASCON-AEAD128', policy=3, key=KEY); L.restrictl(1); L.setst(2, 'C', inp=NONCE); L.setst(8, 'A'); check('restrictl 3 -> 1: Decrypt refused', L.se == SE_INV)
 L = Locker('ASCON-AEAD128', policy=3, key=KEY); L.restrictl(1); L.setst(2, 'C', inp=NONCE); L.setst(7, 'A'); check('restrictl 3 -> 1: Encrypt still admitted', L.st == ENC)
-L = Locker('ASCON-AEAD128', policy=1, key=KEY); L.restrictl(2); check('restrictl to a forbidden value -> Invalid (GR26)', L.se == SE_INV)
+L = Locker('ASCON-AEAD128', policy=1, key=KEY); L.restrictl(2); check('restrictl to a forbidden value -> Invalid (GR25)', L.se == SE_INV)
 L = Locker('ASCON-AEAD128', policy=2, key=KEY); L.restrictl(mask(64)); check('restrictl all-ones: unchanged', L.policy == 2 and L.st == READY)
 L = Locker('ASCON-HASH256'); L.restrictl(0); check('restrictl on an ungated Machine: no change', L.policy == 0 and L.st == READY)
 SK = {0x0101010101010101: KEY}; c, nb, tg = R.ref_ascon_aead(KEY, NONCE, b'a', b'abc')

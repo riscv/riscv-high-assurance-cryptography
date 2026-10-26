@@ -157,7 +157,7 @@ control('L=256 vs KMACXOF right_encode(0): domain separation', refmac('KMAC128',
 control('output of L=39 differs in the masked top bit from unmasked ceil bytes', refmac('KMAC128', KEY, b'abc', b'', 39) != refmac('KMAC128', KEY, b'abc', b'', 40)[:5])
 control('wrong customization string changes the MAC', refmac('KMAC128', KEY, bytes(4), TAG, 256) != refmac('KMAC128', KEY, bytes(4), b'', 256))
 
-section('kl.derive into KMAC (shared secret as message), GR38-GR44')
+section('kl.derive into KMAC (shared secret as message), GR37-GR43')
 def kd(kind='KMAC128', data=b'S' * 32, length=None, shared=True, ks=0):
     d = Locker(kind, K=KEY); d.setst(2, 'A'); s = Secret(data, True, shared); derive(s, d, len(data) if length is None else length, ks); return d, s
 d, s = kd(); d.setst(6, 'B', 256); o = bytearray(32); d.exec('C', out=o)
@@ -166,8 +166,8 @@ d, s = kd('KMACXOF256', b'T' * 70); d.setst(6, 'A'); o = bytearray(40); d.exec('
 check('70-byte secret -> KMACXOF256', bytes(o) == v2b(R.ref_kmac(136, KEY, b'T' * 70, 320, xof=True), 40))
 for nm, kw in (('length 0', dict(length=0)), ('length 31', dict(length=31)), ('klstart 8', dict(ks=1))):
     d, s = kd(**kw); check('derive %s -> destination Invalid, source untouched' % nm, d.se == SE_INV and not s.bad)
-d, s = kd(shared=False); check('non-shared-secret source into KMAC input: both Invalid (GR40.3)', d.se == SE_INV and s.bad)
-d = Locker('KMAC128', K=KEY); derive(Secret(b'S' * 32), d, 32); check('destination in Ready -> Invalid (GR40.2)', d.se == SE_INV)
+d, s = kd(shared=False); check('non-shared-secret source into KMAC input: both Invalid (GR39.4)', d.se == SE_INV and s.bad)
+d = Locker('KMAC128', K=KEY); derive(Secret(b'S' * 32), d, 32); check('destination in Ready -> Invalid (GR39.3)', d.se == SE_INV)
 o = Locker('KMAC128', K=KEY); o.setst(2, 'A'); o.setst(6, 'B', 128); d = Locker('KMAC256', K=KEY); d.setst(2, 'A'); derive(o, d, 32)
 check('KMAC Hash_Output is not a source: source Invalid, dest untouched', o.se == SE_INV and d.st == ABSORB)
 
@@ -186,7 +186,7 @@ for pol, vo, vv in ((1, True, False), (2, False, True), (3, True, True)):
     L = Locker('KMAC128', policy=pol, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy=%d: Hash_Verify %s' % (pol, 'admitted' if vv else 'refused'), (L.st == VERIFY) == vv)
 L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(1); L.setst(2, 'A'); L.setst(6, 'B', 128); check('restrictl 3 -> 1: Hash_Output stays admitted', L.st == OUTPUT_)
 L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(1); L.setst(2, 'A'); L.setst(5, 'B', 128); check('restrictl 3 -> 1: Hash_Verify now refused', L.se == SE_INV)
-L = Locker('KMAC128', policy=1, K=KEY); L.restrictl(2); check('restrictl narrowing to a forbidden value (0 bits) -> Invalid (GR26)', L.se == SE_INV)
+L = Locker('KMAC128', policy=1, K=KEY); L.restrictl(2); check('restrictl narrowing to a forbidden value (0 bits) -> Invalid (GR25)', L.se == SE_INV)
 L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(mask(64)); check('restrictl all-ones: unchanged', L.policy == 3 and L.st == READY)
 for k in ('KMACXOF128', 'KMACXOF256'):
     L = Locker(k, policy=1, K=KEY); check(k + ' with MachinePolicy != 0 -> unsupported Metadata (State 0, ext 1)', (L.st, L.se) == (0, 1))

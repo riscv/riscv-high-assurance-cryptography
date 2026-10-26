@@ -184,9 +184,9 @@ for st, nm in ((ELB, 'Enc_Last_Block'), (DLB, 'Dec_Last_Block')):
         m = at(ENC if st == ELB else DEC); m.setst(st, 'B', 0); m.setst(tgt, f, 0, 0); check('%s lbl 0: setst %s Invalid' % (nm, tn), m.st == INV)
 m = at(ENC); m.setst(ELB, 'B', 0); m.setst(ETF, 'C'); check('Enc_Last_Block lbl 0: Form C setst Enc_Tag_Finalize Invalid (Form A only)', m.st == INV)
 m = at(ENC, policy=2); m.setst(ELB, 'B', 0); check('Enc_Last_Block gated by MachinePolicy[0]', m.st == INV)
-m = at(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 0); check('Hash_Absorb_Last_Block lbl 0: Form B kl.exec Invalid even with KLLEN = 0 (MR10, GR21)', m.st == INV)
+m = at(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 0); check('Hash_Absorb_Last_Block lbl 0: Form B kl.exec Invalid even with KLLEN = 0 (MR10, GR20)', m.st == INV)
 m = at(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 128); check('Hash_Absorb_Last_Block lbl 0: Form B kl.exec Invalid', m.st == INV)
-m = at(ABSORB); m.setst(HABL, 'B', 8); m.exec('B', 0, 0); check('Hash_Absorb_Last_Block lbl 8: KLLEN = 0 is an empty window, State kept (GR53 item 1)', m.st == HABL and m.lbl == 8)
+m = at(ABSORB); m.setst(HABL, 'B', 8); m.exec('B', 0, 0); check('Hash_Absorb_Last_Block lbl 8: KLLEN = 0 is an empty window, State kept (GR52 item 1)', m.st == HABL and m.lbl == 8)
 # Form D exec route vs Form A setst route: same checksum_P, tag, Serialized Content, enc and dec, OCB and OCB_NONCE
 def route(mk, nb, n, a, x, dec):
     r = []

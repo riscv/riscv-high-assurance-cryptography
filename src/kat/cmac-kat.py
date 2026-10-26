@@ -188,7 +188,7 @@ control('verify with a truncated tag shorter than 64 bits is refused', inv((lamb
 section('ported from the old KAT: KLIOBUF substitution, empty window, restrict at issue, Ready')
 m = at(ABSORB); m.zklio = True; m.exec('D', b2v(bytes(16)), 128); check('Zklio: Form D substitutes for Form B in Hash_Absorb', m.st == ABSORB and m.any)
 m = at(ABSORB); m.exec('D', 0, 128); check('no Zklio: Form D is a wrong Form', inv(m))
-m = CMAC(KEY if 'KEY' in globals() else bytes(16)); m.setst(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 0); check('KLLEN = 0 after an empty-message last block: Invalid (MR10, GR21)', m.st == INV)
+m = CMAC(KEY if 'KEY' in globals() else bytes(16)); m.setst(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 0); check('KLLEN = 0 after an empty-message last block: Invalid (MR10, GR20)', m.st == INV)
 m = at(HABL); m.restrict(1); m.setst(HV, 'B', 128); check('restrict removes verify: Hash_Verify refused', inv(m))
 m = at(HOUT); m.restrict(2); m.exec('C', 0, 128); check('restrict removes generate after entering Hash_Output: exec refused at issue (MR1)', inv(m))
 done()

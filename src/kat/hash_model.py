@@ -179,21 +179,21 @@ class Locker:
         s.halted = None; f = s.f; st = s.st; kl = 8 * len(data) if kllen is None else kllen
         if st in ('Invalid', 'Inert'): return None if form != 'C' else bytes(kl // 8)
         zero = bytes(kl // 8) if form == 'C' else None
-        if st in ('Output', 'Verify') and s.hmac and not s.policy & (1 if st == 'Output' else 2): s.inv(); return zero   # GR26
+        if st in ('Output', 'Verify') and s.hmac and not s.policy & (1 if st == 'Output' else 2): s.inv(); return zero   # GR25
         if st == 'Output':
             if form != 'C': return s.inv()
             return s._exec_out(kl, klstart, halt)
         if form != 'B' or st not in ('Absorb', 'Last', 'SetKey', 'Verify'): s.inv(); return zero
         if st == 'Verify':
-            if klstart * 8 >= kl: return None                          # GR53 item 1
+            if klstart * 8 >= kl: return None                          # GR52 item 1
             if kl < s.tag_len: return s.inv()
             ok = (b2v(data) & M(s.tag_len)) == (s.S & M(s.tag_len))
             s.st = 'Success' if ok else 'Failure'; return None
         if st == 'Last':
             L = s.lbl
             if L == 0: return s.inv()                                  # MR10: empty final input admits no kl.exec, even an empty window
-            if klstart * 8 >= kl: return None                          # GR53 item 1
-            if kl < L or klstart: return s.inv()                       # GR53 items 2, 3
+            if klstart * 8 >= kl: return None                          # GR52 item 1
+            if kl < L or klstart: return s.inv()                       # GR52 items 2, 3
             X = b2v(data)
             if f.kind in ('sha2', 'sm3'):
                 nb = (L + 7) // 8; q = L % 8; bs = bytearray(data[:nb])
@@ -234,7 +234,7 @@ class Locker:
                 if halt and ob < kl: s.halted = ob // 8; return v2b(out, kl // 8)
         return v2b(out, kl // 8)
     def restrictl(s, mask):
-        """kl.restrictl narrowing MachinePolicy (GR26): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
+        """kl.restrictl narrowing MachinePolicy (GR25): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
         if s.st in ('Invalid', 'Inert'): return
         s.policy &= mask
         if s.hmac and not s.policy & 3: s.inv()
@@ -242,10 +242,11 @@ class Locker:
         """destination side of kl.derive of a shared secret; False (and dest Invalid) if refused."""
         s.srcinv = False
         if s.st in ('Invalid', 'Inert'): return False
-        if src in ('hmac_tag', 'xof'): s.srcinv = True; return False          # GR40 item 1: not a source endpoint; destination unchanged
-        if src == 'cmac' and s.st == 'Absorb': s.srcinv = True; s.inv(); return False   # GR40 item 3: pair not admitted, both Invalid
+        if klstart: s.inv(); return False                                     # GR39 item 1
+        if src in ('hmac_tag', 'xof'): s.srcinv = True; return False          # GR39 item 2: not a source endpoint; destination unchanged
+        if src == 'cmac' and s.st == 'Absorb': s.srcinv = True; s.inv(); return False   # GR39 item 4: pair not admitted, both Invalid
         f = s.f; length = len(secret) if length is None else length
-        if klstart or length != len(secret): s.inv(); return False
+        if length != len(secret): s.inv(); return False
         if s.st == 'SetKey':
             if stream or len(secret) > f.b // 8: s.inv(); return False
             s.K0 = b2v(secret); s.bb = 0; s.cum = f.b; s.haskey = True; return True

@@ -95,12 +95,12 @@ check('MachinePolicy 0 is invalid Metadata (Error State Invalid)', lk(0, 0).err 
 L = lk(0, 1, k0); L.setst(S_ENC); L.setst(S_DEC)
 check('decrypt-only/encrypt-only: disallowed transition leaves Error State Invalid', L.err == SE_INVALID)
 for imm in (13, 2, 48, 49, 50, 51, 52, 53, 54, 55, 66, 100):
-    L = lk(0, 3, k0); L.setst(imm); check('kl.setst immediate %d is Invalid in ECB (GR24/GR25/GR21)' % imm, L.err == SE_INVALID)
+    L = lk(0, 3, k0); L.setst(imm); check('kl.setst immediate %d is Invalid in ECB (GR23/GR24/GR20)' % imm, L.err == SE_INVALID)
 L = lk(0, 3, k0); L.setst(S_ENC, 'C', vec=5); check('Form C kl.setst into Encrypt (ECB has no aux data): Invalid', L.err == SE_INVALID)
 L = lk(0, 3, k0); L.setst(S_ENC, 'B', xs=5); check('Form B kl.setst into Encrypt: Invalid', L.err == SE_INVALID)
 L = lk(0, 3, k0); L.setst(0); check('kl.clear: Unconfigured, inert', L.err == SE_UNCONFIGURED and L.exec(b2v(P), 128) == (0, 0))
 L = lk(0, 3, k0); L.setst(S_ENC)
-L = lk(0, 3, k0); L.setst(S_ENC); check('KLLEN = 0 below the 128-bit minimum: empty window (GR53 item 1), no-op, State kept', L.exec(0, 0) == (0, 0) and not L.inert() and L.err != SE_INVALID)
+L = lk(0, 3, k0); L.setst(S_ENC); check('KLLEN = 0 below the 128-bit minimum: empty window (GR52 item 1), no-op, State kept', L.exec(0, 0) == (0, 0) and not L.inert() and L.err != SE_INVALID)
 o, _ = L.exec(b2v(P) | (3 << 128), 136); check('MR6: KLLEN=136 violates granularity: Invalid, window zero', o == 0 and L.err == SE_INVALID)
 
 section('MR1: SCC imported in a State that its MachinePolicy disables')
@@ -109,7 +109,7 @@ Li = Locker.import_(mdh_put(mdh, 'MachinePolicy', 2), c1); check('SCC in Encrypt
 Li.exec(b2v(P), 128); check('... kl.exec -> Invalid (MR1)', Li.err == SE_INVALID)
 Li = Locker.import_(mdh_put(mdh, 'MachinePolicy', 2), c1); Li.setst(S_DEC); check('... a kl.setst naming Decrypt is admitted', Li.state == S_DEC and not Li.inert())
 
-section('Window, halting and resume (GR46-GR53)')
+section('Window, halting and resume (GR45-GR52)')
 k = H('2b7e151628aed2a6abf7158809cf4f3c'); C4 = [cipher_enc('AES128', k, p) for p in P4]
 for stop in (1, 2, 3):
     L = lk(0, 3, k); L.setst(S_ENC); inp = blocks_v(P4); acc = 0; ks = 0; steps = 0
@@ -136,7 +136,7 @@ check('import with MachinePolicy 0: Invalid', Locker.import_(mdh_put(mdh, 'Machi
 check('import with a State ECB does not have: Invalid', Locker.import_(mdh_put(mdh, 'State', 9), c1).err == SE_INVALID)
 check('import with non-zero StateExtension at State: Invalid (unsupported)', Locker.import_(mdh_put(mdh, 'StateExtension', 1), c1).err == SE_INVALID)
 
-section('kl.derive into the key field (GR38-GR44)')
+section('kl.derive into the key field (GR37-GR43)')
 KS = bytes(range(64))
 for t, need in ((0, 16), (1, 24), (2, 32), (3, 16)):
     L = lk(t); n = TYPES[t]
@@ -148,5 +148,5 @@ for t, need in ((0, 16), (1, 24), (2, 32), (3, 16)):
 L = Locker(machine(0, 0), 3, bytes(8), skid=True); check('derive into KeyType 1 (SKID) key field: Invalid', not L.load_key(KS, 64))
 L = lk(0); L.setst(S_ENC); L.derive_out(16); check('ECB as kl.derive source: Invalid', L.err == SE_INVALID)
 control('wrong expected key is detected', cipher_enc('AES128', KS[:16], PT) != cipher_enc('AES128', KS[1:17], PT))
-spec_note('Form D (KLIOBUF) substitution, GR narrowing GR41/GR44 and CMAC Hash_Output sources need the Zklio / CMAC models: covered by their KATs')
+spec_note('Form D (KLIOBUF) substitution, GR narrowing GR40/GR43 and CMAC Hash_Output sources need the Zklio / CMAC models: covered by their KATs')
 done()

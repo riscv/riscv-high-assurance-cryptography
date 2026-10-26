@@ -93,18 +93,19 @@ class KLE:
         s.slots -= 1; l = s.L[k]; l.slot = True
         old = s.pool.pop() if s.pool else 0
         l.content = 0 if s.zero_alloc else old
-    def err(s, k, se):             # GR36
+    def err(s, k, se):             # GR35
         m = s.md(k)
         m = mdh_put(mdh_put(m, 'State', 0), 'StateExtension', se)
         m = mdh_put(mdh_put(m, 'AuxDataLen', 0), 'ADSDropped', 0)
         if mdh_get(m, 'Version') == 3: m = mdh_put(m, 'Version', 0)
+        if mdh_get(m, 'KeyType') == 2: m = mdh_put(m, 'KeyType', 0)
         s.free(k); s.L[k].mdh = m
     def tgt(s, kd, r):             # GR4
         if r:
             if kd != 0: raise IllegalInstruction('GR4')
             return None if s.nl == NONE else s.nl
         return kd
-    def common(s):                 # locker-state-independent checks (GR17), reduced
+    def common(s):                 # locker-state-independent checks (GR16), reduced
         if not s.csk: raise Trap('no_csk')
     def config(s, m): return 56 <= mdh_get(m, 'State') <= 60
     # ---- reads
@@ -159,7 +160,7 @@ class KLE:
         s.err(k, immed)
     # ---- usage instructions
     def usage_gate(s, k):
-        """GR21 items 2,3: UsagePolicy then ExpirationDate.  False if an Error State was entered."""
+        """GR20 items 2,3: UsagePolicy then ExpirationDate.  False if an Error State was entered."""
         m = s.md(k)
         if not (mdh_get(m, 'UsagePolicy') >> s.mode & 1): raise Trap('privilege_violation')
         d = mdh_get(m, 'ExpirationDate')
@@ -204,8 +205,8 @@ class KLE:
             if form != 'A' or kd != 0 or r: raise IllegalInstruction('clearall')
             return s.clearall()
         if immed == 64: return s.clearads(kd, r, form)
-        if 56 <= immed <= 63: raise IllegalInstruction('GR24 reserved immed7')
-        if immed in (54, 55) or immed > 65:        # GR25; no toy Machine defines 66-127
+        if 56 <= immed <= 63: raise IllegalInstruction('GR23 reserved immed7')
+        if immed in (54, 55) or immed > 65:        # GR24; no toy Machine defines 66-127
             s.common(); k = s.tgt(kd, r)
             if k is None or mdh_get(s.md(k), 'State') == 0: return
             if s.config(s.md(k)): raise Trap('privilege_violation')
@@ -286,7 +287,7 @@ class KLE:
         if immed == 57: return s._export_open(k)
         s.start = 0; s.free(k)
         if immed == 58 and mdh_get(md, 'State') == 0 and 1 <= mdh_get(md, 'StateExtension') <= 6:
-            # short import: invalid Metadata gives Invalid; otherwise the MDH is kept as is, but for GR36
+            # short import: invalid Metadata gives Invalid; otherwise the MDH is kept as is, but for GR35
             if s.val(md, 'import') == 'invalid': s.L[k].mdh = mdh_pack(State=0, StateExtension=SE_INVALID); return
             s.L[k].mdh = md; s.err(k, mdh_get(md, 'StateExtension')); return
         v = s.val(md, 'provision' if immed == 56 else 'import')
@@ -307,12 +308,12 @@ class KLE:
     def mvin(s, content, tag=0):
         k = None if s.nl == NONE else s.nl
         if k is None or mdh_get(s.md(k), 'State') == 0: return
-        if mdh_get(s.md(k), 'State') not in (56, 58, 60): raise IllegalInstruction('GR31')
+        if mdh_get(s.md(k), 'State') not in (56, 58, 60): raise IllegalInstruction('GR30')
         s.L[k].content = content; s.L[k].tag = tag
     def mvout(s):
         k = None if s.nl == NONE else s.nl
         if k is None or mdh_get(s.md(k), 'State') == 0: return (0, 0)
-        if mdh_get(s.md(k), 'State') not in (57, 59): raise IllegalInstruction('GR31')
+        if mdh_get(s.md(k), 'State') not in (57, 59): raise IllegalInstruction('GR30')
         return (s.L[k].content, toy_tag(s.L[k].content))
     def _sysfmt_complete(s, k): raise NotImplementedError
     def _complete(s, k, ml):
@@ -324,7 +325,7 @@ class KLE:
             if mdh_get(m, 'KeyType') == 2:
                 s.rng = (s.rng * 6364136223846793005 + 1442695040888963407) & mask(64); l.content = s.rng
                 m = mdh_put(m, 'KeyType', 0)
-            l.mdh = mdh_put(mdh_put(mdh_put(m, 'State', 1), 'StateExtension', 0), 'MachineUse', 0); return
+            l.mdh = mdh_put(mdh_put(mdh_put(mdh_put(m, 'State', 1), 'StateExtension', 0), 'MachineUse', 0), 'AuxInfo', 0); return
         mst = mdh_get(ml, 'State')
         v3 = mdh_get(m, 'Version') == 3
         adm = set(PI_STATES) if base_type(st) == 'pi' else set(range(1, 56)) | set(SCC_STATES)

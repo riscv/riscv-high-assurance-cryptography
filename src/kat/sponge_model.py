@@ -7,7 +7,7 @@ L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 wh
   halt = n: stop at the first interruption point with at least n bytes done (resumable via klstart').
 L.export() / L.import_(sc, st)  serialized content; L.mdh_state() -> (State, StateExtension).
 Also modeled: AEAD variants _NONCE/_NONCE_MASK, SKID (sks dict), restrictl, unsupported MachinePolicy, exec_d (Form D), Secret/derive.
-Not modeled: SCC authentication, GR41 SCProtection narrowing.
+Not modeled: SCC authentication, GR40 SCProtection narrowing.
 """
 from common import *
 import sponge_ref as R
@@ -31,7 +31,7 @@ class Locker:
         self.kind, self.policy = kind, policy
         self.skid, self.sks = skid, sks or {}
         bad = False
-        if skid is not None:                        # GR76/GR77: the SKS resolves the SKID
+        if skid is not None:                        # GR75/GR76: the SKS resolves the SKID
             ent = self.sks.get(skid)
             if ent is None: bad = True
             elif kind == 'ASCON-AEAD128_NONCE_MASK': key, K2 = ent
@@ -70,7 +70,7 @@ class Locker:
         else: self.s = 0
 
     def invalid(self):
-        """GR36: clear Content beyond the MDH."""
+        """GR35: clear Content beyond the MDH."""
         self.st, self.se = 0, SE_INV
         self.s = self.bb = self.lbl = self.ol = self.cum = self.L = self.zlen = 0
         if self.fam == 'aead': self.key = self.nonce = self.k2 = 0
@@ -112,7 +112,7 @@ class Locker:
         if self.is_error() or self.inert(): return
         if imm == 0: self.clear(); return
         if imm == READY:
-            if form != 'A': return self.invalid()   # wrong Form: GR21 item 4, no exception
+            if form != 'A': return self.invalid()   # wrong Form: GR20 item 4, no exception
             self._ready(); self.st = READY; return
         if self.st in (SUCCESS, FAILURE): return self.invalid()
         if imm in (SUCCESS, FAILURE): return self.invalid()
@@ -205,7 +205,7 @@ class Locker:
         self._zk = klstart
         if self.is_error() or self.inert():
             if out is not None and form in 'AC':
-                out[self._zk:] = bytes(max(0, len(out) - self._zk))   # GR35: [klstart, top-1] only
+                out[self._zk:] = bytes(max(0, len(out) - self._zk))   # GR34: [klstart, top-1] only
             return 0
         if self.st in (READY, SUCCESS, FAILURE): return self._inv_exec(out)
         return getattr(self, '_exec_' + self.fam)(form, inp, klstart, out, halt)
@@ -215,7 +215,7 @@ class Locker:
         self._zero(out); return 0
 
     def _zero(self, out):
-        if out is not None: out[self._zk:] = bytes(max(0, len(out) - self._zk))   # GR35
+        if out is not None: out[self._zk:] = bytes(max(0, len(out) - self._zk))   # GR34
 
     def _exec_hash(self, form, inp, klstart, out, halt):
         st = self.st
@@ -234,7 +234,7 @@ class Locker:
         K = 8 * len(inp); v = b2v(inp)
         if st == LAST:
             if self.lbl == 0: self.invalid(); return 0     # MR10: no exec admitted, even an empty window
-            if 8 * klstart >= K: return 0                  # empty window (GR53 item 1)
+            if 8 * klstart >= K: return 0                  # empty window (GR52 item 1)
             if K < self.lbl or klstart: self.invalid(); return 0   # length (item 2), interruption point (item 3)
             ib = 0
             while ib < self.lbl:
@@ -244,7 +244,7 @@ class Locker:
             self.lbl = 0; return 0
         ib = 8 * klstart
         if st == AUX and self.zlen == 0: self.invalid(); return 0   # Z_len = 0: any kl.exec, even an empty window
-        if ib >= K: return 0                       # empty window (GR53)
+        if ib >= K: return 0                       # empty window (GR52)
         if klstart and self.bb != 0: self.invalid(); return 0
         mx = self.zlen if st == AUX else 0
         if st == AUX and self.cum >= mx: self.invalid(); return 0
@@ -281,7 +281,7 @@ class Locker:
 
     def _exec_verify(self, inp, klstart=0):
         Lb = self.L
-        if 8 * klstart >= 8 * len(inp): return 0                  # GR53 item 1: empty window
+        if 8 * klstart >= 8 * len(inp): return 0                  # GR52 item 1: empty window
         if 8 * len(inp) < Lb: self.invalid(); return 0
         self.st = SUCCESS if (b2v(inp) ^ self.s) & mask(Lb) == 0 else FAILURE
         return 0
@@ -298,7 +298,7 @@ class Locker:
         return True
 
     def restrictl(self, rq):
-        """kl.restrictl: AND-narrowing of MachinePolicy (all-ones leaves it); GR26: forbidden value -> Invalid."""
+        """kl.restrictl: AND-narrowing of MachinePolicy (all-ones leaves it); GR25: forbidden value -> Invalid."""
         if self.is_error() or self.inert(): return
         if rq == mask(64): return
         if self.fam == 'aead' or (self.fam == 'kmac' and not self.xof):
@@ -309,10 +309,10 @@ class Locker:
 
     def exec_d(self, iobuf, top, klstart=0, halt=None):
         """Form D kl.exec (Zklio): KLIOBUF [klstart, top-1] stands for the native vector operand (GR11, GR12)."""
-        if top == 0: raise IllegalInstruction('KLIOBUF not configured')   # GR15
+        if top == 0: raise IllegalInstruction('KLIOBUF not configured')   # GR14
         st = self.st
         if self.is_error() or self.inert():
-            iobuf[klstart:top] = bytes(max(0, top - klstart)); return 0     # GR35
+            iobuf[klstart:top] = bytes(max(0, top - klstart)); return 0     # GR34
         nat = {ABSORB: 'B', LAST: 'B', AUX: 'B', VERIFY: 'B', OUTPUT_: 'C', ENC: 'A', DEC: 'A', ENCLAST: 'A', DECLAST: 'A'}.get(st)
         if self.fam == 'aead' and st == VERIFY: nat = 'B'
         if nat is None:
@@ -340,7 +340,7 @@ class Locker:
             self.perm(8); return 0
         lb = self.lbl
         if st in (ENCLAST, DECLAST) and form == 'A':
-            if klstart >= len(inp): return 0                        # GR53 item 1: empty window keeps the State
+            if klstart >= len(inp): return 0                        # GR52 item 1: empty window keeps the State
             if 8 * len(inp) < lb: return self._inv_exec(out)       # no zero padding: granularity
             if klstart: return self._inv_exec(out)
         if st == ENCLAST and form == 'A':
@@ -357,7 +357,7 @@ class Locker:
     def _aead_tag(self, form, inp, out, klstart=0):
         tl = self.tag_len
         if self.st == OUTPUT_ and form != 'C' or self.st == VERIFY and form != 'B': return self._inv_exec(out)
-        if klstart >= len(out if self.st == OUTPUT_ else inp): return 0   # GR53 item 1: empty window
+        if klstart >= len(out if self.st == OUTPUT_ else inp): return 0   # GR52 item 1: empty window
         if (8 * len(out) if self.st == OUTPUT_ else 8 * len(inp)) < tl: return self._inv_exec(out)
         k = self.key; self.xw(2, k); self.xw(3, k >> 64); self.perm(12); self.xw(3, k); self.xw(4, k >> 64)
         tag = (self.w(3) | self.w(4) << 64) & mask(tl)
@@ -388,7 +388,7 @@ class Locker:
             o = 8 if self.skid is not None else 16
             if self.skid is not None:
                 ent = self.sks.get(b2v(sc[:8]))
-                if ent is None: return self.invalid()             # GR77
+                if ent is None: return self.invalid()             # GR76
                 self.key, self.k2 = ent if self.var == 'mask' else (ent, 0)
             else:
                 self.key = b2v(sc[:16])
@@ -407,29 +407,29 @@ class Locker:
         self.st, self.se = st, 0
 
 
-# ---- kl.derive (GR38-GR44, endpoint table of KLE-derive-endpoints)
+# ---- kl.derive (GR37-GR43, endpoint table of KLE-derive-endpoints)
 class Secret:
-    """A source: restricted=True is an ML-KEM sharedkey; False an ECC shared secret in Output or a GR44 output (CMAC, keystream).
+    """A source: restricted=True is an ML-KEM sharedkey; False an ECC shared secret in Output or a GR43 output (CMAC, keystream).
     shared=False marks a non-shared-secret output (CMAC tag): admitted into a key, not into a hash input."""
     def __init__(self, data, restricted=True, shared=True, scprot=1): self.data, self.restricted, self.shared, self.bad, self.scprot = data, restricted, shared, False, scprot
     def invalid(self): self.bad = True; self.data = b''
 
 def derive(src, dst, length, klstart=0):
-    """kl.derive dst, src, length. Returns nothing; endpoints become Invalid per GR40 (checked in order)."""
+    """kl.derive dst, src, length. Returns nothing; endpoints become Invalid per GR39 (checked in order)."""
     if isinstance(src, Locker) and (src.is_error() or src.inert()) or isinstance(dst, Locker) and (dst.is_error() or dst.inert()): return
-    if not isinstance(src, Secret): return src.invalid()                                  # 1: not a source endpoint
+    if klstart: return dst.invalid()                                                      # 1
+    if not isinstance(src, Secret): return src.invalid()                                  # 2: not a source endpoint
     fam = dst.fam
     key_n = {'base': 16, 'mask': 32}.get(getattr(dst, 'var', None)) if fam == 'aead' else None
     ok = (key_n and dst.st == READY and dst.skid is None) or (fam != 'aead' and dst.st == ABSORB)
-    if not ok: return dst.invalid()                                                       # 2: not a destination endpoint
-    if fam != 'aead' and not src.shared or key_n == 32 and src.restricted:                # 3: pair not admitted
+    if not ok: return dst.invalid()                                                       # 3: not a destination endpoint
+    if fam != 'aead' and not src.shared or key_n == 32 and src.restricted:                # 4: pair not admitted
         dst.invalid(); return src.invalid()
     if key_n:
-        if length < key_n: return dst.invalid()                                           # 5
-        if len(src.data) < key_n: return src.invalid()                                    # 6
-    elif length != len(src.data) or length == 0: return dst.invalid()                     # 5 (hash input = whole secret)
-    if klstart: return dst.invalid()                                                      # 7
-    if src.restricted and getattr(dst, 'scprot', 1) < src.scprot:                         # GR41: SCProtection (MDH narrowing not modelled)
+        if length < key_n: return dst.invalid()                                           # 6
+        if len(src.data) < key_n: return src.invalid()                                    # 7
+    elif length != len(src.data) or length == 0: return dst.invalid()                     # 6 (hash input = whole secret)
+    if src.restricted and getattr(dst, 'scprot', 1) < src.scprot:                         # GR40: SCProtection (MDH narrowing not modelled)
         dst.invalid(); dst.se = 5; return
     if key_n:
         dst.key = b2v(src.data[:16]); dst.k2 = b2v(src.data[16:32]) if key_n == 32 else 0

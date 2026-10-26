@@ -1,6 +1,6 @@
 """Locker model of the symmetric-cipher Machines (ECB, CBC, CFB, OFB, CTR, XCTR, XEX), derived from
 Zkl-ISA-machines.adoc (KLE-ECB-mode, KLE-chaining, CTR/XCTR, KLE-XEX-XTS-modes), Machine Rules MR1-MR19 and
-General Rules GR21-GR25, GR33-GR36, GR46-GR53 of Zkl-ISA-unpriv.adoc.  Bytes/ints as in common.py.
+General Rules GR20-GR24, GR32-GR35, GR45-GR52 of Zkl-ISA-unpriv.adoc.  Bytes/ints as in common.py.
 
 Locker(machine, policy, key, key2=None, skid=False) -> locker just provisioned (State Ready); an invalid PI
 (policy 0, XEX key2 == key1) leaves an Error State Invalid.
@@ -92,8 +92,8 @@ class Locker:
         gran = 1 if m == 'CFB' else 16
         if okst and not self.policy & {S_ENC: 1, S_DEC: 2, S_OPERATE: 3}[st]: okst = False       # MR1: State disabled by MachinePolicy
         if not okst: self.invalid(); return 0, 0
-        if klstart * 8 >= kllen: return 0, 0                        # GR53 item 1: empty window (KLLEN = 0 too)
-        if kllen % (8 * gran): self.invalid(); return 0, 0          # GR53 item 2 / MR6: output window zeroed
+        if klstart * 8 >= kllen: return 0, 0                        # GR52 item 1: empty window (KLLEN = 0 too)
+        if kllen % (8 * gran): self.invalid(); return 0, 0          # GR52 item 2 / MR6: output window zeroed
         single = m == 'XEX' and self.steal                           # one block, only interruption point 0
         ip = kllen // 8 if single else (self.u * 8 // gcd(8, self.u) // 8 if m == 'CFB' else 16)
         if klstart % ip: self.invalid(); return 0, 0

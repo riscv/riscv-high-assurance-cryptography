@@ -7,7 +7,7 @@ OpenSSL 3.5.9 ML-KEM (key generation from d||z, encapsulation, decapsulation inc
 outputs were compared byte for byte with the model for 2 seeds per parameter set; the VEC table below stores
 the seeds, the message m recovered from the OpenSSL ciphertext, SHA-256 digests of ek, dk, ct, and the keys K.
 The Machine itself is an abstract executable reading of the State Machine text (setst / load / emit / exec /
-derive); the ISA layer (SEW, KLIOBUF, ADS, export/import, GR57 halting and resumption) is NOT modelled.
+derive); the ISA layer (SEW, KLIOBUF, ADS, export/import, GR56 halting and resumption) is NOT modelled.
 Every group of checks is also run against a Machine with one deliberate fault: it must then fail (controls).
 """
 import sys, hashlib
@@ -45,9 +45,9 @@ class Mach:
     def _clear(s): s.dk[:] = bytes(s.sz[1]); s.ct[:] = bytes(s.sz[2]); s.ss[:] = bytes(32); s.he = s.hd = s.hc = s.hs = 0
     def _invalid(s):
         s.st, s.err = 0, SE_INVALID
-        if 'noclear' not in s.f: s._clear()                # GR36: Content cleared on transition to an Error State
+        if 'noclear' not in s.f: s._clear()                # GR35: Content cleared on transition to an Error State
     def setste(s, e):
-        """kl.setste: any State, Error State e (GR37)."""
+        """kl.setste: any State, Error State e (GR36)."""
         s.st, s.err = 0, e
         if 'noclear' not in s.f: s._clear()
     def _fail(s): s.st, s.W = ST_FAILURE, 0
@@ -124,7 +124,7 @@ class Mach:
         finally: M.SAMPLE_LIMIT[0] = None
         s._goto(nxt)
     def derive(s, dest, length=None):
-        """kl.derive from sharedkey (GR39-GR43). dest: ('key', dest_length), ('hash',) = kl.exec input of a hash/MAC/XOF
+        """kl.derive from sharedkey (GR38-GR42). dest: ('key', dest_length), ('hash',) = kl.exec input of a hash/MAC/XOF
         listed for it, or ('other',) = any other endpoint. Returns the bytes the destination receives, or None when the
         destination (or, for a pair not admitted, both lockers) goes to Invalid."""
         if s.st == 0: return None
@@ -379,7 +379,7 @@ def G_sm(mk, mode):
     return R
 
 def G_lock(mk, mode):
-    """Locker level: error cases, forms, MR14 long fields, restricted sharedkey derive (GR21-GR43)."""
+    """Locker level: error cases, forms, MR14 long fields, restricted sharedkey derive (GR20-GR42)."""
     p = NAMES[mode]; R = []; a = lambda n, ok: R.append((n, bool(ok)))
     inv = lambda m: is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_INVALID
     v = [x for k, x in VEC.items() if k.startswith(p + '/')][0]
@@ -393,11 +393,11 @@ def G_lock(mk, mode):
     zero = bytes(sz[1] + sz[2] + 32)
     # ---- Content cleared and inert Error States
     m = sk(); a('premise: Decapsulate result held in sharedkey_Output', st(m) == S_SOUT and m.serialized() != zero)
-    m.exec(); a('Invalid clears the whole Content (GR36)', inv(m) and m.serialized() == zero and m.ext() == 0)
+    m.exec(); a('Invalid clears the whole Content (GR35)', inv(m) and m.serialized() == zero and m.ext() == 0)
     snap = m.mdh()
     m.setst(ST_READY); m.load(b'\1'); m.emit(1); m.exec(); m.derive(('hash',))
-    a('Error State is inert: setst, load, emit, exec, derive change nothing (GR33)', m.mdh() == snap and m.serialized() == zero)
-    m.setste(SE_OUT_OF_MEMORY); a('kl.setste in an Error State: the new Error State replaces it (GR37)', is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_OUT_OF_MEMORY)
+    a('Error State is inert: setst, load, emit, exec, derive change nothing (GR32)', m.mdh() == snap and m.serialized() == zero)
+    m.setste(SE_OUT_OF_MEMORY); a('kl.setste in an Error State: the new Error State replaces it (GR36)', is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_OUT_OF_MEMORY)
     for nm, mkm in (('Ready', full), ('sharedkey_Output', sk)):
         m = mkm(); m.setste(SE_PRIV_VIOLATION)
         a('kl.setste from %s: Error State, Content cleared' % nm, is_error_state(m.mdh()) and m.serialized() == zero)
@@ -412,7 +412,7 @@ def G_lock(mk, mode):
     for n in (S_GEN, S_ENC, S_EIN, S_COUT, 55):
         m2 = mk(mode, RBG(d + z), limit=1); m2.setst(S_GEN); m2.exec(); m2.setst(n)
         a('from Failure, kl.setst #%d: Invalid' % n, inv(m2))
-    # ---- Forms in each State: only the Form of the State is admitted (GR21, GR57)
+    # ---- Forms in each State: only the Form of the State is admitted (GR20, GR56)
     forms = {'load': lambda m: m.load(b'\1' * 16), 'emit': lambda m: m.emit(16), 'exec': lambda m: m.exec(), 'derive': lambda m: m.derive(('hash',))}
     for f in forms:
         m3 = mk(mode, RBG(d + z), limit=1); m3.setst(S_GEN); m3.exec(); fl = st(m3) == ST_FAILURE; forms[f](m3)
@@ -456,7 +456,7 @@ def G_lock(mk, mode):
     a('completed decapsk replaced by entering encapsk_Input: whole decapsk zeroed, both flags clear', bytes(m.dk) == bytes(sz[1]) and m.ext() == 0)
     m = mk(mode); m.setst(S_DIN); load_all(m, dk); m.setst(ST_READY)
     a('completed decapsk kept on leaving: both flags set', bytes(m.dk) == dk and m.ext() == 3)
-    # ---- restricted sharedkey derive (GR39-GR43, KLE-ML-KEM)
+    # ---- restricted sharedkey derive (GR38-GR42, KLE-ML-KEM)
     m = sk()
     for n in (16, 24, 32): a('key field of %d bytes receives the first %d bytes of the secret' % (n, n), m.derive(('key', n)) == bytes(m.ss[:n]))
     a('shared key of Decapsulate = ACVP/OpenSSL K, first bytes into keys', all(m.derive(('key', n)) == bytes(m.ss[:n]) for n in (16, 24, 32)) and m.derive(('key', 32)) == K)
@@ -512,5 +512,5 @@ section('Controls')
 control('RBG failure path is reachable (RBG without data fails the scripted read)', raises(RBG().read, 32, exc=RBGFail))
 control('SampleNTT limit path is reachable', raises(lambda: (M.SAMPLE_LIMIT.__setitem__(0, 1), M.keygen_internal('ML-KEM-512', bytes(32), bytes(32))), exc=M.SampleNTTLimit))
 M.SAMPLE_LIMIT[0] = None
-spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR57 halting and resumption of long-running exec); GR41 narrowing and SCProtection checks of derive.')
+spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR56 halting and resumption of long-running exec); GR40 narrowing and SCProtection checks of derive.')
 done()
