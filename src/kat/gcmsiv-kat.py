@@ -200,11 +200,11 @@ m = mk(k); m.setst(SAV, 'C', inp=1); m.derive_dest(k2); check('derive in Set_Aux
 m = mk(k); m.derive_dest(RB(32)); check('derive wrong size: Invalid', inv(m))
 m = mk(k); m.derive_dest(k2); m.setst(SAV, 'C', inp=1); check('after derive, Ready usable', m.st == SAV)
 
-section('kl.restrictl')
-m = mk(k); m.restrict(1); check('restrict 3 -> 1 (encrypt only)', m.st == READY and m.policy == 1)
-m.restrict(2); check('restrict to disjoint (policy would be 0): Invalid (GR25)', inv(m))
-m = mk(k); m.restrict(0); check('restrict to 0: Invalid', inv(m))
-m = mk(k); m.restrict(0xff); check('restrict with a superset mask leaves the policy', m.policy == 3)
+section('kl.rstrl')
+m = mk(k); m.rstr(1); check('restrict 3 -> 1 (encrypt only)', m.st == READY and m.policy == 1)
+m.rstr(2); check('restrict to disjoint (policy would be 0): Invalid (GR25)', inv(m))
+m = mk(k); m.rstr(0); check('restrict to 0: Invalid', inv(m))
+m = mk(k); m.rstr(0xff); check('restrict with a superset mask leaves the policy', m.policy == 3)
 
 section('negative controls')
 k, n = k1, n1

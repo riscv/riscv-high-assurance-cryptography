@@ -4,7 +4,7 @@ and Zkl-ISA-unpriv.adoc (GR20-GR25, GR34-GR35, GR55-GR57, GR65).
 Locker(ps, policy=3, aux=0, rbg=None, lim=None)
   State numbers: S_READY ... ; fields: st (0 = Inert), se (StateExtension: flags bits0-3, or the Error code when st == 0),
   mu_use (MachineUse = W or P), privkey, pubkey, signature, mu, rnd (bytes, zero-filled when empty), ads.
-  setst(imm, form='A', xs=0); exec(form, data=None, n=None, halt=None) ; restrict(policy)
+  setst(imm, form='A', xs=0); exec(form, data=None, n=None, halt=None) ; rstr(policy)
   export(content2=True) -> snapshot ; Locker.import_(snap, ps, content2=True, rbg=None, lim=None)
   mdh() -> 128-bit MDH value.   rbg(n) -> n bytes, or raises to model an RBG failure.
 """
@@ -227,7 +227,7 @@ class Locker:
         self._to(S_SOUT)
 
     # ------------------------------------------------------------ policy, export, import
-    def restrict(self, pol): self.policy &= pol
+    def rstr(self, pol): self.policy &= pol
 
     def export(self, content2=True):
         s = dict(st=self.st, se=self.se, mu_use=self.mu_use, policy=self.policy, aux=self.aux, rnd=self.rnd,

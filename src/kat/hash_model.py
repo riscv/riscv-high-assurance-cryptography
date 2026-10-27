@@ -233,8 +233,8 @@ class Locker:
                 s.bb = 0
                 if halt and ob < kl: s.halted = ob // 8; return v2b(out, kl // 8)
         return v2b(out, kl // 8)
-    def restrictl(s, mask):
-        """kl.restrictl narrowing MachinePolicy (GR25): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
+    def rstrl(s, mask):
+        """kl.rstrl narrowing MachinePolicy (GR25): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
         if s.st in ('Invalid', 'Inert'): return
         s.policy &= mask
         if s.hmac and not s.policy & 3: s.inv()

@@ -9,7 +9,7 @@ Interface (all Machines):
         by the caller), klstart and halt_at in BYTES.  halt_at = byte offset at which a multi-block/VLI exec is
         interrupted (only at the architected interruption points); the position is then in m.klstart.
   m.export() -> (SC value, width); Cls.from_sc(st, sc, ...) imports it.
-  m.derive_dest(keybytes)  kl.derive into the key field; m.restrict(mask) narrows MachinePolicy.
+  m.derive_dest(keybytes)  kl.derive into the key field; m.rstr(mask) narrows MachinePolicy.
 Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR35).
 """
 from common import *
@@ -53,7 +53,7 @@ class Base:
         if form == 'A' and exp in 'BC': return xs == 0 and inp == 0
         if form == 'D' and exp == 'C': return True
         return False
-    def restrict(self, mask):
+    def rstr(self, mask):
         if self.st == INV: return
         self.policy &= mask
         if self.policy == 0: self._fail()

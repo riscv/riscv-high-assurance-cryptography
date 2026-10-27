@@ -57,15 +57,15 @@ class KLE2(KLE):
     def setnl(s, v): s._pre1(); KLE.setnl(s, v)
     # getters/setters of <<KLE-instruction-getter-setter>>: the iob ones are reserved without Zklio; the privilege of the M-mode CSR is not checked
     def getnl(s): s._pre1(); return s.nl
-    def getklst(s): s._pre1(); return s.start
-    def setklst(s, v): s._pre1(); s.start = v
+    def getks(s): s._pre1(); return s.start
+    def setks(s, v): s._pre1(); s.start = v
     def _iob(s):
         s._pre1()
         if not s.zklio: raise IllegalInstruction('GR1: Zklio')
-    def getiobl(s): s._iob(); return s.kliobuflen
-    def getiobt(s): s._iob(); return s.kliobuftop
-    def setiobl(s, v): s._iob(); s.w_kliobuflen(v)
-    def setiobt(s, v): s._iob(); s.w_kliobuftop(v)
+    def getbl(s): s._iob(); return s.kliobuflen
+    def getbt(s): s._iob(); return s.kliobuftop
+    def setbl(s, v): s._iob(); s.w_kliobuflen(v)
+    def setbt(s, v): s._iob(); s.w_kliobuftop(v)
     def clear(s, kd, r=0): s._exm = True; r_ = KLE.clear(s, kd, r) if True else None; s._exm = False; return r_
     def mgmt(s, kd, immed, r=0, form='C', md=0):
         s._exm = immed in (56, 58)
@@ -420,4 +420,4 @@ def decode(w, xlen=64):
 def vec_mdh_ok(instr, vl, sew, vstart):
     """GR6, GR7 for the vector MDH operand."""
     if vl * sew < 128: raise IllegalInstruction('GR6')
-    if vstart != 0 and instr in ('getmdv', 'restrictv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C'): raise IllegalInstruction('GR7')
+    if vstart != 0 and instr in ('getmdv', 'rstrv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C'): raise IllegalInstruction('GR7')

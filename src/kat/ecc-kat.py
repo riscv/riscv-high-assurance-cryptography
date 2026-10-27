@@ -203,8 +203,8 @@ L = sign_setup(); L.exec_D(halt=True); L.setst(RDY)
 check('transition to Ready discards Progress and RndNum', L.progress == 0 and not L.has('rnd'))
 L = sign_setup(); L.exec_D(halt=True); C2 = L.clone()
 check('clone of halted operation restarts: Progress 0, RndNum destroyed', C2.progress == 0 and not C2.has('rnd') and L.progress != 0)
-L = sign_setup(); L.exec_D(halt=True); r = L.restrictl(2)
-check('restrictl clearing MachinePolicy[0] destroys RndNum', L.has('rnd') is False and not any(L.RndNum))
+L = sign_setup(); L.exec_D(halt=True); r = L.rstrl(2)
+check('rstrl clearing MachinePolicy[0] destroys RndNum', L.has('rnd') is False and not any(L.RndNum))
 L = EccLocker('secp256r1'); load(L, SSCAL, le(7, 32)); L.setst(PMUL); L.exec_D(halt=True)
 check('halted Point_Mul resumes to Output', L.progress != 0 and L.exec_D() == 'output' and L.progress == 0)
 
@@ -253,11 +253,11 @@ check('Ready bit 4 with no SecondPt copies and sets HasSecondPt', bytes(L.Second
 L = EccLocker('secp256r1'); L.setst(RDY, 'B', 32); check('Ready bit 5 without HasSecondPt leaves Generator', bytes(L.Generator) == G)
 check('Ready Xs bit 7 -> Invalid', EccLocker('secp256r1').setst(RDY, 'B', 128) == 'invalid')
 L = rdy_state(); L.setst(RDY, 'B', 0x7f); check('Ready Xs 0x7f: all erased/reset', bytes(L.Generator) == bytes(L.Generator) and not any(L.Scalar) and not any(L.Hash) and not any(L.Signature) and not L.has('sig'))
-# restrictl
-L = rdy_state(); L.restrictl(2); check('restrictl 3 -> 2: Hash/Signature kept', L.has('hash') and L.has('sig') and L.policy == 2)
-L = rdy_state(); L.restrictl(0); check('restrictl -> 0: Signature and Hash erased, flags cleared', not any(L.Signature) and not any(L.Hash) and not L.has('sig') and not L.has('hash'))
-L = rdy_state(); L.restrictl(1); check('restrictl 3 -> 1: Signature/Hash kept (policy != 0)', L.has('hash'))
-L = EccLocker('secp256r1', policy=1); check('restrictl widening 1 -> 3 -> Invalid', L.restrictl(3) == 'invalid')
+# rstrl
+L = rdy_state(); L.rstrl(2); check('rstrl 3 -> 2: Hash/Signature kept', L.has('hash') and L.has('sig') and L.policy == 2)
+L = rdy_state(); L.rstrl(0); check('rstrl -> 0: Signature and Hash erased, flags cleared', not any(L.Signature) and not any(L.Hash) and not L.has('sig') and not L.has('hash'))
+L = rdy_state(); L.rstrl(1); check('rstrl 3 -> 1: Signature/Hash kept (policy != 0)', L.has('hash'))
+L = EccLocker('secp256r1', policy=1); check('rstrl widening 1 -> 3 -> Invalid', L.rstrl(3) == 'invalid')
 # custom generator sign/verify
 Gx = Cc.mul(2, Cc.G); Cx = M.Wei('secp256r1'); Cx.G = Gx
 L = EccLocker('secp256r1', rbg=rbg_k(5)); load(L, SGEN, xy(Gx, 32), 'B'); load(L, SSCAL, le(0x1234, 32)); load(L, SHASH, le(0x777, 32)); L.setst(SGN); L.exec_D(); o = drain(L)
@@ -348,7 +348,7 @@ def noclamp(k, u):
 control('unclamped ladder differs from RFC 7748 vector 1', noclamp(k1, u1).hex() != 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552')
 control('big-endian u gives a different result', xk('x25519', k1, u1[::-1])[0].SecondPt != xk('x25519', k1, u1)[0].SecondPt)
 check('x25519 MachinePolicy must be 0 (model construction asserts)', raises(EccLocker, 'x25519', 3, exc=AssertionError))
-L = EccLocker('x25519', policy=0); check('x25519 restrictl cannot add bits', L.restrictl(1) == 'invalid')
+L = EccLocker('x25519', policy=0); check('x25519 rstrl cannot add bits', L.rstrl(1) == 'invalid')
 
 # ------------------------------------------------------------------ 10
 section('EdDSA: Ed25519 / Ed448 (RFC 8032) through Set_Ctx, Msg_Absorb passes, pre-hash')
@@ -429,7 +429,7 @@ L = EccLocker('ed25519'); check('Set_Ctx length 256 -> Invalid', L.setst(SCTX, '
 L = EccLocker('ed25519'); check('Set_Ctx length 255 admitted', L.setst(SCTX, 'B', 255) == 'ok')
 L = EccLocker('ed25519'); check('Set_Ctx Form A -> Invalid', L.setst(SCTX, 'A') == 'invalid')
 L = EccLocker('ed25519'); check('MachinePolicy = 0 invalid for EdDSA (model asserts)', raises(EccLocker, 'ed25519', 0, exc=AssertionError))
-L = EccLocker('ed25519'); check('EdDSA restrictl to 0 -> Invalid', L.restrictl(0) == 'invalid')
+L = EccLocker('ed25519'); check('EdDSA rstrl to 0 -> Invalid', L.rstrl(0) == 'invalid')
 L = EccLocker('ed25519'); load(L, SSCAL, sd); L.setst(PMUL); r = L.exec_D()
 check('Ed25519 Point_Mul on Generator -> point (OutputType 0), s*B', r == 'output' and L.outtype == 0)
 L = EccLocker('ed25519'); load(L, SSCAL, sd); load(L, S2ND, bytes([2]) + bytes(31)); L.setst(PMUL)

@@ -1,6 +1,6 @@
 """Model of the Elliptic Curve Machines of Zkl-ISA-machines.adoc (KLE-ECC, KLE-X25519-X448, KLE-EdDSA), built from the spec text.
 One `EccLocker` per Configuration Controlled locker.  Operations: setst(target, form, xs), exec_in(bytes) (Form B kl.exec
-of a Set State), exec_D(halt) (Form D), exec_out(n) (Form C), restrictl(policy), clearads(), clone(), shared_secret().
+of a Set State), exec_D(halt) (Form D), exec_out(n) (Form C), rstrl(policy), clearads(), clone(), shared_secret().
 Fields are bytearrays in the spec's little-endian order; an invalid configuration moves the locker to Error State Invalid.
 Not modelled: export/import, kl.derive destinations (only the source bytes), SCProtection, Progress units."""
 import copy
@@ -361,7 +361,7 @@ class EccLocker:
         if self.state == OUT and self.outtype == 2: return self.shared_secret()
         return None
     # ------------------------------------------------------------ restrict / clearads / clone
-    def restrictl(self, pol):
+    def rstrl(self, pol):
         self._live()
         if pol & ~self.policy or (self.kind == 'ed' and pol == 0): return self._inv()   # GR25: narrowing only
         self.policy = pol

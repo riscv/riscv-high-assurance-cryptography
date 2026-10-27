@@ -86,7 +86,7 @@ e = KLE(); e.start = 9; check('kl.exec on Unconfigured: no exception, klstart <-
 e = KLE(); e.start = 9; e.setst(4, 2); check('kl.setst on Unconfigured: no-op, klstart unchanged', e.start == 9 and e.md(4) == 0)
 e = KLE(); e.start = 9; e.clearads(4); check('kl.clearads on inert: klstart unchanged', e.start == 9)
 e = KLE(); e.start = 9; e.exec(0, r=1); check('kl.exec with KLNL & 32: fall through, klstart <- 0', e.start == 0)
-e = KLE(); check('restrict on Unconfigured: nothing', trap(e.restrict, 4, mk()) is None and e.md(4) == 0)
+e = KLE(); check('restrict on Unconfigured: nothing', trap(e.rstr, 4, mk()) is None and e.md(4) == 0)
 e = KLE(); check('getmd/getst/getstx with KLNL & 32: zeros', e.getmd(0, r=1) == 0 and e.getst(0, r=1) == 0 and e.getstx(0, r=1) == 0)
 e = KLE(); e.mgmt(4, 56, md=mk(Version=1)); check('getmd of an Error State returns its MDH', e.getmd(4) == mdh_pack(State=0, StateExtension=2))
 e = KLE(); e.start = 9; e.mgmt(0, 56, r=1, md=mk()); check('kl.mgmt provisioning with KLNL & 32: only klstart <- 0, no locker touched', e.start == 0 and e.nl == 32 and all(l.mdh == 0 for l in e.L))
@@ -94,7 +94,7 @@ e = KLE(); e.nl = 3; e.mgmt(0, 56, r=1, md=mk()); check('kl.mgmt via KLNL names 
 e = KLE(); check('mvin / mvout with KLNL & 32: nothing / zeros', e.mvin(5) is None and e.mvout() == (0, 0))
 e = KLE(); check('kl.clone, kl.rename, kl.swap with KLNL & 32: no-ops', (prov(e, 1), e.clone('NL', 1), e.rename(1, 'NL'), e.swap('NL', 1), stx(e, 1))[4] == (1, 0))
 check('kl.clear with KLNL & 32: no-op, no exception', trap(KLE().clear, 0, 1) is None)
-e = KLE(csk=False); check('no CSK -> kl_exc_no_csk before any locker action <<KLE-GR-locker-state-independent>>', trap(e.exec, 4) == 'no_csk' and trap(e.clear, 4) == 'no_csk' and trap(e.restrict, 4, 0) == 'no_csk')
+e = KLE(csk=False); check('no CSK -> kl_exc_no_csk before any locker action <<KLE-GR-locker-state-independent>>', trap(e.exec, 4) == 'no_csk' and trap(e.clear, 4) == 'no_csk' and trap(e.rstr, 4, 0) == 'no_csk')
 
 section('kl.setst, kl.clear, kl.clearads, kl.clearall  <<KLE-GR-setst-states>>')
 e = KLE(); prov(e, 1)
@@ -142,7 +142,7 @@ e = KLE(clock=10**9); e.L[1].mdh = mk(State=2, ExpirationDate=mask(20)); e.exec(
 e = KLE(clock=100, mode=0); e.L[1].mdh = mk(State=2, ExpirationDate=100, UsagePolicy=4); check('UsagePolicy check precedes ExpirationDate (GR20 order)', trap(e.exec, 1) == 'privilege_violation' and e.getst(1) == 2)
 e = KLE(); prov(e, 1, pol=2); check('MachinePolicy without enc bit: setst Encrypt -> Invalid (MR1)', (e.setst(1, 2), stx(e, 1))[1] == INV)
 e = KLE(); prov(e, 1, pol=2); check('MachinePolicy with dec bit: setst Decrypt ok', (e.setst(1, 3), stx(e, 1))[1] == (3, 0))
-e = KLE(); prov(e, 1); e.setst(1, 2); e.restrict(1, mdh_pack(MachinePolicy=2), part='l'); e.exec(1); check('restrict removing enc while in Encrypt: next kl.exec Invalid (GR25, MR1)', stx(e, 1) == INV)
+e = KLE(); prov(e, 1); e.setst(1, 2); e.rstr(1, mdh_pack(MachinePolicy=2), part='l'); e.exec(1); check('restrict removing enc while in Encrypt: next kl.exec Invalid (GR25, MR1)', stx(e, 1) == INV)
 e = KLE(); prov(e, 1, mach=M_SIG, pol=0); check('signature Machine: zero MachinePolicy valid, State 2 reachable', (e.setst(1, 2), stx(e, 1))[1] == (2, 0))
 e = KLE(); prov(e, 1); e.setst(1, 2); e.setst(1, 1); check('Encrypt -> Ready', stx(e, 1) == (1, 0))
 e = KLE(); e.L[1].mdh = mk(State=1, ExpirationDate=5, UsagePolicy=0); e.clock = 9; check('UsagePolicy violation raises before expiry is evaluated', trap(e.setst, 1, 2) == 'privilege_violation' and e.getst(1) == 1)
@@ -150,7 +150,7 @@ e = KLE(); e.L[1].mdh = mk(State=1, ExpirationDate=5, UsagePolicy=0); e.clock = 
 section('Configuration States  <<KLE-GR-config-states>>')
 e = KLE(); e.mgmt(1, 56, md=mk())
 check('usage instruction on Provisioning -> privilege violation, State kept', trap(e.exec, 1) == 'privilege_violation' and trap(e.setst, 1, 2) == 'privilege_violation' and trap(e.clearads, 1) == 'privilege_violation' and e.getst(1) == 56)
-check('restrict on a Configuration-State locker -> privilege violation', trap(e.restrict, 1, mk()) == 'privilege_violation')
+check('restrict on a Configuration-State locker -> privilege violation', trap(e.rstr, 1, mk()) == 'privilege_violation')
 check('clone from Configuration State -> privilege violation, destination cleared', (lambda: (prov(e, 2), trap(e.clone, 2, 1), e.md(2))[1:])() == ('privilege_violation', 0))
 check('admitted in every State: getmd, getst, kl.size, clear, setste', trap(e.getmd, 1) is None and e.getst(1) == 56 and e.size(1) == 32 and trap(e.setste, 1, 2) is None)
 e = KLE(); e.mgmt(1, 56, md=mk()); FIN(e,1); e.mgmt(1, 57); check('kl.mgmt export opening in Ready: State 57 only change', stx(e, 1) == (57, 0))
@@ -212,33 +212,33 @@ check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; 
 check('kl.avail examines no field but Machine/Version/reserved: State 61 still 1', KLE().avail(form='C', md=mk(State=61)) == 1)
 check('kl.avail B ignores bits above 63', KLE().avail(form='B', md=mk() | 1 << 120) == 1)
 
-section('kl.restrict*  <<KLE-instruction-restrict>>')
+section('kl.rstr*  <<KLE-instruction-restrict>>')
 def rl(**kw):
     e = KLE(); prov(e, 1, up=0x1F, **kw); return e
-e = rl(pol=3); e.restrict(1, mdh_pack(MachinePolicy=1), part='l'); check('restrictl ANDs MachinePolicy', mdh_get(e.md(1), 'MachinePolicy') == 1)
-e = rl(pol=3); e.restrict(1, mdh_pack(MachinePolicy=3), part='l'); check('restrictl all-ones MachinePolicy unchanged', mdh_get(e.md(1), 'MachinePolicy') == 3)
-e = rl(); e.restrict(1, mdh_pack(UsagePolicy=0b01101), part='h'); check('restricth ANDs UsagePolicy', mdh_get(e.md(1), 'UsagePolicy') == 0b01101)
-e = rl(); e.restrict(1, mdh_pack(UsagePolicy=0b11111), part='h'); check('UsagePolicy all-ones unchanged', mdh_get(e.md(1), 'UsagePolicy') == 31)
-e = rl(); e.restrict(1, mdh_pack(UsagePolicy=0), part='h'); check('UsagePolicy zero request clears (admits no mode)', mdh_get(e.md(1), 'UsagePolicy') == 0)
-e = rl(); e.restrict(1, mdh_pack(ExpirationDate=50), part='h'); check('ExpirationDate: md zero takes request', mdh_get(e.md(1), 'ExpirationDate') == 50)
-e.restrict(1, mdh_pack(ExpirationDate=60), part='h'); check('later request does not extend', mdh_get(e.md(1), 'ExpirationDate') == 50)
-e.restrict(1, mdh_pack(ExpirationDate=40), part='h'); check('earlier request shortens', mdh_get(e.md(1), 'ExpirationDate') == 40)
-e.restrict(1, mdh_pack(ExpirationDate=0), part='h'); check('zero request unchanged', mdh_get(e.md(1), 'ExpirationDate') == 40)
-e = rl(); e.restrict(1, mdh_pack(Locality=0b0101), part='h'); check('Locality: md zero takes request', mdh_get(e.md(1), 'Locality') == 5)
-e.restrict(1, mdh_pack(Locality=0b0110), part='h'); check('HW subfield increases ([1:0] 1 -> 2)', mdh_get(e.md(1), 'Locality') & 3 == 2 and mdh_get(e.md(1), 'Locality') >> 2 & 3 == 1)
-check('HW subfield decrease -> privilege violation', trap(e.restrict, 1, mdh_pack(Locality=1), part='h') == 'privilege_violation')
-e = rl(); e.restrict(1, mdh_pack(Locality=0x10), part='h'); check('boot subfield md zero takes request', mdh_get(e.md(1), 'Locality') == 0x10)
-check('boot subfield changing to another nonzero -> privilege violation', trap(e.restrict, 1, mdh_pack(Locality=0x20), part='h') == 'privilege_violation')
-e.restrict(1, mdh_pack(Locality=0x10), part='h'); check('equal subfield no change', mdh_get(e.md(1), 'Locality') == 0x10)
-e = rl(); e.restrict(1, mdh_pack(Locality=0x1C0), part='h'); check('Locality bits 6-8 ORed', mdh_get(e.md(1), 'Locality') == 0x1C0)
-e = rl(); e.restrict(1, mdh_pack(State=3), part='v'); check('non-allowed field (State) nonzero -> Error State Invalid', stx(e, 1) == INV)
-e = rl(); e.restrict(1, mdh_pack(AuxInfo=1), part='h'); check('AuxInfo nonzero in taken half -> Invalid', stx(e, 1) == INV)
-e = rl(); e.restrict(1, mdh_pack(UsagePolicy=1), part='l'); check('restrictl does not take [127:64]: UsagePolicy in request ignored', mdh_get(e.md(1), 'UsagePolicy') == 31 and e.getst(1) == 1)
-e = rl(); e.restrict(1, mdh_pack(MachinePolicy=1), part='h'); check('restricth does not take MachinePolicy', mdh_get(e.md(1), 'MachinePolicy') == 3)
-e = rl(); e.restrict(1, mdh_pack(MachinePolicy=1, UsagePolicy=1), part='v'); check('restrictv takes both', mdh_get(e.md(1), 'MachinePolicy') == 1 and mdh_get(e.md(1), 'UsagePolicy') == 1)
-e = rl(); e.restrict(1, mdh_pack(MachinePolicy=1), part='l'); check('restrict never changes SCProtection/State/Machine', mdh_get(e.md(1), 'Machine') == M_ENC and e.getst(1) == 1)
-e = rl(); e.restrict(1, mdh_pack(MachinePolicy=0), part='l'); check('restrict can narrow MachinePolicy to zero', mdh_get(e.md(1), 'MachinePolicy') == 0)
-e = rl(); e.mgmt(2, 58, md=mk(State=1)); check('restrict on a Configuration State -> privilege violation', trap(e.restrict, 2, mk()) == 'privilege_violation')
+e = rl(pol=3); e.rstr(1, mdh_pack(MachinePolicy=1), part='l'); check('rstrl ANDs MachinePolicy', mdh_get(e.md(1), 'MachinePolicy') == 1)
+e = rl(pol=3); e.rstr(1, mdh_pack(MachinePolicy=3), part='l'); check('rstrl all-ones MachinePolicy unchanged', mdh_get(e.md(1), 'MachinePolicy') == 3)
+e = rl(); e.rstr(1, mdh_pack(UsagePolicy=0b01101), part='h'); check('rstrh ANDs UsagePolicy', mdh_get(e.md(1), 'UsagePolicy') == 0b01101)
+e = rl(); e.rstr(1, mdh_pack(UsagePolicy=0b11111), part='h'); check('UsagePolicy all-ones unchanged', mdh_get(e.md(1), 'UsagePolicy') == 31)
+e = rl(); e.rstr(1, mdh_pack(UsagePolicy=0), part='h'); check('UsagePolicy zero request clears (admits no mode)', mdh_get(e.md(1), 'UsagePolicy') == 0)
+e = rl(); e.rstr(1, mdh_pack(ExpirationDate=50), part='h'); check('ExpirationDate: md zero takes request', mdh_get(e.md(1), 'ExpirationDate') == 50)
+e.rstr(1, mdh_pack(ExpirationDate=60), part='h'); check('later request does not extend', mdh_get(e.md(1), 'ExpirationDate') == 50)
+e.rstr(1, mdh_pack(ExpirationDate=40), part='h'); check('earlier request shortens', mdh_get(e.md(1), 'ExpirationDate') == 40)
+e.rstr(1, mdh_pack(ExpirationDate=0), part='h'); check('zero request unchanged', mdh_get(e.md(1), 'ExpirationDate') == 40)
+e = rl(); e.rstr(1, mdh_pack(Locality=0b0101), part='h'); check('Locality: md zero takes request', mdh_get(e.md(1), 'Locality') == 5)
+e.rstr(1, mdh_pack(Locality=0b0110), part='h'); check('HW subfield increases ([1:0] 1 -> 2)', mdh_get(e.md(1), 'Locality') & 3 == 2 and mdh_get(e.md(1), 'Locality') >> 2 & 3 == 1)
+check('HW subfield decrease -> privilege violation', trap(e.rstr, 1, mdh_pack(Locality=1), part='h') == 'privilege_violation')
+e = rl(); e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('boot subfield md zero takes request', mdh_get(e.md(1), 'Locality') == 0x10)
+check('boot subfield changing to another nonzero -> privilege violation', trap(e.rstr, 1, mdh_pack(Locality=0x20), part='h') == 'privilege_violation')
+e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('equal subfield no change', mdh_get(e.md(1), 'Locality') == 0x10)
+e = rl(); e.rstr(1, mdh_pack(Locality=0x1C0), part='h'); check('Locality bits 6-8 ORed', mdh_get(e.md(1), 'Locality') == 0x1C0)
+e = rl(); e.rstr(1, mdh_pack(State=3), part='v'); check('non-allowed field (State) nonzero -> Error State Invalid', stx(e, 1) == INV)
+e = rl(); e.rstr(1, mdh_pack(AuxInfo=1), part='h'); check('AuxInfo nonzero in taken half -> Invalid', stx(e, 1) == INV)
+e = rl(); e.rstr(1, mdh_pack(UsagePolicy=1), part='l'); check('rstrl does not take [127:64]: UsagePolicy in request ignored', mdh_get(e.md(1), 'UsagePolicy') == 31 and e.getst(1) == 1)
+e = rl(); e.rstr(1, mdh_pack(MachinePolicy=1), part='h'); check('rstrh does not take MachinePolicy', mdh_get(e.md(1), 'MachinePolicy') == 3)
+e = rl(); e.rstr(1, mdh_pack(MachinePolicy=1, UsagePolicy=1), part='v'); check('rstrv takes both', mdh_get(e.md(1), 'MachinePolicy') == 1 and mdh_get(e.md(1), 'UsagePolicy') == 1)
+e = rl(); e.rstr(1, mdh_pack(MachinePolicy=1), part='l'); check('restrict never changes SCProtection/State/Machine', mdh_get(e.md(1), 'Machine') == M_ENC and e.getst(1) == 1)
+e = rl(); e.rstr(1, mdh_pack(MachinePolicy=0), part='l'); check('restrict can narrow MachinePolicy to zero', mdh_get(e.md(1), 'MachinePolicy') == 0)
+e = rl(); e.mgmt(2, 58, md=mk(State=1)); check('restrict on a Configuration State -> privilege violation', trap(e.rstr, 2, mk()) == 'privilege_violation')
 
 section('kl.clone / kl.rename / kl.swap  <<KLE-instruction-clone>>')
 def two(): e = KLE(); prov(e, 1); e.L[1].content = 0x55; prov(e, 2, mach=M_SIG); return e
@@ -466,9 +466,9 @@ for T, nm in enumerate(('clone', 'rename', 'swap', 'derive')):
     n, f = decode(0x0F | 4 << 7 | 4 << 12 | 5 << 15 | 6 << 20 | 1 << 25 | T << 27 | 2 << 30)
     check('funct2=2, T=%d is kl.%s (R=01: Kd is KLNL)' % (T, nm), n == nm and f['R'] == 1 and f['kd'] == 4 and f['ks'] == 5)
 check('R = 11 reserved for the clone/rename/swap/derive family (<<KLE-GR-klnamedlocker-override>>)', trap(decode, 0x0F | 4 << 12 | 3 << 25 | 3 << 27 | 2 << 30) == 'illegal')
-check('GR6: vector MDH operand with VL*SEW < 128 -> illegal; GR7: vstart != 0 -> illegal on getmdv, restrictv, Form C size, avail, setst, mgmt',
+check('GR6: vector MDH operand with VL*SEW < 128 -> illegal; GR7: vstart != 0 -> illegal on getmdv, rstrv, Form C size, avail, setst, mgmt',
       trap(vec_mdh_ok, 'getmdv', 3, 32, 0) == 'illegal' and trap(vec_mdh_ok, 'getmdv', 4, 32, 0) is None
-      and all(trap(vec_mdh_ok, i, 4, 32, 1) == 'illegal' for i in ('getmdv', 'restrictv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C')) and trap(vec_mdh_ok, 'mvin_v', 4, 32, 1) is None)
+      and all(trap(vec_mdh_ok, i, 4, 32, 1) == 'illegal' for i in ('getmdv', 'rstrv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C')) and trap(vec_mdh_ok, 'mvin_v', 4, 32, 1) is None)
 section('GR1 reserved setst/mgmt immediates through KLNL and GR3')
 e = KLE2(); check('GR4: KLNL requires the locker field 0 (r=1, kd!=0): illegal for getmd, exec, size', all(trap(fn, 5, 1) == 'illegal' for fn in (e.getmd, e.size, e.avail, e.exec)))
 
@@ -542,7 +542,7 @@ check('Debug: a debug access privilege of VS needs bits 0 and 1 only, one of U n
 check('Debug: bit 4 alone suffices in authenticated Debug', trap(dbg(0x10, True).setst, 1, 2) is None and trap(dbg(0x04, True).setst, 1, 2) == 'privilege_violation')
 check('UsagePolicy zero admits no mode, including Debug', all(trap(dbg(0, a).setst, 1, 2) == 'privilege_violation' for a in (False, True)))
 e = E2(csk=False)
-check('GR16: no-CSK exception precedes klnamedlocker=32 fall-through for kl.exec, load, setst, restrict', trap(e.execw, 0, 1) == 'no_csk' and trap(e.load, Mem(), 0) == 'no_csk' and trap(e.setst, 0, 1, 1) == 'no_csk' and trap(e.restrict, 0, 0, 1) == 'no_csk')
+check('GR16: no-CSK exception precedes klnamedlocker=32 fall-through for kl.exec, load, setst, restrict', trap(e.execw, 0, 1) == 'no_csk' and trap(e.load, Mem(), 0) == 'no_csk' and trap(e.setst, 0, 1, 1) == 'no_csk' and trap(e.rstr, 0, 0, 1) == 'no_csk')
 e = E2(csk=False); check('GR16: misalignment (item 8) after no-CSK (item 4)', trap(e.load, Mem(), 1) == 'no_csk')
 e = E2(); e.nl = 5; check('GR16: Xl != 0 illegal (item 7) precedes misalignment (item 8)', trap(e.load, Mem(), 1, 4) == 'illegal')
 e = E2(); e.mgmt(0, 56, md=mk(KeyType=2, mach=M_KEY)); e.rbg_dead = True; e.mgmt(0, 63, md=mk(State=56)); check('RBG permanent failure: KeyType 2 provisioning completion not performed, locker Invalid (GR65)', stx(e, 0) == INV)
@@ -631,7 +631,7 @@ e = E2(); prov(e, 1); e.kls = 2; e.run(e.clear, 1); check('a configured locker m
 e = E2(); e.kls = 1; e.run(e.setnl, 3); check('klnamedlocker is KLE state: kl.setnl sets Dirty', e.kls == 3)
 e = lowp(); e.lstat[1] = 0
 check('locker Off in lower modes: exec, setst, getmd, getst, restrict, size, clearads and KLNL aliases trap (kl_exc locker-Off)', all(trap(f, *a) == 'locker_off' for f, a in
-      ((e.exec, (1,)), (e.setst, (1, 2)), (e.getmd, (1,)), (e.getst, (1,)), (e.restrict, (1, 0)), (e.size, (1,)), (e.clearads, (1,)), (e.setste, (1, 2)))) and (setattr(e, 'nl', 1), trap(e.getmd, 0, 1))[1] == 'locker_off')
+      ((e.exec, (1,)), (e.setst, (1, 2)), (e.getmd, (1,)), (e.getst, (1,)), (e.rstr, (1, 0)), (e.size, (1,)), (e.clearads, (1,)), (e.setste, (1, 2)))) and (setattr(e, 'nl', 1), trap(e.getmd, 0, 1))[1] == 'locker_off')
 check('locker Off in M-mode: no gate (the field governs the modes below)', (setattr(e, 'priv', 'M'), trap(e.getmd, 1))[1] is None)
 e = lowp(); e.lstat[1] = 0
 check('destructive configuration is exempt: kl.clear, provisioning-opening and import-opening kl.mgmt, clone/rename into the locker', trap(e.clear, 1) is None and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 56, md=mk()))[1] is None
@@ -663,13 +663,13 @@ e.iobuf[:8] = bytes([5]) * 8; e.w_kliobuftop(16); check('a kliobuftop write leav
 e.w_kliobuflen(0); check('kliobuflen = 0 leaves the KLIOBUF unconfigured (GR14)', trap(e.buf_in) is None and (setattr(e, 'nl', 0), True)[1] and e.kliobuflen == 0)
 section('getters and setters  <<KLE-instruction-getter-setter>>')
 e = E2(); e.zklio = True; e.iobuf[:64] = bytes([7]) * 64
-e.setiobl(1 << 20); check('kl.setiobl above the maximum, read back with kl.getiobl: the maximum, as vsetvl', e.getiobl() == e.maxiobuf and e.getiobt() == e.maxiobuf)
-e.setiobl(32); check('kl.setiobl zeroes the buffer below the length and sets the top', e.getiobl() == 32 and e.getiobt() == 32 and e.iobuf[:32] == bytes(32))
-e.iobuf[:8] = bytes([5]) * 8; e.setiobt(16); check('kl.setiobt: top capped by the length, buffer unchanged', e.getiobt() == 16 and e.iobuf[:8] == bytes([5]) * 8)
-e.setiobt(99); check('kl.setiobt above the length: capped', e.getiobt() == 32)
-e.setklst(9); check('kl.setklst / kl.getklst', e.getklst() == 9 and e.start == 9)
-e = E2(); check('without Zklio kl.getiobl, getiobt, setiobl and setiobt are reserved (GR1)', all(trap(f, *a) == 'illegal' for f, a in ((e.getiobl, ()), (e.getiobt, ()), (e.setiobl, (8,)), (e.setiobt, (8,)))))
-e.setklst(4); check('kl.getklst, kl.setklst are Zkl common: available without Zklio', e.getklst() == 4)
+e.setbl(1 << 20); check('kl.setbl above the maximum, read back with kl.getbl: the maximum, as vsetvl', e.getbl() == e.maxiobuf and e.getbt() == e.maxiobuf)
+e.setbl(32); check('kl.setbl zeroes the buffer below the length and sets the top', e.getbl() == 32 and e.getbt() == 32 and e.iobuf[:32] == bytes(32))
+e.iobuf[:8] = bytes([5]) * 8; e.setbt(16); check('kl.setbt: top capped by the length, buffer unchanged', e.getbt() == 16 and e.iobuf[:8] == bytes([5]) * 8)
+e.setbt(99); check('kl.setbt above the length: capped', e.getbt() == 32)
+e.setks(9); check('kl.setks / kl.getks', e.getks() == 9 and e.start == 9)
+e = E2(); check('without Zklio kl.getbl, getbt, setbl and setbt are reserved (GR1)', all(trap(f, *a) == 'illegal' for f, a in ((e.getbl, ()), (e.getbt, ()), (e.setbl, (8,)), (e.setbt, (8,)))))
+e.setks(4); check('kl.getks, kl.setks are Zkl common: available without Zklio', e.getks() == 4)
 _w = setst_encode('B', 2, 0, rs1=5, g=2); _i = setst_encode('C', 3, 77, g=2)
 check('setters: register form is G=2, F=0, r=0, immed7=0, rd=CSR, rs1=Xs1', setst_decode(_w)['G'] == 2 and setst_decode(_w)['F'] == 0 and setst_decode(_w)['r'] == 0 and setst_decode(_w)['immed7'] == 0 and setst_decode(_w)['kd'] == 2 and setst_decode(_w)['rs1'] == 5)
 check('setters: immediate form is G=2, F=1, r=0, rs1=0, immed7=uimm7, rd=CSR', setst_decode(_i)['G'] == 2 and setst_decode(_i)['F'] == 1 and setst_decode(_i)['r'] == 0 and setst_decode(_i)['rs1'] == 0 and setst_decode(_i)['immed7'] == 77 and setst_decode(_i)['kd'] == 3)
@@ -695,7 +695,7 @@ check('GR22: kl.clearads is admitted in a Valid State whatever the MachinePolicy
 e = enc(); e.clearads(1, form='B') if False else None
 for imm in (48, 53, 54, 1, 2):
     e = KLE2(); check('Unconfigured locker: kl.setst #%d is a no-op (<<KLE-GR-outcome-inert>>)' % imm, (e.setst(7, imm), e.getmd(7))[1] == 0 and e.getst(7) == 0)
-e = KLE2(); check('Unconfigured locker: kl.clearads and kl.restrictl are no-ops', (e.clearads(7), e.restrict(7, mdh_pack(MachinePolicy=1), part='l'), e.getmd(7))[2] == 0)
+e = KLE2(); check('Unconfigured locker: kl.clearads and kl.rstrl are no-ops', (e.clearads(7), e.rstr(7, mdh_pack(MachinePolicy=1), part='l'), e.getmd(7))[2] == 0)
 
 section('GR22 Success/Failure as Machine outcomes (toy VERIFY Machine)  <<KLE-GR-to-ready>>, <<KLE-GR-success-failure-cannot-be-set-directly>>, <<KLE-MGR-config-data-error>>')
 def ver():
@@ -758,8 +758,8 @@ r = e.execw(1, form='A', data=bytes(64))
 check('a resumption point after a halt is an evaluation point: Expired', stx(e, 1) == (0, SE_EXPIRED))
 e = ex(2000); d2 = E2(clock=2000)
 e = ex(5000, ed=10, up=0x4)
-r = [e.restrict(1, mdh_pack(ExpirationDate=9), part='h'), e.getst(1)]
-check('kl.restricth is not an evaluation point', r[1] == 2 and mdh_get(e.md(1), 'ExpirationDate') == 9)
+r = [e.rstr(1, mdh_pack(ExpirationDate=9), part='h'), e.getst(1)]
+check('kl.rstrh is not an evaluation point', r[1] == 2 and mdh_get(e.md(1), 'ExpirationDate') == 9)
 e = ex(5000, ed=10); e.size(1); e.getmd(1); e.clone(2, 1) if hasattr(e, 'clone') else None
 check('size, getmd, clone are not evaluation points: State kept', e.getst(1) == 2 and e.getst(2) == 2)
 e = ex(5000, ed=10); e.mgmt(1, 57, form='A'); n = e.getst(1)
@@ -780,8 +780,8 @@ e = ex(5000, ed=10); e.clock = None; t = trap(e.exec, 1); e.setste(1, SE_EXPIRED
 check('SR9: a handler that cannot resolve the clock sets Expired by kl.setste (no usage, no clock read)', t == 'clock_unavailable' and stx(e, 1) == (0, SE_EXPIRED))
 e = E2(zk=False); e.mgmt(1, 56, md=mk(ExpirationDate=1))
 check('without Zklexpire a non-zero ExpirationDate in a PI is invalid Metadata', stx(e, 1) == INV)
-e = E2(zk=False); prov(e, 1); e.restrict(1, mdh_pack(ExpirationDate=1), part='h')
-check('without Zklexpire a restrict request with a non-zero ExpirationDate: Invalid (kl.restrict* validity rule)', stx(e, 1) == INV)
+e = E2(zk=False); prov(e, 1); e.rstr(1, mdh_pack(ExpirationDate=1), part='h')
+check('without Zklexpire a restrict request with a non-zero ExpirationDate: Invalid (kl.rstr* validity rule)', stx(e, 1) == INV)
 e = E2(zk=False, clock=1 << 30); prov(e, 1); e.setst(1, 2)
 check('without Zklexpire no clock is read', trap(e.exec, 1) is None)
 
@@ -797,8 +797,8 @@ e = dl(); e.run(e.swap, 1, 3); check('kl.swap of two lockers with different cont
 e = dl(); e.run(e.swap, 1, 1); check('same-index swap: nothing modified, Clean', e.lstat[1] == 2)
 e = dl(); e.run(e.mgmt, 3, 56, md=mk()); check('provisioning-opening kl.mgmt: Dirty', e.lstat[3] == 3)
 e = dl(); e.run(e.setste, 1, 3); check('kl.setste: Dirty', e.lstat[1] == 3)
-e = dl(); e.run(e.restrict, 1, mdh_pack(MachinePolicy=1), part='l'); check('kl.restrictl that narrows: Dirty', e.lstat[1] == 3)
-e = dl(); e.run(e.restrict, 1, mdh_pack(MachinePolicy=3), part='l'); check('kl.restrictl that changes nothing: Clean', e.lstat[1] == 2)
+e = dl(); e.run(e.rstr, 1, mdh_pack(MachinePolicy=1), part='l'); check('kl.rstrl that narrows: Dirty', e.lstat[1] == 3)
+e = dl(); e.run(e.rstr, 1, mdh_pack(MachinePolicy=3), part='l'); check('kl.rstrl that changes nothing: Clean', e.lstat[1] == 2)
 e = dl(); e.lstat[1] = 0; e.lstat[2] = 3; e.run(e.clearall); check('kl.clearall: Off stays Off, the Dirty one stays Dirty', e.lstat[1] == 0 and e.lstat[2] == 3)
 
 section('kl.setste matrix, KLNL no-ops, moves of Error/Success/Failure  <<KLE-instruction-setste>>, <<KLE-GR-error-state-transition>>, <<KLE-GR-klnamedlocker-override>>')
@@ -820,7 +820,7 @@ check('short import with ADS fields: AuxDataLen and ADSDropped zeroed (GR35), no
 e = E2(); e.setste(3, SE_INVALID); check('kl.setste on Unconfigured records the Error State (GR36)', stx(e, 3) == INV)
 e = dv(); e.nl = 32; b = e.snap()
 for nm, f in (('clone', lambda: e.clone('NL', 1)), ('rename', lambda: e.rename('NL', 1)), ('swap', lambda: e.swap('NL', 1)), ('rename src', lambda: e.rename(1, 'NL')),
-              ('derive', lambda: e.derive('NL', 1, 16)), ('derive src', lambda: e.derive(2, 'NL', 16)), ('restrict', lambda: e.restrict(0, mdh_pack(UsagePolicy=1), r=1, part='h'))):
+              ('derive', lambda: e.derive('NL', 1, 16)), ('derive src', lambda: e.derive(2, 'NL', 16)), ('restrict', lambda: e.rstr(0, mdh_pack(UsagePolicy=1), r=1, part='h'))):
     check('KLNL = 32: %s performs no operation and raises nothing' % nm, trap(f) is None and e.snap() == b)
 e = dv(); e.nl = 2; b = e.snap()
 check('KLNL naming locker 2: derive with KLNL as destination and source 1 acts on locker 2', e.derive('NL', 1, 32) == 'ok' and e.L[2].content == SEC)
@@ -838,15 +838,15 @@ section('restrict sweep: UsagePolicy and MachinePolicy narrowing  <<KLE-instruct
 bad = []
 for a in range(32):
     for b in range(32):
-        e = E2(); prov(e, 1, up=a); e.restrict(1, mdh_pack(UsagePolicy=b), part='h')
+        e = E2(); prov(e, 1, up=a); e.rstr(1, mdh_pack(UsagePolicy=b), part='h')
         if mdh_get(e.md(1), 'UsagePolicy') != a & b: bad.append((a, b))
-check('kl.restricth: UsagePolicy becomes the AND of the two, 32 x 32 values', bad == [])
+check('kl.rstrh: UsagePolicy becomes the AND of the two, 32 x 32 values', bad == [])
 bad = []
 for a in range(4):
     for b in range(4):
-        e = E2(); prov(e, 1, pol=a); e.restrict(1, mdh_pack(MachinePolicy=b), part='l')
+        e = E2(); prov(e, 1, pol=a); e.rstr(1, mdh_pack(MachinePolicy=b), part='l')
         if mdh_get(e.md(1), 'MachinePolicy') != a & b: bad.append((a, b))
-check('kl.restrictl: MachinePolicy becomes the AND of the two, 4 x 4 values', bad == [])
+check('kl.rstrl: MachinePolicy becomes the AND of the two, 4 x 4 values', bad == [])
 
 section('Reset, negative controls')
 e = KLE(); control('negative: a usage-policy violation does not move the State', (lambda: (prov(e, 1, up=0), trap(e.setst, 1, 2), e.getst(1))[2] == 1)())

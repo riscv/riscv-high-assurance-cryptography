@@ -98,9 +98,9 @@ for pol, st, ok in ((0, S_SGEN, False), (1, S_SGEN, True), (2, S_SGEN, False), (
     t = lk if st == S_SGEN else pub
     t.setst(st, 'B' if st == S_SGEN else 'A', 1)
     check('policy %d State %d %s' % (pol, st, 'admitted' if ok else 'Invalid'), (not t.error) == ok or (st == S_SVER and pol & 2 == 0 and t.error))
-lk = mk(policy=3); lk.restrict(1); lk.restrict(2); check('restrictl narrows, never widens', lk.policy == 0)
+lk = mk(policy=3); lk.rstr(1); lk.rstr(2); check('rstrl narrows, never widens', lk.policy == 0)
 lk = mk(policy=0); load_priv(lk, sk44); lk.setst(S_READY); check('policy 0 admits the loading States', not lk.error and lk.flag(HAS_PRIV))
-lk = mk(policy=2); lk.restrict(1); check('restrict ANDs', lk.policy == 0)
+lk = mk(policy=2); lk.rstr(1); check('restrict ANDs', lk.policy == 0)
 
 # ------------------------------------------------------------------ 4
 section('4 State machine, flags, MachineUse')
@@ -215,7 +215,7 @@ lk = mk(); load_priv(lk, sk44); load_mu(lk, mu_hard); sign(lk, halt=1); lk.setst
 check('same-State setst in halted Sign_Generate -> Invalid', lk.error)
 lk = mk(rbg=Rbg(r1, r2)); load_priv(lk, sk44); load_mu(lk, mu_hard); sign(lk, 0, halt=1); lk.setst(S_READY); load_mu(lk, mu_hard); sign(lk, 0, halt=1)
 check('re-entering draws a fresh rnd', lk.rnd == r2)
-lk = mk(); load_priv(lk, sk44); load_mu(lk, mu_hard); sign(lk, halt=1); lk.restrict(2); lk.exec('D')
+lk = mk(); load_priv(lk, sk44); load_mu(lk, mu_hard); sign(lk, halt=1); lk.rstr(2); lk.exec('D')
 check('narrowing during halt -> resuming exec Invalid', lk.error)
 lk = mk(rbg=Rbg(r1)); load_priv(lk, sk44); load_mu(lk, mu_hard); sign(lk, 0, halt=2)
 snap = lk.export(True)

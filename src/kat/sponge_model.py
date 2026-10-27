@@ -6,7 +6,7 @@ L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 wh
   Form B: inp = INPUT bytes;  Form C/A output: out = bytearray (window, KLLEN = len(out)); Form A input: inp.
   halt = n: stop at the first interruption point with at least n bytes done (resumable via klstart').
 L.export() / L.import_(sc, st)  serialized content; L.mdh_state() -> (State, StateExtension).
-Also modeled: AEAD variants _NONCE/_NONCE_MASK, SKID (sks dict), restrictl, unsupported MachinePolicy, exec_d (Form D), Secret/derive.
+Also modeled: AEAD variants _NONCE/_NONCE_MASK, SKID (sks dict), rstrl, unsupported MachinePolicy, exec_d (Form D), Secret/derive.
 Not modeled: SCC authentication, GR40 SCProtection narrowing.
 """
 from common import *
@@ -297,8 +297,8 @@ class Locker:
             if st == VERIFY: return bool(p & 2)
         return True
 
-    def restrictl(self, rq):
-        """kl.restrictl: AND-narrowing of MachinePolicy (all-ones leaves it); GR25: forbidden value -> Invalid."""
+    def rstrl(self, rq):
+        """kl.rstrl: AND-narrowing of MachinePolicy (all-ones leaves it); GR25: forbidden value -> Invalid."""
         if self.is_error() or self.inert(): return
         if rq == mask(64): return
         if self.fam == 'aead' or (self.fam == 'kmac' and not self.xof):

@@ -157,7 +157,7 @@ A conformant KLE implementation requires the RISC-V External Debug Security exte
 
 It also requires the KLE exceptions of <<Zkl-ISA-priv.adoc#KLE-exceptions>> to be implemented and raised as the unprivileged architecture mandates, whether or not the other parts of the KLE Privileged Architecture are implemented.
 
-Where the KLE unit or its Machines need an RBG, they must use an entropy source that meets the requirements of the `Zkr` specification cite:[RISCV-ISA-Unpriv], used to seed a DRBG compliant with NIST SP 800-90A cite:[nist-SP-800-90-r1] or with another standard that the implementation documents.
+Where the KLE unit or its Machines need an RBG, they must use an entropy source that meets the requirements of the `Zkr` extension (chapter “Cryptography Extensions: Scalar & Entropy Source Instructions”, section “Entropy Source” cite:[RISCV-ISA-Unpriv]), used to seed a DRBG compliant with NIST SP 800-90A cite:[nist-SP-800-90-r1] or with another standard that the implementation documents.
 The DRBG must be instantiated with a security strength of at least 256 bits and reseeded from that entropy source at the interval its standard prescribes; another standard may replace SP 800-90A only if it provides at least this strength.
 Rule <<KLE-GR-rbg-failure>> covers RBG failure.
 
@@ -226,17 +226,17 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 | `kl.size` / `kl.avail`   | `Zkl` common       | Forms A–C   | Forms A and B
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D, natively or as the substitution (Rule <<KLE-GR-substitution>>) of a Form A–C
 | `kl.mvin`, `kl.mvout`    | `Zklmv`         | GPR and vector variants | GPR and KLIOBUF variants; each only when `Zklmv` is implemented, which is mandatory in hardware if `Zklmem` is emulated
-| `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D
+| `kl.setst`, `kl.setstq` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D
 | `kl.setste`              | `Zkl` common    2+<| Available
 | `kl.mgmt`                | `Zkl` common       | Forms A, C and D | Forms A and D
 | `kl.getmdl`, `kl.getmd` (and the pseudo-instructions `kl.getst`,
 `kl.getstx`)               | `Zkl` common    2+<| Available
 | `kl.getmdv`              | `Zklv`             | Available    | —
-| `kl.getnl`, `kl.setnl`, `kl.setnli`, `kl.getklst`, `kl.setklst`, `kl.setklsti` | `Zkl` common    2+<| Available
-| `kl.getiobl`, `kl.getiobt`, `kl.setiobl`, `kl.setiobt`, `kl.setiobli`, `kl.setiobti` | `Zklio`   | —           | Available
-| `kl.restrictl`,
-`kl.restricth`             | `Zkl` common    2+<| Available
-| `kl.restrictv`           | `Zklv`             | Available    | —
+| `kl.getnl`, `kl.setnl`, `kl.setnli`, `kl.getks`, `kl.setks`, `kl.setksi` | `Zkl` common    2+<| Available
+| `kl.getbl`, `kl.getbt`, `kl.setbl`, `kl.setbt`, `kl.setbli`, `kl.setbti` | `Zklio`   | —           | Available
+| `kl.rstrl`,
+`kl.rstrh`             | `Zkl` common    2+<| Available
+| `kl.rstrv`           | `Zklv`             | Available    | —
 | `kl.clone`, `kl.rename`, `kl.swap`  | `Zkl` common   2+<| Available
 | `kl.derive`              | `Zkl` common    2+<| Available
 | `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present, in hardware or by trap-and-emulate, per the conformance requirements above
@@ -754,13 +754,13 @@ Invalid Metadata takes precedence over unsupported Metadata: the test for _unsup
 
 Several operations narrow the policies of a CC by those of another source, by the narrowing defined below: the resolution of a SKID (<<KLE-system-keys>>),
 a restricted `kl.derive` (Rule <<KLE-GR-narrowing>>), the import of a system-specific format (<<KLE-system-specific-import>>),
-and `kl.restrict*`, at the request of software (<<KLE-instruction-restrict>>).
+and `kl.rstr*`, at the request of software (<<KLE-instruction-restrict>>).
 
 The _narrowing_ of an MDH _A_ by the policies of a source _B_ (an MDH, the
 policies that the SKS associates with a key, or those that a system-specific format carries) is _A_ with the following
 fields replaced; a policy field that _B_ does not carry leaves that field of _A_ unchanged, and no other field changes:
 
-* _MachinePolicy_: for `kl.restrictl` and `kl.restrictv` only, the AND of both, so that the functions enabled are those that both enable (Rule <<KLE-GR-policy-narrowing-state>>); every other narrowing leaves it unchanged, even when _B_ is an MDH.
+* _MachinePolicy_: for `kl.rstrl` and `kl.rstrv` only, the AND of both, so that the functions enabled are those that both enable (Rule <<KLE-GR-policy-narrowing-state>>); every other narrowing leaves it unchanged, even when _B_ is an MDH.
 * _UsagePolicy_: the AND of both, so that the modes that may use the CC are those that both allow.
 * _Locality_ (<<KLE-locality-indexes>>): each HW Binding subfield (bits [1:0] and [3:2]) takes the larger value, that is, the stricter entry of its chain, zero meaning no binding; the Boot Session subfield (bits [5:4]) takes the non-zero value if only one is non-zero, and their common value if they are equal; and bits 6–8 are OR-ed.
 * _ExpirationDate_, with `Zklexpire`: the smaller non-zero value, or 0 if both are 0.
@@ -911,12 +911,12 @@ A non-zero locker register field that `r` or `R` replaces is a reserved encoding
 
 [[KLE-GR-locker-less-transfers,GR5]]GR5:: The management transfer instructions, `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout`, have no locker operand: they act on the locker that `klnamedlocker` names.
 
-[[KLE-GR-vector-MDH-operand,GR6]]GR6:: Where a KLE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.restrictv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
+[[KLE-GR-vector-MDH-operand,GR6]]GR6:: Where a KLE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.rstrv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
 <<KLE-extensions-overview-unpriv>> lists the vector extensions that provide such a register.
 
 [[KLE-GR-vector-legality,GR7]]GR7:: A vector register operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
 Every KLE instruction with a vector operand sets `vstart` to 0 when it retires, and on a precise halt sets it as Rules <<KLE-GR-precise-halt>> and <<KLE-GR-klstart-vstart>> prescribe.
-An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size`, `kl.avail`, `kl.setst` and `kl.mgmt`) raises an illegal-instruction exception if issued with `vstart` {ne} 0, as RVV 1.0 {sect}3.7 permits for a `vstart` value that the instruction can never produce.
+An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.rstrv`, Form C of `kl.size`, `kl.avail`, `kl.setst` and `kl.mgmt`) raises an illegal-instruction exception if issued with `vstart` {ne} 0, as RVV 1.0 {sect}3.7 permits for a `vstart` value that the instruction can never produce.
 
 [[KLE-GR-klstart-vstart,GR8]]GR8:: KLE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each by its own semantics; except for `kl.mvin` and `kl.mvout`, both denote the same point of progress, `klstart` in bytes and `vstart` in elements of the width in effect.
 Issuing a Form A–C `kl.exec` with `klstart` {ne} `vstart` {times} `SEW`/8 raises an illegal-instruction exception.
@@ -1214,7 +1214,7 @@ On such a locker a vector `kl.mvout` writes zeros to elements [`vstart`, `vl`-1]
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-instruction-setst]]
-=== kl.setst
+=== kl.setst and kl.setstq
 
 Synopsis::
 Change the state of the Machine encoded in the CC in a locker.
@@ -1538,9 +1538,9 @@ Get, resp. set, the value of `klnamedlocker`, `kliobuflen`, `kliobuftop`, and `k
 Mnemonics::
 +
 --
-`kl.getnl/getiobl/getiobt/getklst{fournbsp}{nbsp}{nbsp}Xd`(((KLE, instruction, kl.getnl)))(((KLE, instruction, kl.getiobl)))(((KLE, instruction, kl.getiobt)))(((KLE, instruction, kl.getklst))) +
-`kl.setnl/setiobl/setiobt/setklst{fournbsp}{nbsp}{nbsp}Xs1`(((KLE, instruction, kl.setnl)))(((KLE, instruction, kl.setiobl)))(((KLE, instruction, kl.setiobt)))(((KLE, instruction, kl.setklst))) +
-`kl.setnli/setiobli/setiobti/setklsti{nbsp}#uimm7`(((KLE, instruction, kl.setnli)))(((KLE, instruction, kl.setiobli)))(((KLE, instruction, kl.setiobti)))(((KLE, instruction, kl.setklsti)))
+`kl.getnl/getbl/getbt/getks{fournbsp}{nbsp}{nbsp}Xd`(((KLE, instruction, kl.getnl)))(((KLE, instruction, kl.getbl)))(((KLE, instruction, kl.getbt)))(((KLE, instruction, kl.getks))) +
+`kl.setnl/setbl/setbt/setks{fournbsp}{nbsp}{nbsp}Xs1`(((KLE, instruction, kl.setnl)))(((KLE, instruction, kl.setbl)))(((KLE, instruction, kl.setbt)))(((KLE, instruction, kl.setks))) +
+`kl.setnli/setbli/setbti/setksi{nbsp}#uimm7`(((KLE, instruction, kl.setnli)))(((KLE, instruction, kl.setbli)))(((KLE, instruction, kl.setbti)))(((KLE, instruction, kl.setksi)))
 --
 
 Encodings::
@@ -1548,13 +1548,13 @@ Encodings::
 --
 The encodings are variants of those of `kl.getmd*` (<<KLE-instruction-getmd>>) and `kl.setst` (<<KLE-instruction-setst>>):
 
-* `kl.getnl Xd`, `kl.getiobl Xd`, `kl.getiobt Xd`, `kl.getklst Xd`:
+* `kl.getnl Xd`, `kl.getbl Xd`, `kl.getbt Xd`, `kl.getks Xd`:
 these instructions use the `kl.getmd*` encoding with `v` = `h` = 1, `r` = 0 and `rs1` = 1, 2, 3, and 4, respectively; `rd` holds `Xd`.
 
-* `kl.setnl Xs1`, `kl.setiobl Xs1`, `kl.setiobt Xs1`, `kl.setklst Xs1`:
+* `kl.setnl Xs1`, `kl.setbl Xs1`, `kl.setbt Xs1`, `kl.setks Xs1`:
 the `kl.setst` encoding with `G` = `0b10`, `r` = 0, `F` = `0b00`, `#immed7` = 0, and `rd` = 1, 2, 3, and 4, respectively; `rs1` holds `Xs1`.
 
-* `kl.setnli #uimm7`, `kl.setiobli #uimm7`, `kl.setiobti #uimm7`, `kl.setklsti #uimm7`:
+* `kl.setnli #uimm7`, `kl.setbli #uimm7`, `kl.setbti #uimm7`, `kl.setksi #uimm7`:
 the `kl.setst` encoding with `G` = `0b10`, `r` = 0, `F` = `0b01`, `rs1` = 0, and `rd` = 1, 2, 3, and 4, respectively; `#immed7` holds `#uimm7`.
 
 Every other encoding with `v` = `h` = 1 in the `kl.getmd*` encoding, or with `G` = `0b10` in the `kl.setst` encoding, is reserved.
@@ -1563,18 +1563,18 @@ Every other encoding with `v` = `h` = 1 in the `kl.getmd*` encoding, or with `G`
 Description::
 +
 --
-`kl.getnl`, `kl.getiobl`, `kl.getiobt`, and `kl.getklst` write
+`kl.getnl`, `kl.getbl`, `kl.getbt`, and `kl.getks` write
 `klnamedlocker`, `kliobuflen`, `kliobuftop`, and `klstart`, respectively, zero-extended, to `Xd`.
 
-`kl.setnl`, `kl.setiobl`, `kl.setiobt`, and `kl.setklst` write `X[rs1]` to
+`kl.setnl`, `kl.setbl`, `kl.setbt`, and `kl.setks` write `X[rs1]` to
 `klnamedlocker`, `kliobuflen`, `kliobuftop`, and `klstart`, respectively,
 with the effect of a CSR write.
 
-`kl.setnli`, `kl.setiobli`, `kl.setiobti`, and `kl.setklsti` write zero-extended `#uimm7` to
+`kl.setnli`, `kl.setbli`, `kl.setbti`, and `kl.setksi` write zero-extended `#uimm7` to
 `klnamedlocker`, `kliobuflen`, `kliobuftop`, and `klstart`, respectively,
 with the effect of a CSR write.
 
-`kl.getnl`, `kl.setnl`, `kl.setnli`, `kl.getklst`, `kl.setklst` and `kl.setklsti` are part of `Zkl` common; the ones on `kliobuflen` and `kliobuftop` are part of `Zklio` and reserved (Rule <<KLE-GR-reserved-encodings>>) without it. They are not gated as accesses to the CSRs: the privilege of the CSR is not checked, and they are the recommended way for software to read or write `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart`.
+`kl.getnl`, `kl.setnl`, `kl.setnli`, `kl.getks`, `kl.setks` and `kl.setksi` are part of `Zkl` common; the ones on `kliobuflen` and `kliobuftop` are part of `Zklio` and reserved (Rule <<KLE-GR-reserved-encodings>>) without it. They are not gated as accesses to the CSRs: the privilege of the CSR is not checked, and they are the recommended way for software to read or write `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart`.
 They behave as reads and writes of the CSRs: the CSRs are WARL, so a written value above the maximum of the CSR is replaced by that maximum, and `mklmaxiobuflen` {ge} `kliobuflen` {ge} `kliobuftop` is enforced (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>, <<KLE-CSR-kliobuflen>>, <<KLE-CSR-kliobuftop>>).
 
 They are configuration instructions, not usage instructions: Usage Control does not gate them.
@@ -1583,7 +1583,7 @@ They are configuration instructions, not usage instructions: Usage Control does 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-instruction-restrict]]
-=== kl.restrictl, kl.restricth, and kl.restrictv
+=== kl.rstrl, kl.rstrh, and kl.rstrv
 
 Synopsis::
 Restrict the policies encoded in a CC in a locker.
@@ -1592,15 +1592,15 @@ Mnemonics::
 +
 --
 [%hardbreaks]
-`kl.restrictl{nbsp}{nbsp}Kd, Xs1`(((KLE, instruction, kl.restrict)))(((KLE, instruction, kl.restrictl)))
-`kl.restricth{nbsp}{nbsp}Kd, Xs1`(((KLE, instruction, kl.restricth)))
-`kl.restrictv{nbsp}{nbsp}Kd, Vs1`(((KLE, instruction, kl.restrictv)))
+`kl.rstrl{nbsp}{nbsp}Kd, Xs1`(((KLE, instruction, kl.rstr)))(((KLE, instruction, kl.rstrl)))
+`kl.rstrh{nbsp}{nbsp}Kd, Xs1`(((KLE, instruction, kl.rstrh)))
+`kl.rstrv{nbsp}{nbsp}Kd, Vs1`(((KLE, instruction, kl.rstrv)))
 --
 
 Encoding::
 +
 --
-`kl.restrict*` are R-type instructions that share the opcode and `funct3` of `kl.exec`, with `funct2` (the two msbs of `funct7`) = `0b01`.
+`kl.rstr*` are R-type instructions that share the opcode and `funct3` of `kl.exec`, with `funct2` (the two msbs of `funct7`) = `0b01`.
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1620,8 +1620,8 @@ Encoding::
 
 `r` names `KLNL` as Rule <<KLE-GR-klnamedlocker-override>> specifies.
 
-With bit `v` (bit 29) = 0, bit `h` (bit 28) selects `kl.restrictl` (`h` = 0) or `kl.restricth` (`h` = 1), and the input comes from a GPR (a GPR pair on RV32).
-With `v` = 1, the instruction is `kl.restrictv`, `h` must be 0, and the input comes from the lowest 128 bits of a vector register; `v` = `h` = 1 is reserved.
+With bit `v` (bit 29) = 0, bit `h` (bit 28) selects `kl.rstrl` (`h` = 0) or `kl.rstrh` (`h` = 1), and the input comes from a GPR (a GPR pair on RV32).
+With `v` = 1, the instruction is `kl.rstrv`, `h` must be 0, and the input comes from the lowest 128 bits of a vector register; `v` = `h` = 1 is reserved.
 --
 
 // comment
@@ -1629,12 +1629,12 @@ With `v` = 1, the instruction is `kl.restrictv`, `h` must be 0, and the input co
 Description::
 +
 --
-These instructions narrow the policies of the CC in locker `Kd`, whose MDH is `md`, as their operand requests: `Xs1`, or `Vs1` for `kl.restrictv`, formatted as an MDH.
+These instructions narrow the policies of the CC in locker `Kd`, whose MDH is `md`, as their operand requests: `Xs1`, or `Vs1` for `kl.rstrv`, formatted as an MDH.
 
 Operand::
-* `kl.restrictl` takes bits [63:0] of the operand, and may change _MachinePolicy_;
-* `kl.restricth` takes bits [127:64], supplied in `Xs1`[63:0], and may change _Locality_, _UsagePolicy_ and _ExpirationDate_;
-* `kl.restrictv` takes both halves, and applies both sets of rules.
+* `kl.rstrl` takes bits [63:0] of the operand, and may change _MachinePolicy_;
+* `kl.rstrh` takes bits [127:64], supplied in `Xs1`[63:0], and may change _Locality_, _UsagePolicy_ and _ExpirationDate_;
+* `kl.rstrv` takes both halves, and applies both sets of rules.
 +
 The _request_ `rq` is the 128-bit MDH image that these halves form; the fields of a half that the instruction does not take are not requested and stay unchanged.
 In a half that the instruction takes, a non-zero field other than these four transitions the locker to _Invalid_.
@@ -1663,11 +1663,11 @@ The validity check comes first: a request with an invalid value, such as a reser
 A request that transitions the locker to an Error State changes no other field of `md` beyond those of Rule <<KLE-GR-clear-locker-content-error-state>>: none of the other narrowings it requests is written.
 
 States::
-The `kl.restrict` instructions are not usage instructions (Rule <<KLE-GR-usage-policy>>).
+The `kl.rstr` instructions are not usage instructions (Rule <<KLE-GR-usage-policy>>).
 They act only in a Valid State: on an _Unconfigured_ or Error-State locker they perform no operation (Rule <<KLE-GR-outcome-inert>>), and in a Configuration State Rule <<KLE-GR-outcome-config-state>> applies.
 --
 
-NOTE: A `kl.restrict` narrows only the CC in `Kd`. Copies of the same secret made earlier, such as SCCs exported before the narrowing or clones in other lockers, keep their wider policies (<<KLE-KLF>>).
+NOTE: A `kl.rstr` narrows only the CC in `Kd`. Copies of the same secret made earlier, such as SCCs exported before the narrowing or clones in other lockers, keep their wider policies (<<KLE-KLF>>).
 // Memory carries no attributes that could track such copies, so making a narrowing effective everywhere is up to the discipline of the software that holds them.
 
 // ////////////////////////////////////////////////////////////////////
@@ -2001,7 +2001,7 @@ The first component access is at the effective address plus `klstart`, with a si
 --
 . an inert locker: none; the instruction has the outcome of Rule <<KLE-GR-outcome-inert>>;
 . a Configuration State: Rule <<KLE-GR-outcome-config-state>>, with the <<KLE-mv-locker-checks,locker checks>> for a management transfer and the sequence of the operation under way for a `kl.mgmt` (<<KLE-locker-management>>);
-. a Valid State, for a configuration instruction: Rule <<KLE-GR-config-valid-state>>, with the <<KLE-mv-locker-checks,locker checks>> for a management transfer, Rule <<KLE-GR-policy-narrowing-state>> for `kl.restrict*`, and Rule <<KLE-GR-error-state-can-be-reconfigured>> for `kl.setste`;
+. a Valid State, for a configuration instruction: Rule <<KLE-GR-config-valid-state>>, with the <<KLE-mv-locker-checks,locker checks>> for a management transfer, Rule <<KLE-GR-policy-narrowing-state>> for `kl.rstr*`, and Rule <<KLE-GR-error-state-can-be-reconfigured>> for `kl.setste`;
 . a Valid State, for a usage instruction: Rule <<KLE-GR-outcome-valid-state>>, then, for a `kl.exec`, the transfer-window checks of Rule <<KLE-GR-transfer-window-checks>> and, after them, the Rules of its Machine (<<Zkl-ISA-machines.adoc#KLE-MGR-granularity>>, <<Zkl-ISA-machines.adoc#KLE-MGR-single-last-block>>), and, for a `kl.derive`, Rules <<KLE-GR-derive-check-order>>, <<KLE-GR-checks>> and <<KLE-GR-narrowing>>, in this order.
 --
 
@@ -2016,7 +2016,7 @@ An instruction that the _UsagePolicy_ forbids raises a KLE privilege-violation e
 
 [[KLE-instruction-properties]]
 .State modification and usage control, per instruction
-[width="100%",cols="<16%,^12%,^12%,^12%,<48%",options="header"]
+[width="100%",cols="<22%,^12%,^12%,^12%,<42%",options="header"]
 |===
 | Instructions                | May modify KLE state | May modify other state | Usage instruction | Notes
 
@@ -2030,13 +2030,13 @@ An instruction that the _UsagePolicy_ forbids raises a KLE privilege-violation e
 | `kl.clearads`               | Yes                   | No                    | Yes               | Encoding of `kl.setst`; see its row.
 | `kl.mgmt`                   | Yes                   | Yes +
 (see note) | No        | Vector forms reset `vstart` on retirement. A provisioning- or import-opening `kl.mgmt`: admitted whatever the State of the locker; an export-opening `kl.mgmt`: admitted in every Valid, Error or Configuration State; no Machine may restrict either.
-| `kl.getmd*`, `kl.getst`, `kl.getstx` | No         | Yes                   | No                | Admitted whatever the State of the locker; no Machine may restrict it.
-| `kl.getnl`, `kl.getiobl`, `kl.getiobt`, `kl.getklst` | No | Yes | No | Read the CSR they name.
-| `kl.setnl`, `kl.setnli`, `kl.setiobl`, `kl.setiobli`, `kl.setiobt`, `kl.setiobti`, `kl.setklst`, `kl.setklsti` | Yes | No | No | Write only the CSR they name, with the effect of a CSR write.
-| `kl.restrict*`              | Yes                   | Yes +
-(see note) | No        | `kl.restrictv` resets `vstart` on retirement.
-| `kl.clone`                  | Yes | No  | No                    | Admitted whatever the State of the destination, and of a source not in a Configuration State (Rule <<KLE-GR-outcome-config-state>>); no Machine may restrict it.
-| `kl.rename`, `kl.swap`      | Yes | No  | No                    | Admitted whatever the State of the locker; no Machine may restrict them.
+| `kl.getmd`, `kl.getmdl`, `kl.getmdv`, `kl.getst`, `kl.getstx` | No  | Yes   | No                | Admitted whatever the State of the locker; no Machine may restrict it.
+| `kl.getnl`, `kl.getbl`, `kl.getbt`, `kl.getks` | No | Yes | No | Read the CSR they name.
+| `kl.setnl`, `kl.setnli`, `kl.setbl`, `kl.setbli`, `kl.setbt`, `kl.setbti`, `kl.setks`, `kl.setksi` | Yes | No | No | Write only the CSR they name, with the effect of a CSR write.
+| `kl.rstrl`, `kl.rstrh`, `kl.rstrv` | Yes | Yes +
+(see note) | No        | `kl.rstrv` resets `vstart` on retirement.
+| `kl.clone`                  | Yes                   | No                    | No                | Admitted whatever the State of the destination, and of a source not in a Configuration State (Rule <<KLE-GR-outcome-config-state>>); no Machine may restrict it.
+| `kl.rename`, `kl.swap`      | Yes                   | No                    | No                | Admitted whatever the State of the locker; no Machine may restrict them.
 | `kl.derive`                 | Yes                   | No                    | Yes               | The _UsagePolicy_ fields of the source and destination lockers are evaluated separately for the source and the destination (Rule <<KLE-GR-derive-check-order>>).
 | `kl.load`                   | Yes                   | No                    | No^*^             | Updates `klstart` and locker.
 | `kl.store`                  | Yes                   | Yes                   | No^*^             | Modifies `klstart` and memory, but no locker.
@@ -2075,7 +2075,7 @@ Unless the Machine defines another Form for it, a `kl.setst` naming _Ready_ is o
 
 [[KLE-GR-success-failure-cannot-be-set-directly,GR24]]GR24:: No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 54 or 55). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
 
-[[KLE-GR-policy-narrowing-state,GR25]]GR25:: A `kl.restrictl` or `kl.restrictv` (<<KLE-instruction-restrict>>) that narrows _MachinePolicy_ to a value that the Machine forbids transitions the locker to Error State _Invalid_.
+[[KLE-GR-policy-narrowing-state,GR25]]GR25:: A `kl.rstrl` or `kl.rstrv` (<<KLE-instruction-restrict>>) that narrows _MachinePolicy_ to a value that the Machine forbids transitions the locker to Error State _Invalid_.
 Any other narrowing changes no State; from the next instruction on, Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> checks each `kl.exec`, `kl.derive` and usage `kl.setst` against the narrowed _MachinePolicy_, at issue and on entering a State.
 
 //
@@ -2161,7 +2161,7 @@ Transitions to and between Configuration States use `kl.mgmt`, `kl.rename` or `k
 
 [horizontal]
 [[KLE-GR-outcome-config-state,GR29]]GR29:: A Configuration State admits the instructions that <<KLE-instruction-properties>> admits in every State, an export-opening `kl.mgmt`, and the management transfers and the completing `kl.mgmt` of the operation under way (Rule <<KLE-GR-zkl-load-mv-allowed>>, <<KLE-locker-management>>).
-Every other instruction traps and leaves the _State_ unchanged: a management transfer of the other direction, or a completing `kl.mgmt` with an inconsistent `ml`._State_, with an illegal-instruction exception (Locker Checks in <<KLE-instruction-mv>>, <<KLE-locker-management>>); a usage instruction, a `kl.clone` from the locker into another one, or a `kl.restrict*` on it, with a KLE privilege-violation exception.
+Every other instruction traps and leaves the _State_ unchanged: a management transfer of the other direction, or a completing `kl.mgmt` with an inconsistent `ml`._State_, with an illegal-instruction exception (Locker Checks in <<KLE-instruction-mv>>, <<KLE-locker-management>>); a usage instruction, a `kl.clone` from the locker into another one, or a `kl.rstr*` on it, with a KLE privilege-violation exception.
 
 [[KLE-GR-zkl-load-mv-allowed,GR30]]GR30:: The management transfers into the locker, `kl.load` and `kl.mvin`, are admitted in States `kl_cfg_provisioning`, `kl_cfg_importing` and `kl_cfg_ppi_importing`; those out of it, `kl.store` and `kl.mvout`, in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`.
 The images that these instructions transfer are described in <<KLE-CC-management>>.
@@ -2217,7 +2217,7 @@ Every such instruction that honors `klstart` (<<KLE-CSR-klstart>>) writes 0 to `
 | Writes the MDH, resp. its _State_ or _StateExtension_ field.
 2+| Writes zeros to the destination.
 
-| <<KLE-instruction-restrict,kl.restrict*>>
+| <<KLE-instruction-restrict,kl.rstr*>>
 3+| Writes nothing.
 
 | <<KLE-instruction-setste,kl.setste>>

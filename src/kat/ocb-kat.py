@@ -245,14 +245,14 @@ check('second message with the same nonce after Ready gives identical output', x
 check('OCB_NONCE is not a kl.derive destination', inv((lambda m: (m.derive_dest(RB(16)), m)[1])(OCB_NONCE(KEY, n))))
 check('OCB_NONCE zero policy rejected', raises(OCB_NONCE, KEY, n, policy=0, exc=ValueError))
 
-section('kl.derive and kl.restrictl')
+section('kl.derive and kl.rstrl')
 k2 = RB(16)
 m = OCB(KEY); m.derive_dest(k2); check('derive in Ready: new key used', ocb_enc(m, 5, 96, b'a', b'b' * 20) == ocb_enc(OCB(k2), 5, 96, b'a', b'b' * 20))
 m = at(ABSORB); m.derive_dest(k2); check('derive in Hash_Absorb: Invalid', inv(m))
 m = OCB(KEY); m.setst(SAV, 'B', 96); m.derive_dest(k2); check('derive in Set_Aux_Value: Invalid', inv(m))
 m = OCB(KEY); m.derive_dest(RB(24)); check('derive of 24 bytes into a 128-bit key: Invalid', inv(m))
-m = OCB(KEY); m.restrict(1); check('restrict to 1', m.policy == 1 and m.st == READY)
-m.restrict(2); check('restrict to disjoint: Invalid', inv(m))
+m = OCB(KEY); m.rstr(1); check('restrict to 1', m.policy == 1 and m.st == READY)
+m.rstr(2); check('restrict to disjoint: Invalid', inv(m))
 
 section('negative controls')
 nbits = 0xBBAA99887766554433221100

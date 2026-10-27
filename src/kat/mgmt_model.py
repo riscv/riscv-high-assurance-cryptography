@@ -224,7 +224,7 @@ class KLE:
         for n in ('AuxDataLen', 'ADSDropped', 'MachineUse', 'AuxInfo'): m = mdh_put(m, n, 0)
         s.L[k].mdh = m
     # ---- restrict
-    def restrict(s, kd, rq, r=0, part='v'):
+    def rstr(s, kd, rq, r=0, part='v'):
         s.common(); k = s.tgt(kd, r)
         if k is None: return
         m = s.md(k)

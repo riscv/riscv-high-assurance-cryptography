@@ -156,7 +156,7 @@ ikm = b'\x0b' * 22; salt = bytes(range(13)); L = mknik('SHA-256', salt); L.setst
 prk = out_all(L, 32)
 check('PRK = RFC 5869 A.1', ok and prk.hex() == '077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5')
 okm = ref('SHA-256', prk, bytes.fromhex('f0f1f2f3f4f5f6f7f8f9') + b'\x01'); L = mknik('SHA-256', prk); check('first HKDF block T(1) through a NIK K0 = PRK', tag(L, bytes.fromhex('f0f1f2f3f4f5f6f7f8f9') + b'\x01') == okm and okm.hex().startswith('3cb25f25faacd57a90434f64d0362f2a'))
-section('Ported from the old KAT: _Machine_, KeyType, Unconfigured, restrictl, derive endpoints')
+section('Ported from the old KAT: _Machine_, KeyType, Unconfigured, rstrl, derive endpoints')
 check('NIK with KeyType = 1: invalid Metadata (KeyType 0 only)', raises(Locker, 'SHA-256', 'NIK', key=bytes(64), policy=3, exc=Metadata))
 ENC = {'SHA-256': ((5, 7), (4, 7)), 'SHA3-512': ((7, 9), (6, 9)), 'SM3': ((9, 2), (9, 1))}
 check('_Machine_ encodings (KIP Type/Mode, NIK Type/Mode): HMAC-SHA-256 5/7 and 4/7, HMAC-SHA3-512 7/9 and 6/9, SM3_HMAC Mode 2 and 1 (Type 9)', ENC == {'SHA-256': ((5, 7), (4, 7)), 'SHA3-512': ((7, 9), (6, 9)), 'SM3': ((9, 2), (9, 1))})
@@ -165,15 +165,15 @@ for fn in ('SHA-256', 'SHA3-512', 'SM3'):
     L.setst('success'); L.setst('absorb'); L.exec('B', b'x'); L.setst('failure'); L.setst('ready')
     check('%s kl.clear: Unconfigured, later kl.setst/kl.exec change nothing (GR32)' % fn, L.st == 'Inert' and (L.S, L.K0) == S0 and L.exec('C', kllen=64) == bytes(8))
     L = mkkip(fn, b'key'); L.setst('absorb'); L.setst('success'); check('%s kl.setst naming Success -> Invalid (GR24)' % fn, inv(L))
-section('kl.restrictl (GR25, MR1) and the gates of Output and Verify')
+section('kl.rstrl (GR25, MR1) and the gates of Output and Verify')
 for fn in ('SHA-256', 'SHA3-256'):
     k = b'key'; m = b'abc'
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('output'); L.restrictl(2)
-    o = L.exec('C', kllen=256); check('%s restrictl clearing bit 0 in Hash_Output: the tag kl.exec -> Invalid, OUTPUT zeroed' % fn, inv(L) and o == bytes(32))
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.restrictl(1); L.setst('output'); check('%s restrictl clearing bit 1 in Hash_Absorb: Hash_Output still works' % fn, out_all(L, L.f.t // 8) == ref(fn, k, m))
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.restrictl(1); L.setst('verify', 'B', 64); check('%s restrictl clearing bit 1: Hash_Verify refused (Invalid)' % fn, inv(L))
-    L = mkkip(fn, k, 2); L.restrictl(1); check('%s restrictl clearing the only set bit -> Invalid at once' % fn, inv(L))
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); L.restrictl(1); L.exec('B', ref(fn, k, m)[:8]); check('%s restrictl clearing bit 1 in Hash_Verify: the compare kl.exec -> Invalid' % fn, inv(L))
+    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('output'); L.rstrl(2)
+    o = L.exec('C', kllen=256); check('%s rstrl clearing bit 0 in Hash_Output: the tag kl.exec -> Invalid, OUTPUT zeroed' % fn, inv(L) and o == bytes(32))
+    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.rstrl(1); L.setst('output'); check('%s rstrl clearing bit 1 in Hash_Absorb: Hash_Output still works' % fn, out_all(L, L.f.t // 8) == ref(fn, k, m))
+    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.rstrl(1); L.setst('verify', 'B', 64); check('%s rstrl clearing bit 1: Hash_Verify refused (Invalid)' % fn, inv(L))
+    L = mkkip(fn, k, 2); L.rstrl(1); check('%s rstrl clearing the only set bit -> Invalid at once' % fn, inv(L))
+    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); L.rstrl(1); L.exec('B', ref(fn, k, m)[:8]); check('%s rstrl clearing bit 1 in Hash_Verify: the compare kl.exec -> Invalid' % fn, inv(L))
 section('kl.derive source and pair rules (GR39, GR42)')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)

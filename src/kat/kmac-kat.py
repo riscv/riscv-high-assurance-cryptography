@@ -171,7 +171,7 @@ d = Locker('KMAC128', K=KEY); derive(Secret(b'S' * 32), d, 32); check('destinati
 o = Locker('KMAC128', K=KEY); o.setst(2, 'A'); o.setst(6, 'B', 128); d = Locker('KMAC256', K=KEY); d.setst(2, 'A'); derive(o, d, 32)
 check('KMAC Hash_Output is not a source: source Invalid, dest untouched', o.se == SE_INV and d.st == ABSORB)
 
-section('SKID key, MachinePolicy, restrictl, unsupported policy')
+section('SKID key, MachinePolicy, rstrl, unsupported policy')
 SKS = {0x0101010101010101: KEY}
 def macof(L, x=b'abc', xs=256):
     L.setst(2, 'A'); L.exec('B', x); L.setst(6, 'B', xs); o = bytearray(xs // 8); L.exec('C', out=o); return bytes(o)
@@ -184,10 +184,10 @@ check('derive into SKID-keyed KMAC absorb is still admitted (message input)', d.
 for pol, vo, vv in ((1, True, False), (2, False, True), (3, True, True)):
     L = Locker('KMAC128', policy=pol, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B', 128); check('MachinePolicy=%d: Hash_Output %s' % (pol, 'admitted' if vo else 'refused'), (L.st == OUTPUT_) == vo)
     L = Locker('KMAC128', policy=pol, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy=%d: Hash_Verify %s' % (pol, 'admitted' if vv else 'refused'), (L.st == VERIFY) == vv)
-L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(1); L.setst(2, 'A'); L.setst(6, 'B', 128); check('restrictl 3 -> 1: Hash_Output stays admitted', L.st == OUTPUT_)
-L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(1); L.setst(2, 'A'); L.setst(5, 'B', 128); check('restrictl 3 -> 1: Hash_Verify now refused', L.se == SE_INV)
-L = Locker('KMAC128', policy=1, K=KEY); L.restrictl(2); check('restrictl narrowing to a forbidden value (0 bits) -> Invalid (GR25)', L.se == SE_INV)
-L = Locker('KMAC128', policy=3, K=KEY); L.restrictl(mask(64)); check('restrictl all-ones: unchanged', L.policy == 3 and L.st == READY)
+L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(1); L.setst(2, 'A'); L.setst(6, 'B', 128); check('rstrl 3 -> 1: Hash_Output stays admitted', L.st == OUTPUT_)
+L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(1); L.setst(2, 'A'); L.setst(5, 'B', 128); check('rstrl 3 -> 1: Hash_Verify now refused', L.se == SE_INV)
+L = Locker('KMAC128', policy=1, K=KEY); L.rstrl(2); check('rstrl narrowing to a forbidden value (0 bits) -> Invalid (GR25)', L.se == SE_INV)
+L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(mask(64)); check('rstrl all-ones: unchanged', L.policy == 3 and L.st == READY)
 for k in ('KMACXOF128', 'KMACXOF256'):
     L = Locker(k, policy=1, K=KEY); check(k + ' with MachinePolicy != 0 -> unsupported Metadata (State 0, ext 1)', (L.st, L.se) == (0, 1))
 
@@ -218,8 +218,8 @@ for kind in ('KMAC128', 'KMACXOF128'):
     for imm in (48, 53):
         L = Locker(kind, K=KEY); L.setst(2, 'A'); L.setst(imm, 'A'); check('%s: setst %d in Hash_Absorb -> Invalid' % (kind, imm), L.se == SE_INV)
     L = Locker(kind, K=KEY); L.setst(2, 'A'); L.setst(0, 'A'); st0 = (L.st, L.se)
-    L.setst(1, 'A'); L.exec('B', b'a'); L.restrictl(3)
-    check('%s: kl.clear -> Unconfigured; later setst/exec/restrictl change nothing' % kind, st0 == (0, 0) and (L.st, L.se) == (0, 0))
+    L.setst(1, 'A'); L.exec('B', b'a'); L.rstrl(3)
+    check('%s: kl.clear -> Unconfigured; later setst/exec/rstrl change nothing' % kind, st0 == (0, 0) and (L.st, L.se) == (0, 0))
 
 section('Generic sequence: random plans of chunks, halts, export/import, final piece, bound Xs')
 import random

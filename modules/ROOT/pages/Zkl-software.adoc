@@ -39,7 +39,7 @@ It includes every exception and interrupt handler, in any mode, that of the inte
 === Requirements on the KLIOBUF
 
 [horizontal]
-[[KLE-SR-kliobuflen-zero,SR2]]SR2:: Software should set `kliobuflen`, with `kl.setiobl` or `kl.setiobli`, to zero once it no longer needs the KLIOBUF contents, which context-switch code must otherwise save and restore (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>); setting `kliobuftop` to zero instead, with `kl.setiobt` or `kl.setiobti`, keeps them accessible.
+[[KLE-SR-kliobuflen-zero,SR2]]SR2:: Software should set `kliobuflen`, with `kl.setbl` or `kl.setbli`, to zero once it no longer needs the KLIOBUF contents, which context-switch code must otherwise save and restore (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>); setting `kliobuftop` to zero instead, with `kl.setbt` or `kl.setbti`, keeps them accessible.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -152,9 +152,9 @@ Where an item cites a Rule SR__n__ (<<KLE-software-requirements>>), that Rule ta
 
 On entry, before its first KLE instruction, the handler (which reads and writes `klstart` and `klnamedlocker` with the getter and setter instructions, <<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>):
 
-. saves `klstart` (`kl.getklst`, Rule <<KLE-SR-klstart-save>>);
+. saves `klstart` (`kl.getks`, Rule <<KLE-SR-klstart-save>>);
 . saves `klnamedlocker` (`kl.getnl`, Rule <<KLE-SR-klnamedlocker-write>>);
-. writes 0 to `klstart` (`kl.setklsti 0`) before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
+. writes 0 to `klstart` (`kl.setksi 0`) before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
 . saves the vector state, and writes 0 to `vstart`, before its first vector KLE instruction (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-vector-legality>>).
 
 Before each instruction that Rule <<KLE-SR-klnamedlocker-write>> lists, it sets `klnamedlocker` as that Rule requires.
@@ -163,7 +163,7 @@ On exit, the handler:
 
 . restores `klnamedlocker` (`kl.setnl`) to its saved value, or to 32 if it has cleared, instead of saving, the locker that value named (<<KLE-save-order>>);
 . restores the vector state, `vstart` included; and
-. restores `klstart` last (`kl.setklst`), exactly as saved (Rules <<KLE-SR-klstart-save>> and <<KLE-SR-klstart-no-reset>>).
+. restores `klstart` last (`kl.setks`), exactly as saved (Rules <<KLE-SR-klstart-save>> and <<KLE-SR-klstart-no-reset>>).
 
 A handler that skips the trapping instruction applies its retirement effects to `klstart` and `vstart` instead of restoring them (Rule <<KLE-SR-handler-duty>>).
 
@@ -195,7 +195,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 [[KLE-save-order]]
 === Context Save Order
 
-. Save `klstart` (`kl.getklst`).
+. Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
 If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
@@ -203,8 +203,8 @@ If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is under management.
 . With `Zklio`:
-.. save `kliobuflen` and `kliobuftop` (`kl.getiobl`, `kl.getiobt`);
-.. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setklsti 0`, `kl.setiobt` of the saved length), then write 0 to `kliobuflen` (`kl.setiobli 0`).
+.. save `kliobuflen` and `kliobuftop` (`kl.getbl`, `kl.getbt`);
+.. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
 . Save every locker other than the managed locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
@@ -222,21 +222,21 @@ The handler may clear a locker being provisioned or imported instead of saving i
 . Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
-.. restore `kliobuflen` (`kl.setiobl`), which zeroes the buffer and sets `kliobuftop` to it;
+.. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
-.. restore `kliobuftop` (`kl.setiobt`), after the buffer, since a write of `kliobuflen` resets it.
+.. restore `kliobuftop` (`kl.setbt`), after the buffer, since a write of `kliobuflen` resets it.
 . If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
-. Restore `klstart` last (`kl.setklst`).
+. Restore `klstart` last (`kl.setks`).
 
 The getter and setter instructions are the recommended way for software to access `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>).
-As with `vsetvl`, the same instructions give the maximum KLIOBUF length: write a large value with `kl.setiobl`, then read it back with `kl.getiobl`.
+As with `vsetvl`, the same instructions give the maximum KLIOBUF length: write a large value with `kl.setbl`, then read it back with `kl.getbl`.
 
 [source,asm]
 ----
-  kl.getiobl  t1      # save the current length
-  kl.setiobl  a0      # zeroes the buffer, clamps to the maximum
-  kl.getiobl  t0      # t0 <- length granted
+  kl.getbl  t1      # save the current length
+  kl.setbl  a0      # zeroes the buffer, clamps to the maximum
+  kl.getbl  t0      # t0 <- length granted
 ----
 
 // ////////////////////////////////////////////////////////////////////
