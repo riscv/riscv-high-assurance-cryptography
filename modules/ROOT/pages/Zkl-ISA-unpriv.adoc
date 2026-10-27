@@ -2404,16 +2404,16 @@ An implementation achieves this with option 1, 2 or 5 of Rule <<KLE-GR-resumabil
 The failing and subsequent units have no effect, except as Rule <<KLE-GR-prefix-complete>> permits for a memory instruction, and the instruction does not retire, `xepc` holding its address.
 If the instruction transitions its locker to an Error State after partial progress, the completed prefix stays committed, the unwritten part of its output window is zeroed (Rule <<KLE-GR-zero-unwritten-output>>), and the instruction retires (Rule <<KLE-GR-klstart-updates>>).
 
-[[KLE-GR-interruption-point,GR50]]GR50:: An _interruption point_ of a KLE instruction in a State of a Machine is a `klstart` value at which the instruction may halt precisely in that State: a whole multiple of the Machine's granularity within the transfer window, unless the Machine, or a macro such as `PROCESS_VLI` (<<Zkl-ISA-machines.adoc#KLE-process-VLI>>), defines another set.
-For a `kl.exec` with a vector operand, an interruption point is also a multiple of `SEW`/8; if no non-zero point of the set is one, the only interruption point is 0.
+[[KLE-GR-interruption-point,GR50]]GR50:: An _interruption point_ of a KLE instruction in a State of a Machine is a `klstart` value at which the instruction may halt precisely: a multiple of the Machine's granularity within the transfer window, unless the Machine, or a macro such as `PROCESS_VLI` (<<Zkl-ISA-machines.adoc#KLE-process-VLI>>), defines another set.
+For a `kl.exec` with a vector operand it is also a multiple of `SEW`/8; if no non-zero point of the set is one, the only interruption point is 0.
 
-[[KLE-GR-klstart-updates,GR51]]GR51:: Apart from a precise halt (Rule <<KLE-GR-precise-halt>>), <<KLE-CSR-klstart,an instruction that honors `klstart`>> writes 0 to it when it retires, whether it performs its operation or falls through (Rule <<KLE-GR-outcome-inert>>; so does a `kl.exec` of any Form that falls through), except `kl.mvin` and `kl.mvout`, which keep it (<<KLE-instruction-mv>>).
+[[KLE-GR-klstart-updates,GR51]]GR51:: Apart from a precise halt (Rule <<KLE-GR-precise-halt>>), <<KLE-CSR-klstart,an instruction that honors `klstart`>> writes 0 to it when it retires, whether it performs its operation or falls through (Rule <<KLE-GR-outcome-inert>>), except `kl.mvin` and `kl.mvout`, which keep it (<<KLE-instruction-mv>>).
 `kl.clearall` and a `kl.mgmt` that passes items 1–6 of the locker-state-independent checks (<<KLE-locker-management>>) also write 0 to it; every other instruction leaves it unchanged.
 
 [[KLE-GR-transfer-window-checks,GR52]]GR52:: A Form A–C `kl.exec`, or a Form D `kl.exec` that substitutes for one (<<KLE-usage-input-output>>), checks its transfer window after the conditions of Rule <<KLE-GR-outcome-valid-state>>, in this order:
 +
 . A `klstart` {ge} the length, which includes a length of 0, makes the window _empty_: the instruction writes 0 to `klstart` and does not reach the Machine, which keeps its State.
-. Otherwise, a length invalid for the Machine transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-granularity>>).
+. Otherwise, a length invalid for the Machine transitions the locker to Error State _Invalid_.
 . Any other `klstart` that is not an interruption point (Rule <<KLE-GR-interruption-point>>) transitions the locker to Error State _Invalid_.
 
 [[KLE-GR-conflicting-access-rule,GR53]]GR53:: Under every option of Rule <<KLE-GR-resumability-options>>, before the issuing hart performs a _conflicting access_, the in-flight operation must have completed, or have halted precisely with `klstart` set as Rule <<KLE-GR-prefix-complete>> requires.
@@ -2430,14 +2430,14 @@ A conflicting access is:
 
 Scalar operands in GPRs, `vl` and `vtype` are captured at issue; accessing them is not a conflicting access.
 A KLE instruction sets to Dirty the `*llockerstatus` and `KLS` fields that it affects when it is issued, before any later instruction of the hart can read them, so a read of these fields is not a conflicting access.
+--
 
 //
 
-NOTE: This Rule and Rule <<KLE-GR-resumability-options>> make asynchronous execution by the KLE unit invisible to same-hart program order, as <<KLE-Memory-Model>> requires.
+NOTE: Together, the last Rule and Rule <<KLE-GR-resumability-options>> make asynchronous execution by the KLE unit invisible to same-hart program order, as <<KLE-Memory-Model>> requires.
 Beyond them, the architecture specifies only the allowed interruption points of its instructions and Machines.
 An implementation may also preempt a <<KLE-GR-long-running-no-data>> at points that it defines itself.
 These operations are defined in the next section.
---
 
 //
 
@@ -2592,7 +2592,7 @@ A nested export taken during the import (<<KLE-management-formats-and-states>>) 
 It then makes the check of Rule <<KLE-GR-sysfmt-mdh>>, converts the data to the internal representation expected by KLE, translates the policies of the format and takes _AuxInfo_ from the format where it supplies a value. A failure here invalidates the locker.
 . The converted Content undergoes every check that the Machine makes on a provisioning or an import of the same fields, with the same outcomes (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>); each field that it configures is then in the same status, its flag included, as after a complete load of that field by `kl.exec` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
 . It narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>); a failed narrowing, or a format that requires a higher side-channel protection level than the declared _SCProtection_, gives Error State _Privilege Violation_.
-. It sets _Version_ to 0 and _AuxDataLen_ to 0, zeroes the implementation-defined subfields of _AuxInfo_ (<<KLE-MachineUse>>) and, unless a Machine check left the locker in _Failure_, enters _Ready_ with the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>) or, at this completion only, with initialization operations of the format instead. The other provisioning actions of the Machine, such as setting a default or clearing a field or its flag, apply only to the fields that the converted Content does not configure, and to their flags; none clears a flag set in step 2.
+. It sets _Version_ and _AuxDataLen_ to 0, zeroes the implementation-defined subfields of _AuxInfo_ (<<KLE-MachineUse>>) and, unless a Machine check left the locker in _Failure_, enters _Ready_ performing the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>) or, at this completion only, with initialization operations of the format instead. The other provisioning actions of the Machine, such as setting a default or clearing a field or its flag, apply only to the fields that the converted Content does not configure, and to their flags; none clears a flag set in step 2.
 --
 
 NOTE: A CC imported from a system-specific format can be bound by its _Locality_ to the implementations meant to use it.
@@ -3143,14 +3143,14 @@ B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 Section <<KLE-SCC-AEAD>> defines the authenticated encryption scheme, and <<KLE-SCC-export>> and <<KLE-SCC-import>> the SCC export and import algorithms.
 
 [[KLE-SCC-AEAD]]
-=== The SCC Authenticated Encryption Scheme
+==== The SCC Authenticated Encryption Scheme
 
-SCC export and import use a variant of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] that differs as follows:
-
-. The POLYVAL input omits the lengths of the associated data and plaintext, since they are already implied by the MDH.
-. The optional Nonce is omitted.
-. A domain separation bit, `sep`, distinguishes the two segments of the content sealed in an SCC: the architected content (`sep` = 0) and the optional implementation-specific content (`sep` = 1); `sep` replaces bit 126 of the tag input and of every counter block.
-. For `sep` = 0, bit 47 of `AD[0]`, the unauthenticated _ADSDropped_ bit of the MDH (<<KLE-Auxiliary-Data-Section>>), is cleared before `POLYVAL` is evaluated.
+SCC export and import use a variant of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] that differs from the standard as follows:
+the POLYVAL input does not contain the lengths of the associated data and plaintext, since they are already implied by the MDH;
+the optional nonce is omitted;
+a domain separation bit, `sep`, distinguishes the two segments of the content sealed in an SCC: the architected content (`sep` = 0) and the optional implementation-specific content (`sep` = 1); `sep` replaces bit 126 of the tag input and of every counter block; and
+for `sep` = 0, bit 47 of `MDH` (the first block of the associated data), i.e.,
+the unauthenticated _ADSDropped_ bit of the MDH (<<KLE-Auxiliary-Data-Section>>), is cleared before `POLYVAL` is evaluated.
 
 The Key Derivation (<<KLE-SCC-key-derivation>>) and POLYVAL (<<KLE-SCC-POLYVAL>>) functions are defined first, then SCC generation from a locker (<<KLE-SCC-export>>) and SCC import into a locker (<<KLE-SCC-import>>).
 
@@ -3273,7 +3273,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
   tmp[95:0] ← tmp[95:0] xor N;
   tmp ← AESE256(keys.enc_key, zeros(1) @ sep @ tmp[125:0]);
 
-  if (tmp != SIV) then:
+  if (tmp ≠ SIV) then:
     foreach(i from 0 to len_PC - 1) do:
       P[i] ← zeros(128);
     return ( false, P[] );
@@ -3282,13 +3282,13 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 }
 ----
 
-The comparison `tmp != SIV` is performed in constant time.
+The comparison `tmp {ne} SIV` is performed in constant time.
 It is strongly recommended that `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` also take a time, and make memory accesses, independent of the CSK, the derived keys, the Locality Secrets and the plaintext, as the KLF paths are recommended to (<<KLE-KLF>>).
 
 // ///////////////////////////////////////////////////////////////////////////
 
 [[KLE-SCC-export]]
-=== Generation of an SCC from a Fully Configured Locker
+==== Generation of an SCC from a Fully Configured Locker
 
 A locker ``K(i)`` in a Valid State is fully provisioned, and opening it for export creates the serialized, encrypted and authenticated SCC by the steps below.
 
@@ -3335,7 +3335,7 @@ An export completed prematurely fails authentication at import (<<KLE-SCC-import
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-SCC-import]]
-=== Decryption and Authentication of a Complete SCC into a Locker
+==== Decryption and Authentication of a Complete SCC into a Locker
 
 The following algorithm imports the SCC of a fully configured locker.
 For an SCC whose MDH is in an Error State, use the method of <<KLE-error-state-transfer>>.
@@ -3382,7 +3382,7 @@ For an SCC whose MDH is in an Error State, use the method of <<KLE-error-state-t
 
 // ///////////////////////////////////////////////////////////////////////////
 
-=== Design Rationale for the Sealing Construction
+==== Design Rationale for the Sealing Construction
 
 _This section is informative and non-normative._
 
@@ -3397,7 +3397,7 @@ As in AES-GCM-SIV, bit 127 separates tag inputs from keystream inputs; bit 126 s
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-error-state-transfer]]
-=== Export and Import of a Locker in an Error State
+==== Export and Import of a Locker in an Error State
 
 A locker in an Error State is only an MDH (Rule <<KLE-GR-clear-locker-content-error-state>>) and uses no KLF capacity.
 Its import checks the MDH as any supplied MDH (<<KLE-Metadata-validity>>).
