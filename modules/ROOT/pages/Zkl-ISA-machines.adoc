@@ -307,17 +307,17 @@ A Machine whose input ends in a fractional block processes it in a State of its 
 +
 --
 . The caller determines the bit length `n` of the final block (Rule <<KLE-MGR-last-blk-len>>) and tests whether it is zero.
-. If `n` = 0, no `kl.exec` is needed: a `kl.setst` into the final-block State with `n` = 0 (`Xs` = 0, or Form A) records `last_block_len` = 0 and performs the operations of the final block on empty input; where the Machine has a single successor of the final-block State, the locker enters it at once (item 3).
+. If `n` = 0, no `kl.exec` is needed: a `kl.setst` into the final-block State with `n` = 0 (`Xs` = 0, or Form A) records `last_block_len` = 0 and performs the operations of the final block on empty input; where the Machine has a single successor of the final-block State, the locker enters it at once (item 3), unless the Machine defines otherwise.
 A `kl.setst` from the State preceding the final-block State to its successor, bypassing the final-block State, is equivalent to this and must be of Form A; where `n` is determined by the Machine (`max_len` != 0 in <<KLE-process-VLI>>) and is not zero, the bypass transitions the locker to Error State _Invalid_.
 . If `n` != 0, a `kl.setst` into the final-block State records `last_block_len` = `n`, and a single `kl.exec` (Rule <<KLE-MGR-one-klexec-per-block>>) processes the `n` least significant bits of its `INPUT` and ignores the other bits (Rule <<KLE-MGR-fixed-width-input>>); a `KLLEN` smaller than `n` is not zero-padded but violates the granularity (Rule <<KLE-MGR-granularity>>), and an empty transfer window does not reach the Machine (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 The output window is zeroed where nothing is written (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-zero-unwritten-output>>).
 Once the final block is processed, the locker transitions to the successor of the final-block State that the Machine names, and no `kl.setst` is needed to leave the final-block State.
 . Where software chooses among several successors, as for the digest of a hash function (_Hash_Output_ or _Hash_Verify_, which may be gated separately by Rule <<KLE-MGR-policy-gate>>), or the entry of the successor takes an operand that the final-block State cannot supply, as the length block of _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_ in <<KLE-GCM-mode>>, the Machine names no successor: the locker stays in the final-block State once the block is processed, or on entering it with `n` = 0, and software selects the successor with a `kl.setst`.
-A State whose final block is empty or already processed (`last_block_len` = 0) admits no `kl.exec`, whatever its transfer window, even an empty one: one transitions the locker to Error State _Invalid_.
-. A `kl.setst` leaving the final-block State with `n` != 0 before its `kl.exec` transitions the locker to Error State _Invalid_, unless the Machine defines otherwise.
+A State whose final block is empty or already processed (`last_block_len` = 0) admits no `kl.exec` of Forms A to C, whatever its transfer window, even an empty one: one transitions the locker to Error State _Invalid_.
+. A `kl.setst`, other than one naming _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>), leaving the final-block State with `n` != 0 before its `kl.exec` transitions the locker to Error State _Invalid_, unless the Machine defines otherwise.
 --
 +
-A Machine may require a native Form D `kl.exec`, which has no transfer window, as _Enc_Last_Block_ and _Dec_Last_Block_ of <<KLE-OCB-mode>> do.
+A Machine may require a native Form D `kl.exec`, which has no transfer window, as _Enc_Last_Block_ and _Dec_Last_Block_ of <<KLE-OCB-mode>> do: with `n` = 0 the locker stays in the State until that `kl.exec`, and item 2 does not apply.
 The designer of a new Machine follows this Rule, with <<KLE-OCB-mode>> and <<KLE-Ascon-AEAD128>> as examples of a single successor, and <<KLE-hash-functions-MACs-XOFs>> of a choice of successors.
 +
 NOTE: A second final block is not a continuation of the input but an attempt to manipulate the internal state of the Machine.
@@ -1071,6 +1071,8 @@ They are updated independently: `input_base` is set to 8 {interpunct} `klstart` 
 An invocation that binds two of them to the same location is malformed: the macro would update
 that location several times per iteration.
 
+When `max_len` is not 0 or `last_block_state` is not `None`, `cumul_len` shall not be `None`: the macro evaluates it unconditionally in those cases.
+
 When `mode` is `xor_accumulate`, the caller shall satisfy `state_offset` + `b` {le} `n`. The
 destination of step 3.c ends at bit `block_base` + `amount` + `state_offset` − 1, and
 `block_base` + `amount` can reach `b`, so a larger `state_offset` would write past the end of `state`.
@@ -1268,8 +1270,7 @@ Data Structures::
 The variables `len`, `input_base`, `block_base` and `cumul_len` of the internal state may overlap with `J0`, or be separate
 fields, as may be necessary if the implementation of macro `PROCESS_VLI` (<<KLE-process-VLI>>) works with integers of a
 different length.
-Where they overlap, they hold their values only until `finalize()` writes `J0`, and the zeroing of `cumul_len` at
-completion (Rule <<KLE-MGR-load-long-field>>) leaves `J0` unchanged.
+Where they overlap, they hold their values only until `finalize()` writes `J0`, and the transition to _Hash_Absorb_ leaves `J0` as `finalize()` wrote it.
 
 * *Serialized Content*:
 +
@@ -1368,7 +1369,8 @@ caller:
  ** When entering State _Ready_:
   . `auth_key <- enc_blk(key, zeros(b))`;
   . `tag <- zeros(b)`;
-  . `tag_len <- 0`.
+  . `tag_len <- 0`;
+  . `last_block_len <- 0`.
 
  ** When entering State _Set_Aux_Value_:
   . A Form B `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `Xs` sets the IV length in bits: `len <- Xs`.
@@ -1466,7 +1468,7 @@ A truncation to the least significant bits does not map onto that order; hence t
 
 ** Rule <<KLE-MGR-single-last-block>> applies to _Enc_Last_Block_ and _Dec_Last_Block_, with one exception: the length block that _Enc_Tag_Finalize_, resp. _Dec_Tag_Finalize_, takes from a Form C `kl.setst` is an operand, so the `kl.exec` does not enter them.
 After the `kl.exec`, `last_block_len` is 0, the State admits no further `kl.exec`, and the Form C `kl.setst` leaves it.
-A `kl.setst` that leaves the State with `last_block_len` {ne} 0 before the `kl.exec` transitions the locker to Error State _Invalid_.
+A `kl.setst` that leaves the State with `last_block_len` {ne} 0 before the `kl.exec`, other than one naming _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>), transitions the locker to Error State _Invalid_.
 A Form C `kl.setst` from _Encrypt_ into _Enc_Tag_Finalize_, resp. from _Decrypt_ into _Dec_Tag_Finalize_, bypasses the final-block State: no final block is processed, `tag` and `J0` are unchanged, and the message ends with the blocks already processed.
 
 ** When entering State _Enc_Tag_Finalize_:
@@ -1772,14 +1774,14 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Machine makes use of the 
  ** The `kl.exec` of _Enc_Tag_Finalize_ synthesizes `SIV` and transitions the locker to _Encrypt_ (Rule <<KLE-MGR-machine-transitions>>).
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
  ** Gated States (Rule <<KLE-MGR-policy-gate>>): _MachinePolicy_[0] gates _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_; _MachinePolicy_[1] gates _Decrypt_, _Dec_Last_Block_ and _Dec_Tag_Finalize_.
- ** Rule <<KLE-MGR-single-last-block>> applies: the `kl.exec` of _Dec_Last_Block_ transitions the locker to _Dec_Tag_Finalize_, _Enc_Last_Block_ has no successor, and a `kl.setst` that leaves a last-block State with `last_block_len` {ne} 0 before its `kl.exec` transitions the locker to Error State _Invalid_.
+ ** Rule <<KLE-MGR-single-last-block>> applies: the `kl.exec` of _Dec_Last_Block_ transitions the locker to _Dec_Tag_Finalize_, _Enc_Last_Block_ has no successor, and a `kl.setst` that leaves a last-block State with `last_block_len` {ne} 0 before its `kl.exec`, other than one naming _Ready_, transitions the locker to Error State _Invalid_.
  A Form A `kl.setst` from _Decrypt_ into _Dec_Tag_Finalize_ bypasses _Dec_Last_Block_ (no final block).
  ** A final plaintext or ciphertext block shorter than `b` goes through _Enc_Last_Block_, resp. _Dec_Last_Block_.
 
 * *Behavior:*
 ** Upon entering State _Ready_:
   *** The following initialization operations are performed:
-   . `nonce <- 0`, `ctr <- 0`, `tmp <- 0` and `SIV <- 0`.
+   . `nonce <- 0`, `ctr <- 0`, `tmp <- 0`, `last_block_len <- 0` and `SIV <- 0`.
 
 ** When entering State _Set_Aux_Value_:
    . A Form C `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `INPUT` is expected.
@@ -2017,7 +2019,8 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode us
  ** _Decrypt_ -> _Dec_Last_Block_ -> _Hash_Verify_ -> _Success_ or _Failure_.
  ** The `kl.exec` of _Enc_Last_Block_, resp. _Dec_Last_Block_, makes the transition to _Enc_Tag_Finalize_, resp.
     _Hash_Verify_ (Rule <<KLE-MGR-machine-transitions>>).
- ** Every message passes through _Enc_Last_Block_ or _Dec_Last_Block_, which a full final block of the message does not avoid: it is processed in _Encrypt_ or _Decrypt_, and `last_block_len` is zero. These States are left by their `kl.exec`; with `last_block_len` zero there is nothing to process, and a Form A `kl.setst` to _Enc_Tag_Finalize_, resp. _Hash_Verify_, leaves them as well (see below). Any other `kl.setst` transitions the locker to Error State _Invalid_.
+ ** Every message passes through _Enc_Last_Block_ or _Dec_Last_Block_, which a full final block of the message does not avoid: it is processed in _Encrypt_ or _Decrypt_, and `last_block_len` is zero. These States are left by their `kl.exec`; with `last_block_len` zero there is nothing to process, and a Form A `kl.setst` to _Enc_Tag_Finalize_, resp. _Hash_Verify_, leaves them as well (see below). Any other `kl.setst`, except one naming _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>), transitions the locker to Error State _Invalid_.
+ These States are the exception to item 2 of Rule <<KLE-MGR-single-last-block>>: a `kl.setst` into them with `last_block_len` zero does not enter the successor, which the Form D `kl.exec` or the Form A `kl.setst` above enters.
  ** Gated States (Rule <<KLE-MGR-policy-gate>>): _MachinePolicy_[0] gates _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_; _MachinePolicy_[1] gates _Decrypt_, _Dec_Last_Block_ and _Hash_Verify_.
 
 * *Behavior:*
@@ -2029,6 +2032,7 @@ Besides _Ready_, _Success_, and _Failure_, the Machines implementing OCB Mode us
    . `hash_A <- zeros(128)`.
    . `checksum_P <- zeros(128)`.
    . `index <- 0`.
+   . `last_block_len <- 0`.
    . `tag_len <- 128`.
 
 ** When entering State _Set_Aux_Value_:
@@ -2109,7 +2113,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
 --
 +
 An empty final block of the AD, set with `last_block_len` = 0, needs no `kl.exec` (Rule <<KLE-MGR-single-last-block>>): the message continues with the `kl.setst` into _Encrypt_ or _Decrypt_.
-The AD has several successors, so _Hash_Absorb_Last_Block_ stays after its `kl.exec`; a `kl.setst` that leaves it with `last_block_len` {ne} 0 before the `kl.exec` transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-single-last-block>>).
+The AD has several successors, so _Hash_Absorb_Last_Block_ stays after its `kl.exec`; a `kl.setst` that leaves it with `last_block_len` {ne} 0 before the `kl.exec`, other than one naming _Ready_, transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-single-last-block>>).
 
 ** On entering State _Encrypt_ or _Decrypt_, by a Form A `kl.setst`, the Machine computes the nonce-dependent variables of cite:[RFC7253] {sect}4.2:
 +
@@ -2165,7 +2169,7 @@ which performs:
 
 . `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`.
 
-In both cases the state then transitions to _Enc_Tag_Finalize_.
+In both cases `last_block_len <- 0` and the state then transitions to _Enc_Tag_Finalize_.
 --
 +
 With `last_block_len` zero, a Form A `kl.setst` with immediate `kl_state_enc_tag_finalize` is also admitted: on entering _Enc_Tag_Finalize_ it performs the operation of the Form D `kl.exec`, so that both routes leave the same `checksum_P`. With `last_block_len` nonzero, that `kl.setst` transitions the locker to Error State _Invalid_.
@@ -2214,7 +2218,7 @@ which performs:
 
 . `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`.
 
-In both cases the state then transitions to _Hash_Verify_.
+In both cases `last_block_len <- 0` and the state then transitions to _Hash_Verify_.
 --
 +
 With `last_block_len` zero, a Form A `kl.setst` with immediate `kl_state_hash_verify` is also admitted: on entering _Hash_Verify_ it performs the operation of the Form D `kl.exec`, so that both routes leave the same `checksum_P`. With `last_block_len` nonzero, that `kl.setst` transitions the locker to Error State _Invalid_.
@@ -2405,7 +2409,7 @@ State Machine::
    . `hash <- enc_blk(key, hash xor P)`.
    . `absorbed_any <- true`.
 --
-** When entering State _Hash_Absorb_Last_Block_, the `kl.setst` is of Form B, with immediate `kl_state_hash_last_block` and auxiliary operand `Xs`, the bit length of the last block:
+** When entering State _Hash_Absorb_Last_Block_, the `kl.setst` is of Form B, with immediate `kl_state_hash_last_block` and auxiliary operand `Xs`, the bit length of the last block, or of Form A, which implies `Xs` = 0:
 +
 --
 . it sets `last_block_len <- Xs`;
@@ -3508,7 +3512,7 @@ It performs:
 --
 +
 A `KLLEN` smaller than `last_block_len` is not zero-padded: it transitions the locker to Error State _Invalid_, and an empty transfer window leaves the State (Rule <<KLE-MGR-single-last-block>>).
-A `kl.setst` that leaves _Enc_Last_Block_ before this `kl.exec` transitions the locker to Error State _Invalid_.
+A `kl.setst` that leaves _Enc_Last_Block_ before this `kl.exec`, other than one naming _Ready_, transitions the locker to Error State _Invalid_.
 
 ** In State _Hash_Output_, only one ``kl.exec`` instruction of Form C is expected, computing the tag into `OUTPUT` as follows:
 +
@@ -3567,7 +3571,7 @@ It performs:
 --
 +
 A `KLLEN` smaller than `last_block_len` is not zero-padded: it transitions the locker to Error State _Invalid_, and an empty transfer window leaves the State (Rule <<KLE-MGR-single-last-block>>).
-A `kl.setst` that leaves _Dec_Last_Block_ before this `kl.exec` transitions the locker to Error State _Invalid_.
+A `kl.setst` that leaves _Dec_Last_Block_ before this `kl.exec`, other than one naming _Ready_, transitions the locker to Error State _Invalid_.
 
 ** In State _Hash_Verify_, which the decryption path enters by itself, a single Form B `kl.exec`
 with `KLLEN` {ge} `tag_len` verifies the tag (Rule <<KLE-MGR-tag-verify>>) and performs:

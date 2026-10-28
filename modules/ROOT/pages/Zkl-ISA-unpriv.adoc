@@ -241,7 +241,7 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 | `kl.derive`              | `Zkl` common    2+<| Available
 | `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present, in hardware or by trap-and-emulate, per the conformance requirements above
 | `kl.input`, `kl.output`  | `Zklio`            | —           | Available
-| `kliobuflen`, `kliobuftop` | `Zklio`          | —           | Available
+| `kliobuflen`, `kliobuftop`, `mklmaxiobuflen` | `Zklio`          | —           | Available
 | `klstart`                | `Zkl` common    2+<| Always present
 | `klnamedlocker`          | `Zkl` common    2+<| Always present
 |===
@@ -542,7 +542,7 @@ _KeyType_ states how the keys of a CC are supplied:
 * 1: by a system-specific, 64-bit System Key Identifier (SKID) (<<KLE-system-keys>>).
 * 2: generated randomly by the `kl.mgmt` that completes a base (non-nested) provisioning, all keys of the Machine at once unless the Machine states otherwise; an RBG failure follows Rule <<KLE-GR-rbg-failure>>.
 The PI has the layout of one with _KeyType_ = 0, and the generated values replace its key values.
-_KeyType_ then becomes 0, so the keys are exported by value; _KeyType_ = 2 thus occurs only in a PI, and in a PCCC of base type `pi` (<<KLE-management-formats-and-states>>).
+_KeyType_ then becomes 0, so the keys are exported by value; _KeyType_ = 2 thus occurs only in a PI, in a PCCC of base type `pi` and in a locker being provisioned from them (<<KLE-management-formats-and-states>>).
 * 3: reserved; a PI or SCC that carries it is invalid Metadata (<<KLE-Metadata-validity>>).
 
 NOTE: A SKID may refer to keys with unrelated purposes on different devices; the _System Key Store_ (SKS) therefore supplies a _Locality_ for it (Rule <<KLE-GR-skid-policies>>).
@@ -589,7 +589,7 @@ Usage in Debug mode requires bit 4 and, outside authenticated Debug mode (<<KLE-
 WARNING: The Debug-mode rule above is based on a draft of the External Debug Security extension (the debug access privilege). It must be revisited when that extension is ratified.
 
 A clear bit denies its mode, so a zero _UsagePolicy_ admits no mode: software sets each permission deliberately.
-`mstatus.MPRV` is not considered, and the bit of a mode that is unsupported or not enabled is ignored.
+`mstatus.MPRV` is not considered, and the bit of a mode that is unsupported or not enabled has no effect, because it is never checked.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -670,7 +670,7 @@ _ExpirationDate_ is evaluated only:
 * at the issue of any usage instruction, for `kl.derive` at both endpoints; and
 * when a usage instruction resumes after a halt, but not between the blocks or component operations of one execution.
 
-Each execution reads the clock once, before any component operation, and a passed check covers the rest of it, even if the date passes meanwhile.
+Each execution reads the clock at most once, before any component operation, and a passed check covers the rest of it, even if the date passes meanwhile.
 An unavailable clock on resumption leaves the prefix committed before the halt in place (Rule <<KLE-exception-state-change>>).
 
 The _ExpirationDate_ of a locker that is not in a Valid State is not evaluated: only an expired locker in active use transitions to Error State _Expired_, and expired contexts can still be managed cleanly.
@@ -1042,7 +1042,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, 16 if the locker is in an Error State, and otherwise the size of item 7;
 . Forms B and C: 0 if _State_ is 61–63, or is 0 with a _StateExtension_ of 7–15 (reserved);
-. 16 if _State_ is 0 with a _StateExtension_ of 1–6 (an Error State) (<<KLE-error-state-transfer>>);
+. 16 if _State_ is 0 with a _StateExtension_ of 1–5, or 6 with `Zklexpire` (an Error State) (<<KLE-error-state-transfer>>);
 . 0 if _Version_ is 1 or 2, or if _SCProtection_ or _KeyType_ holds a reserved value;
 . [[KLE-size-avail-lookup,5]]if the KLE unit does not natively implement the Machine fields: an illegal-instruction exception if `mstatus.kleemulation` = 1 (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>), so that M-mode can supply the value, and 0 otherwise;
 . 0 if the MDH is unsupported or invalid Metadata (<<KLE-Metadata-validity>>), evaluated as at provisioning when _State_ is 0 and _Version_ is not 3, and as at import otherwise;
@@ -1430,7 +1430,7 @@ this prevents any previous content from leaking into a nested management operati
 
 Like `kl.setst`, `kl.mgmt` changes the locker's _State_, but with different semantics, hence a separate instruction.
 The State reached depends on both the locker's previous State and `#immed7`.
-Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: when opening a provisioning or an import, it selects the variant of the operation and may become the locker's MDH; when completing an import or an export, it restores, from the copy the caller saved, the _State_ the locker had when the operation started.
+Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: when opening a provisioning or an import, it selects the variant of the operation and may become the locker's MDH; when completing an import or an export, it restores, from the copy the caller saved, the _State_ that `ml` records.
 
 <<KLE-management-immeds>> gives the values of `#immed7`; every other value is reserved (Rule <<KLE-GR-reserved-encodings>>).
 
@@ -2449,7 +2449,7 @@ A `kl.exec` or `kl.setst` that accesses only its lockers and the values of the o
 //
 
 [horizontal]
-[[KLE-GR-long-running-preemption,GR54]]GR54:: On preemption, a long-running operation behaves as an option of Rule <<KLE-GR-resumability-options>> that the interrupt or exception allows; the implementation supports option 3, 4 or 5.
+[[KLE-GR-long-running-preemption,GR54]]GR54:: On preemption, a long-running operation behaves as an option of Rule <<KLE-GR-resumability-options>> that the interrupt or exception allows; the implementation supports at least one of options 3, 4 and 5.
 Whether a long-running `kl.setst` is resumable under option 3 or 4 is implementation-defined; one that is makes its State transition only at completion, and until then its State admits only that `kl.setst`, a `kl.setst` naming _Ready_ (Rule <<KLE-GR-to-ready>>), `kl.clearads` and configuration instructions.
 
 [[KLE-GR-long-running-progress,GR55]]GR55:: A long-running operation that halts at implementation-defined points records its progress in a _progress field_ _P_ of the MDH, which is _MachineUse_ or a subfield of it.
@@ -2613,7 +2613,7 @@ This Section describes when exceptions are raised and when Error States are set.
 === Exceptions
 
 A summary of the grounds of each exception that KLE may raise is given here.
-The grounds are given in the same descending priority order as in <<Zkl-ISA-priv.adoc#KLE-priv-extensions>>, except that the address breakpoint and address-misaligned grounds of the first component access of a KLE memory instruction precede the locker-state-dependent grounds (Rule <<KLE-GR-management-check-order>>, item 8); its page, guest-page and access faults follow them.
+The grounds are given in the same descending priority order as in <<Zkl-ISA-priv.adoc#KLE-priv-extensions>>: the address breakpoint and address-misaligned grounds of the first component access of a KLE memory instruction precede the locker-state-dependent grounds (Rule <<KLE-GR-management-check-order>>, item 8), and its page, guest-page and access faults follow them.
 
 [[KLE-first-group-ILL-grounds,First Group of Illegal-Instruction Exception Grounds]]First Group of Illegal-Instruction Exception Grounds::
 +
@@ -2857,7 +2857,7 @@ Accesses to `S` are 16-byte granular: the management transfer instructions (Rule
 [horizontal]
 [[KLE-GR-image-length,GR72]]GR72:: The length of an external image depends only on fields in bits [63:0] of its MDH, as follows, where the bullets are considered in order:
 +
-* an Error State image, _State_ 0 with a _StateExtension_ of 1–6, whatever its other fields hold: the length is 16 bytes (see <<KLE-locker-in-error-state>>);
+* an Error State image, _State_ 0 with a _StateExtension_ of 1–5, or 6 with `Zklexpire`, whatever its other fields hold: the length is 16 bytes (see <<KLE-locker-in-error-state>>);
 * any other image with _Version_ = 3: the length is 16 + 16 {times} _AuxDataLen_ bytes (Rule <<KLE-GR-sysfmt-mdh>>);
 * a PI: the length depends on _Machine_, _MachinePolicy_, _MachineExtension_ and _KeyType_;
 * an SCC: the length depends on _Machine_, _MachinePolicy_, _MachineExtension_, _KeyType_, _StateExtension_, _AuxDataLen_ and _ADSDropped_;
@@ -2944,7 +2944,7 @@ The `kl.mgmt` instruction:
 .. attempts to allocate the KLF capacity that the fields _Machine_, _MachinePolicy_, _MachineExtension_, _SCProtection_ and _KeyType_ of `M` require (<<KLE-length-rule>>) and, if `M`._Version_ is 3, the capacity for 16 {times} `M`._AuxDataLen_ bytes of data (Rule <<KLE-GR-sysfmt-as-received>>), and raises a KLE out-of-memory exception if it cannot;
 .. for a *provisioning*, installs `M` as the locker's MDH, with _State_ `kl_cfg_provisioning`;
 .. for an *import*:
-... installs `M` as the locker's MDH, with _ADSDropped_ = 1 if `M`._Version_ is not 3, `M`._AuxDataLen_ {ge} 2, and either `M`._ADSDropped_ = 1 or `M`._AuxDataLen_ exceeds the maximum of the implementation for the Machine, and with _ADSDropped_ = 0 otherwise (Step 6 of <<KLE-SCC-import>>);
+... installs `M` as the locker's MDH, with _ADSDropped_ = 1 if `M`._Version_ is not 3, `M`._AuxDataLen_ {ge} 2, and either `M`._ADSDropped_ = 1 or `M`._AuxDataLen_ exceeds the maximum of the implementation for the Machine, and with _ADSDropped_ = 0 otherwise (Step 4 of <<KLE-SCC-import>>);
 ... sets the locker's _State_ to `kl_cfg_importing` if `ml`._State_ is a Valid State, `kl_cfg_importing` or `kl_cfg_exporting`, or `ml`._Version_ is 3;
 ... sets it to `kl_cfg_ppi_importing` if the base type of `ml`._State_ is `pi` (<<KLE-management-formats-and-states>>).
 
@@ -2986,7 +2986,7 @@ Two special cases:
 These two special cases aside, a `kl.mgmt` issued to complete a management operation
 first reads the target locker's MDH, and completes a provisioning if its _State_ is `kl_cfg_provisioning`, an import if it is `kl_cfg_importing` or `kl_cfg_ppi_importing`, and an export if it is `kl_cfg_exporting` or `kl_cfg_ppi_exporting`.
 
-When completing an import or an export, it consumes only the _State_ field of the auxiliary operand `ml`, which restores the locker's _State_ to its value when the management operation started; no other MDH field is written from `ml`.
+When completing an import or an export, it consumes only the _State_ field of the auxiliary operand `ml`, which restores the locker's _State_ to the value that `ml` records; no other MDH field is written from `ml`.
 The locker keeps the _StateExtension_ that it holds during the operation: for an export, the one that it had when the export was opened; for an import, the one carried in the image (<<KLE-SCC-import>>). The completion thus restores _StateExtension_ @ _State_ without reading `ml`._StateExtension_.
 An Error State never reaches a completion: its image is the MDH alone, imported by the short import path, and an export opened on an Error-State locker opens no operation (<<KLE-error-state-transfer>>).
 
@@ -3417,7 +3417,7 @@ A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and
 == Architectural Requirements on the Context Sealing Key
 
 The KLE unit operates only with an active Context Sealing Key (CSK): with a hardwired CSK it is available from reset, otherwise once the CSK is established.
-Without an active CSK, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except accesses to the `mklcsk` and Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK.
+Without an active CSK, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except writes to the `mklcsk` group and accesses to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK.
 
 Each hart holds a CSK, established in exactly one of four ways:
 
