@@ -348,7 +348,7 @@ The instruction that provides the tag or MAC to verify performs the verification
 [horizontal]
 [[KLE-MGR-one-klexec-per-block,MR13]]MR13:: _Single- and Multi-block `kl.exec`._
 In a State that processes whole blocks of `b` bits, one `kl.exec` applies the per-block operation of the State `KLLEN`/`b` times, for `i` = 0, `b`, `2b`, {ellipsis}, `KLLEN` − `b` in that order, consuming `INPUT[i+b-1:i]` if the State takes an input and producing `OUTPUT[i+b-1:i]` if it produces an output.
-Blocks are thus taken and produced from the least significant position upwards, here and throughout this specification.
+Blocks are taken and produced from the least significant position upwards, here and throughout this specification.
 A resumed `kl.exec` performs only the iterations from `i` = 8 {interpunct} `klstart` onwards (<<Zkl-ISA-unpriv.adoc#KLE-CSR-klstart>>).
 +
 A State that the Machine describes as processing a single block, such as a last-block, tag-finalize or verify State, or XEX _Decrypt_ during ciphertext stealing (<<KLE-XEX-XTS-modes>>), processes exactly one block whatever `KLLEN` is, unless its transfer window is invalid (Rule <<KLE-MGR-granularity>>) or empty (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
@@ -846,7 +846,7 @@ Machine-Specific Functions::
 
 * `enc_blk(K, p) -> c` encrypts block `p` using the key `K`, and returns the result `c`.
 * `dec_blk(K, c) -> p` decrypts block `c` using the key `K`, and returns the result `p`.
-* `update_mask(mask)` multiplies `mask` by a generator of GF(2^128^), i.e. it is
+* `update_mask(mask)` multiplies `mask` by a generator of GF(2^128^): it is
 the multiplication by `x` modulo `x^128^ + x^7^ + x^2^ + x + 1`.
 For `AES128_XEX` and `AES256_XEX` (cite:[IEEE-1619-2018] {sect}5.2),
 +
@@ -951,7 +951,7 @@ Decryption consumes mask index `m` before mask index `m-1`; the stealing steps o
   . `P~m~` {leftarrow} `PP[s-1:0]` and `CP` {leftarrow} `PP[b-1:s]`.
   . Issue `kl.exec` for `CP @ C~m~`, obtaining `P~m-1~` at mask index `m-1`; the locker transitions to _Success_.
 
-Decryption with stealing thus adds the `kl.setst` with immediate `kl_xex_state_steal` to the data unit.
+Decryption with stealing adds the `kl.setst` with immediate `kl_xex_state_steal` to the data unit.
 The data unit ends in _Success_, so a `kl.setst` into _Ready_ precedes the `kl.setst` that sets the next tweak.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1065,15 +1065,15 @@ where each parameter is a _reference_ to a variable or function of the calling M
 [IMPORTANT]
 ====
 `input_base`, `block_base`, `cumul_len` and `last_block_len`, the last two whenever they are
-given, shall denote distinct storage locations.
+given, must denote distinct storage locations.
 They are updated independently: `input_base` is set to 8 {interpunct} `klstart` at the start of every `kl.exec` (step 2), whereas
 `block_base` and `cumul_len` persist across instructions.
 An invocation that binds two of them to the same location is malformed: the macro would update
 that location several times per iteration.
 
-When `max_len` is not 0 or `last_block_state` is not `None`, `cumul_len` shall not be `None`: the macro evaluates it unconditionally in those cases.
+When `max_len` is not 0 or `last_block_state` is not `None`, `cumul_len` must not be `None`: the macro evaluates it unconditionally in those cases.
 
-When `mode` is `xor_accumulate`, the caller shall satisfy `state_offset` + `b` {le} `n`. The
+When `mode` is `xor_accumulate`, the caller must satisfy `state_offset` + `b` {le} `n`. The
 destination of step 3.c ends at bit `block_base` + `amount` + `state_offset` − 1, and
 `block_base` + `amount` can reach `b`, so a larger `state_offset` would write past the end of `state`.
 
@@ -1088,7 +1088,7 @@ that neither party chose.
 The macro does not initialize the persistent state variables `block_base` and `cumul_len`, so that several invocations of it can concatenate their results.
 The invoking Machine zeroes them where needed.
 A Machine that enters a State with `mode` = `assign`, and whose destination field must hold a
-defined value once loading completes, shall zero that field on entry to the State.
+defined value once loading completes, must zero that field on entry to the State.
 
 *Units.* `max_len`, `b`, `n`, `input_base`, `block_base`, `state_offset`, `cumul_len`, `last_block_len`, and `amount` are
 all counted in bits, to support values of `max_len` that are not multiples of 8 bits.
@@ -1387,8 +1387,8 @@ caller:
     . If `len = 96`, then:
       .. `J0 <- bswap(bin(1,32)) @ tag[95:0]`.
 +
-The value of `J0` is that of cite:[nist-SP-800-38D] {sect}7.1 for a 96-bit IV, the byte string `IV {vvert} bswap(bin(1,32))`: the IV occupies bytes 0 to 11, i.e.
-`J0[95:0]`, and the counter occupies bytes 12 to 15 as a big-endian integer.
+The value of `J0` is that of cite:[nist-SP-800-38D] {sect}7.1 for a 96-bit IV, the byte string `IV {vvert} bswap(bin(1,32))`: the IV occupies bytes 0 to 11 (`J0[95:0]`),
+and the counter occupies bytes 12 to 15 as a big-endian integer.
 
     . Otherwise, let `s <- 128 {interpunct} ceil(len/128) - len`, and the computation of `J0 := GHASH(IV {vvert} 0^s+64^ {vvert} bswap(bin(len,64)), auth_key)` is completed by performing:
       .. if `block_base != 0`, then `tag <- Galoismul(tag, auth_key)`.
@@ -1579,7 +1579,7 @@ The mode of operation (((KLE, Machine, GCM with Preset IV))) “GCM with a Prese
 This Machine is the same as GCM (<<KLE-GCM-mode>>), except that it does not set the IV.
 A 96-bit IV is carried in the Provisioning Input, and provisioning forms `J0` from it as cite:[nist-SP-800-38D] {sect}7.1
 does for a 96-bit IV; `J0` itself is never provisioned.
-State _Set_Aux_Value_ and everything that GCM specifies for it therefore do not apply, and _Hash_Absorb_ is entered
+State _Set_Aux_Value_ and everything that GCM specifies for it do not apply, and _Hash_Absorb_ is entered
 from _Ready_. The differences follow.
 
 Data Structures::
@@ -1627,7 +1627,7 @@ Same as for GCM, with the following exceptions:
 --
 The differences with respect to GCM are:
 
- ** The ``kl.setst`` into State _Hash_Absorb_ must be of Form A, i.e., _without any additional inputs_: the IV is already in the PI.
+ ** The ``kl.setst`` into State _Hash_Absorb_ must be of Form A, without any additional inputs: the IV is already in the PI.
  ** Entering State _Ready_ also restores the provisioned `J0`, by `J0[127:96] <- bswap(bin(1,32))`: a later message repeats the provisioned GCM invocation. Software that needs another IV provisions another locker.
 --
 
@@ -1903,7 +1903,7 @@ Parameters::
 +
 --
 * `b` = 128 = block size.
-* `k` = key size. Currently, it can only be 128, 192, or 256.
+* `k` = key size. Currently, it must be 128, 192, or 256.
 * `MAX_BLOCKS` = 2^48^ = maximum number of blocks, a final partial block included, in the AD or in the plaintext.
   This specification sets this bound: cite:[RFC7253] places no limit on the length of a message.
   The caller keeps the uniqueness of the nonce and the recommendation of
@@ -1927,7 +1927,7 @@ Data Structures::
 * *Internal State*:
   ** `key`: `k` bits.
  ** `N`: 120 bits.
- ** `N_len`: 7 bits. Bit length of the nonce. It cannot exceed 120.
+ ** `N_len`: 7 bits. Bit length of the nonce. It must not exceed 120.
  ** `HasN`: bit 0 of _StateExtension_, set once `N` holds a loaded nonce (Rule <<KLE-MGR-load-long-field>>).
  ** `L*`, `offset`, `hash_A`, `checksum_P`: 128 bits each.
  ** `L$` and `L[i]` (derived): 128 bits each, for `0` {le} `i` {le} `floor(log_2(MAX_BLOCKS))` = 48; `L[i]` is `L~i~` of cite:[RFC7253]. Rule <<KLE-MGR-recomputed-fields>> applies to them.
@@ -3902,8 +3902,8 @@ The parameters used in this section are:
  ... the caller computes `Z~A~` and `e`, since every input to `Z~A~` is public; the KLE unit computes neither;
  .. for the Edwards curves, the 64-byte `PH(M)`, used only in pre-hash mode; see <<KLE-EdDSA>>;
  . The bit length `j` of the random number used as nonce in signature generation;
- . The number `u` of coordinates used to represent a point (`u` can be 1 or 2); and
- . The number `v` of elements used to represent a signature (`v` can be 0, 1 or 2, where `v` = 0
+ . The number `u` of coordinates used to represent a point (`u` is 1 or 2); and
+ . The number `v` of elements used to represent a signature (`v` is 0, 1 or 2, where `v` = 0
    denotes a curve for which no signature scheme is provided).
 
 The granularity of every Elliptic Curve Machine, X25519, X448 and EdDSA included, is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
@@ -3984,7 +3984,7 @@ The Elliptic Curve Machines use the _MachineUse_ field as follows:
 |  [13:2] | `Progress`      |   Tracks, in an implementation-defined and non-portable unit, the progress of long-running operations such as scalar multiplications. Whenever it is non-zero, the SCC must include an ADS, and an import that completes without `Content2`, for instance on an implementation version mismatch, restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>).
 |===
 
-NOTE: _Output_ explicitly allows the export of a shared secret through `kl.exec`, like any other output, so the caller can read it: the protocols that process the ECDH shared secret themselves are too many to list as `kl.derive` destinations. Its `kl.derive` transfers are therefore unrestricted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), and the exclusion of `K1 {vvert} K2` of nonce masking as a destination (<<KLE-derive-endpoints>>) applies only to a secret that `kl.exec` cannot read, such as the ML-KEM `sharedkey`.
+NOTE: _Output_ explicitly allows the export of a shared secret through `kl.exec`, like any other output, so the caller can read it. Too many protocols process the ECDH shared secret themselves to list them as `kl.derive` destinations. Its `kl.derive` transfers are therefore unrestricted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), and the exclusion of `K1 {vvert} K2` of nonce masking as a destination (<<KLE-derive-endpoints>>) applies only to a secret that `kl.exec` cannot read, such as the ML-KEM `sharedkey`.
 
 For ECC Machines (Rule <<KLE-MGR-policy-gate>>), _MachinePolicy_[0] gates _Sign_Generate_ and _Output_ with a signature, _MachinePolicy_[1] gates _Sign_Input_ and _Sign_Verify_, and _MachinePolicy_ {ne} 0 gates _Set_Hash_, since its field `Hash` exists only then.
 All four combinations are admissible, except as <<KLE-X25519-X448>> and <<KLE-EdDSA>> restrict them.
@@ -4259,7 +4259,7 @@ Parameters::
   interchangeable between them.
 * A point is represented in compressed form, by its _u_-coordinate alone, so the parameter `u` = 1.
   The _u_-coordinate is held as the X coordinate of `Generator` and `SecondPt` of <<KLE-ECC>>.
-  A public key and a shared secret are thus 32 bytes for x25519 and 56 bytes for x448.
+  A public key and a shared secret are 32 bytes for x25519 and 56 bytes for x448.
 * There is no signature scheme: `v` = 0, and `h` and `j` are not defined.
 * `X25519(k, u)` and `X448(k, u)` map a scalar and a _u_-coordinate, both `b`-bit strings, to a `b`-bit
   string, decoding their inputs as cite:[RFC7748] {sect}5 prescribes:
@@ -4542,7 +4542,7 @@ State Machine::
 --
 +
 To initialize `H`, or `H'`, with a string `x` is to set that instance as entering _Ready_ of the hash Machine of `H` does (<<KLE-SHA-2>> for ed25519, <<KLE-SHA-3>> for ed448), with all its counters zero, `last_block_len` and `out_len` included, and then to absorb `x` as a `kl.exec` in _Hash_Absorb_ of that Machine would, counting it in the `cumul_len` of that instance.
-At pass finalization, the `finalize()` of <<KLE-SHA-2>> thus encodes for SHA-512 the length of the whole input of the instance, as cite:[nist-fips-180-4] {sect}5.1.2 requires.
+At pass finalization, the `finalize()` of <<KLE-SHA-2>> encodes for SHA-512 the length of the whole input of the instance, as cite:[nist-fips-180-4] {sect}5.1.2 requires.
 
 ** In State _Msg_Absorb_, Form B ``kl.exec`` instructions absorb message bytes into `H`, and in signing pass 2 also into `H'`:
 +
@@ -4803,7 +4803,7 @@ ML-KEM Machines define the following States:
   . the checks and their outcomes are, for each field:
   .. `encapsk`: the *encapsulation key check* of cite:[nist-fips-203] {sect}7.2:
   ... it is the type check (`encapsk` has the length required by the parameter set) and the modulus check (`encapsk`
-      re-encodes to itself, i.e. every coefficient is reduced modulo `q`);
+      re-encodes to itself, that is, every coefficient is reduced modulo `q`);
   ... a completed load that passes it sets `HasEncapsk`;
   ... a failure is a *data* error (Rule <<KLE-MGR-config-data-error>>) when the `encapsk` was loaded in _encapsk_Input_,
       or imported with `HasEncapsk` set: the whole `decapsk` field is zeroed, `HasEncapsk` and `HasDecapsk` are
@@ -5170,7 +5170,7 @@ ML-DSA Machines define:
   . once the field is complete, the locker transitions to _Success_ (Rule <<KLE-MGR-load-long-field>>);
   . entering _pubkey_Output_ requires `HasPubKey` (Rule <<KLE-MGR-policy-gate>>).
 
-** _MachinePolicy_ can be narrowed using `kl.rstrl` or `kl.rstrv` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
+** _MachinePolicy_ may be narrowed using `kl.rstrl` or `kl.rstrv` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-policy-narrowing-state>>).
 --
 
 // ////////////////////////////////////////////////////////////////////
