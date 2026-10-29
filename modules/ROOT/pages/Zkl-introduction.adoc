@@ -6,9 +6,9 @@ include::partial$Zkl-symbols.adoc[]
 endif::[]
 
 This introduction to the _Cryptographic Lockers Extension_ (KLE), formerly the _Atomic Cryptography Extension_ (ACE),
-is not part of the specification and, in particular, is not normative.
-When KLE is ratified, parts of this introduction, for instance the Threat Model, may be incorporated into the specification.
-Expect repetitions of material written here in various places of the specification; they are not mistakes.
+is not part of the specification and is not normative.
+When KLE is ratified, parts of it, for instance the Threat Model, may be incorporated into the specification.
+Repetitions of material found elsewhere in the specification are intended.
 
 // The ratification plan is
 // https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].
@@ -16,12 +16,12 @@ Expect repetitions of material written here in various places of the specificati
 == Features
 
 KLE lets software perform high-performance cryptographic operations without giving it direct access to the keys or to other critical values.
-The use cases that motivated its development include content protection (including both media and local LLM decryption), link and storage encryption, secure boot, and attestation.
+The use cases that motivated it include content protection (media and local LLM decryption), link and storage encryption, secure boot, and attestation.
 
-We now list the main features of KLE:
+The main features of KLE are:
 
 * *Atomic operations.* Each cryptographic operation is atomic, so keys cannot be recovered from the data before and after processing,
-even when memory read exploits obtain it.
+even when a memory-read exploit obtains it.
 //  An instruction can be interrupted only between operations, if it performs multiple cryptographic operations in a single call,
 //  or at the points an algorithm defines for its long-running operations.
 //+
@@ -29,27 +29,20 @@ even when memory read exploits obtain it.
 //  If the primitive is secure, its key cannot be recovered from the inputs and outputs of the complete operation. ISAs that take the key between rounds or MAC stages would not have this property, even if the key came from a hidden register. For instance, an attacker with access to an instruction computing only 4 or 5 rounds of AES can efficiently recover the key cite:[Rijndael-revised]. Hence, even splitting the AES, say, into two calls (for AES-128) or three (for AES-192 and AES-256) is not an option if the goal is preventing exposure of the key.
 
 * *Cryptographic Lockers* are architectural containers that hide their secrets from software.
-They contain Content consisting of the keys and other state information, and Metadata that binds the Content to algorithms, and optionally to usage policies, hardware and software environments, and an expiration date.
-Software _provisions_ (writes) Content and Metadata into a locker to bind them into a *Cryptographic Context*.
-KLE instructions reference lockers instead of key values, and they must respect a strict set of rules governing their management:
-they cannot reveal keys and other critical values.
-The cryptographic context in a locker can be exported to memory using an authenticated encryption algorithm and later reimported into a locker.
-
-
+They hold Content (the keys and other state information) and Metadata that binds the Content to algorithms and, optionally, to usage policies, hardware and software environments, and an expiration date.
+Software _provisions_ (writes) Content and Metadata into a locker, forming a *Cryptographic Context*.
+KLE instructions reference lockers instead of key values, and strict rules on their management ensure that they cannot reveal keys and other critical values.
+The context in a locker can be exported to memory with an authenticated encryption algorithm and later reimported into a locker.
 
 * *A single interface for many primitives*, instead of separate instructions per primitive:
- ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLE therefore also defines modes of operation, among them CTR, GCM, and CMAC, and secure key derivation.
+ ** Primitives alone do not suffice for modes such as AES-GCM-SIV, XTS, and OCB, where leaked derived keys or intermediate values compromise security. KLE therefore also defines modes of operation (among them CTR, GCM, and CMAC) and secure key derivation.
  ** Encrypt-only and decrypt-only versions reduce misuse, and versions with a preset IV or nonce keep it confidential.
  The modes work with AES-128, -192, -256, and other block ciphers such as SM4.
  ** The interface also supports hash functions, public-key and post-quantum algorithms, and SCA-resistant implementations.
- ** When side-channel protected implementations of cryptographic operations are available, they are variants of the standard algorithms, and they can be used in place of the latter without changes to the code.
- ** Implementations need not support every algorithm and variant thereof: following RISC-V practice, KLE defines subextensions; `Zkl` requires a baseline set of algorithms (<<Zkl-ISA-unpriv.adoc#KLE-extensions-overview-unpriv>>) and leaves the others to the RISC-V profiles.
+ ** Side-channel protected implementations, where available, are variants of the standard algorithms and replace them without code changes.
+ ** Implementations need not support every algorithm or variant: following RISC-V practice, KLE defines subextensions; `Zkl` requires a baseline set of algorithms (<<Zkl-ISA-unpriv.adoc#KLE-extensions-overview-unpriv>>) and leaves the others to the RISC-V profiles.
 
 * *Scalability.* One ISA and ABI serve embedded to server cores, and KLE supports persistence, sleep, hibernation, and VM migration.
-
-
-
-//
 
 [[KLE-introduction-non-features]]
 == Non-Goals
@@ -58,7 +51,7 @@ KLE intentionally does not provide the following features.
 
 * **Variable-length inputs:** plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
 
-* **Full key management:** KLE provides only building blocks; the key-management logic resides in trusted software, such as TEE applets. External schemes do not provision keys directly: a local trusted component, in software or hardware, obtains keys and policies and configures the CCs.
+* **Full key management:** KLE provides only building blocks; the key-management logic resides in trusted software, such as TEE applets. External schemes do not provision keys directly: a local trusted component obtains keys and policies and configures the CCs.
 
 * **Key revocation**, because:
 
@@ -67,7 +60,7 @@ KLE intentionally does not provide the following features.
 . revocation applies mainly to root keys, which the trusted entity managing them can revoke, while expiration dates and _Localities_ limit the lifetime and scope of derived keys; and
 . applications that access root keys directly, such as link or storage encryption, usually run in protected environments with their own revocation mechanisms.
 
-* **Full prevention of misuse by compromised processes:** compromised processes keep access to their CCs, so KLE complements, but does not replace, vulnerability mitigations and process isolation. Modes that use one operation for both encryption and decryption, such as counter modes, remain open to such abuse.
+* **Full prevention of misuse by compromised processes:** a compromised process keeps access to its CCs, so KLE complements, but does not replace, vulnerability mitigations and process isolation. Modes that use one operation for both encryption and decryption, such as counter modes, remain open to such abuse.
 
 [[KLE-threat-model]]
 == Threat Model
@@ -149,10 +142,8 @@ Group B: open design questions owned by this task group.::
 . *Nonces for SCC export and import.* An RFC 8452 nonce costs six AES-256 encryptions per export or import, whereas the
   current design recomputes the derived keys only when the CSK changes. A competing architecture also omits nonces from
   key export and import, probably for the same reason. We welcome input on this choice.
-// One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
-. *Additional inputs for random key generation.* KDFs with arbitrary inputs and unlimited outputs could easily be defined
-  as Machines that feed a locker's key field through `kl.derive`. Should standard KDFs be defined?
+. *Additional inputs for random key generation.* Should standard KDFs be defined?
 
 . *`SCC_Encrypt` security claim.* Substantiate the claim “secure for up to 2^64^ 128-bit blocks.”
 
@@ -162,8 +153,6 @@ Group B: open design questions owned by this task group.::
 
 . *Memory-instruction check order.* Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> makes the address-misaligned check of `kl.load` and `kl.store` a locker-state-independent check, so a misaligned address traps even on an inert locker.
   Hardware implementers should confirm that this order is practical, and that M-mode trap-and-emulate (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>) can reproduce it.
-
-. *Fast path for CSRs.* Add instructions to read and set `kliobuflen`, `kliobuftop` and `klnamedlocker`, then make these CSRs read-only.
 
 // TOOD: About `klnamedlocker`:
 // . Add named locker to `kl.exec` and `kl.setst`. Analyze whether there are some incompabilities.
