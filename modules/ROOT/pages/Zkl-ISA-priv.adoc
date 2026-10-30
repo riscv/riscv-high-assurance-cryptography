@@ -9,7 +9,6 @@ The KLE Privileged Architecture provides CSRs; this chapter also defines the KLE
 
 // ////////////////////////////////////////////////////////////////////
 
-[[KLE-priv-exceptions-order]]
 == Extension Overview
 
 // [WARNING]
@@ -33,7 +32,7 @@ The KLE Privileged Architecture provides CSRs; this chapter also defines the KLE
 
 //
 
-The KLE Privileged Architecture is _implemented_ on a hart that implements the `KLS` field. It is mandatory on every hart that is not M-mode-only, and optional on an M-mode-only hart.
+The KLE Privileged Architecture is _implemented_ on a hart whose `mstatus` implements the `KLS` field. It is mandatory on every hart that is not M-mode-only, and optional on an M-mode-only hart.
 The KLE exceptions of <<KLE-exceptions>> exist on every hart, whether or not it implements the KLE Privileged Architecture.
 Where the KLE Privileged Architecture is not implemented:
 
@@ -54,12 +53,12 @@ The requirements for the other extensions are:
 Configuration {downarrow}  | `Smklstatus` | `Smkllclt` | `Ssklvbootscrt`
 
 | M-mode only
-| Optional: If implemented, `mllockerstatus` is implemented and shadowed in `sllockerstatus`.
+| Optional: If implemented, `mllockerstatus` is implemented; `sllockerstatus` is not.
 | Optional: If implemented, `mkllocality` configures MLocality
 | {empty}
 
 | M+U
-| Mandatory: `mllockerstatus` is implemented and shadowed in `sllockerstatus`.
+| Mandatory: `mllockerstatus` is implemented; `sllockerstatus` is not.
 | Optional: If implemented, `mkllocality` configures MLocality
 | {empty}
 
@@ -247,7 +246,7 @@ The following holds for every `KLS` field, in the privilege modes in which it is
 * The `*llockerstatus` and `KLS` fields that an instruction sets to Dirty are set before any trap is taken on or after that instruction, and before any later instruction executes, including when the instruction continues in the background (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-preemption>>) or is discarded and restarted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-uninterruptible-instructions>>).
 * While a field is Dirty, the `SD` bit of the register holding it is 1; otherwise that `SD` is set in accordance with the existing specifications.
 
-A hart that implements the KLE Privileged Architecture, and whose `misa.L` is writable, implements the `KLS` field in every `*status` register it implements.
+A hart that implements the KLE Privileged Architecture implements the `KLS` field in every `*status` register it implements.
 The field is present and writable while `misa.L` is clear, like `FS` and `VS`; an emulated KLE unit relies on this.
 
 NOTE: Precise management of `mstatus.KLS` is an optimization that software may use to reduce context-switch overhead.
@@ -313,7 +312,7 @@ For each of these three CSRs::
 |===
 --
 +
-`*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the <<Zkl-ISA-unpriv.adoc#KLE-second-group-ILL-grounds>>), and the KLE fatal-error and missing-CSK exceptions, but before all other conditions, including the third group of <<KLE-priv-exceptions-order>> and the conditions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>. The hardware state of a locker with an _Off_ field in effect is never consulted (but see `kl.getmd*` below): conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
+`*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the <<Zkl-ISA-unpriv.adoc#KLE-second-group-ILL-grounds>>), and the KLE fatal-error and missing-CSK exceptions, but before all other conditions, including the <<Zkl-ISA-unpriv.adoc#KLE-third-group-ILL-grounds>> and the conditions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>. The hardware state of a locker with an _Off_ field in effect is never consulted (but see `kl.getmd*` below): conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
 A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`. An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>> other than `kl.swap`, which reads the locker it overwrites: a provisioning- or import-opening `kl.mgmt`, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` into it; nor does any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker, which performs no operation (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>). A destructive configuration instruction, on a locker with an _Off_ field in effect, sets every field in effect for the locker to _Dirty_, even if the locker was already _Unconfigured_. However, a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination performs no operation, raises no KLE locker-Off exception, and sets no field to _Dirty_ (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
 +
@@ -379,9 +378,11 @@ The _Off_ value and the KLE locker-Off exception let software load lockers on de
 [[KLE-unsupported-handling]]
 ==== Emulation of Unsupported Machines
 
-A KLE unsupported-Metadata exception (<<KLE-priv-exceptions-order>>) can be resolved only by M-mode, by emulating the Machine; a handler below M-mode treats it as unresolvable.
+A KLE unsupported-Metadata exception (<<KLE-exception-codes>>) can be resolved only by M-mode, by emulating the Machine; a handler below M-mode treats it as unresolvable.
 An M-mode handler that emulates the Machine instead marks the locker _Off_, holds it in its own protected memory, and services every operation on it, including SCC import and export.
-For these, it needs either (a) the CSK and the Locality Secrets of the HW Binding Group, inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>) that it cannot otherwise obtain, or (b) implementation-specific primitives that compute these functions for it.
+For these, an implementation that supports the emulation of Machines must provide M-mode-only, implementation-specific primitives that compute `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` (<<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>) under the active CSK and the Locality Secrets in effect, with the substitutions of <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, exactly as the KLE unit computes them.
+The primitives signal when a _Locality_ names an unconfigured entry without a configured substitute, and return neither the CSK, nor the Locality Secrets of the HW Binding Group, nor the keys derived from them.
+An implementation without these primitives does not support the emulation of Machines: `kleemulation` is read-only zero, and M-mode treats a KLE unsupported-Metadata exception as unresolvable.
 
 An emulator keeps one copy per locker slot and replaces it:
 
@@ -421,7 +422,7 @@ The KLE unit is unavailable until a CSK is established (<<Zkl-ISA-unpriv.adoc#KL
 [[KLE-CSR-mklmaxiobuflen]]
 === mklmaxiobuflen
 
-(((CSR, `mklmaxiobuflen`)))`mklmaxiobuflen` is an XLEN-bit M-mode CSR, present with `Zklio` only, that holds the maximum configurable length of the KLIOBUF, in bytes; its hardwired value out of KLE unit reset is its maximum.
+(((CSR, `mklmaxiobuflen`)))`mklmaxiobuflen` is an MXLEN-bit M-mode CSR, present with `Zklio` only, that holds the maximum configurable length of the KLIOBUF, in bytes; its hardwired value out of KLE unit reset is its maximum.
 Software in the other modes has no access to it: as with `vsetvl`, it learns the maximum by writing a larger value to `kliobuflen` and reading it back.
 M-mode should write it only while the KLE unit is in its state out of reset (<<Zkl-ISA-unpriv.adoc#KLE-out-of-reset-unpriv>>), before any write to `kliobuflen`, and should never reduce it below the current `kliobuflen`: after a write that does, `kliobuflen` and `kliobuftop` become 0 and the whole KLIOBUF is zeroized; no other state is affected.
 
@@ -459,7 +460,7 @@ The groups are accessible whether or not a CSK has been established (<<Zkl-ISA-u
 | [[KLE-CSR-skllocality,skllocality]]`skllocality{0..1}{,h}`             | _SLocality_    |  S   | `Sskllclt` and S-mode are both implemented.
 |===
 
-Software that exports lockers on behalf of a lower privilege level configures every SW Filter Group register it owns before doing so: an export whose CC names an unconfigured entry yields an SCC that no import accepts (<<Zkl-ISA-unpriv.adoc#KLE-Localities>>). The hypervisor duty to clear `hkllocality` and `hklvirtbootscrt` before running such software is Rule <<Zkl-software.adoc#KLE-SR-hypervisor-locality-clear>>.
+Software that exports lockers on behalf of a lower privilege level configures every SW Filter Group register it owns before doing so: the export of a locker whose _Locality_ names an unconfigured entry is refused (<<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>). The hypervisor duty to clear `hkllocality` and `hklvirtbootscrt` before running such software is Rule <<Zkl-software.adoc#KLE-SR-hypervisor-locality-clear>>.
 
 The Locality CSR groups are readable at their respective privilege levels, and
 context-switch software saves and restores them like any other CSR.

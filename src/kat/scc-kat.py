@@ -157,8 +157,6 @@ def main():
           st == 'authfail' and f['State'] == 0 and f['StateExtension'] == 4 and E['c1'] == b'' and f['AuxDataLen'] == 0 and f['Machine'] == 0x20 and f['Locality'] == mdh_get(L['mdh'], 'Locality'))
     check('unpopulated SiPScrt: substituted by ChipFamScrt on both sides', scc_import(scc_export(mk(js=(0,)), CSKV, lst2, IMPQ), CSKV, lst2, IMPQ)[0] == 'ok'
           and scc_import(scc_export(mk(js=(0,)), CSKV, lst2, IMPQ), CSKV, LSTV, IMPQ)[0] == 'authfail')
-    lz = list(LSTV); lz[10] = 0
-    check('export naming an unconfigured SLocality contributes zeros(128)', scc_ad(mk(js=(10,))['mdh'], lz)[1] == 0)
     for name, kw in (('Locality[5:4] = 3', dict(Locality=0x30)), ('SCProtection 3', dict(SCProtection=3)), ('KeyType 2', dict(KeyType=2)),
                      ('Version 1', dict(Version=1)), ('ExpirationDate without Zklexpire', dict(ExpirationDate=5)), ('Reserved bit', dict(Reserved46=1)),
                      ('AuxDataLen 1', dict(AuxDataLen=1))):
@@ -396,11 +394,14 @@ def locker_level():
         bad = SCCKLE(); bad.mgmt(5, 58, md=mdh_put(pre, 'AuxDataLen', 1))
         check('import-opening with AuxDataLen 1 is invalid', _st(bad, 5) == (0, SE_INVALID))
         check('import-opening with an unsupported Machine (0x30) is refused (model: Trap unsupported)', _raises(lambda: SCCKLE().mgmt(5, 58, md=mdh_put(pre, 'Machine', 0x30)), Trap))
-        K = SCCKLE(lst=[LSTV[j] if j != 9 else 0 for j in range(11)]); K2 = SCCKLE(lst=K.lst)
-        K2.install(3, mdh_put(pre, 'Locality', scc_loc_bits((9,))), key); pre9, S9 = _exp(K2, 3)
-        check('export with an unconfigured Locality secret is not refused', len(S9) == 32 + 16)
-        K.mgmt(5, 58, md=pre9)
-        check('... but import-opening rejects it (Invalid)', _st(K, 5) == (0, SE_INVALID))
+        K = SCCKLE(lst=[LSTV[j] if j != 9 else 0 for j in range(11)]); m9 = mdh_put(pre, 'Locality', scc_loc_bits((9,)))
+        K.install(3, m9, key); K.siv = K.siv2 = 5; K.mgmt(3, 57)
+        check('export-opening of a Valid locker bound to an unconfigured Locality is refused: MDH and authentication registers unchanged', K.md(3) == m9 and (K.siv, K.siv2) == (5, 5))
+        check('... and a kl.mvout on it then raises an illegal-instruction exception', _raises(K.gpr_out, IllegalInstruction))
+        K.mgmt(5, 58, md=m9)
+        check('import-opening of an MDH bound to an unconfigured Locality is Invalid', _st(K, 5) == (0, SE_INVALID))
+        K.lst[9] = LSTV[9]; pre9, S9 = _exp(K, 3)
+        check('once the Locality Secret is configured again, the export proceeds', _st(K, 3) == (57, 0) and len(S9) == 32 + 16)
         control('negative: a valid MDH opens in Configuration State 58', _st((lambda k: (k.mgmt(5, 58, md=pre), k)[1])(SCCKLE()), 5) == (58, 0))
 
 

@@ -304,6 +304,7 @@ class KLE:
     def _export_open(s, k):
         s.start = 0; m = s.md(k); st = mdh_get(m, 'State')
         if st == 0: return
+        if not s.config(m) and not all(s.conf(j) for j in loc_entries(mdh_get(m, 'Locality'))): return   # refused (<<KLE-SCC-export>>)
         s.L[k].mdh = mdh_put(m, 'State', (59 if st in PI_STATES else 57) if s.config(m) else 57)
     def mvin(s, content, tag=0):
         k = None if s.nl == NONE else s.nl

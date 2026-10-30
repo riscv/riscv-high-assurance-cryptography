@@ -777,7 +777,7 @@ check('unreadable clock with date 0 is unaffected', trap(e.exec, 1) is None)
 e = ex(5000, ed=10, up=0x3); e.clock = None
 check('UsagePolicy precedes the unreadable clock', trap(e.exec, 1) == 'privilege_violation')
 e = ex(5000, ed=10); e.clock = None; t = trap(e.exec, 1); e.setste(1, SE_EXPIRED)
-check('SR9: a handler that cannot resolve the clock sets Expired by kl.setste (no usage, no clock read)', t == 'clock_unavailable' and stx(e, 1) == (0, SE_EXPIRED))
+check('SR10: a handler that cannot resolve the clock sets Expired by kl.setste (no usage, no clock read)', t == 'clock_unavailable' and stx(e, 1) == (0, SE_EXPIRED))
 e = E2(zk=False); e.mgmt(1, 56, md=mk(ExpirationDate=1))
 check('without Zklexpire a non-zero ExpirationDate in a PI is invalid Metadata', stx(e, 1) == INV)
 e = E2(zk=False); prov(e, 1); e.rstr(1, mdh_pack(ExpirationDate=1), part='h')

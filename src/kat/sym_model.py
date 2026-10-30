@@ -136,7 +136,7 @@ class Locker:
             if stop is not None and (j * u) % 8 == 0 and j * u > klstart * 8:
                 pts += 1
                 if pts == stop: return brev8(Y, nb), j * u // 8
-            W = brev8(self.iv, 16); Eb = brev8(b2v(self.enc(self.key, v2b(self.iv, 16))), 16)
+            W = brev8(self.iv, 16); Eb = brev8(b2v(self.enc(self.key, v2b(self.iv, 16))), 16)   # W, Q from the current IV
             Xj = sl(X, (j + 1) * u - 1, j * u); Yj = Xj ^ (Eb & mask(u))
             C = Yj if self.state == S_ENC else Xj
             self.iv = brev8((C << (128 - u)) | (W >> u), 16)

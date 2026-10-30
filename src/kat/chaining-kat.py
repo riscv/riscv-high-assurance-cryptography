@@ -93,6 +93,8 @@ p18 = b''.join(P4)[:18]; c18 = H('3b79424c9c0dd436bace9e0ed4586a4f32b9')
 L = lk(0, 2, KEYS[0]); L.setst(S_AUX, 'B', xs=8); check('Set_Aux_Value u = 8', L.state == S_AUX and L.u == 8)
 L.setst(S_ENC, 'C', vec=b2v(IV)); check('CFB8 Encrypt 18 bytes (F.3.7)', v2b(L.exec(b2v(p18), 144)[0], 18) == c18)
 L = lk(0, 2, KEYS[0]); L.setst(S_AUX, 'B', xs=8); L.setst(S_DEC, 'C', vec=b2v(IV)); check('CFB8 Decrypt (F.3.8)', v2b(L.exec(b2v(c18), 144)[0], 18) == p18)
+q0 = cipher_enc('AES128', KEYS[0], IV)[0]     # Q computed once, from the IV at the start of the kl.exec
+control('Q not recomputed per segment is detected (F.3.7)', bytes(p ^ q0 for p in p18) != c18 and cfb_ref('AES128', KEYS[0], IV, p18, 8, True) == c18)
 L = lk(0, 2, KEYS[0]); L.setst(S_AUX, 'B', xs=1); L.setst(S_ENC, 'C', vec=b2v(IV))
 check('CFB1 Encrypt 16 bits 6bc1 -> 68b3 (F.3.1)', v2b(L.exec(b2v(H('6bc1')), 16)[0], 2) == H('68b3'))
 L = lk(0, 2, KEYS[0]); L.setst(S_AUX, 'B', xs=1); L.setst(S_DEC, 'C', vec=b2v(IV))
