@@ -147,7 +147,7 @@ for fn in FNS:
         L = _vt(fn, k, m, Xs, tlp); L.exec('B', w[:tlp // 8]); check('%s tag_len_p=%d, Xs=%d: verification compares tag_len_p bits -> Success' % (fn, tlp, Xs), L.st == 'Success' and L.tag_len == tlp)
     for tlp, Xs in ((128, 64), (128, 136), (64, 72), (64, t), (t, 64), (t, t - 8)):
         check('%s tag_len_p=%d, Xs=%d: min(Xs, t) != tag_len_p -> Invalid' % (fn, tlp, Xs), inv(_vt(fn, k, m, Xs, tlp)))
-    L = mkkip(fn, k, tlp=96); check('%s Content carries tag_len_p' % fn, L.fields()[-1] == ('tag_len_p', 96, 16))
+    L = mkkip(fn, k, tlp=96); check('%s AuxInfo holds tag_len_p (not in the Content)' % fn, L.tag_len_p == 96 and 'tag_len_p' not in [n for n, _, _ in L.fields()])
     L.setst('absorb'); run(L, [m]); L = copy.deepcopy(L); L.setst('verify', 'B', 96); L.exec('B', w[:12])
     check('%s import keeps tag_len_p: Xs=96 verifies' % fn, L.st == 'Success')
     L = copy.deepcopy(mkkip(fn, k, tlp=96)); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', t); check('%s ... and Xs=t -> Invalid' % fn, inv(L))
@@ -156,7 +156,7 @@ for fn in FNS:
 section('Serialized Content')
 for fn in FNS:
     f = Locker(fn).f; L = mknik(fn, msg_of(9)); names = [n for n, _, _ in L.fields()]
-    check('%s HMAC Content: hash content, K0 (b), tag_len (16), tag_len_p (16)' % fn, names[-3:] == ['K0', 'tag_len', 'tag_len_p'] and [w for _, _, w in L.fields()[-3:]] == [f.b, 16, 16] and L.fields()[-1][1] == f.t, names)
+    check('%s HMAC Content: hash content, K0 (b), tag_len (16)' % fn, names[-2:] == ['K0', 'tag_len'] and [w for _, _, w in L.fields()[-2:]] == [f.b, 16], names)
     L.setst('absorb'); run(L, [msg_of(f.b // 8 + 9)]); fl = {n: v for n, v, _ in L.fields()}
     check('%s cumul_len counts the message only (K0^ipad not counted)' % fn, fl['cumul_len'] == f.b + 72 if f.kind == 'sha3' and False else fl['cumul_len'] == 8 * (f.b // 8 + 9))
     if f.kind == 'sha3': check('%s SHA-3 order: block_base, last_block_len, out_len, cumul_len (HMAC only)' % fn, [n for n, _, _ in L.fields()][1:5] == ['block_base', 'last_block_len', 'out_len', 'cumul_len'])

@@ -147,8 +147,8 @@ m = CMAC(key); m.setst(ABSORB); m.exec('B', 0, 768, klstart=96); check('klstart 
 
 section('Serialized Content')
 m = CMAC(key); m.setst(ABSORB); m.exec('B', b2v(msg[:32]), 256); sc, w = m.export()
-W = (128, 128, 32, 32, 1, 1, 16); f = CMAC.unpack(sc, W)
-check('SC: key, hash, last_block_len32, tag_len32, absorbed_any, absorbed_all, tag_len_p16; width 128+128+66+16', w == 128 + 128 + 66 + 16 and f[1] == m.hash and f[4] == 1 and f[5] == 0 and f[6] == 128)
+W = (128, 128, 32, 32, 1, 1); f = CMAC.unpack(sc, W)
+check('SC: key, hash, last_block_len32, tag_len32, absorbed_any, absorbed_all; width 128+128+66', w == 128 + 128 + 66 and f[1] == m.hash and f[4] == 1 and f[5] == 0)
 q = CMAC.from_sc(ABSORB, sc); q.exec('B', b2v(msg[32:96]), 512); q.setst(HABL, 'B', 32); q.exec('B', b2v(msg[96:] + bytes(12)), 128); q.setst(HOUT, 'A')
 check('export mid-absorb, import, finish: equals reference', v2b(q.exec('C', 0, 128), 16) == want)
 m = at(HV, key=key); sc, w = m.export(); f = CMAC.unpack(sc, W); check('SC in Hash_Verify: tag_len = 128, absorbed_all = 1', f[3] == 128 and f[5] == 1 and f[4] == 1 if False else f[3] == 128 and f[5] == 1)
@@ -157,8 +157,8 @@ m = at(HABL, key=key, msg=b'abc'); sc, w = m.export(); f = CMAC.unpack(sc, W)
 check('SC in Hash_Absorb_Last_Block after its exec: last_block_len = 24 retained, absorbed_all', f[2] == 24 and f[5] == 1)
 q = CMAC.from_sc(HABL, sc); q.setst(HOUT, 'A'); check('import into Hash_Absorb_Last_Block then Hash_Output works', q.st == HOUT)
 q = CMAC.from_sc(HV, at(HV, key=key).export()[0]); q.exec('B', 0, 128); check('import in Hash_Verify, exec decides', q.st in (SUCCESS, FAILURE))
-check('TDEA SC width: 192 + 64 + 66 + 16', CMAC(TK, cipher='TDEA').export()[1] == 192 + 64 + 66 + 16)
-check('AES-256 SC width: 256 + 128 + 66 + 16', CMAC(RB(32), cipher='AES256').export()[1] == 256 + 128 + 66 + 16)
+check('TDEA SC width: 192 + 64 + 66', CMAC(TK, cipher='TDEA').export()[1] == 192 + 64 + 66)
+check('AES-256 SC width: 256 + 128 + 66', CMAC(RB(32), cipher='AES256').export()[1] == 256 + 128 + 66)
 check('TDEA tag_len_p defaults to b = 64', CMAC(TK, cipher='TDEA').tag_len_p == 64)
 
 section('tag_len_p: provisioning, import, verification length (MR12)')
@@ -168,11 +168,11 @@ for tlp in (0, 56, 63, 100, 136, 256):
     check('provisioning with tag_len_p=%d: Invalid' % tlp, inv(CMAC(key, tag_len_p=tlp)))
 check('TDEA provisioning with tag_len_p=72 > b: Invalid', inv(CMAC(TK, cipher='TDEA', tag_len_p=72)))
 m = at(HABL, key=key, tag_len_p=96); sc = m.export()[0]
-check('SC carries tag_len_p = 96', CMAC.unpack(sc, W)[6] == 96)
-q = CMAC.from_sc(HABL, sc); q.setst(HV, 'B', 96); check('import keeps tag_len_p: Hash_Verify Xs=96 accepted', q.st == HV and q.tag_len == 96)
-q = CMAC.from_sc(HABL, sc); q.setst(HV, 'B', 128); check('import keeps tag_len_p: Hash_Verify Xs=128 Invalid', inv(q))
+check('AuxInfo holds tag_len_p = 96', m.tag_len_p == 96)
+q = CMAC.from_sc(HABL, sc, tag_len_p=96); q.setst(HV, 'B', 96); check('import keeps tag_len_p: Hash_Verify Xs=96 accepted', q.st == HV and q.tag_len == 96)
+q = CMAC.from_sc(HABL, sc, tag_len_p=96); q.setst(HV, 'B', 128); check('import keeps tag_len_p: Hash_Verify Xs=128 Invalid', inv(q))
 for tlp in (0, 60, 136):
-    check('import with tag_len_p=%d: Invalid' % tlp, inv(CMAC.from_sc(HABL, sc & ~(mask(16) << 322) | tlp << 322)))
+    check('import with tag_len_p=%d: Invalid' % tlp, inv(CMAC.from_sc(HABL, sc, tag_len_p=tlp)))
 
 section('policy, kl.derive, kl.rstrl')
 check('zero MachinePolicy rejected', raises(CMAC, key, policy=0, exc=ValueError))

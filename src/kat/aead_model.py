@@ -253,11 +253,12 @@ class GCM(Base):
             j = self.pack((self.len, 16), (0, 16), (self.block_base, 16), (self.cumul, 48), (0, 32))[0]
         else: j = self.J0
         tl = self.tag_len
-        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16), (self.tag_len_p, 16))
+        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16))
     @classmethod
-    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128'):
+    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128', tag_len_p=None):
         m = cls._blank(keybytes, policy, cipher)
-        k, j, tag, sctr, lbl, tl, tlp = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16, 16))
+        tlp = max(m.tlps()) if tag_len_p is None else tag_len_p      # AuxInfo of the MDH
+        k, j, tag, sctr, lbl, tl = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16))
         m.key = v2b(k, keybytes); m.auth = m.E(0)
         m.st, m.tag, m.start_ctr, m.lbl, m.tag_len, m.tag_len_p = st, tag, sctr, lbl, tl, tlp
         if st == SAV:
@@ -550,11 +551,12 @@ class CMAC(Base):
         return v2b(self.hash, self.B // 8)
     def export(self):
         b = self.B
-        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (self.tag_len, 32), (int(self.any), 1), (int(self.all), 1), (self.tag_len_p, 16))
+        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (self.tag_len, 32), (int(self.any), 1), (int(self.all), 1))
     @classmethod
-    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128'):
+    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128', tag_len_p=None):
         m = cls._blank(keybytes, policy, cipher)
-        k, h, lb, tl, a, al, tlp = cls.unpack(sc, (8 * keybytes, m.B, 32, 32, 1, 1, 16))
+        tlp = max(m.tlps()) if tag_len_p is None else tag_len_p      # AuxInfo of the MDH
+        k, h, lb, tl, a, al = cls.unpack(sc, (8 * keybytes, m.B, 32, 32, 1, 1))
         m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.tag_len, m.any, m.all, m.tag_len_p = st, h, lb, tl, bool(a), bool(al), tlp
         if tlp not in m.tlps(): m._fail()                             # MR12
         return m

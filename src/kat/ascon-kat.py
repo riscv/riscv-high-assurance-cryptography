@@ -226,9 +226,9 @@ for pol, okenc, okdec in ((1, True, False), (2, False, True), (3, True, True)):
 
 section('Ascon-AEAD128 Serialized Content')
 L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=96); sc = L.export()
-check('SC length 64 B, key | state | last_block_len | tag_len | tag_len_p', len(sc) == 64 and sc[:16] == KEY and sc[58:60] == v2b(96, 2) and sc[60:62] == v2b(96, 2))
+check('SC length 64 B, key | state | last_block_len | tag_len, padded; tag_len_p is the AuxInfo', len(sc) == 64 and sc[:16] == KEY and sc[58:60] == v2b(96, 2) and sc[60:] == bytes(4) and L.tag_len_p == 96)
 for tlp, ok in ((64, True), (128, True), (0, False), (63, False), (129, False)):
-    L2 = Locker('ASCON-AEAD128', key=b''); L2.import_(sc[:60] + v2b(tlp, 2) + sc[62:], READY)
+    L2 = Locker('ASCON-AEAD128', key=b''); L2.import_(sc, READY, tag_len_p=tlp)
     check('import with tag_len_p=%d -> %s' % (tlp, 'Ready' if ok else 'Invalid (MR12)'), (L2.st == READY and L2.tag_len_p == tlp) if ok else L2.se == SE_INV)
 pt = msg(40); ad = b'hdr'; c, nb, tg = R.ref_ascon_aead(KEY, NONCE, ad, pt)
 for stage in ('absorb', 'encrypt', 'last'):
@@ -348,8 +348,8 @@ L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); L.setst(2, 'A'); check('
 L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN, tag_len_p=80); L.setst(13, 'B', 80); full_ok = L.se == 0 and L.st == READY
 check('_Nonce: tag_len Set_Aux_Value as in the base Machine', full_ok)
 L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(13, 'B', 80); check('_Nonce: Set_Aux_Value Xs != tag_len_p -> Invalid', L.se == SE_INV)
-L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (62 B) then nonce, padded to 80 B', len(n1) == 80 and n1[60:62] == v2b(128, 2) and n1[62:78] == NN and n1[78:] == bytes(2), len(n1))
-L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: K1 | K2 | state | lbl | tag_len | tag_len_p (80 B)', len(m1) == 80 and m1[:16] == KEY and m1[16:32] == K2 and m1[76:78] == v2b(128, 2), len(m1))
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (60 B) then nonce, padded to 80 B', len(n1) == 80 and n1[60:76] == NN and n1[76:] == bytes(4), len(n1))
+L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: K1 | K2 | state | lbl | tag_len, padded (80 B)', len(m1) == 80 and m1[:16] == KEY and m1[16:32] == K2 and m1[74:76] == v2b(128, 2) and m1[76:] == bytes(4), len(m1))
 for kind, kw, setup, op in (('ASCON-AEAD128_NONCE', dict(nonce=NN), (2, 'A'), 8), ('ASCON-AEAD128_NONCE_MASK', dict(K2=K2), (2, 'C', 0, NN), 7)):
     L = Locker(kind, key=KEY, **kw); L.setst(*setup); L.exec('B', pad128(b'hdr')); L.setst(op, 'A'); L.exec('A', msg(16), out=bytearray(16))
     L2 = Locker(kind, key=b'', **kw); L2.import_(L.export(), L.st); a = bytearray(16); b = bytearray(16)

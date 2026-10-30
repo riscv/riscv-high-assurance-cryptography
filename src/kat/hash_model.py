@@ -264,7 +264,7 @@ class Locker:
         if f.kind == 'sha3': L = [('state', s.S, 1600), ('block_base', s.bb, 16), ('last_block_len', s.lbl, 16), ('out_len', s.outl, 32)] + ([('cumul_len', s.cum, 64)] if s.hmac else [])
         else: L = [('state', s.S, f.n), ('last_block_len', s.lbl, 16), ('block_base', s.bb, 16), ('out_len', s.outl, 32), ('cumul_len', s.cum, 64), ('block', s.blk, f.b)]
         if f.kind == 'blake2': L = ([('SKID', 0, 64)] if s.syskey is not None else []) + L + [('nn', s.nn, 16), ('kk', s.kk, 16)]
-        if s.hmac: L += [('K0', s.K0, f.b), ('tag_len', s.tag_len, 16), ('tag_len_p', s.tag_len_p, 16)]
+        if s.hmac: L += [('K0', s.K0, f.b), ('tag_len', s.tag_len, 16)]
         return L
 
 def run(L, chunks, halts=False):

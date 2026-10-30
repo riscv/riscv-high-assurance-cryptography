@@ -349,11 +349,12 @@ The instruction that provides the tag or MAC to verify performs the verification
 --
 +
 <<KLE-CMAC-mode>>, <<KLE-GCM-mode>>, <<KLE-GCM-with-IV-mode>>, <<KLE-HMAC>>, <<KLE-Ascon-AEAD128>>, <<KLE-Ascon-AEAD128-wsn>> and <<KLE-Ascon-AEAD128-N-masking>> compare a prefix of the tag or MAC.
-Every verification of a locker of these Machines compares the same number of bits, `tag_len_p`, which the PI and the Serialized Content carry:
+Every verification of a locker of these Machines compares the same number of bits, `tag_len_p`, which the _AuxInfo_ field of its MDH holds (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>):
 +
 --
 * `tag_len_p` is one of the tag lengths that the Machine admits, and the full length if _KeyType_ = 1: 128 for GCM and Ascon-AEAD128, `b` for CMAC and `t` for HMAC.
-A provisioning or import that carries another value completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
+A provisioning or import whose _AuxInfo_ holds another value completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
+* Provisioning keeps the _AuxInfo_ of the PI, and entering _Ready_ leaves it unchanged; these Machines define all its bits, so `kl.clearads` and an import without ADS leave it unchanged too.
 * A locker whose `tag_len_p` is shorter than the full length is not a `kl.derive` destination (<<KLE-derive-endpoints>>).
 * A `kl.setst` naming _Hash_Verify_ whose resulting `tag_len` differs from `tag_len_p` transitions the locker to Error State _Invalid_.
 * In Ascon-AEAD128 and its variants, entering _Ready_ sets `tag_len` {leftarrow} `tag_len_p`, and the _Set_Aux_Value_ operation transitions the locker to Error State _Invalid_ if its `Xs` differs from `tag_len_p`.
@@ -1275,7 +1276,6 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | 16            | `tag_len_p`
 |===
 --
 
@@ -1289,7 +1289,7 @@ Data Structures::
 ** `start_ctr`: an integer in the range 0 to 2^32^-1, the counter of the pre-counter block `J0` of cite:[nist-SP-800-38D] {sect}7.1; the first block uses the initial counter block `inc32(J0)`, of counter (`start_ctr` + 1) mod 2^32^.
 ** `last_block_len`: 0, or a multiple of 8 from 8 to 120. The bit length of the final, partial block of the plaintext or ciphertext.
 ** `tag_len`: the number of bits that _Hash_Verify_ compares, one of 128, 120, 112, 104, 96 and 64, or 0 before it is set; serialized on 16 bits.
-** `tag_len_p`: the length of every tag that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): one of 128, 120, 112, 104, 96 and 64 (cite:[nist-SP-800-38D] {sect}5.2.1.2), and 128 if _KeyType_ = 1; serialized on 16 bits.
+** `tag_len_p`: the length of every tag that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): one of 128, 120, 112, 104, 96 and 64 (cite:[nist-SP-800-38D] {sect}5.2.1.2), and 128 if _KeyType_ = 1; held in _AuxInfo_, not serialized.
 ** `len`, `block_base`, `cumul_len`, `input_base`: in _Set_Aux_Value_, the `max_len`, `block_base`, `cumul_len` and `input_base` of <<KLE-process-VLI>> for the IV. `input_base` is not serialized.
 --
 +
@@ -1310,7 +1310,6 @@ Where they overlap, they hold their values only until `finalize()` writes `J0`, 
 |   iv  | 32            | `start_ctr`    | The counter of the pre-counter block `J0` before the first block, serialized as `bin(start_ctr,32)`.
 |   v   | 16            | `last_block_len` | {empty}
 |   vi  | 16            | `tag_len`      | Zero, or one of 128, 120, 112, 104, 96 and 64, and then not zero exactly in State _Hash_Verify_; an import that violates this transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
-|  vii  | 16            | `tag_len_p`    | The length of every tag that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>).
 |===
 
 While the locker is in State _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -1624,7 +1623,6 @@ Data Structures::
 |  Pos. | Size (Bits)   | Field       | Description
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 96            | `IV`        | The IV of cite:[nist-SP-800-38D] {sect}7.1. Only a 96-bit IV is supported.
-|  iv   | 16            | `tag_len_p` | The number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>).
 |===
 --
 
@@ -2364,7 +2362,6 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | 16            | `tag_len_p`
 |===
 --
 
@@ -2373,7 +2370,7 @@ Data Structures::
  ** `hash`: `b` bits.
  ** `last_block_len`: an integer in the range 0 to `b`, serialized on 32 bits.
  ** `tag_len`: the number of bits that _Hash_Verify_ compares, an integer in the range 64 to `b`, or 0 before it is set; serialized on 32 bits.
- ** `tag_len_p`: the length of every MAC that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `b`, and `b` if _KeyType_ = 1; serialized on 16 bits.
+ ** `tag_len_p`: the length of every MAC that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `b`, and `b` if _KeyType_ = 1; held in _AuxInfo_, not serialized.
  ** `absorbed_any`: a boolean, set once a block has been absorbed in _Hash_Absorb_.
  ** `absorbed_all`: a boolean, set once the last block has been absorbed.
 
@@ -2391,7 +2388,6 @@ Data Structures::
 |   iv  | 32            | `tag_len`
 |    v  | 1 (boolean)   | `absorbed_any`
 |   vi  | 1 (boolean)   | `absorbed_all`
-|  vii  | 16            | `tag_len_p`
 |===
 --
 
@@ -2974,7 +2970,7 @@ Data Structures::
 --
 Each HMAC Machine has two variants, which the _Machine_ field distinguishes (<<KLE-exec-encodings>>): by _Type_ for the SHA-2 and SHA-3 HMACs, and by _Mode_ for `SM3_HMAC`.
 
-The PI of the “No Initial Key” (NIK) variant contains the MDH and, at Pos. ii, the 16-bit `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
+The PI of the “No Initial Key” (NIK) variant is the MDH alone.
 
 The PI of the “Key In PI” (KIP) variant has the following format:
 
@@ -2982,7 +2978,6 @@ The PI of the “Key In PI” (KIP) variant has the following format:
 |===
 | Pos. | Size (Bits)               | Field
 |  ii  | `b` or 64                 | `K0`, the key already reduced to `b` bits (see below), or a System Key Identifier.
-| iii  | 16                        | `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
 |===
 
 The key provisioned or held in a CC is the value `K0` of cite:[nist-fips-198-1] {sect}4, Steps 1 to 3: the key `K` padded with zeros to `b` bits, or, if `K` is longer than `b` bits, `H(K)` padded with zeros to `b` bits.
@@ -3001,7 +2996,7 @@ A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>)
   *** `block`: `b` bits.  Included only if a partial block is maintained, for instance when the inputs are not directly absorbed into `state`.
  ** `K0`: `b` bits, the value `K0` as per cite:[nist-fips-198-1] {sect}4, Steps 1 to 3.
  ** `tag_len`: the number of bits that _Hash_Verify_ compares, 64 to `t`, or 0 before it is set.
- ** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `t`, and `t` if _KeyType_ = 1; serialized on 16 bits.
+ ** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `t`, and `t` if _KeyType_ = 1; held in _AuxInfo_, not serialized.
  ** `HasKey` (NIK variant only): Boolean, bit 0 of _StateExtension_, recording that `K0` holds a completely loaded key (Rule <<KLE-MGR-load-long-field>>).
     The KIP variant does not use _StateExtension_.
 
@@ -3014,7 +3009,6 @@ A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>)
 |  i   | variable                 | Serialized Content of the underlying hash function, in its entirety, including its own padding to a multiple of 128 bits.
 | ii   | `b` or 64                | `K0`, or a System Key Identifier.
 | iii  | 16                       | `tag_len`
-| iv   | 16                       | `tag_len_p`
 |===
 --
 
@@ -3406,7 +3400,6 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | 128 or 64     | `key` or System Key Identifier
-| iii  | 16            | `tag_len_p`
 |===
 --
 
@@ -3415,7 +3408,7 @@ Data Structures::
  ** `state[0 .. 4]`: the five 64-bit words S~0~ to S~4~ of cite:[nist-SP-800-232], 320 bits, with `state[0]`
     in bits [63:0], so that the rate is `state[127:0]`.
  ** `tag_len`: 8 bits as int.
- ** `tag_len_p`: 8 bits as int, the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to 128, and 128 if _KeyType_ = 1; serialized on 16 bits.
+ ** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to 128, and 128 if _KeyType_ = 1; held in _AuxInfo_, not serialized.
  ** `last_block_len`: 7 bits as int.
 
 * *Serialized Content*:
@@ -3432,7 +3425,6 @@ Data Structures::
 |   vi | 64              | `state`[4]
 |  vii | 16              | `last_block_len`
 | viii | 16              | `tag_len`
-|   ix | 16              | `tag_len_p`
 |===
 --
 
@@ -3649,7 +3641,6 @@ Data Structures::
 | Pos. | Size (Bits)   | Field
 |  ii  | 128 or 64     | `key` or System Key Identifier
 | iii  | 128           | `nonce`
-|  iv  | 16            | `tag_len_p` (Rule <<KLE-MGR-tag-verify>>)
 |===
 --
 
@@ -3669,7 +3660,7 @@ Same as for Ascon-AEAD128, followed by:
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 | Pos. | Size (Bits)     | Field
-|    x | 128             | `nonce`
+|   ix | 128             | `nonce`
 |===
 
 `nonce` is serialized because every transition into _Hash_Absorb_, also after an import, loads it into `state`.
@@ -3721,7 +3712,6 @@ Data Structures::
 | Pos. | Size (Bits)   | Field
 |  ii  | 128 or 64     | `K1` or System Key Identifier
 | iii  | 128 or 0      | `K2`; absent when Pos. ii holds a System Key Identifier, which retrieves both `K1` and `K2` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>)
-|  iv  | 16            | `tag_len_p` (Rule <<KLE-MGR-tag-verify>>)
 |===
 --
 
@@ -3731,7 +3721,7 @@ Data Structures::
  ** `state[0 .. 4]`: the five 64-bit words S~0~ to S~4~ of cite:[nist-SP-800-232], 320 bits, with `state[0]`
     in bits [63:0], so that the rate is `state[127:0]`.
  ** `tag_len`: 8 bits as int.
- ** `tag_len_p`: 8 bits as int, as in <<KLE-Ascon-AEAD128>>.
+ ** `tag_len_p`: as in <<KLE-Ascon-AEAD128>>.
  ** `last_block_len`: 7 bits as int, as in <<KLE-Ascon-AEAD128>>, whose
     _Enc_Last_Block_ and _Dec_Last_Block_ states this Machine inherits.
 
@@ -3750,7 +3740,6 @@ Data Structures::
 |  vii  | 64            | `state`[4]
 | viii  | 16            | `last_block_len`
 |   ix  | 16            | `tag_len`
-|    x  | 16            | `tag_len_p`
 |===
 --
 

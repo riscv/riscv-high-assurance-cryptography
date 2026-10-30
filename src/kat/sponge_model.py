@@ -379,7 +379,7 @@ class Locker:
         if self.fam == 'aead':
             kf = v2b(self.skid, 8) if self.skid is not None else v2b(self.key, 16)
             if self.var == 'mask' and self.skid is None: kf += v2b(self.k2, 16)
-            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2) + v2b(self.tag_len_p, 2)
+            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2)
             if self.var == 'wsn': r += v2b(self.nonce, 16)
             return r + bytes(-len(r) % 16)
         n = 200 if self.n == 1600 else 40
@@ -388,8 +388,8 @@ class Locker:
             head += v2b(self.cs, self.b // 8) + (v2b(self.skid, 8) if self.skid is not None else v2b(self.kb, self.b // 8))
         return head
 
-    def import_(self, sc, st):
-        """st: State to restore (the MDH is not part of SC here)."""
+    def import_(self, sc, st, tag_len_p=None):
+        """st: State to restore; tag_len_p: AuxInfo of the MDH (None: 128)."""
         if self.fam == 'aead':
             o = 8 if self.skid is not None else 16
             if self.skid is not None:
@@ -400,8 +400,8 @@ class Locker:
                 self.key = b2v(sc[:16])
                 if self.var == 'mask': self.k2 = b2v(sc[16:32]); o = 32
             self.s = b2v(sc[o:o + 40]); self.lbl = b2v(sc[o + 40:o + 42]); self.tag_len = b2v(sc[o + 42:o + 44])
-            self.tag_len_p = b2v(sc[o + 44:o + 46])
-            if self.var == 'wsn': self.nonce = b2v(sc[o + 46:o + 62])
+            self.tag_len_p = 128 if tag_len_p is None else tag_len_p
+            if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
             if not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
             n = 200 if self.n == 1600 else 40
