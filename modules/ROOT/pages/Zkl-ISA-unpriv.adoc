@@ -275,13 +275,15 @@ and `Content2`, any implementation-specific content.
 Where the implementation is emulated, in part or in full, only M-mode firmware accesses it, through an implementation-defined mechanism that the implementation must provide.
 
 The KLF guarantees the confidentiality and integrity of its contents, also against rollback through any access this specification does not permit.
-This specification can only recommend side-channel resistance, not require it.
-It *strongly recommends* that every path that handles a locker's secrets (reconstruction, re-sharing, KLF access, `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and its derived keys) resist timing, other side-channel and fault-injection attacks at least as well as the locker's Machine at its _SCProtection_ level (<<KLE-SCProtection-field>>), and that a path serving several Machines do so at the highest level among them.
+Every path that handles a locker's secrets must resist timing, other side-channel and fault-injection attacks at least as well as the locker's Machine does at its _SCProtection_ level (<<KLE-SCProtection-field>>), emulated paths included.
+These paths are reconstruction, re-sharing, KLF access, the `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` of the locker's export and import, the import of a system-specific format into the locker (<<KLE-system-specific-import>>), and every use of the CSK and its derived keys for the locker.
+A path that serves lockers of several levels does so at the highest of them.
 What an implementation achieves is established only by the certifications that its implementer provides, if any.
 
-NOTE: Side-channel resistance depends on how a path is implemented, for instance on the core that runs an emulated path, and this specification defines only architectural behavior, so it accepts the risk of timing leakage.
-If `SCC_KeyDeriv`, `SCC_Encrypt` or `SCC_Decrypt` leaks timing, software below M-mode, which chooses the SCCs that an import decrypts and can time each `kl.mgmt`, may recover the keys derived from the CSK, and then decrypt and forge every SCC sealed under that CSK.
-Every _SCProtection_ level, Level A included, is likewise a target: a locker has the protection that the implementation documents for its level (<<KLE-SC-protection-levels>>).
+NOTE: The KLE unit computes `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` with the AES and POLYVAL hardware that its Machines use, so the export and import of a locker can have the protection of its Machine.
+An implementation that supports several levels offers each of them to export and import as well: for instance, a timing-protected AES and POLYVAL engine exports and imports the lockers of Level A, and a more protected engine those of Levels B and C.
+Every level excludes timing leakage, so software below M-mode, which chooses the SCCs that an import decrypts and can time each `kl.mgmt`, cannot use timing to recover the keys derived from the CSK, with which it could decrypt and forge every SCC sealed under that CSK.
+This specification accepts one risk: every SCC, whatever its level, is sealed under the same keys, which the CSK alone determines, so on an implementation that supports several levels, the SCCs of every level resist differential side-channel and fault-injection attacks only as well as the least-protected engine that handles these keys (<<Zkl-introduction.adoc#KLE-open-points>>).
 
 NOTE: The KLF resists rollback, but an SCC does not: it can be imported again, under the same CSK and Localities, as long as it exists.
 Any party that holds an SCC can replay an earlier CC state: the software that stores it, and any mode that could export the locker.
@@ -306,7 +308,7 @@ Any further capacity is desirable, but not required.
 
 Corruption of a hart's KLF is unrecoverable: it resets the hart's KLE architectural state (<<KLE-reset-and-m-mode-only>>) and raises a KLE fatal-error exception (<<Zkl-ISA-priv.adoc#KLE-exceptions>>).
 
-The KLE unit holds three 128-bit _authentication registers_, `SIV`, `IMPQUAL` and `SIV2`, with the authentication and identification data of the locker that owns them (<<KLE-auth-reg-association>>); `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` access them as the leading bytes of the image (<<KLE-instruction-mv>>).
+The KLE unit holds three 128-bit _authentication registers_, `SIV`, `IMPQUAL` and `SIV2`, with the authentication and identification data of a locker whose import or export is open; the unit does not record which locker that is (<<KLE-auth-reg-association>>). `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` access them as the leading bytes of the image (<<KLE-instruction-mv>>).
 The export-opening `kl.mgmt` of a Valid locker writes `SIV`, and `IMPQUAL` and `SIV2` when the _AuxDataLen_ of the locker's MDH is at least 2.
 An import-opening `kl.mgmt`, other than the short import of an Error-State locker (<<KLE-error-state-transfer>>), zeroizes them before the `kl.load` or `kl.mvin` that writes them.
 
@@ -437,7 +439,7 @@ detection of injected faults, followed either by completion with the correct res
 a transition to a fatal error condition (see <<KLE-error-architecture>>).
 |===
 
-A level applies to the operations that need it for security, such as signature generation but not signature verification, and only as far as the cryptographic method of the Machine needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
+A level applies to the export and import of the locker (<<KLE-KLF>>) and to the operations that need it for security, such as signature generation but not signature verification, and only as far as the cryptographic method of the Machine needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
 
 An implementation must document, for each level it supports, the standard and edition, assessment profile, security level and test metrics it meets, such as acquisition-time limits and trace sample sizes; Level B, resp. C, must offer at least the guarantees documented for Level A, resp. B.
 
@@ -811,7 +813,7 @@ The `KLS` field in effect controls access to these CSRs: while it is Off, every 
 With `Smstateen`, the KLE bit of the `*stateen0` CSRs (<<Zkl-ISA-priv.adoc#KLE-privileged-CSRs>>) also gates all of them and the KLE instructions; a denied access raises the exception that `Smstateen` prescribes for the executing mode and the denying gate.
 
 Context-switch code saves `klstart` and `klnamedlocker` first and restores them last, and also saves and restores `kliobuflen`, `kliobuftop` and the KLIOBUF contents (<<Zkl-software.adoc#KLE-state-save-and-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-klstart-save>>).
-[[KLE-auth-reg-association]]The values in the authentication registers belong to the locker under management, if there is one, and otherwise, while `klnamedlocker` is 32, to the locker in State `kl_cfg_importing` or `kl_cfg_exporting` that no nested export has saved, if there is one; that locker is exported before the other lockers and imported after them, so that its import sets `SIV` and, if they are used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-no-interleaving>>).
+[[KLE-auth-reg-association]]The KLE unit does not record which locker the values in the authentication registers belong to: the registers keep what the last instruction to write them stored (<<KLE-KLF>>). Software keeps track of their owner, the locker whose import or export is open and that no nested export has saved, by keeping `klnamedlocker` at that locker's number, or at 32 while that locker is the only one in State `kl_cfg_importing` or `kl_cfg_exporting` (Rules <<Zkl-software.adoc#KLE-SR-nested-export-first>> and <<Zkl-software.adoc#KLE-SR-no-interleaving>>). Context-switch code finds the owner this way, exports it before the other lockers and imports it after them, so that its import restores `SIV` and, if they are used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>).
 
 A CSR whose description gives a maximum is WARL: writing a larger value sets the maximum, so software must read it back (for software below M-mode, by means of the getter instructions of <<KLE-instruction-getter-setter>>).
 Writing a reserved value to `klnamedlocker`, which has no maximum, leaves it unchanged (<<KLE-CSR-klnamedlocker>>).
@@ -870,7 +872,7 @@ Rule <<KLE-GR-klstart-updates>> lists the events that change `klstart`, Rules <<
 It holds the number of the locker named for management transfers and `KLNL`, or 32 if none.
 Completing a management operation, even with an error, keeps the number, so that software can inspect the outcome through `KLNL` before writing 32 or restoring a saved value.
 Values 33 and above are reserved; writing one leaves `klnamedlocker` unchanged.
-While the locker it names is in a Configuration State, that locker is under management; software keeps the authentication registers `SIV`, `IMPQUAL` and `SIV2` associated with the locker under management (<<KLE-auth-reg-association>>).
+While the locker it names is in a Configuration State, that locker is under management; `klnamedlocker` is also the record from which context-switch code finds the locker that owns the authentication registers `SIV`, `IMPQUAL` and `SIV2` (<<KLE-auth-reg-association>>).
 
 The named locker serves two purposes:
 
@@ -2620,7 +2622,7 @@ This Section describes when exceptions are raised and when Error States are set.
 === Exceptions
 
 A summary of the grounds of each exception that KLE may raise is given here.
-The grounds are given in the same descending priority order as in <<Zkl-ISA-priv.adoc#KLE-priv-extensions>>: the address breakpoint and address-misaligned grounds of the first component access of a KLE memory instruction precede the locker-state-dependent grounds (Rule <<KLE-GR-management-check-order>>, item 8), and its page, guest-page and access faults follow them.
+The grounds are given in the same descending priority order as in <<Zkl-ISA-priv.adoc#KLE-exception-codes>>: the address breakpoint and address-misaligned grounds of the first component access of a KLE memory instruction precede the locker-state-dependent grounds (Rule <<KLE-GR-management-check-order>>, item 8), and its page, guest-page and access faults follow them.
 
 [[KLE-first-group-ILL-grounds,First Group of Illegal-Instruction Exception Grounds]]First Group of Illegal-Instruction Exception Grounds::
 +
@@ -3291,7 +3293,8 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 ----
 
 The comparison `tmp {ne} SIV` is performed in constant time.
-It is strongly recommended that `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` also take a time, and make memory accesses, independent of the CSK, the derived keys, the Locality Secrets and the plaintext, as the KLF paths are recommended to (<<KLE-KLF>>).
+`SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of the _SCProtection_ level of the locker that is exported or imported (<<KLE-KLF>>); at every level, they take a time independent of the CSK, the derived keys, the Locality Secrets and the plaintext.
+It is strongly recommended that their memory accesses also be independent of these values.
 
 // ///////////////////////////////////////////////////////////////////////////
 

@@ -71,15 +71,15 @@ An instruction issued in violation of Rule <<KLE-SR-klnamedlocker-write>> or <<K
 The intended value is the number of the target locker; 32 for a transfer to or from the KLIOBUF; and 32 or the target locker's number for a `kl.mgmt` that names its locker explicitly.
 Any software that completes or abandons a management operation must then write 32 to `klnamedlocker`, or restore the value it saved.
 
-[[KLE-SR-nested-export-first,SR7]]SR7:: While a locker is in State `kl_cfg_exporting` or `kl_cfg_importing`, whether or not `klnamedlocker` names it, software must save that locker by a nested export before it opens, on another locker, an export from a Valid State or an import other than the short import of an Error-State image (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>), and must restore it before returning to the code that opened its operation, or terminate that code.
-Until it has saved that locker this way, software must not write to `klnamedlocker` any value other than that locker's number or 32.
+[[KLE-SR-nested-export-first,SR7]]SR7:: While a locker is in State `kl_cfg_exporting` or `kl_cfg_importing`, whether or not `klnamedlocker` names it, software must save that locker by a nested export before it issues a `kl.mgmt` on another locker, and must restore it before returning to the code that opened its operation, or terminate that code.
+Until it has saved that locker this way, software must not write to `klnamedlocker` any value other than that locker's number or 32: `klnamedlocker` is the record from which context-switch code finds the locker that owns the authentication registers (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
 The locker is in such a State even while `klnamedlocker` is 32, as Rule <<KLE-SR-no-interleaving>> permits for transfers through the KLIOBUF; the authentication registers, which exist once per hart (<<Zkl-ISA-unpriv.adoc#KLE-KLF>>), are then still in use.
 Software may instead clear a locker in State `kl_cfg_importing`, whose import then restarts (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>).
 
 [[KLE-SR-no-interleaving,SR8]]SR8:: Software should complete or discard a management operation before it performs cryptographic operations or manages other lockers.
-Rule <<KLE-SR-nested-export-first>> keeps cryptography through `KLNL` on another locker out of an open import or export, as it keeps two imports or exports apart: otherwise a context switch would export that other locker first and overwrite the authentication registers of the open operation (<<KLE-save-order>>).
+Rule <<KLE-SR-nested-export-first>> keeps cryptography through `KLNL` on another locker, and every `kl.mgmt` on another locker, out of an open import or export that no nested export has saved: otherwise a context switch could find `klnamedlocker` naming that other locker, save it as the managed locker, and export a Valid locker before the open one, overwriting its authentication registers (<<KLE-save-order>>).
 Code that must interleave them, such as several threads of one process, needs coordination: a mutex, or lightweight threads with KLE context-switching support.
-Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance to transfer data through the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), must have no other import or export open that a nested export has not saved.
+Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance to transfer data through the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), must have no other locker in State `kl_cfg_importing` or `kl_cfg_exporting`, even one that a nested export has saved: context-switch code then finds the open operation by its State (<<KLE-save-order>>).
 
 [[KLE-SR-no-unconditional-clear,SR9]]SR9:: At a context switch, system software may clear a locker under a provisioning or an import instead of saving it, which restarts the operation; it must, however, be able to save such a locker, and must not clear it unconditionally at every context switch.
 Unless it terminates the owner, software must not clear a locker under an export, base or nested, before completing that export.
@@ -214,7 +214,8 @@ A handler that skips the trapping instruction applies its retirement effects to 
 
 . Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
-. Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rule <<KLE-SR-no-interleaving>>).
+. Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
+These Rules make it the owner of the authentication registers, if a locker owns them (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
 If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
@@ -222,9 +223,12 @@ If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<
 . With `Zklio`:
 .. save `kliobuflen` and `kliobuftop` (`kl.getbl`, `kl.getbt`);
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
-. Save every locker other than the managed locker that is not _Unconfigured_, with `klnamedlocker` = 32 between exports.
+. Save every locker other than the managed locker that is not _Unconfigured_, by the paths of step 3, with `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
+
+An export-opening `kl.mgmt` that leaves a Valid locker in its Valid State was refused (Rule <<KLE-SR-export-final-check>>): the handler saves no image for that locker and reports the error to the code that owns it, and the restore order clears the locker, whose CC is lost.
+Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures the Locality Secret CSRs before it exports (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) meets no refused export.
 
 Software does not read or compare `IMPQUAL`: the unit does, on import.
 An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted long-running operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
@@ -640,7 +644,7 @@ The architecture does not enforce these sequences or their order.
 == Code for the Machines
 
 The listings of <<KLE-machine-code-examples>> are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target throughout. Listing <<KLE-pseudocode-GCM-encryption-alternate>> also needs Zvkg (`vghsh.vv`).
-Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown.
+Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown, which erases the output buffer of a decryption before it reports (Rule <<KLE-SR-unverified-plaintext>>).
 `import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`; it changes no `a` register, `s9` or `s10`, but it changes `vtype`.
 A 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, as in most examples, where `b` = 128; a shorter piece of `p` bytes is processed with `vl` = `p`, so `KLLEN` = 8 {times} `p`.
 Most listings omit the `kl.getst` that checks, before an output is used, that the locker is still in a Valid State (<<KLE-reading-locker-state>>): a usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
@@ -1027,7 +1031,7 @@ The Machine takes the PT and the CT in whole bytes (each last-block `Xs` is a mu
   vmv.v.x   v1, t1                # bits [127:64]
   vmv.s.x   v1, t2                # bits [63:0]
   kl.setst  K0, #kl_state_enc_tag_finalize, v1
-  kl.exec   v2, K0                # v2 holds the tag
+  kl.exec   v2, K0                # v2 holds the tag, of tag_len_p bits
 ----
 
 <<KLE-pseudocode-GCM-decryption>> decrypts with GCM from the point where the AD has been absorbed; up to there, it is <<KLE-pseudocode-GCM-encryption>>.
@@ -1088,7 +1092,7 @@ stays inside the locker.
   kl.exec   K0, v1
   kl.getst  t1, K0
   li        t2, kl_state_success
-  bne       t1, t2, error         # do not use the plaintext
+  bne       t1, t2, error         # error must discard the plaintext at a4 (Rule SR18)
 ----
 
 //
@@ -1343,7 +1347,7 @@ has carry-less multiplication, here the `vghsh.vv` of Zvkg. Under the threat mod
   kl.exec   K0, v0
   kl.getst  t1, K0
   li        t2, kl_state_success
-  bne       t1, t2, error         # do not use the plaintext
+  bne       t1, t2, error         # error must discard the plaintext at a4 (Rule SR18)
 ----
 
 //
@@ -1435,14 +1439,14 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag.
 [[KLE-pseudocode-OCB-decryption-difference]]
 .OCB Decryption
 ----
-# s10 = the received tag, of tag_len bits
+# s9 = tag_len in bits, s10 = address of the received tag
   srli      t1, s9, 3
   vsetvli   zero, t1, e8, m1, ta, ma # KLLEN = tag_len
   vle8.v    v1, (s10)
   kl.exec   K0, v1                # Form B: compares it with checksum_P
   kl.getst  t1, K0
   li        t2, kl_state_success
-  bne       t1, t2, error         # do not use the plaintext
+  bne       t1, t2, error         # error must discard the plaintext at a4 (Rule SR18)
 ----
 
 [[KLE-CMAC-mode-example]]
@@ -1484,7 +1488,7 @@ _Hash_Verify_, where a Form B `kl.exec` supplies the received tag.
   vsetivli  zero, 16, e8, m1, ta, ma
 4:
   kl.setst  K0, #kl_state_hash_output
-  kl.exec   v0, K0                # v0 holds the CMAC value
+  kl.exec   v0, K0                # v0 holds the CMAC, of tag_len_p bits
 ----
 
 To verify a CMAC `T` of `T_len` bits instead, the code from label `4` on is replaced by:

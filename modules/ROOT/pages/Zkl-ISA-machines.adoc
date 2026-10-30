@@ -352,11 +352,13 @@ The instruction that provides the tag or MAC to verify performs the verification
 Every verification of a locker of these Machines compares the same number of bits, `tag_len_p`, which the PI and the Serialized Content carry:
 +
 --
-* `tag_len_p` is one of the lengths that the Machine admits for verification, and the full length if _KeyType_ = 1: 128 for GCM and Ascon-AEAD128, `b` for CMAC and `t` for HMAC.
+* `tag_len_p` is one of the tag lengths that the Machine admits, and the full length if _KeyType_ = 1: 128 for GCM and Ascon-AEAD128, `b` for CMAC and `t` for HMAC.
 A provisioning or import that carries another value completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
 * A locker whose `tag_len_p` is shorter than the full length is not a `kl.derive` destination (<<KLE-derive-endpoints>>).
 * A `kl.setst` naming _Hash_Verify_ whose resulting `tag_len` differs from `tag_len_p` transitions the locker to Error State _Invalid_.
 * In Ascon-AEAD128 and its variants, entering _Ready_ sets `tag_len` {leftarrow} `tag_len_p`, and the _Set_Aux_Value_ operation transitions the locker to Error State _Invalid_ if its `Xs` differs from `tag_len_p`.
+* The tag or MAC that a locker of GCM or CMAC outputs has `tag_len_p` bits: a smaller `KLLEN` violates the granularity of the State (Rule <<KLE-MGR-granularity>>), and a larger one receives the tag with the bits beyond `tag_len_p` cleared (Rule <<KLE-MGR-clear-output>>); Ascon-AEAD128 and its variants output `tag_len` = `tag_len_p` bits.
+HMAC, which also serves as a pseudorandom function, outputs as many bits as the caller chooses for each message; a caller that uses them as MACs keeps one length per key (Rule <<KLE-MGR-caller-limits>>).
 --
 
 === Multi-block Operations
@@ -1287,7 +1289,7 @@ Data Structures::
 ** `start_ctr`: an integer in the range 0 to 2^32^-1, the counter of the pre-counter block `J0` of cite:[nist-SP-800-38D] {sect}7.1; the first block uses the initial counter block `inc32(J0)`, of counter (`start_ctr` + 1) mod 2^32^.
 ** `last_block_len`: 0, or a multiple of 8 from 8 to 120. The bit length of the final, partial block of the plaintext or ciphertext.
 ** `tag_len`: the number of bits that _Hash_Verify_ compares, one of 128, 120, 112, 104, 96 and 64, or 0 before it is set; serialized on 16 bits.
-** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): one of 128, 120, 112, 104, 96 and 64 (cite:[nist-SP-800-38D] {sect}5.2.1.2), and 128 if _KeyType_ = 1; serialized on 16 bits.
+** `tag_len_p`: the length of every tag that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): one of 128, 120, 112, 104, 96 and 64 (cite:[nist-SP-800-38D] {sect}5.2.1.2), and 128 if _KeyType_ = 1; serialized on 16 bits.
 ** `len`, `block_base`, `cumul_len`, `input_base`: in _Set_Aux_Value_, the `max_len`, `block_base`, `cumul_len` and `input_base` of <<KLE-process-VLI>> for the IV. `input_base` is not serialized.
 --
 +
@@ -1308,7 +1310,7 @@ Where they overlap, they hold their values only until `finalize()` writes `J0`, 
 |   iv  | 32            | `start_ctr`    | The counter of the pre-counter block `J0` before the first block, serialized as `bin(start_ctr,32)`.
 |   v   | 16            | `last_block_len` | {empty}
 |   vi  | 16            | `tag_len`      | Zero, or one of 128, 120, 112, 104, 96 and 64, and then not zero exactly in State _Hash_Verify_; an import that violates this transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
-|  vii  | 16            | `tag_len_p`    | The number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>).
+|  vii  | 16            | `tag_len_p`    | The length of every tag that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>).
 |===
 
 While the locker is in State _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -1508,9 +1510,9 @@ A Form C `kl.setst` from _Encrypt_ into _Enc_Tag_Finalize_, resp. from _Decrypt_
 
 ** In State _Enc_Tag_Finalize_, a single Form C `kl.exec` writes `tag` to `OUTPUT`, and the locker
    transitions to _Success_.
-.  A `KLLEN` smaller than 128 must be 120, 112, 104, 96 or 64 (cite:[nist-SP-800-38D] {sect}5.2.1.2), and `OUTPUT` then
-   receives `tag[KLLEN-1:0]`, the truncated tag `MSB~KLLEN~(T)` of cite:[nist-SP-800-38D] {sect}7.1.
-. Any other `KLLEN` below 128 violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
+. `OUTPUT` receives `tag[tag_len_p-1:0]`, the truncated tag `MSB~tag_len_p~(T)` of cite:[nist-SP-800-38D] {sect}7.1, with the bits beyond
+   the ``tag_len_p``-th cleared (Rule <<KLE-MGR-clear-output>>).
+. A `KLLEN` smaller than `tag_len_p` violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
 
 ** In State _Decrypt_, (multi-block) Form A `kl.exec` instructions absorb the ciphertext
    `INPUT` into `tag`, then decrypt `INPUT` into `OUTPUT`:
@@ -1579,7 +1581,7 @@ A `KLLEN` smaller than `tag_len` violates the granularity of the State (Rule <<K
 NOTE: Truncated tags are prefixes of one another.
 The floor of 64 bits excludes the 32 bits that cite:[nist-SP-800-38D] admits for some applications.
 Since every verification of a locker compares `tag_len_p` bits (Rule <<KLE-MGR-tag-verify>>), a verification oracle confirms the tag only after about 2^`tag_len_p`^ trials, at least 2^64^.
-Across lockers that hold the same key by value, the caller must use one `t` (Rule <<KLE-MGR-caller-limits>>).
+Rule <<KLE-MGR-caller-limits>> leaves to the caller a single `t` across lockers that hold the same key by value.
 +
 NOTE: _Decrypt_ and _Dec_Last_Block_ release the plaintext block by block, before _Hash_Verify_ checks the tag,
 whereas cite:[nist-SP-800-38D] returns no plaintext when the check fails.
@@ -1588,10 +1590,9 @@ _Dec_Tag_Finalize_ verifies the tag), <<KLE-OCB-mode>>, <<KLE-OCB-with-nonce-mod
 <<KLE-Ascon-AEAD128-wsn>> and <<KLE-Ascon-AEAD128-N-masking>>.
 Rule <<Zkl-software.adoc#KLE-SR-unverified-plaintext>> forbids the caller to use this plaintext before the locker reaches _Success_, and requires it to discard the plaintext otherwise.
 In OCB, the released plaintext also enables a forgery (<<KLE-accepted-risks>>).
+Only software that complies with Rule <<Zkl-software.adoc#KLE-SR-unverified-plaintext>> obtains the authenticated decryption of cite:[nist-SP-800-38D] and of the standards of the other AEAD Machines.
 +
-An AEAD Machine provides the authenticated-decryption function of its standard only to software that complies with Rule <<Zkl-software.adoc#KLE-SR-unverified-plaintext>>.
-+
-NOTE: Two messages that the caller encrypts under the same `key` and IV reveal `auth_key`, and then allow forgeries under that IV (<<KLE-accepted-risks>>).
+NOTE: Two messages that the caller encrypts under the same `key` and IV reveal `auth_key`, which then allows forgeries under every IV until the key is retired (<<KLE-accepted-risks>>).
 
 //
 
@@ -2372,7 +2373,7 @@ Data Structures::
  ** `hash`: `b` bits.
  ** `last_block_len`: an integer in the range 0 to `b`, serialized on 32 bits.
  ** `tag_len`: the number of bits that _Hash_Verify_ compares, an integer in the range 64 to `b`, or 0 before it is set; serialized on 32 bits.
- ** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `b`, and `b` if _KeyType_ = 1; serialized on 16 bits.
+ ** `tag_len_p`: the length of every MAC that the locker outputs, and the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `b`, and `b` if _KeyType_ = 1; serialized on 16 bits.
  ** `absorbed_any`: a boolean, set once a block has been absorbed in _Hash_Absorb_.
  ** `absorbed_all`: a boolean, set once the last block has been absorbed.
 
@@ -2478,7 +2479,7 @@ A `kl.setst` naming _Hash_Output_ with `absorbed_all` = `false` transitions the 
 ** In State _Hash_Output_, a single Form C `kl.exec` outputs the CMAC:
 +
 --
-. `OUTPUT <- hash`, with the bits beyond the `b`-th cleared (Rule <<KLE-MGR-clear-output>>); with `KLLEN` < `b`, it emits the first `KLLEN`/8 bytes, the truncated tag of cite:[nist-SP-800-38B] {sect}6.2.
+. `OUTPUT <- hash[tag_len_p-1:0]`, the first `tag_len_p`/8 bytes of `hash` and the truncated tag of cite:[nist-SP-800-38B] {sect}6.2 when `tag_len_p` < `b`, with the bits beyond the ``tag_len_p``-th cleared (Rule <<KLE-MGR-clear-output>>); a `KLLEN` smaller than `tag_len_p` violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
 . The CC transitions to State _Success_.
 
 The `kl.exec` processes a single block, so its only interruption point is 0 (Rule <<KLE-MGR-one-klexec-per-block>>).
@@ -3137,15 +3138,15 @@ Parameters::
 [%autowidth,float="center",align="center",cols="<,^,^,^,^,<",options="header"]
 |===
 | Function |  `c` | `b` = 1600 - `c` | `t` | XOF? | Suffix `D`
-| SHA3-224 |  448 |       1152       |  224 |   no |   `01`
-| SHA3-256 |  512 |       1088       |  256 |   no |   `01`
-| SHA3-384 |  768 |        832       |  384 |   no |   `01`
-| SHA3-512 | 1024 |        576       |  512 |   no |   `01`
-| SHAKE128 |  256 |       1344       | 1344 |  yes | `1111`
-| SHAKE256 |  512 |       1088       | 1088 |  yes | `1111`
+| SHA3-224 |  448 |       1152       |  224 |   no | `bin(2, 2)`
+| SHA3-256 |  512 |       1088       |  256 |   no | `bin(2, 2)`
+| SHA3-384 |  768 |        832       |  384 |   no | `bin(2, 2)`
+| SHA3-512 | 1024 |        576       |  512 |   no | `bin(2, 2)`
+| SHAKE128 |  256 |       1344       | 1344 |  yes | `bin(15, 4)`
+| SHAKE256 |  512 |       1088       | 1088 |  yes | `bin(15, 4)`
 |===
 
-`D` is written in the order of cite:[nist-fips-202], first bit leftmost: for SHA3-``N``, `D[0]` = 0 and `D[1]` = 1.
+`bin(2, 2)` and `bin(15, 4)` are the suffixes that cite:[nist-fips-202] writes `01` and `1111`, first bit leftmost: for SHA3-``N``, `D[0]` = 0 and `D[1]` = 1.
 
 For the four fixed-output functions, `t` is the digest length, which is `c`/2, and a
 single squeeze suffices. For the two extendable-output functions, `t` is the full rate
@@ -3353,7 +3354,7 @@ a Form A `kl.setst`, or `Xs` = 0, sets `L` {leftarrow} 0, for an unbounded outpu
 .. for `KMAC128` and `KMAC256`, where _MachinePolicy_[1] is set, the `kl.setst` into _Hash_Verify_ is of Form B, and sets `L` {leftarrow} `Xs`, the tag length in bits, with `Xs` a multiple of 8 and 32 {le} `Xs` {le} `b`, the lower bound being that of cite:[nist-SP-800-185] {sect}8.4.2;
 . then performs `finalize()`, which:
 .. XORs `right_encode(L)`, or `right_encode(0)` for `KMACXOF128` and `KMACXOF256`, into `state` from bit `block_base` on, as `PROCESS_VLI` with `mode` = `xor_accumulate` absorbs data; the encoding directly follows the last bit of the message, also when `block_base` is not a multiple of 8;
-.. then applies the padding of <<KLE-SHA-3>> with `D` = `00`, the suffix of cSHAKE (`pad_byte` = `0x04` when `block_base` is a multiple of 8), in place of the `1111` of SHAKE;
+.. then applies the padding of <<KLE-SHA-3>> with `D` = `bin(0, 2)`, the suffix `00` of cSHAKE (`pad_byte` = `0x04` when `block_base` is a multiple of 8), in place of the `bin(15, 4)` of SHAKE;
 . sets `block_base` {leftarrow} 0 and `last_block_len` {leftarrow} 0.
 --
 
@@ -3414,7 +3415,7 @@ Data Structures::
  ** `state[0 .. 4]`: the five 64-bit words S~0~ to S~4~ of cite:[nist-SP-800-232], 320 bits, with `state[0]`
     in bits [63:0], so that the rate is `state[127:0]`.
  ** `tag_len`: 8 bits as int.
- ** `tag_len_p`: 8 bits as int, the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): 64 to 128, and 128 if _KeyType_ = 1; serialized on 16 bits.
+ ** `tag_len_p`: 8 bits as int, the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to 128, and 128 if _KeyType_ = 1; serialized on 16 bits.
  ** `last_block_len`: 7 bits as int.
 
 * *Serialized Content*:
@@ -3476,7 +3477,7 @@ State Machine::
    . `last_block_len <- 0`
 
 ** In State _Ready_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `Xs` is an operation, not a State
-   (Rule <<KLE-operation-immediates>>): it sets `tag_len` {leftarrow} `Xs`, where `Xs` = `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
+   (Rule <<KLE-operation-immediates>>): it checks that `Xs` = `tag_len_p` (Rule <<KLE-MGR-tag-verify>>), and leaves `tag_len` unchanged.
    Any other `Xs` transitions the locker to Error State _Invalid_.
 +
 NOTE: A truncated tag is the leftmost `tag_len` bits of the 128-bit tag in the bit order of cite:[nist-SP-800-232] {sect}4.2.1, which are the `tag_len` least significant bits of `state[4] @ state[3]`.
@@ -3940,8 +3941,11 @@ Since the tag depends on the ciphertext only through the checksum, (`N`, `A`, `C
 Wagner's generalized birthday algorithm (CRYPTO 2002) finds such a `C'` with about 2^23^ block decryptions for `m` {ge} 128, 2^45^ for `m` = 4 and 2^64^ for `m` = 2; for `m` = 1, no such `C'` exists.
 
 A repeated IV or nonce, which Rule <<KLE-MGR-caller-limits>> leaves to the caller, can reveal locker state derived from the key.
-In <<KLE-GCM-mode>>, two messages that a locker with _MachinePolicy_ = `0b11` encrypts under one IV give, with their tags, a polynomial in `auth_key` whose roots software computes, leaving few candidates (the "forbidden attack" of Joux, 2006).
-With `auth_key`, either tag gives the tag mask of that IV, and software then forges under that IV outside the locker; narrowing _MachinePolicy_, an _ExpirationDate_ and clearing the locker do not revoke this.
+In <<KLE-GCM-mode>>, two messages encrypted under one key and one IV give, with their tags, a polynomial in `auth_key` whose roots software computes, leaving few candidates (the "forbidden attack" of Joux, 2006).
+With `auth_key`, every valid message gives the tag mask of its IV, so software forges under that IV outside the locker.
+Since the Machine also accepts IVs of lengths other than 96 bits, whose `J0` is a GHASH under `auth_key`, software can compute an IV whose `J0` is the `J0` of any chosen IV with its 32-bit counter decremented by one; encrypting or decrypting a zero block under it, in any locker of <<KLE-GCM-mode>> that holds the key, outputs the tag mask of the chosen IV.
+One repeated IV thus allows forgeries under every IV.
+Narrowing _MachinePolicy_, an _ExpirationDate_ and clearing the locker do not revoke them; only retiring the key, in every locker and SCC that holds it, ends them.
 <<KLE-GCM-SIV-mode>> limits the damage of a repeated nonce to revealing whether two messages are equal.
 
 Two Rules limit the remaining risks:
@@ -5318,6 +5322,7 @@ For now, the admissible pairs move:
 A destination key field still sets its own length conditions (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 6): the `K0` of
 HMAC takes only a source of exactly `eff_length` bytes, which a keystream is not, so a keystream into `K0` invalidates the
 destination alone.
+A locker of a Machine that Rule <<KLE-MGR-tag-verify>> lists, whose `tag_len_p` is shorter than the full length, is not a destination.
 Every such `kl.derive` is uninterruptible (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruptibility-classes>>).
 
 // NOTE: The `K2` of <<KLE-Ascon-AEAD128-N-masking>> is not an endpoint for a restricted shared secret (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>). It only masks a nonce that the caller chooses.
