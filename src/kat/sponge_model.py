@@ -1,7 +1,9 @@
 """Locker model of the sponge Machines (SHA-3/SHAKE, KMAC, Ascon-Hash256/XOF128/CXOF128, Ascon-AEAD128),
 written from Zkl-ISA-machines.adoc (KLE-hash-functions-MACs-XOFs, KLE-process-VLI, KLE-SHA-3, KLE-KMAC, KLE-Ascon-*).
 
-L = Locker(kind, policy=0, K=b'', S=b'', key=b'');  L.setst(imm, form, xs=0, inp=b'');
+L = Locker(kind, policy=0, K=b'', S=b'', key=b'', tag_len_p=None);  L.setst(imm, form, xs=0, inp=b'');
+  AEAD: tag_len_p defaults to 128; a value outside 64..128 gives Invalid (MR12).  policy 0 means 3, and 2 for
+  _NONCE, which admits no other value (MR1): any other policy gives Invalid.
 L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 when the instruction completed)
   Form B: inp = INPUT bytes;  Form C/A output: out = bytearray (window, KLLEN = len(out)); Form A input: inp.
   halt = n: stop at the first interruption point with at least n bytes done (resumable via klstart').
@@ -27,7 +29,7 @@ ASCONP = {'ASCON-HASH256': (R.IV_HASH, 256), 'ASCON-XOF128': (R.IV_XOF, 0), 'ASC
 
 
 class Locker:
-    def __init__(self, kind, policy=0, K=b'', S=b'', key=b'', nonce=b'', K2=b'', skid=None, sks=None):
+    def __init__(self, kind, policy=0, K=b'', S=b'', key=b'', nonce=b'', K2=b'', skid=None, sks=None, tag_len_p=None):
         self.kind, self.policy = kind, policy
         self.skid, self.sks = skid, sks or {}
         bad = False
@@ -48,6 +50,10 @@ class Locker:
         elif kind in AEADV:
             self.fam = 'aead'; self.var = AEADV[kind]; self.key = b2v(key); self.b = 128; self.n = 320; self.xof = False
             self.nonce = b2v(nonce); self.k2 = b2v(K2)
+            self.tag_len_p = 128 if tag_len_p is None else tag_len_p
+            if self.var == 'wsn' and policy in (0, 2): self.policy = 2
+            elif self.var == 'wsn': bad = True                  # MR1: a preset nonce admits only MachinePolicy 0b10
+            if not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
         else: raise ValueError(kind)
         self.P = R.keccak_f if self.n == 1600 else R.ascon12
         self.st, self.se = READY, 0
@@ -63,7 +69,7 @@ class Locker:
 
     def _ready(self):
         self.bb = self.lbl = self.ol = self.cum = 0
-        self.L = 0; self.zlen = 0; self.tag_len = 128
+        self.L = 0; self.zlen = 0; self.tag_len = self.tag_len_p if self.fam == 'aead' else 128
         if self.fam in ('sha3', 'kmac'): self.s = 0
         elif self.fam == 'ahash':
             self.s = R.ascon12(self.iv)
@@ -183,7 +189,7 @@ class Locker:
     def _setst_aead(self, imm, form, xs, inp):
         st = self.st; pol = self.policy
         g0 = pol == 0 or pol & 1; g1 = pol == 0 or pol & 2
-        if imm == AUX and st == READY and form == 'B' and 64 <= xs <= 128: self.tag_len = xs; return
+        if imm == AUX and st == READY and form == 'B' and xs == self.tag_len_p: self.tag_len = xs; return
         if imm == ABSORB and st == READY and form == ('A' if self.var == 'wsn' else 'C'):
             n = self.nonce if self.var == 'wsn' else b2v(inp[:16]) ^ (self.k2 if self.var == 'mask' else 0); k = self.key
             self.s = 0; self.sw(0, 0x00001000808c0001); self.sw(1, k); self.sw(2, k >> 64)
@@ -373,7 +379,7 @@ class Locker:
         if self.fam == 'aead':
             kf = v2b(self.skid, 8) if self.skid is not None else v2b(self.key, 16)
             if self.var == 'mask' and self.skid is None: kf += v2b(self.k2, 16)
-            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2)
+            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2) + v2b(self.tag_len_p, 2)
             if self.var == 'wsn': r += v2b(self.nonce, 16)
             return r + bytes(-len(r) % 16)
         n = 200 if self.n == 1600 else 40
@@ -394,7 +400,9 @@ class Locker:
                 self.key = b2v(sc[:16])
                 if self.var == 'mask': self.k2 = b2v(sc[16:32]); o = 32
             self.s = b2v(sc[o:o + 40]); self.lbl = b2v(sc[o + 40:o + 42]); self.tag_len = b2v(sc[o + 42:o + 44])
-            if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
+            self.tag_len_p = b2v(sc[o + 44:o + 46])
+            if self.var == 'wsn': self.nonce = b2v(sc[o + 46:o + 62])
+            if not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
             n = 200 if self.n == 1600 else 40
             self.s = b2v(sc[:n]); self.bb = b2v(sc[n:n + 2]); self.lbl = b2v(sc[n + 2:n + 4]); v = b2v(sc[n + 4:n + 8])
@@ -421,7 +429,7 @@ def derive(src, dst, length, klstart=0):
     if not isinstance(src, Secret): return src.invalid()                                  # 2: not a source endpoint
     fam = dst.fam
     key_n = {'base': 16, 'mask': 32}.get(getattr(dst, 'var', None)) if fam == 'aead' else None
-    ok = (key_n and dst.st == READY and dst.skid is None) or (fam != 'aead' and dst.st == ABSORB)
+    ok = (key_n and dst.st == READY and dst.skid is None and dst.tag_len_p == 128) or (fam != 'aead' and dst.st == ABSORB)
     if not ok: return dst.invalid()                                                       # 3: not a destination endpoint
     if fam != 'aead' and not src.shared or key_n == 32 and src.restricted:                # 4: pair not admitted
         dst.invalid(); return src.invalid()

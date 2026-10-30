@@ -3,7 +3,8 @@ text only: generic hash Machine (KLE-hash-functions-MACs-XOFs, KLE-process-VLI),
 on SHA-2, SM3, SHA-3) and SHA-3/SHAKE.  Values follow common.py conventions (ints, bit i = V[i], bytes = little endian).
 Round functions come from hash_ref.py (independent of this model).
 
-Locker(fname, hmac=None|'NIK'|'KIP', key=bytes K0 (KIP), syskey=bytes (BLAKE2 only), policy=int)
+Locker(fname, hmac=None|'NIK'|'KIP', key=bytes K0 (KIP), syskey=bytes (BLAKE2 only), policy=int, tag_len_p=int (HMAC))
+  tag_len_p defaults to t; a value not admitted (a multiple of 8 from 64 to t) gives Invalid (MR12).
   .st                         'Ready','Absorb','Last','Output','Verify','SetKey','Success','Failure','Invalid','Inert'
   .setst(imm, form='A', Xs=0) imm in ready absorb last output verify setkey aux success failure finalize
   .exec(form, data=b'', klstart=0, halt=False, kllen=None) -> bytes (Form C output, zero-filled) | None
@@ -29,7 +30,7 @@ class Fn:
     bit_ok = property(lambda s: s.kind in ('sha3', 'sha2', 'sm3'))   # final piece may have any bit length
 
 class Locker:
-    def __init__(s, fname, hmac=None, key=None, syskey=None, policy=None):
+    def __init__(s, fname, hmac=None, key=None, syskey=None, policy=None, tag_len_p=None):
         if policy is None: policy = 3 if hmac else 0
         f = s.f = Fn(fname); s.hmac = hmac; s.syskey = None; s.policy = policy; s.halted = None
         if hmac:
@@ -45,9 +46,12 @@ class Locker:
         s.nn = f.t // 8 if f.kind == 'blake2' else 0
         s.kk = len(syskey) if syskey else 0
         s.tag_len = 0; s.input_key = None
+        s.tag_len_p = (f.t if tag_len_p is None else tag_len_p) if hmac else None
         s.ready()
+        if hmac and not s.tlp_ok(): s.inv()                               # MR12: provisioning completes into Invalid
     # ---- helpers
     def inv(s): s.st = 'Invalid'; return None
+    def tlp_ok(s): return s.tag_len_p % 8 == 0 and 64 <= s.tag_len_p <= s.f.t
     def iv(s):
         f = s.f
         if f.kind == 'sha3': return 0
@@ -152,7 +156,7 @@ class Locker:
                 if Xs and (Xs % 8 or Xs >= 2**32 if f.xof else Xs % 8 or Xs > (8 * s.nn if f.kind == 'blake2' else f.d)): return s.inv()
                 if Xs and s.hmac and Xs < 64: return s.inv()
             else:
-                if not s.hmac or form != 'B' or not s.policy & 2 or Xs % 8 or Xs < 64: return s.inv()
+                if not s.hmac or form != 'B' or not s.policy & 2 or Xs % 8 or Xs < 64 or min(Xs, f.t) != s.tag_len_p: return s.inv()
             if s.hmac: s._hmac_outer()
             else: s._finalize()
             if s.st == 'Invalid': return
@@ -244,6 +248,7 @@ class Locker:
         if s.st in ('Invalid', 'Inert'): return False
         if klstart: s.inv(); return False                                     # GR39 item 1
         if src in ('hmac_tag', 'xof'): s.srcinv = True; return False          # GR39 item 2: not a source endpoint; destination unchanged
+        if s.hmac and s.tag_len_p != s.f.t: s.inv(); return False             # MR12: a short tag_len_p is not a destination
         if src == 'cmac' and s.st == 'Absorb': s.srcinv = True; s.inv(); return False   # GR39 item 4: pair not admitted, both Invalid
         f = s.f; length = len(secret) if length is None else length
         if length != len(secret): s.inv(); return False
@@ -259,7 +264,7 @@ class Locker:
         if f.kind == 'sha3': L = [('state', s.S, 1600), ('block_base', s.bb, 16), ('last_block_len', s.lbl, 16), ('out_len', s.outl, 32)] + ([('cumul_len', s.cum, 64)] if s.hmac else [])
         else: L = [('state', s.S, f.n), ('last_block_len', s.lbl, 16), ('block_base', s.bb, 16), ('out_len', s.outl, 32), ('cumul_len', s.cum, 64), ('block', s.blk, f.b)]
         if f.kind == 'blake2': L = ([('SKID', 0, 64)] if s.syskey is not None else []) + L + [('nn', s.nn, 16), ('kk', s.kk, 16)]
-        if s.hmac: L += [('K0', s.K0, f.b), ('tag_len', s.tag_len, 16)]
+        if s.hmac: L += [('K0', s.K0, f.b), ('tag_len', s.tag_len, 16), ('tag_len_p', s.tag_len_p, 16)]
         return L
 
 def run(L, chunks, halts=False):

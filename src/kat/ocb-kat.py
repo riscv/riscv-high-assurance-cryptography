@@ -34,8 +34,8 @@ for i, a, p, out in V:
     check('OCB vector %d decrypt: Success' % i, ok and pp == p)
     m = OCB(KEY); _, ok = ocb_dec(m, nbits, 96, a, c, bytes([t[0] ^ 1]) + t[1:])
     check('OCB vector %d corrupted tag: Failure' % i, m.st == FAILURE)
-    c2, t2 = ocb_enc(OCB_NONCE(KEY, nonce_of(nbits, 96)), nbits, 96, a, p, preset=True)
-    check('OCB_NONCE vector %d encrypt' % i, c2 + t2 == want)
+    m = OCB_NONCE(KEY, nonce_of(nbits, 96)); ocb_enc(m, nbits, 96, a, p, preset=True)
+    check('OCB_NONCE vector %d encrypt: Invalid (MachinePolicy = 0b10, MR1)' % i, inv(m))
     pp, ok = ocb_dec(OCB_NONCE(KEY, nonce_of(nbits, 96)), nbits, 96, a, c, t, preset=True)
     check('OCB_NONCE vector %d decrypt' % i, ok and pp == p)
 
@@ -59,8 +59,8 @@ for n in (6, 13, 64, 96, 120):
     for tl in (64, 128):
         key = RB(16); nbits = rnd.getrandbits(n); a, p = RB(21), RB(35)
         r = R.ocb_enc('AES128', key, nbits, n, a, p, tl)
-        bad += ocb_enc(OCB_NONCE(key, nonce_of(nbits, n)), nbits, n, a, p, tl, preset=True) != r
-check('OCB_NONCE equals the reference for nonce lengths 6..120 (bad=%d)' % bad, bad == 0)
+        bad += ocb_dec(OCB_NONCE(key, nonce_of(nbits, n)), nbits, n, a, r[0], r[1], preset=True) != (p, True)
+check('OCB_NONCE decrypts the reference for nonce lengths 6..120 (bad=%d)' % bad, bad == 0)
 for ln in (1, 7, 15, 16, 17, 31, 32, 33, 48, 64, 100):
     key = RB(16); nbits = rnd.getrandbits(96); p = RB(ln); a = RB(ln % 20)
     r = R.ocb_enc('AES128', key, nbits, 96, a, p)
@@ -204,7 +204,7 @@ for dec in (False, True):
     for ln in (0, 16, 32, 48, 64, 160):
         for al in (0, 16, 5):
             a, x = bytes(range(al)), bytes(range(ln))
-            for nm, mk in (('OCB', lambda: OCB(KEY)), ('OCB_NONCE', lambda: OCB_NONCE(KEY, nonce_of(0, 96)))):
+            for nm, mk in (('OCB', lambda: OCB(KEY)), ('OCB_NONCE', lambda: OCB_NONCE(KEY, nonce_of(0, 96))))[:2 if dec else 1]:   # OCB_NONCE only decrypts (MR1)
                 r = route(mk, 0, 96, a, x, dec)
                 check('%s %s msg %d AD %d: Form D exec route == Form A setst route (checksum_P, State, Serialized Content)' % (nm, 'decrypt' if dec else 'encrypt', ln, al), r[0] == r[1] and r[0][1] == (SUCCESS if dec else SUCCESS))
 
@@ -234,14 +234,19 @@ check('OCB_NONCE provisioning with N_len = 5: invalid metadata', raises(OCB_NONC
 check('OCB_NONCE provisioning with N_len = 121: invalid metadata', raises(OCB_NONCE, KEY, (1, 121), exc=ValueError))
 
 section('OCB_NONCE specifics')
-n = nonce_of(rnd.getrandbits(96), 96); m = OCB_NONCE(KEY, n)
+nb_ = rnd.getrandbits(96); n = nonce_of(nb_, 96); m = OCB_NONCE(KEY, n)
+check('default MachinePolicy = 0b10', m.policy == 2)
+for pol in (1, 3):
+    check('MachinePolicy=%d: invalid Metadata (MR1)' % pol, raises(OCB_NONCE, KEY, n, policy=pol, exc=ValueError))
+m = OCB_NONCE(KEY, n); m.setst(ABSORB, 'B', 128); m.exec('B', 0, 128); m.setst(HABL, 'B', 0); m.setst(ENC); check('Hash_Absorb_Last_Block -> Encrypt: Invalid (MR1)', inv(m))
+m = OCB_NONCE(KEY, n); m.rstr(1); check('narrowing to 0b01 leaves 0: Invalid (GR25)', inv(m))
 check('Ready -> Hash_Absorb by Form B setst (tag_len), no Set_Aux_Value', (lambda m: (m.setst(ABSORB, 'B', 128), m.st == ABSORB)[1])(OCB_NONCE(KEY, n)))
 check('Set_Aux_Value does not exist: Invalid', inv((lambda m: (m.setst(SAV, 'B', 96), m)[1])(OCB_NONCE(KEY, n))))
 m = OCB_NONCE(KEY, n); m.setst(ABSORB, 'B', 128); m.setst(READY)
 check('Ready keeps N and N_len; HasN stays 0', m.N == n[0] and m.N_len == 96 and not m.hasN)
-a1 = ocb_enc(m, 0, 96, b'a', b'b' * 20, preset=True); a2 = ocb_enc(m, 0, 96, b'a', b'b' * 20, preset=True) if m.st == READY else None
-m = OCB_NONCE(KEY, n); x = ocb_enc(m, 0, 96, b'a', b'b' * 20, preset=True); m.setst(READY); y = ocb_enc(m, 0, 96, b'a', b'b' * 20, preset=True)
-check('second message with the same nonce after Ready gives identical output', x == y)
+c, t = R.ocb_enc('AES128', KEY, nb_, 96, b'a', b'b' * 20)
+m = OCB_NONCE(KEY, n); x = ocb_dec(m, 0, 96, b'a', c, t, preset=True); m.setst(READY); y = ocb_dec(m, 0, 96, b'a', c, t, preset=True)
+check('second message with the same nonce after Ready gives identical output', x == y == (b'b' * 20, True))
 check('OCB_NONCE is not a kl.derive destination', inv((lambda m: (m.derive_dest(RB(16)), m)[1])(OCB_NONCE(KEY, n))))
 check('OCB_NONCE zero policy rejected', raises(OCB_NONCE, KEY, n, policy=0, exc=ValueError))
 

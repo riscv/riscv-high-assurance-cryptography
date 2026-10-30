@@ -15,9 +15,9 @@ def K0of(fn, key):
 def Hf(fn): return (lambda x: R.sm3(x)) if fn == 'SM3' else (lambda x: R.sha3(fn, x)) if fn.startswith('SHA3') else (lambda x: R.sha2(fn, x))
 def fips(fn, k, m): return R.hmac(Hf(fn), bsz(fn), k, m)
 def ref(fn, key, msg): return pyhmac.new(key, msg, HL[fn]).digest()
-def mkkip(fn, key, pol=3): return Locker(fn, 'KIP', key=K0of(fn, key), policy=pol)
-def mknik(fn, key=None, pol=3):
-    L = Locker(fn, 'NIK', policy=pol)
+def mkkip(fn, key, pol=3, tlp=None): return Locker(fn, 'KIP', key=K0of(fn, key), policy=pol, tag_len_p=tlp)
+def mknik(fn, key=None, pol=3, tlp=None):
+    L = Locker(fn, 'NIK', policy=pol, tag_len_p=tlp)
     if key is not None: L.setst('setkey'); L.exec('B', K0of(fn, key)); assert L.haskey
     return L
 def tag(L, msg, tl=None, plan='chunks'):
@@ -27,8 +27,8 @@ def _fin(L): return L
 def _redo(L):
     L.setst('ready') if L.st != 'Absorb' else None
     return L
-def _vt(fn, k, m, Xs):
-    L = mkkip(fn, k); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', Xs); return L
+def _vt(fn, k, m, Xs, tlp=None):
+    L = mkkip(fn, k, tlp=tlp); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', Xs); return L
 section('RFC 4231 (SHA-224/256/384/512) and FIPS 198-1 (others): NIK and KIP')
 RFC = [(b'\x0b' * 20, b'Hi There'), (b'Jefe', b'what do ya want for nothing?'), (b'\xaa' * 20, b'\xdd' * 50),
        (bytes(range(1, 26)), b'\xcd' * 50), (b'\xaa' * 131, b'Test Using Larger Than Block-Size Key - Hash Key First'),
@@ -118,7 +118,7 @@ for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256', 'SHA3-512'):
     for Xs in (64, 128, 8 * t, 8 * t + 64):
         tl = min(Xs // 8, t)
         for flip in (None, 0, tl - 1):
-            L = mkkip(fn, k); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', Xs)
+            L = mkkip(fn, k, tlp=8 * tl); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', Xs)
             tg = bytearray(w[:tl]);
             if flip is not None: tg[flip] ^= 1
             L.exec('B', bytes(tg) + b'\xff' * 3)
@@ -127,19 +127,36 @@ for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256', 'SHA3-512'):
         check('%s Verify Xs=%d -> Invalid' % (fn, Xs), inv(_vt(fn, k, m, Xs)))
     L = mkkip(fn, k); L.setst('absorb'); run(L, [m]); L.setst('verify', 'A'); check('%s Verify Form A -> Invalid' % fn, inv(L))
     L = mkkip(fn, k); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 8 * t); L.exec('B', w[:-1]); check('%s Verify KLLEN < tag_len -> Invalid' % fn, inv(L))
-    L = mkkip(fn, k); L.setst('absorb'); L.setst('last'); L.setst('verify', 'B', 64); check('%s Hash_Absorb_Last_Block(len 0) -> Hash_Verify' % fn, L.st == 'Verify')
-    L = mkkip(fn, k); L.setst('absorb'); L.setst('last', 'B', 8); L.setst('verify', 'B', 64); check('%s Last with last_block_len != 0 -> Hash_Verify Invalid' % fn, inv(L))
-    check('%s Verify then Output -> Invalid' % fn, inv(_do(_vt(fn, k, m, 64), 'output')))
+    L = mkkip(fn, k, tlp=64); L.setst('absorb'); L.setst('last'); L.setst('verify', 'B', 64); check('%s Hash_Absorb_Last_Block(len 0) -> Hash_Verify' % fn, L.st == 'Verify')
+    L = mkkip(fn, k, tlp=64); L.setst('absorb'); L.setst('last', 'B', 8); L.setst('verify', 'B', 64); check('%s Last with last_block_len != 0 -> Hash_Verify Invalid' % fn, inv(L))
+    check('%s Verify then Output -> Invalid' % fn, inv(_do(_vt(fn, k, m, 64, 64), 'output')))
     for pol, out_ok, ver_ok in ((1, True, False), (2, False, True), (3, True, True)):
         L = mkkip(fn, k, pol); L.setst('absorb'); run(L, [m]); L.setst('output'); a = L.st == 'Output'
-        L = mkkip(fn, k, pol); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); bb_ = L.st == 'Verify'
+        L = mkkip(fn, k, pol, 64); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); bb_ = L.st == 'Verify'
         check('%s MachinePolicy=%d: Hash_Output %s, Hash_Verify %s' % (fn, pol, out_ok, ver_ok), (a, bb_) == (out_ok, ver_ok))
     check('%s MachinePolicy 0 or bit 2: invalid Metadata' % fn, raises(Locker, fn, 'NIK', policy=0, exc=Metadata) and raises(Locker, fn, 'NIK', policy=4, exc=Metadata))
     check('%s KIP K0 of the wrong size / NIK with key -> invalid Metadata' % fn, raises(Locker, fn, 'KIP', key=b'x', policy=1, exc=Metadata) and raises(Locker, fn, 'NIK', key=bytes(bsz(fn)), policy=1, exc=Metadata))
+section('tag_len_p: provisioning, verification length, Content, derive (MR12)')
+for fn in FNS:
+    t = Locker(fn).f.t; k = msg_of(17); m = msg_of(33); w = ref(fn, k, m)
+    for tlp in sorted({64, 72, 128, t - 8, t}):
+        check('%s tag_len_p=%d: NIK and KIP provisioned into Ready' % (fn, tlp), Locker(fn, 'NIK', tag_len_p=tlp).st == 'Ready' and mkkip(fn, k, tlp=tlp).st == 'Ready')
+    for tlp in (0, 56, 63, 100, t + 8, 2 * t):
+        check('%s tag_len_p=%d: provisioning completes into Invalid' % (fn, tlp), inv(Locker(fn, 'NIK', tag_len_p=tlp)) and inv(mkkip(fn, k, tlp=tlp)))
+    for tlp, Xs in ((64, 64), (128, 128), (t, t), (t, t + 64)):
+        L = _vt(fn, k, m, Xs, tlp); L.exec('B', w[:tlp // 8]); check('%s tag_len_p=%d, Xs=%d: verification compares tag_len_p bits -> Success' % (fn, tlp, Xs), L.st == 'Success' and L.tag_len == tlp)
+    for tlp, Xs in ((128, 64), (128, 136), (64, 72), (64, t), (t, 64), (t, t - 8)):
+        check('%s tag_len_p=%d, Xs=%d: min(Xs, t) != tag_len_p -> Invalid' % (fn, tlp, Xs), inv(_vt(fn, k, m, Xs, tlp)))
+    L = mkkip(fn, k, tlp=96); check('%s Content carries tag_len_p' % fn, L.fields()[-1] == ('tag_len_p', 96, 16))
+    L.setst('absorb'); run(L, [m]); L = copy.deepcopy(L); L.setst('verify', 'B', 96); L.exec('B', w[:12])
+    check('%s import keeps tag_len_p: Xs=96 verifies' % fn, L.st == 'Success')
+    L = copy.deepcopy(mkkip(fn, k, tlp=96)); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', t); check('%s ... and Xs=t -> Invalid' % fn, inv(L))
+    L = Locker(fn, 'NIK', tag_len_p=128); L.setst('setkey'); check('%s tag_len_p=128 < t: K0 in Set_Key is not a derive destination -> Invalid' % fn, not L.derive(msg_of(16)) and inv(L))
+    L = mknik(fn, k, tlp=128); L.setst('absorb'); check('%s tag_len_p=128 < t: Hash_Absorb is not a derive destination -> Invalid' % fn, not L.derive(msg_of(16)) and inv(L))
 section('Serialized Content')
 for fn in FNS:
     f = Locker(fn).f; L = mknik(fn, msg_of(9)); names = [n for n, _, _ in L.fields()]
-    check('%s HMAC Content: hash content, K0 (b), tag_len (16)' % fn, names[-2:] == ['K0', 'tag_len'] and L.fields()[-2][2] == f.b and L.fields()[-1][2] == 16, names)
+    check('%s HMAC Content: hash content, K0 (b), tag_len (16), tag_len_p (16)' % fn, names[-3:] == ['K0', 'tag_len', 'tag_len_p'] and [w for _, _, w in L.fields()[-3:]] == [f.b, 16, 16] and L.fields()[-1][1] == f.t, names)
     L.setst('absorb'); run(L, [msg_of(f.b // 8 + 9)]); fl = {n: v for n, v, _ in L.fields()}
     check('%s cumul_len counts the message only (K0^ipad not counted)' % fn, fl['cumul_len'] == f.b + 72 if f.kind == 'sha3' and False else fl['cumul_len'] == 8 * (f.b // 8 + 9))
     if f.kind == 'sha3': check('%s SHA-3 order: block_base, last_block_len, out_len, cumul_len (HMAC only)' % fn, [n for n, _, _ in L.fields()][1:5] == ['block_base', 'last_block_len', 'out_len', 'cumul_len'])
@@ -171,9 +188,9 @@ for fn in ('SHA-256', 'SHA3-256'):
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('output'); L.rstrl(2)
     o = L.exec('C', kllen=256); check('%s rstrl clearing bit 0 in Hash_Output: the tag kl.exec -> Invalid, OUTPUT zeroed' % fn, inv(L) and o == bytes(32))
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.rstrl(1); L.setst('output'); check('%s rstrl clearing bit 1 in Hash_Absorb: Hash_Output still works' % fn, out_all(L, L.f.t // 8) == ref(fn, k, m))
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.rstrl(1); L.setst('verify', 'B', 64); check('%s rstrl clearing bit 1: Hash_Verify refused (Invalid)' % fn, inv(L))
+    L = mkkip(fn, k, 3, 64); L.setst('absorb'); run(L, [m]); L.rstrl(1); L.setst('verify', 'B', 64); check('%s rstrl clearing bit 1: Hash_Verify refused (Invalid)' % fn, inv(L))
     L = mkkip(fn, k, 2); L.rstrl(1); check('%s rstrl clearing the only set bit -> Invalid at once' % fn, inv(L))
-    L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); L.rstrl(1); L.exec('B', ref(fn, k, m)[:8]); check('%s rstrl clearing bit 1 in Hash_Verify: the compare kl.exec -> Invalid' % fn, inv(L))
+    L = mkkip(fn, k, 3, 64); L.setst('absorb'); run(L, [m]); L.setst('verify', 'B', 64); L.rstrl(1); L.exec('B', ref(fn, k, m)[:8]); check('%s rstrl clearing bit 1 in Hash_Verify: the compare kl.exec -> Invalid' % fn, inv(L))
 section('kl.derive source and pair rules (GR39, GR42)')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)
@@ -215,5 +232,7 @@ control('outer hash without the K0^opad block differs', oracle(fn, inner) != goo
 control('outer hash over inner with a non-zero block_base would differ: tag != hash(K0^opad | inner) of other length', oracle(fn, bytes(x ^ 0x5c for x in K0) + inner[:-1]) != good)
 control('known-prefix attack: HMAC is not H(key | m)', oracle(fn, k + m) != good)
 control('Content without cumul_len cannot resume: SHA-256 length field would restart', R.sha2(fn, b'bc') != R.sha2(fn, b'abc'))
+L = _vt(fn, k, m, 64, 64); L.exec('B', good[:8])
+control('a verification length taken from Xs would accept a 64-bit tag on a full-length locker', L.st == 'Success' and inv(_vt(fn, k, m, 64)))
 info('%d checks, %.1fs' % (common.N_PASS + common.N_FAIL, time.time() - t0))
 common.done()

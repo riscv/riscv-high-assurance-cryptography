@@ -10,6 +10,8 @@ Interface (all Machines):
         interrupted (only at the architected interruption points); the position is then in m.klstart.
   m.export() -> (SC value, width); Cls.from_sc(st, sc, ...) imports it.
   m.derive_dest(keybytes)  kl.derive into the key field; m.rstr(mask) narrows MachinePolicy.
+  policy= defaults to 3, and to 2 for GCM_IV and OCB_NONCE, which admit no other value (MR1).
+  tag_len_p= (GCM, GCM_IV, CMAC) defaults to the full tag length (MR12); a value not admitted gives INV.
 Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR35).
 """
 from common import *
@@ -33,14 +35,21 @@ class Base:
     EXF = {}            # st -> expected Form of kl.exec
     GATE = {}           # st -> MachinePolicy bit index
     NOKEYDER = False
+    DEC_ONLY = False              # IV or nonce in the PI: only MachinePolicy = 0b10 (MR1)
     zklio = False                 # True: a Form D kl.exec substitutes for the native Form
 
-    def __init__(self, key, policy=3):
-        need_ = policy != 0
-        if not need_: raise ValueError('zero MachinePolicy is invalid metadata (MR1)')
+    def __init__(self, key, policy=None, tag_len_p=None):
+        if policy is None: policy = 2 if self.DEC_ONLY else 3
+        if policy == 0: raise ValueError('zero MachinePolicy is invalid metadata (MR1)')
+        if self.DEC_ONLY and policy != 2: raise ValueError('a preset IV or nonce admits only MachinePolicy 0b10 (MR1)')
         self.cipher = self.CIPHER if len(key) in (16, 24, 32) and self.CIPHER == 'AES128' else self.CIPHER
         self.key, self.policy, self.st, self.klstart, self.out_partial = key, policy, READY, 0, 0
+        T = self.tlps()
+        self.tag_len_p = (max(T) if tag_len_p is None else tag_len_p) if T else None
         self._ready()
+        if T and self.tag_len_p not in T: self._fail()        # MR12: provisioning completes into Invalid
+
+    def tlps(self): return None       # the tag_len_p values that the Machine admits (MR12); None: no such field
 
     # ------------------------------------------------------------ plumbing
     def E(self, blk): return b2v(cipher_enc(self.cipher, self.key, v2b(blk, self.B // 8)))
@@ -126,6 +135,7 @@ class Base:
         if self.st == INV: return
         try:
             need(not self.NOKEYDER and self.st == READY and len(newkey) == len(self.key))
+            T = self.tlps(); need(not T or self.tag_len_p == max(T))     # MR12: a truncated tag_len_p is not a destination
             self.key = newkey; self._ready()
         except Inv:
             self._fail()
@@ -140,11 +150,10 @@ class GCM(Base):
     SAMEOK = (SAV,)
     IV = False
 
-    def __init__(self, key, iv=None, policy=3, cipher='AES128'):
+    def __init__(self, key, iv=None, policy=None, cipher='AES128', tag_len_p=None):
         self.CIPHER = cipher
-        super().__init__(key, policy)
-        self.cipher = cipher
-        self._ready()
+        super().__init__(key, policy, tag_len_p)
+    def tlps(self): return (128, 120, 112, 104, 96, 64)
 
     def _ready(self):
         self.auth = self.E(0)
@@ -170,7 +179,7 @@ class GCM(Base):
             self.absorb(inp & MASK128)
             self.tag ^= self.E(cat((bswap(self.start_ctr, 4), 32), (sl(self.J0, 95, 0), 96)))
         elif st == HV:
-            need(xs in (128, 120, 112, 104, 96, 64)); self.tag_len = xs
+            need(xs == self.tag_len_p); self.tag_len = xs                # MR12
     def _leave(self, cur, nxt):
         if cur == SAV: need(False)            # leaving SAV other than by completion/Ready is Invalid
         if cur in (ELB, DLB): need(self.lbl == 0)    # MR10 item 5: leaving a final-block State before its kl.exec
@@ -244,18 +253,19 @@ class GCM(Base):
             j = self.pack((self.len, 16), (0, 16), (self.block_base, 16), (self.cumul, 48), (0, 32))[0]
         else: j = self.J0
         tl = self.tag_len
-        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16))
+        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16), (self.tag_len_p, 16))
     @classmethod
-    def from_sc(cls, st, sc, keybytes=16, policy=3, cipher='AES128'):
+    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128'):
         m = cls._blank(keybytes, policy, cipher)
-        k, j, tag, sctr, lbl, tl = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16))
+        k, j, tag, sctr, lbl, tl, tlp = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16, 16))
         m.key = v2b(k, keybytes); m.auth = m.E(0)
-        m.st, m.tag, m.start_ctr, m.lbl, m.tag_len = st, tag, sctr, lbl, tl
+        m.st, m.tag, m.start_ctr, m.lbl, m.tag_len, m.tag_len_p = st, tag, sctr, lbl, tl, tlp
         if st == SAV:
             m.len, _, m.block_base, m.cumul = sl(j, 15, 0), 0, sl(j, 47, 32), sl(j, 95, 48); m.J0 = 0
         else: m.J0 = j
         try:
             if cls.IV: need(sctr == 1)
+            need(tlp in m.tlps())                                     # MR12
         except Inv: m._fail()
         return m
 
@@ -264,11 +274,12 @@ class GCM_IV(GCM):
     IV = True
     TRANS = {READY: {ABSORB}, ABSORB: {ENC, DEC}, ENC: {ELB, ETF}, ELB: {ETF}, DEC: {DLB, DTF}, DLB: {DTF}, DTF: {HV}}
     NOKEYDER = True
+    DEC_ONLY = True
     @classmethod
     def _blank(cls, kb, policy, cipher='AES128'): return cls(bytes(kb), 0, policy, cipher)
-    def __init__(self, key, iv, policy=3, cipher='AES128'):
+    def __init__(self, key, iv, policy=None, cipher='AES128', tag_len_p=None):
         self.J0 = iv & mask(96)
-        super().__init__(key, policy=policy, cipher=cipher)
+        super().__init__(key, policy=policy, cipher=cipher, tag_len_p=tag_len_p)
         self.start_ctr = 1
     def _ready(self):
         super()._ready()
@@ -363,7 +374,7 @@ class OCB(Base):
     EXF = {SAV: 'B', ABSORB: 'B', HABL: 'B', ENC: 'A', DEC: 'A', ELB: 'A', DLB: 'A', ETF: 'C', HV: 'B'}
     GATE = {ENC: 0, ELB: 0, ETF: 0, DEC: 1, DLB: 1, HV: 1}
     SAMEOK = (SAV,)
-    def __init__(self, key, policy=3, nonce=None):
+    def __init__(self, key, policy=None, nonce=None):
         super().__init__(key, policy)
         if nonce is not None:
             self.N, self.N_len = nonce
@@ -457,7 +468,7 @@ class OCB(Base):
                          (self.Ls if self.Ls is not None else 0, 128), (self.offset, 128), (self.hash_A, 128), (self.csum, 128),
                          (self.index, 49), (self.tag_len // 32 - 2, 2), (self.lbl, 7))
     @classmethod
-    def from_sc(cls, st, sc, keybytes=16, policy=3):
+    def from_sc(cls, st, sc, keybytes=16, policy=None):
         m = cls._blank(keybytes, policy)
         k, N, nl, _, Ls, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 128, 49, 2, 7))
         m.key = v2b(k, keybytes); m.st, m.N, m.N_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
@@ -473,10 +484,11 @@ class OCB_NONCE(OCB):
     TRANS = {READY: {ABSORB}, ABSORB: {HABL}, HABL: {ENC, DEC}, ENC: {ELB}, ELB: {ETF}, DEC: {DLB}, DLB: {HV}}
     SETF = dict(OCB.SETF)
     NOKEYDER = True
+    DEC_ONLY = True
     SAMEOK = ()
     @classmethod
     def _blank(cls, kb, policy, cipher='AES128'): return cls(bytes(kb), (0, 6), policy)
-    def __init__(self, key, nonce, policy=3):
+    def __init__(self, key, nonce, policy=None):
         N, self.N_len = nonce
         if not 6 <= self.N_len <= 120: raise ValueError('N_len outside [6,120]')
         q = -(-self.N_len // 8)      # PI loads N as the Set_Aux_Value kl.exec does: pad bits of byte q-1 cleared
@@ -490,11 +502,11 @@ class CMAC(Base):
     SETF = {ABSORB: 'A', HABL: 'B', HOUT: 'A', HV: 'B'}
     EXF = {ABSORB: 'B', HABL: 'B', HOUT: 'C', HV: 'B'}
     GATE = {HOUT: 0, HV: 1}
-    def __init__(self, key, policy=3, cipher='AES128'):
+    def __init__(self, key, policy=None, cipher='AES128', tag_len_p=None):
         self.CIPHER = cipher
         self.B = 64 if cipher == 'TDEA' else 128
-        super().__init__(key, policy); self.cipher = cipher
-        self._ready()
+        super().__init__(key, policy, tag_len_p)
+    def tlps(self): return tuple(range(64, self.B + 1, 8))
     def _ready(self):
         self.hash = self.lbl = self.tag_len = 0; self.any = self.all = False
     def _dbl(self, s): return double(s, self.B)
@@ -511,7 +523,7 @@ class CMAC(Base):
                 self.hash = self.E(self.hash ^ cat((0, b - 8), (0x80, 8)) ^ K2); self.all = True
         elif st == HOUT: need(self.all)
         elif st == HV:
-            need(xs % 8 == 0 and xs >= 64 and self.all); self.tag_len = min(xs, b)
+            need(xs % 8 == 0 and xs >= 64 and self.all and min(xs, b) == self.tag_len_p); self.tag_len = min(xs, b)   # MR12
     def _exec(self, st, inp, kllen, klstart, halt_at):
         b = self.B
         if st == ABSORB:
@@ -538,10 +550,11 @@ class CMAC(Base):
         return v2b(self.hash, self.B // 8)
     def export(self):
         b = self.B
-        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (self.tag_len, 32), (int(self.any), 1), (int(self.all), 1))
+        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (self.tag_len, 32), (int(self.any), 1), (int(self.all), 1), (self.tag_len_p, 16))
     @classmethod
-    def from_sc(cls, st, sc, keybytes=16, policy=3, cipher='AES128'):
+    def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128'):
         m = cls._blank(keybytes, policy, cipher)
-        k, h, lb, tl, a, al = cls.unpack(sc, (8 * keybytes, m.B, 32, 32, 1, 1))
-        m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.tag_len, m.any, m.all = st, h, lb, tl, bool(a), bool(al)
+        k, h, lb, tl, a, al, tlp = cls.unpack(sc, (8 * keybytes, m.B, 32, 32, 1, 1, 16))
+        m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.tag_len, m.any, m.all, m.tag_len_p = st, h, lb, tl, bool(a), bool(al), tlp
+        if tlp not in m.tlps(): m._fail()                             # MR12
         return m

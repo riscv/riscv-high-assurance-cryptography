@@ -117,20 +117,22 @@ for kl in (64, 96, 120, 128, 192):
 bs = 128
 for xs in (0, 8, 32, 56, 63, 65, 70):
     m = at(HABL); m.setst(HV, 'B', xs) if xs else m.setst(HV, 'A'); check('Hash_Verify Xs=%d: Invalid' % xs, inv(m))
-for xs in (64, 72, 128, 136, 256):
-    m = at(HABL); m.setst(HV, 'B', xs); check('Hash_Verify Xs=%d: accepted, tag_len=min(Xs,128)' % xs, m.st == HV and m.tag_len == min(xs, 128))
-m = at(HABL, 'TDEA'); m.setst(HV, 'B', 128); check('TDEA Hash_Verify Xs=128: tag_len = 64', m.tag_len == 64)
+for tlp, xs in ((64, 64), (72, 72), (128, 128), (128, 136), (128, 256)):
+    m = at(HABL, tag_len_p=tlp); m.setst(HV, 'B', xs); check('tag_len_p=%d, Hash_Verify Xs=%d: accepted, tag_len=min(Xs,128)' % (tlp, xs), m.st == HV and m.tag_len == min(xs, 128))
+for tlp, xs in ((128, 64), (128, 120), (64, 72), (64, 128), (96, 104)):
+    m = at(HABL, tag_len_p=tlp); m.setst(HV, 'B', xs); check('tag_len_p=%d, Hash_Verify Xs=%d: min(Xs,b) != tag_len_p, Invalid (MR12)' % (tlp, xs), inv(m))
+m = at(HABL, 'TDEA'); m.setst(HV, 'B', 128); check('TDEA Hash_Verify Xs=128: tag_len = 64 = tag_len_p', m.tag_len == 64)
 m = at(HABL, 'TDEA'); m.setst(HV, 'B', 56); check('TDEA Hash_Verify Xs=56: Invalid', inv(m))
 m = at(HV); m.exec('B', 0, 96); check('Hash_Verify KLLEN < tag_len: Invalid', inv(m))
 key = AES[0][1]
 for tl in (64, 72, 96, 120, 128):
-    t = H(AES[0][2][2])[:tl // 8]; m = CMAC(key); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128)
+    t = H(AES[0][2][2])[:tl // 8]; m = CMAC(key, tag_len_p=tl); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128)
     m.setst(HV, 'B', tl); m.exec('B', b2v(t), tl)
     check('truncated CMAC verify, %d bits: Success' % tl, m.st == SUCCESS)
-    m = CMAC(key); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128)
+    m = CMAC(key, tag_len_p=tl); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128)
     m.setst(HV, 'B', tl); m.exec('B', b2v(t) ^ (1 << (tl - 1)), tl)
     check('truncated verify %d bits, MSB of tag flipped: Failure' % tl, m.st == FAILURE)
-m = CMAC(key); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128); m.setst(HV, 'B', 64)
+m = CMAC(key, tag_len_p=64); m.setst(ABSORB); m.exec('B', b2v(M64[:32]), 256); m.setst(HABL, 'B', 64); m.exec('B', b2v(M64[32:40]), 128); m.setst(HV, 'B', 64)
 m.exec('B', b2v(H(AES[0][2][2])[:8]) | 0xffff << 64, 128); check('Hash_Verify with KLLEN > tag_len ignores bits above tag_len', m.st == SUCCESS)
 m = at(HABL); m.setst(HV, 'B', 128); m.exec('B', b2v(RB(16)), 128, halt_at=0); check('Hash_Verify with random tag: Failure', m.st == FAILURE)
 
@@ -145,8 +147,8 @@ m = CMAC(key); m.setst(ABSORB); m.exec('B', 0, 768, klstart=96); check('klstart 
 
 section('Serialized Content')
 m = CMAC(key); m.setst(ABSORB); m.exec('B', b2v(msg[:32]), 256); sc, w = m.export()
-W = (128, 128, 32, 32, 1, 1); f = CMAC.unpack(sc, W)
-check('SC: key, hash, last_block_len32, tag_len32, absorbed_any, absorbed_all; width 128+128+66', w == 128 + 128 + 66 and f[1] == m.hash and f[4] == 1 and f[5] == 0)
+W = (128, 128, 32, 32, 1, 1, 16); f = CMAC.unpack(sc, W)
+check('SC: key, hash, last_block_len32, tag_len32, absorbed_any, absorbed_all, tag_len_p16; width 128+128+66+16', w == 128 + 128 + 66 + 16 and f[1] == m.hash and f[4] == 1 and f[5] == 0 and f[6] == 128)
 q = CMAC.from_sc(ABSORB, sc); q.exec('B', b2v(msg[32:96]), 512); q.setst(HABL, 'B', 32); q.exec('B', b2v(msg[96:] + bytes(12)), 128); q.setst(HOUT, 'A')
 check('export mid-absorb, import, finish: equals reference', v2b(q.exec('C', 0, 128), 16) == want)
 m = at(HV, key=key); sc, w = m.export(); f = CMAC.unpack(sc, W); check('SC in Hash_Verify: tag_len = 128, absorbed_all = 1', f[3] == 128 and f[5] == 1 and f[4] == 1 if False else f[3] == 128 and f[5] == 1)
@@ -155,8 +157,22 @@ m = at(HABL, key=key, msg=b'abc'); sc, w = m.export(); f = CMAC.unpack(sc, W)
 check('SC in Hash_Absorb_Last_Block after its exec: last_block_len = 24 retained, absorbed_all', f[2] == 24 and f[5] == 1)
 q = CMAC.from_sc(HABL, sc); q.setst(HOUT, 'A'); check('import into Hash_Absorb_Last_Block then Hash_Output works', q.st == HOUT)
 q = CMAC.from_sc(HV, at(HV, key=key).export()[0]); q.exec('B', 0, 128); check('import in Hash_Verify, exec decides', q.st in (SUCCESS, FAILURE))
-check('TDEA SC width: 192 + 64 + 66', CMAC(TK, cipher='TDEA').export()[1] == 192 + 64 + 66)
-check('AES-256 SC width: 256 + 128 + 66', CMAC(RB(32), cipher='AES256').export()[1] == 256 + 128 + 66)
+check('TDEA SC width: 192 + 64 + 66 + 16', CMAC(TK, cipher='TDEA').export()[1] == 192 + 64 + 66 + 16)
+check('AES-256 SC width: 256 + 128 + 66 + 16', CMAC(RB(32), cipher='AES256').export()[1] == 256 + 128 + 66 + 16)
+check('TDEA tag_len_p defaults to b = 64', CMAC(TK, cipher='TDEA').tag_len_p == 64)
+
+section('tag_len_p: provisioning, import, verification length (MR12)')
+for tlp in (64, 72, 96, 120, 128):
+    check('provisioning with tag_len_p=%d: Ready' % tlp, CMAC(key, tag_len_p=tlp).st == READY)
+for tlp in (0, 56, 63, 100, 136, 256):
+    check('provisioning with tag_len_p=%d: Invalid' % tlp, inv(CMAC(key, tag_len_p=tlp)))
+check('TDEA provisioning with tag_len_p=72 > b: Invalid', inv(CMAC(TK, cipher='TDEA', tag_len_p=72)))
+m = at(HABL, key=key, tag_len_p=96); sc = m.export()[0]
+check('SC carries tag_len_p = 96', CMAC.unpack(sc, W)[6] == 96)
+q = CMAC.from_sc(HABL, sc); q.setst(HV, 'B', 96); check('import keeps tag_len_p: Hash_Verify Xs=96 accepted', q.st == HV and q.tag_len == 96)
+q = CMAC.from_sc(HABL, sc); q.setst(HV, 'B', 128); check('import keeps tag_len_p: Hash_Verify Xs=128 Invalid', inv(q))
+for tlp in (0, 60, 136):
+    check('import with tag_len_p=%d: Invalid' % tlp, inv(CMAC.from_sc(HABL, sc & ~(mask(16) << 322) | tlp << 322)))
 
 section('policy, kl.derive, kl.rstrl')
 check('zero MachinePolicy rejected', raises(CMAC, key, policy=0, exc=ValueError))
@@ -173,6 +189,7 @@ k2 = RB(16); m = CMAC(key); m.derive_dest(k2); check('derive into key in Ready: 
 m = at(ABSORB); m.derive_dest(k2); check('derive into key in Hash_Absorb: Invalid', inv(m))
 m = at(HOUT); m.exec('C', 0, 128); m.derive_dest(k2); check('derive into key in Success: Invalid', inv(m))
 m = CMAC(key); m.derive_dest(RB(24)); check('derive wrong size: Invalid', inv(m))
+m = CMAC(key, tag_len_p=120); m.derive_dest(k2); check('derive into a locker with tag_len_p < b: Invalid (MR12)', inv(m))
 a = CMAC(RB(16)); b = CMAC(RB(16)); a.derive_dest(v2b(b.hash, 16)) if False else None
 
 section('negative controls')

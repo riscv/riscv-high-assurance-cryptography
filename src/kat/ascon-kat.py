@@ -184,12 +184,20 @@ check('empty message verify of a wrong tag -> Failure', L.st == FAILURE)
 section('Ascon-AEAD128 tag length and rules')
 for tl in (64, 72, 100, 128):
     pt = msg(20); c, nb, tg = R.ref_ascon_aead(KEY, NONCE, b'', pt)
-    L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', tl); ct, t = enc(L, b'', pt)
-    check('tag_len=%d: tag = low bits of the 128-bit tag, rest cleared' % tl, b2v(t) == tg & mask(tl) and ct == v2b(c, 20))
-    L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', tl); dec(L, b'', ct, 160, t)
-    check('tag_len=%d verifies' % tl, L.st == SUCCESS)
+    L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=tl); L.setst(13, 'B', tl); ct, t = enc(L, b'', pt)
+    check('tag_len_p=%d: tag = low bits of the 128-bit tag, rest cleared' % tl, b2v(t) == tg & mask(tl) and ct == v2b(c, 20))
+    L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=tl); dec(L, b'', ct, 160, t)
+    check('tag_len_p=%d verifies with no Set_Aux_Value (entering Ready sets tag_len)' % tl, L.st == SUCCESS)
+    L.setst(1, 'A'); check('tag_len_p=%d: entering Ready again restores tag_len' % tl, L.tag_len == tl)
 for tl in (63, 129, 1):
     L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', tl); check('tag_len=%d -> Invalid' % tl, L.se == SE_INV)
+for tlp, xs in ((128, 96), (128, 64), (96, 128), (96, 64), (64, 72)):
+    L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=tlp); L.setst(13, 'B', xs); check('tag_len_p=%d: Set_Aux_Value Xs=%d -> Invalid (MR12)' % (tlp, xs), L.se == SE_INV)
+for kind, kw in (('ASCON-AEAD128', {}), ('ASCON-AEAD128_NONCE', dict(nonce=bytes(range(50, 66)))), ('ASCON-AEAD128_NONCE_MASK', dict(K2=bytes(16)))):
+    for tlp in (0, 63, 129, 256):
+        check('%s tag_len_p=%d: provisioning completes into Invalid (MR12)' % (kind, tlp), Locker(kind, key=KEY, tag_len_p=tlp, **kw).se == SE_INV)
+pt = msg(20); L = Locker('ASCON-AEAD128', key=KEY); ct, t = enc(L, b'', pt)
+L = Locker('ASCON-AEAD128', key=KEY); dec(L, b'', ct, 160, t[:8]); check('tag_len_p=128: a 64-bit tag -> Invalid (KLLEN < tag_len)', L.se == SE_INV)
 L = Locker('ASCON-AEAD128', key=KEY); L.setst(2, 'C', inp=NONCE); L.setst(13, 'B', 96); check('Set_Aux_Value outside Ready -> Invalid', L.se == SE_INV)
 L = Locker('ASCON-AEAD128', key=KEY); L.setst(2, 'A'); check('Hash_Absorb with Form A (no nonce) -> Invalid', L.se == SE_INV)
 def _tail(f):
@@ -217,8 +225,11 @@ for pol, okenc, okdec in ((1, True, False), (2, False, True), (3, True, True)):
     L = Locker('ASCON-AEAD128', policy=pol, key=KEY); L.setst(2, 'C', inp=NONCE); L.setst(8, 'A'); check('MachinePolicy=%d: Decrypt %s' % (pol, 'admitted' if okdec else 'refused'), (L.st == DEC) == okdec)
 
 section('Ascon-AEAD128 Serialized Content')
-L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', 96); sc = L.export()
-check('SC length 64 B, key | state | last_block_len | tag_len', len(sc) == 64 and sc[:16] == KEY and sc[58:60] == v2b(96, 2))
+L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=96); sc = L.export()
+check('SC length 64 B, key | state | last_block_len | tag_len | tag_len_p', len(sc) == 64 and sc[:16] == KEY and sc[58:60] == v2b(96, 2) and sc[60:62] == v2b(96, 2))
+for tlp, ok in ((64, True), (128, True), (0, False), (63, False), (129, False)):
+    L2 = Locker('ASCON-AEAD128', key=b''); L2.import_(sc[:60] + v2b(tlp, 2) + sc[62:], READY)
+    check('import with tag_len_p=%d -> %s' % (tlp, 'Ready' if ok else 'Invalid (MR12)'), (L2.st == READY and L2.tag_len_p == tlp) if ok else L2.se == SE_INV)
 pt = msg(40); ad = b'hdr'; c, nb, tg = R.ref_ascon_aead(KEY, NONCE, ad, pt)
 for stage in ('absorb', 'encrypt', 'last'):
     L = Locker('ASCON-AEAD128', key=KEY); L.setst(2, 'C', inp=NONCE); L.exec('B', pad128(ad))
@@ -271,7 +282,7 @@ for k in HASHES:
     check('%s: 40 random plans (chunks, halts, export/import, piece, bound)' % k, not bad, bad[:4])
 
 section('Tag is not a derive source; out_len on entering Ready; Error-State setst; GR40')
-L = Locker('ASCON-AEAD128', key=KEY); L.setst(13, 'B', 100); ct, t = enc(L, b'', b'abc')
+L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=100); L.setst(13, 'B', 100); ct, t = enc(L, b'', b'abc')
 L2 = Locker('ASCON-AEAD128', key=KEY); L2.setst(2, 'C', inp=NONCE); L2.setst(7, 'A'); L2.setst(9, 'B', 0)
 d = Locker('ASCON-AEAD128', key=bytes(16)); derive(L2, d, 13)
 check('AEAD tag (Hash_Output) as source: source Invalid, destination untouched', L2.se == SE_INV and d.st == READY and d.key == 0)
@@ -300,6 +311,8 @@ control('caller-padded message differs from the Machine-padded one', href('ASCON
 L = Locker('ASCON-AEAD128', key=KEY); ct, t = enc(L, b'', b'abc')
 control('a zero tag does not verify (Failure is reachable)', (dec(Locker('ASCON-AEAD128', key=KEY), b'', ct, 24, bytes(16)), True)[1] and t != bytes(16))
 L = Locker('ASCON-AEAD128', key=KEY); dec(L, b'', ct, 24, bytes(16)); control('verify of a wrong tag ends in Failure', L.st == FAILURE)
+L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=64); dec(L, b'', ct, 24, t[:8]); L2 = Locker('ASCON-AEAD128', key=KEY); L2.setst(13, 'B', 64)
+control('a verification length taken from Xs would accept a 64-bit tag on a full-length locker', L.st == SUCCESS and L2.se == SE_INV)
 
 section('Ascon-AEAD128_Nonce (stored nonce) and _Nonce_Mask (nonce XOR K2)')
 K2 = bytes(range(100, 116)); NN = bytes(range(50, 66))
@@ -311,28 +324,47 @@ def full(L, setup, ad, pt):
     r = len(pt) % 16; L.setst(9, 'B', 8 * r)
     if r: o = bytearray(16); L.exec('A', pt[-r:].ljust(16, b'\0'), out=o); ct += bytes(o[:r])
     tg = bytearray(16); L.exec('C', out=tg); return ct, bytes(tg)
+def fulld(L, setup, ad, ct, tg):
+    L.setst(*setup)
+    if ad: L.exec('B', pad128(ad))
+    L.setst(8, 'A'); pt = b''
+    for i in range(len(ct) // 16): o = bytearray(16); L.exec('A', ct[16 * i:16 * i + 16], out=o); pt += bytes(o)
+    r = len(ct) % 16; L.setst(10, 'B', 8 * r)
+    if r: o = bytearray(16); L.exec('A', ct[-r:].ljust(16, b'\0'), out=o); pt += bytes(o[:r])
+    L.exec('B', tg); return pt, L.st
 bad = []
 for adn in (0, 5, 16, 20):
     for pn in (0, 3, 16, 29):
         ad, pt = msg(adn, 4), msg(pn, 5)
         c, nb, tg = R.ref_ascon_aead(KEY, NN, ad, pt)
-        r1 = full(Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN), (2, 'A'), ad, pt)
+        r1 = fulld(Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN), (2, 'A'), ad, v2b(c, pn), v2b(tg, 16))
         nm = bytes(a ^ b for a, b in zip(NN, K2)); c2, nb2, tg2 = R.ref_ascon_aead(KEY, nm, ad, pt)
         r2 = full(Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2), (2, 'C', 0, NN), ad, pt)
-        if r1 != (v2b(c, pn), v2b(tg, 16)): bad.append(('wsn', adn, pn))
+        if r1 != (pt, SUCCESS): bad.append(('wsn', adn, pn))
         if r2 != (v2b(c2, pn), v2b(tg2, 16)): bad.append(('mask', adn, pn))
-check('_Nonce (Form A setup) and _Nonce_Mask (INPUT xor K2): 16 AD/PT pairs vs reference', not bad, bad[:3], None)
+check('_Nonce (Form A setup) decrypts and _Nonce_Mask (INPUT xor K2) encrypts: 16 AD/PT pairs vs reference', not bad, bad[:3], None)
 L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(2, 'C', inp=NONCE); check('_Nonce: Form C into Hash_Absorb is a wrong Form -> Invalid', L.se == SE_INV)
 L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); L.setst(2, 'A'); check('_Nonce_Mask: Form A into Hash_Absorb -> Invalid', L.se == SE_INV)
-L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(13, 'B', 80); full_ok = L.se == 0 and L.st == READY
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN, tag_len_p=80); L.setst(13, 'B', 80); full_ok = L.se == 0 and L.st == READY
 check('_Nonce: tag_len Set_Aux_Value as in the base Machine', full_ok)
-L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (60 B) then nonce, padded to 80 B', len(n1) == 80 and n1[60:76] == NN and n1[76:] == bytes(4), len(n1))
-L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: K1 | K2 | state | lbl | tag_len (80 B)', len(m1) == 80 and m1[:16] == KEY and m1[16:32] == K2, len(m1))
-for kind, kw, setup in (('ASCON-AEAD128_NONCE', dict(nonce=NN), (2, 'A')), ('ASCON-AEAD128_NONCE_MASK', dict(K2=K2), (2, 'C', 0, NN))):
-    L = Locker(kind, key=KEY, **kw); L.setst(*setup); L.exec('B', pad128(b'hdr')); L.setst(7, 'A'); L.exec('A', msg(16), out=bytearray(16))
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(13, 'B', 80); check('_Nonce: Set_Aux_Value Xs != tag_len_p -> Invalid', L.se == SE_INV)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (62 B) then nonce, padded to 80 B', len(n1) == 80 and n1[60:62] == v2b(128, 2) and n1[62:78] == NN and n1[78:] == bytes(2), len(n1))
+L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: K1 | K2 | state | lbl | tag_len | tag_len_p (80 B)', len(m1) == 80 and m1[:16] == KEY and m1[16:32] == K2 and m1[76:78] == v2b(128, 2), len(m1))
+for kind, kw, setup, op in (('ASCON-AEAD128_NONCE', dict(nonce=NN), (2, 'A'), 8), ('ASCON-AEAD128_NONCE_MASK', dict(K2=K2), (2, 'C', 0, NN), 7)):
+    L = Locker(kind, key=KEY, **kw); L.setst(*setup); L.exec('B', pad128(b'hdr')); L.setst(op, 'A'); L.exec('A', msg(16), out=bytearray(16))
     L2 = Locker(kind, key=b'', **kw); L2.import_(L.export(), L.st); a = bytearray(16); b = bytearray(16)
     for X, o in ((L, a), (L2, b)): X.exec('A', msg(16, 2), out=o)
-    check(kind + ' export/import mid-encryption: same continuation', a == b)
+    check(kind + ' export/import mid-%s: same continuation' % ('decryption' if op == 8 else 'encryption'), a == b and L.st == L2.st == op)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); check('_Nonce: MachinePolicy defaults to 0b10 (MR1)', L.policy == 2 and L.st == READY)
+for pol in (1, 3):
+    check('_Nonce: MachinePolicy=%d is invalid Metadata -> Invalid (MR1)' % pol, Locker('ASCON-AEAD128_NONCE', policy=pol, key=KEY, nonce=NN).se == SE_INV)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(2, 'A'); L.setst(7, 'A'); check('_Nonce: Encrypt -> Invalid (decrypt only, MR1)', L.se == SE_INV)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(2, 'A'); L.setst(8, 'A'); check('_Nonce: Decrypt admitted from the same point', L.st == DEC)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.rstrl(1); check('_Nonce: rstrl to 0b01 -> Invalid (GR25)', L.se == SE_INV)
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.rstrl(2); check('_Nonce: rstrl to 0b10 keeps Ready', L.st == READY and L.policy == 2)
+c, nb, tg = R.ref_ascon_aead(KEY, NN, b'h', b'abc'); L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN)
+x = fulld(L, (2, 'A'), b'h', v2b(c, 3), v2b(tg, 16)); L.setst(1, 'A'); y = fulld(L, (2, 'A'), b'h', v2b(c, 3), v2b(tg, 16))
+check('_Nonce: a second message after Ready decrypts with the same nonce', x == y == (b'abc', SUCCESS))
 
 section('kl.derive into AEAD key fields (GR37-GR43)')
 def dk(kind='ASCON-AEAD128', data=bytes(range(40)), length=None, restricted=True, shared=True, ks=0, **kw):
@@ -348,6 +380,8 @@ for nm, kw in (('length 15', dict(length=15)), ('length 0', dict(length=0)), ('k
     d, s = dk(restricted=False, **kw); check('derive %s -> destination Invalid' % nm, d.se == SE_INV and not s.bad)
 d, s = dk(data=bytes(12), length=16, restricted=False); check('12-byte source shorter than the key -> source Invalid (GR39.7)', s.bad and d.se == 0 and d.st == READY)
 d = Locker('ASCON-AEAD128', key=KEY); d.setst(2, 'C', inp=NONCE); derive(Secret(bytes(16), False), d, 16); check('destination not in Ready -> Invalid (GR39.3)', d.se == SE_INV)
+for kind in ('ASCON-AEAD128', 'ASCON-AEAD128_NONCE_MASK'):
+    d, s = dk(kind=kind, restricted=False, tag_len_p=96); check('%s tag_len_p=96 < 128: not a derive destination -> Invalid (MR12)' % kind, d.se == SE_INV and not s.bad)
 d = Locker('ASCON-AEAD128', skid=0x0101010101010101, sks={0x0101010101010101: KEY}); derive(Secret(bytes(16), False), d, 16); check('SKID-keyed destination refuses derive (KeyType 1) -> Invalid', d.se == SE_INV)
 d, s = dk(shared=False, restricted=False, data=bytes(range(16))); check('CMAC-type output into AEAD key: admitted (GR43)', d.se == 0 and d.key == b2v(bytes(range(16))))
 d, s = dk(kind='ASCON-AEAD128_NONCE_MASK', shared=False, restricted=False, data=bytes(16)); check('16-byte CMAC-type output into K1|K2 (32 B needed): dest Invalid', d.se == SE_INV)

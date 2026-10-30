@@ -279,6 +279,10 @@ This specification can only recommend side-channel resistance, not require it.
 It *strongly recommends* that every path that handles a locker's secrets (reconstruction, re-sharing, KLF access, `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and its derived keys) resist timing, other side-channel and fault-injection attacks at least as well as the locker's Machine at its _SCProtection_ level (<<KLE-SCProtection-field>>), and that a path serving several Machines do so at the highest level among them.
 What an implementation achieves is established only by the certifications that its implementer provides, if any.
 
+NOTE: Side-channel resistance depends on how a path is implemented, for instance on the core that runs an emulated path, and this specification defines only architectural behavior, so it accepts the risk of timing leakage.
+If `SCC_KeyDeriv`, `SCC_Encrypt` or `SCC_Decrypt` leaks timing, software below M-mode, which chooses the SCCs that an import decrypts and can time each `kl.mgmt`, may recover the keys derived from the CSK, and then decrypt and forge every SCC sealed under that CSK.
+Every _SCProtection_ level, Level A included, is likewise a target: a locker has the protection that the implementation documents for its level (<<KLE-SC-protection-levels>>).
+
 NOTE: The KLF resists rollback, but an SCC does not: it can be imported again, under the same CSK and Localities, as long as it exists.
 Any party that holds an SCC can replay an earlier CC state: the software that stores it, and any mode that could export the locker.
 This may enable multi-time-pad or nonce-reuse attacks on every Machine whose security rests on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
@@ -302,7 +306,7 @@ Any further capacity is desirable, but not required.
 
 Corruption of a hart's KLF is unrecoverable: it resets the hart's KLE architectural state (<<KLE-reset-and-m-mode-only>>) and raises a KLE fatal-error exception (<<Zkl-ISA-priv.adoc#KLE-exceptions>>).
 
-The KLE unit holds three 128-bit _authentication registers_, `SIV`, `IMPQUAL` and `SIV2`, with the authentication and identification data of the locker under management; `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` access them as the leading bytes of the image (<<KLE-instruction-mv>>).
+The KLE unit holds three 128-bit _authentication registers_, `SIV`, `IMPQUAL` and `SIV2`, with the authentication and identification data of the locker that owns them (<<KLE-auth-reg-association>>); `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` access them as the leading bytes of the image (<<KLE-instruction-mv>>).
 The export-opening `kl.mgmt` of a Valid locker writes `SIV`, and `IMPQUAL` and `SIV2` when the _AuxDataLen_ of the locker's MDH is at least 2.
 An import-opening `kl.mgmt`, other than the short import of an Error-State locker (<<KLE-error-state-transfer>>), zeroizes them before the `kl.load` or `kl.mvin` that writes them.
 
@@ -803,11 +807,11 @@ Like `vstart` and `vl`, they are unprivileged; the getter and setter instruction
 
 Without `Zklio`, `kliobuflen` and `kliobuftop` do not exist: every access to them raises an illegal-instruction exception, as the corresponding getter and setter instructions are reserved (Rule <<KLE-GR-reserved-encodings>>).
 
-The `KLS` field in effect controls access to these CSRs: while it is Off, every access raises an illegal-instruction exception; a read of a CSR that M-mode emulates also raises it (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
+The `KLS` field in effect controls access to these CSRs: while it is Off, every access, a read of a CSR that M-mode emulates included, raises an illegal-instruction exception (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
 With `Smstateen`, the KLE bit of the `*stateen0` CSRs (<<Zkl-ISA-priv.adoc#KLE-privileged-CSRs>>) also gates all of them and the KLE instructions; a denied access raises the exception that `Smstateen` prescribes for the executing mode and the denying gate.
 
 Context-switch code saves `klstart` and `klnamedlocker` first and restores them last, and also saves and restores `kliobuflen`, `kliobuftop` and the KLIOBUF contents (<<Zkl-software.adoc#KLE-state-save-and-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-klstart-save>>).
-[[KLE-auth-reg-association]]The values in the authentication registers belong to the locker under management, if there is one; that locker is exported before the other lockers and imported after them, so that its import sets `SIV` and, if they are used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-no-interleaving>>).
+[[KLE-auth-reg-association]]The values in the authentication registers belong to the locker under management, if there is one, and otherwise, while `klnamedlocker` is 32, to the locker in State `kl_cfg_importing` or `kl_cfg_exporting` that no nested export has saved, if there is one; that locker is exported before the other lockers and imported after them, so that its import sets `SIV` and, if they are used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-no-interleaving>>).
 
 A CSR whose description gives a maximum is WARL: writing a larger value sets the maximum, so software must read it back (for software below M-mode, by means of the getter instructions of <<KLE-instruction-getter-setter>>).
 Writing a reserved value to `klnamedlocker`, which has no maximum, leaves it unchanged (<<KLE-CSR-klnamedlocker>>).
@@ -1433,7 +1437,7 @@ this prevents any previous content from leaking into a nested management operati
 
 Like `kl.setst`, `kl.mgmt` changes the locker's _State_, but with different semantics.
 The State reached depends on both the locker's previous State and `#immed7`.
-Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: when opening a provisioning or an import, it selects the variant of the operation and may become the locker's MDH; when completing an import or an export, it restores, from the copy the caller saved, the _State_ that `ml` records.
+Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: when opening a provisioning or an import, it selects the variant of the operation and may become the locker's MDH; when completing an import or an export, it restores the _State_ recorded in `ml`, the copy of the MDH that the caller saved (<<KLE-management-formats-and-states>>).
 
 <<KLE-management-immeds>> gives the values of `#immed7`; every other value is reserved (Rule <<KLE-GR-reserved-encodings>>).
 
@@ -3425,11 +3429,11 @@ Without an active CSK, every KLE instruction and KLE CSR access raises a KLE mis
 
 Each hart holds a CSK, established in exactly one of four ways:
 
-. M-mode programs it through the `mklcsk` CSR group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>); M-mode can then read it in clear, and under no other way can any software.
+. M-mode programs it through the `mklcsk` CSR group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>); M-mode can then read it in clear, and no software can read it in any other way.
 . A secure hardware block exclusive to M-mode, such as Caliptra cite:[caliptra], or a port to one, configures it through a dedicated interface based on public-key encryption, at the request of M-mode only, by a handle or a wrapped key; addressing and key transport are platform-specific and outside the scope of this specification.
 . It is hardwired at manufacturing time and cannot be reconfigured or revoked.
 . A secure RBG (<<KLE-Prerequisites>>) generates it at boot.
-  All harts of a well-defined subsystem of an SoC hold the same such CSK, so that processes can migrate among them, and cannot exchange SCCs with other subsystems; the CSK survives the reset or fatal condition of a single hart and is regenerated only at the power-on reset of the subsystem, so the SCCs sealed under it cannot be imported after a power loss.
+  All harts of a subsystem of an SoC that the platform defines and documents hold the same such CSK, so that processes can migrate among them, and cannot exchange SCCs with other subsystems; the CSK survives the reset or fatal condition of a single hart and is regenerated only at the power-on reset of the subsystem, so the SCCs sealed under it cannot be imported after a power loss.
 
 The third and fourth ways suit mainly specialized embedded deployments.
 Harts among which processes or CCs migrate must hold the same CSK: under the first and second ways, M-mode establishes it on each.
