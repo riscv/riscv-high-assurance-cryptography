@@ -160,6 +160,7 @@ A key field of the Internal State holds the key itself, even when the PI or the 
 the plaintext of the `Content1` of the SCC:
 its fields, in the order in which they appear in an SCC, each with its length.
 It does not include the MDH, and ends with a zero Padding to a multiple of 128 bits; a size `pad` is (−_s_) mod 128 bits, _s_ being the total size of the Positions before it, with the sizes in effect.
+In the formulas for `pad`, `kf` is the size of the key field: `k`, or 64 when it holds a System Key Identifier.
 The Machine may designate public fields, which it places first and an SCC carries in clear; their number of whole 128-bit blocks is `SCC_ClearLen1` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>), zero where the Machine designates none.
 --
 
@@ -546,7 +547,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64      | `key` or System Key Identifier
-| iii  | `pad`          | Padding
+| iii  | `pad`          | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -560,7 +561,7 @@ Data Structures::
 |===
 |  Pos. | Size (Bits)   | Field
 |  i    | `k` or 64      | `key` or System Key Identifier
-|  ii   | `pad`         | Padding
+|  ii   | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -607,7 +608,7 @@ CBC and CFB process data; OFB, like CTR (<<KLE-keystream-modes>>), generates a k
 Parameters::
 * `b` = block size (8|`b`), with 64 {le} `b` {le} 128.
 * `k` = key size (8|`k`).
-* `u` = segment size in bits (CFB only), with 0 < `u` {le} `b`; its default is `b`.
+* `u` = segment size in bits (CFB only), with 0 < `u` {le} `b`, a parameter of the CC held in _AuxInfo_ (see the Behavior below).
 * Granularity: `b` bits in CBC and OFB; 8 bits in CFB, where a `KLLEN` below `u` violates it (Rule <<KLE-MGR-granularity>>).
 
 Data Structures::
@@ -618,14 +619,14 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
 * *Internal State*:
  ** `key`: `k` bits.
  ** `IV`: `b` bits, the chaining value: the initialization vector at first, then the last ciphertext block in CBC and CFB and the last keystream block in OFB.
- ** `u`: 8 bits (CFB only).
+ ** `u`: 8 bits (CFB only), held in _AuxInfo_[7:0] of the MDH, not serialized.
 
 * *Serialized Content*:
 +
@@ -635,8 +636,7 @@ Data Structures::
 |  Pos. | Size (Bits)   | Field
 |    i  | `k` or 64     | `key` or System Key Identifier
 |   ii  | `b`           | `IV`
-|  iii  | 8             | `u` (CFB only)
-|   iv  | `pad`         | Padding
+|  iii  | `pad`         | Padding: (−(`kf` + `b`)) mod 128.
 |===
 --
 
@@ -646,26 +646,24 @@ Machine-Specific Functions::
 State Machine::
 * *States:*
  ** _Ready_: The CC is ready.
- ** _Set_Aux_Value_ (CFB): The segment size `u` is being set; no `kl.exec` is admitted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>).
  ** _Encrypt_ and _Decrypt_ (CBC and CFB): Encrypting, resp. decrypting, blocks (CBC) or segments (CFB) of input.
  ** _Operate_ (OFB): The CC produces a keystream.
 
 * *Allowed State Transitions:*
  ** CBC and CFB: _Ready_, _Encrypt_ or _Decrypt_ -> _Encrypt_, if encryption is allowed, and -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- ** CFB: _Ready_ or _Set_Aux_Value_ -> _Set_Aux_Value_; _Set_Aux_Value_ -> _Encrypt_ or _Decrypt_, under the same condition as above.
  ** OFB: _Ready_ or _Operate_ -> _Operate_, if encryption or decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
- ** _Set_Aux_Value_ (CFB), _Encrypt_, _Decrypt_ or _Operate_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
+ ** _Encrypt_, _Decrypt_ or _Operate_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior:*
- ** When entering _Ready_, `IV` {leftarrow} 0 and, in CFB, `u` {leftarrow} `b`.
+ ** When entering _Ready_, `IV` {leftarrow} 0.
 
- ** In CFB, the Form B `kl.setst` into _Set_Aux_Value_ sets `u` {leftarrow} `Xs`; a value outside 0 < `Xs` {le} `b` transitions the locker to Error State _Invalid_.
-    An import checks `u` likewise (Rule <<KLE-MGR-check-on-write>>), with `u` = `b` in _Ready_.
-    A same-State `kl.setst` into _Set_Aux_Value_ sets `u` again (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
-    Without it, `u` = `b`: the full-block CFB.
+ ** In CFB, the segment size is fixed at provisioning: `u` = _AuxInfo_[7:0] (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>), and _AuxInfo_[15:8] is zero.
+    A provisioning or import whose _AuxInfo_ violates this, or has `u` outside 0 < `u` {le} `b`, completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
+    Provisioning keeps the _AuxInfo_ of the PI, and no operation changes it: CFB defines all its bits, so entering _Ready_, `kl.clearads` and an import without ADS leave it unchanged.
+    With `u` = `b` the Machine is the full-block CFB.
 
  ** When entering _Encrypt_, _Decrypt_ or _Operate_, the Form C `kl.setst` with auxiliary operand `INPUT` sets `IV` {leftarrow} `INPUT`, truncated to its `b` least significant bits (Rule <<KLE-MGR-fixed-width-input>>).
-    The Machine allows a same-State `kl.setst` into these States (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which does the same: it replaces `IV` and keeps `key` and, in CFB, `u`.
+    The Machine allows a same-State `kl.setst` into these States (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>), which does the same: it replaces `IV` and keeps `key`.
 
  ** In _Encrypt_ and _Decrypt_, (multi-block) Form A `kl.exec` instructions are expected.
     In CBC, for each block, with `INPUT` the block of input:
@@ -684,14 +682,14 @@ The standard cite:[nist-SP-800-38A-1] numbers bits from the most significant bit
 For each `j` from 0 to `n`-1, in increasing order, with `C~j~` the ciphertext segment, `Y~j~` in _Encrypt_ and `X~j~` in _Decrypt_:
 +
 --
-`W <- brev8(IV)` +
-`Q <- brev8(enc_blk(key, IV))[u-1:0]` +
-`X~j~ <- brev8(INPUT)[(j+1)u-1:ju]` +
-`Y~j~ <- X~j~ xor Q` +
-`IV <- brev8(C~j~ @ W[b-1:u])`, with `W[b-1:u]` empty if `u` = `b`
+. `W <- brev8(IV)`;
+. `Q <- brev8(enc_blk(key, IV))[u-1:0]`;
+. `X~j~ <- brev8(INPUT)[(j+1)u-1:ju]`;
+. `Y~j~ <- X~j~ xor Q`;
+. `IV <- brev8(C~j~ @ W[b-1:u])`, with `W[b-1:u]` empty if `u` = `b`; and
+. `OUTPUT` = `brev8(Y)`, where `Y` has `Y~j~` in bits `[(j+1)u-1:ju]` and 0 above bit `nu`-1.
 --
 +
-and `OUTPUT` = `brev8(Y)`, where `Y` has `Y~j~` in bits `[(j+1)u-1:ju]` and 0 above bit `nu`-1.
 The iterations of Rule <<KLE-MGR-one-klexec-per-block>> are over the segments; the interruption points (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>) are the multiples of lcm(8, `u`)/8 bytes.
 For `u` a multiple of 8 the `brev8` cancel: for each segment, `Q` = `enc_blk(key, IV)[u-1:0]` with the current `IV`, and `IV` {leftarrow} `C~j~ @ IV[b-1:u]`, with `C~j~` the bytes of the segment in `OUTPUT` or `INPUT`.
 +
@@ -731,7 +729,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -749,7 +747,7 @@ Data Structures::
 |    i  | `k` or 64       | `key` or System Key Identifier
 |   ii  | `n`             | `IV`
 |  iii  | `j`             | `ctr`
-|   iv  | `pad`           | Padding
+|   iv  | `pad`           | Padding: (−(`kf` + `n` + `j`)) mod 128.
 |===
 --
 
@@ -846,7 +844,7 @@ Data Structures::
 |  Pos. | Size (Bits)     | Field
 |  ii   | `k` or 64       | `key1` or System Key Identifier
 | iii   | `k` or 0        | `key2`, or empty if _KeyType_ = 1 (a single SKID retrieves both keys, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>)
-|  iv   | `pad`           | Padding
+|  iv   | `pad`           | Padding: (−2``k``) mod 128, or 64 with a System Key Identifier.
 |===
 --
 
@@ -868,7 +866,7 @@ Data Structures::
 |  i   | `k` or 64    | `key1` or System Key Identifier
 | ii   | `k` or 0     | `key2`, or empty if _KeyType_ = 1 (a single SKID retrieves both keys, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>)
 | iii  | `b`          | `mask`
-| iv   | `pad`        | Padding
+| iv   | `pad`        | Padding: (−2``k``) mod 128, or 64 with a System Key Identifier.
 |===
 --
 
@@ -1012,7 +1010,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -1028,7 +1026,7 @@ Data Structures::
 | Pos. | Size (Bits)   | Field
 |   i  | `k` or 64     | `key` or System Key Identifier
 |  ii  | `t`           | `tweak`
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−(`kf` + `t`)) mod 128.
 |===
 --
 
@@ -1285,7 +1283,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -1320,7 +1318,7 @@ Where they overlap, they hold their values only until `finalize()` writes `J0`, 
 |   iv  | 32            | `start_ctr`    | The counter of the pre-counter block `J0` before the first block, serialized as `bin(start_ctr,32)`.
 |   v   | 16            | `last_block_len` | {empty}
 |   vi  | 16            | `tag_len`      | Zero, or one of 128, 120, 112, 104, 96 and 64, and then not zero exactly in State _Hash_Verify_; an import that violates this transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
-|  vii  | `pad`         | Padding        | Zero.
+|  vii  | `pad`         | Padding        | Zero; (−(`kf` + 320)) mod 128 = (−(`kf` + 64)) mod 128 bits.
 |===
 
 While the locker is in State _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -1632,7 +1630,7 @@ Data Structures::
 |  Pos. | Size (Bits)   | Field       | Description
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 96            | `IV`        | The IV of cite:[nist-SP-800-38D] {sect}7.1. Only a 96-bit IV is supported.
-|  iv   | `pad`         | Padding     | {empty}
+|  iv   | `pad`         | Padding     | Zero; (−(`kf` + 96)) mod 128 bits.
 |===
 --
 
@@ -1725,7 +1723,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -1752,7 +1750,7 @@ Data Structures::
 |   iv  |  128            | `SIV`
 |    v  |  128            | `tmp`
 |   vi  |  16             | `ctr[32]` in bit 15, `last_block_len` in bits [6:0], the other bits zero
-|  vii  |  `pad`          | Padding
+|  vii  |  `pad`          | Padding: (−(`kf` + 400)) mod 128 = (−(`kf` + 16)) mod 128.
 |===
 --
 
@@ -1963,7 +1961,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64      | `key` or System Key Identifier
-| iii  | `pad`          | Padding
+| iii  | `pad`          | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -1995,7 +1993,7 @@ Data Structures::
 |   ix  |  49         | `index`
 |    x  |   2         | `tag_len`, encoded as `tag_len`/32 − 2. The value 3 is not produced; an import that carries it transitions the locker to Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
 |   xi  |   7         | `last_block_len`
-|  xii  | `pad`       | Padding
+|  xii  | `pad`       | Padding: (−(`kf` + 698)) mod 128 = (−(`kf` + 58)) mod 128.
 |===
 --
 
@@ -2376,7 +2374,7 @@ Data Structures::
 |===
 | Pos. | Size (Bits)   | Field
 |  ii  | `k` or 64     | `key` or System Key Identifier
-| iii  | `pad`         | Padding
+| iii  | `pad`         | Padding: (−`kf`) mod 128.
 |===
 --
 
@@ -2403,7 +2401,7 @@ Data Structures::
 |   iv  | 32            | `tag_len`
 |    v  | 1 (boolean)   | `absorbed_any`
 |   vi  | 1 (boolean)   | `absorbed_all`
-|  vii  | `pad`         | Padding
+|  vii  | `pad`         | Padding: (−(`kf` + `b` + 66)) mod 128.
 |===
 --
 
@@ -2562,7 +2560,7 @@ Data Structures::
 | Pos. | Size (Bits)             | Field
 .2+|  ii  | If keyed: `k` or 64  | `key` or System Key Identifier
 <|          If unkeyed: 0          | none: the Provisioning Input is the MDH only
-|  iii | `pad`                   | Padding
+|  iii | `pad`                   | Padding: (−`kf`) mod 128 if keyed, 0 if unkeyed.
 |===
 --
 
@@ -2593,7 +2591,7 @@ Data Structures::
 | v, vi | 32                   | `out_len`         | Unless the Machine uses these bits otherwise, as <<KLE-BLAKE2>> does.
 |   vii | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far; its width limits the length of a message (Rule <<KLE-MGR-caller-limits>>). Present only if the padding or another function of the Machine uses it, or under HMAC (<<KLE-HMAC>>).
 |  viii | `b`                  | `block`           | Only if the block is stored separately from the `state`.
-|    ix | `pad`                | Padding           | --
+|    ix | `pad`                | Padding           | Zero; (−(`kf` + `n` + 64 + `c'` + `b'`)) mod 128 bits, where `kf` is 0 if unkeyed, `c'` is 64 if `cumul_len` is present and 0 otherwise, and `b'` is `b` if `block` is present and 0 otherwise.
 |===
 
 `input_base`/`output_base` is not serialized: it is set to 8 {interpunct} `klstart` at the start of every `kl.exec`.
@@ -3029,7 +3027,7 @@ A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>)
 |  i   | variable                 | Serialized Content of the underlying hash function, in its entirety, including its Padding.
 | ii   | `b` or 64                | `K0`, or a System Key Identifier.
 | iii  | 16                       | `tag_len`
-|  iv  | `pad`                    | Padding
+|  iv  | `pad`                    | Padding: (−(`b` + 16)) mod 128, or 48 with a System Key Identifier.
 |===
 --
 

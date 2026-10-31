@@ -23,10 +23,12 @@ VALID_STATES = {'ECB': (1, 7, 8), 'CBC': (1, 7, 8), 'CFB': (1, 7, 8, 13), 'OFB':
 def pad16(n): return (n + 15) // 16 * 16
 
 class Locker:
-    def __init__(self, mach, policy, key, key2=None, skid=False):
+    def __init__(self, mach, policy, key, key2=None, skid=False, aux=None):
         self.m = mach; self.cipher = TYPES[mach >> 4]; self.mode = MODES[mach & 15]
         self.policy = policy; self.kl = KEYLEN[self.cipher]; self.skid = skid
         self.err = None; self.key, self.key2 = key, key2; self.state = S_READY; self.enter_ready()
+        self.aux = aux if aux is not None else (128 if self.mode == 'CFB' else 0); self.u = self.aux & 255
+        if self.mode == 'CFB' and not (0 < self.u <= 128 and self.aux >> 8 == 0): self.invalid()   # u = AuxInfo[7:0], fixed at provisioning
         if policy == 0 or (self.mode == 'XEX' and key2 is not None and key == key2): self.invalid()
 
     def enc(self, k, b): return cipher_enc(self.cipher, k, b)
@@ -34,18 +36,17 @@ class Locker:
     def invalid(self): self.err = SE_INVALID; self.state = 0; self.key = self.key2 = None
     def inert(self): return self.err is not None
     def enter_ready(self):
-        self.iv = 0; self.u = 128; self.ctr = 1 if self.mode == 'XCTR' else 0; self.mask = 0; self.steal = 0
+        self.iv = 0; self.ctr = 1 if self.mode == 'XCTR' else 0; self.mask = 0; self.steal = 0
     def mdh(self):
         return mdh_pack(Machine=self.m, MachinePolicy=self.policy, State=0 if self.inert() else self.state,
-                        StateExtension=self.err or self.steal, KeyType=1 if self.skid else 0)
+                        StateExtension=self.err or self.steal, KeyType=1 if self.skid else 0, AuxInfo=self.aux)
 
     # ---- kl.setst
     def allowed(self, s):
         m, st = self.mode, self.state
         if m in ('ECB', 'CBC'): return s in (S_ENC, S_DEC) and st in (S_READY, S_ENC, S_DEC)
         if m == 'CFB':
-            if s == S_AUX: return st in (S_READY, S_AUX)
-            return s in (S_ENC, S_DEC) and st in (S_READY, S_ENC, S_DEC, S_AUX)
+            return s in (S_ENC, S_DEC) and st in (S_READY, S_ENC, S_DEC)
         if m in ('OFB', 'CTR', 'XCTR'):
             if s == S_AUX: return m != 'OFB' and st in (S_READY, S_OPERATE)
             return s == S_OPERATE and st in (S_READY, S_OPERATE)
@@ -66,9 +67,6 @@ class Locker:
         if s in (S_ENC, S_DEC, S_OPERATE) and not self.policy & {S_ENC: 1, S_DEC: 2, S_OPERATE: 3}[s]:
             return self.invalid()                                   # MR1
         if s == S_AUX:
-            if m == 'CFB':
-                if form != 'B' or not (0 < xs <= 128): return self.invalid()
-                self.u = xs; self.state = S_AUX; return
             if form not in ('A', 'B'): return self.invalid()
             self.ctr = bin_(0 if form == 'A' else xs, 32 if m == 'CTR' else 64); return   # operation
         if m == 'ECB':
@@ -164,7 +162,7 @@ class Locker:
     def content1(self):
         c = self.key + (self.key2 or b''); m = self.mode
         if m in ('CBC', 'OFB'): c += v2b(self.iv, 16)
-        if m == 'CFB': c += v2b(self.iv, 16) + bytes([self.u & 255])
+        if m == 'CFB': c += v2b(self.iv, 16)
         if m == 'CTR': c += v2b(self.iv, 12) + v2b(self.ctr, 4)
         if m == 'XCTR': c += v2b(self.iv, 16) + v2b(self.ctr, 8)
         if m == 'XEX': c += v2b(self.mask, 16)
@@ -183,7 +181,8 @@ class Locker:
         L.key = content[:k]; p = k
         if L.mode == 'XEX': L.key2 = content[p:p + k]; p += k; bad |= L.key == L.key2
         if L.mode in ('CBC', 'OFB', 'CFB'): L.iv = b2v(content[p:p + 16]); p += 16
-        if L.mode == 'CFB': L.u = content[p]; bad |= not (0 < L.u <= 128) or (L.state == S_READY and L.u != 128)
+        L.aux = f['AuxInfo']; L.u = L.aux & 255
+        if L.mode == 'CFB': bad |= not (0 < L.u <= 128 and L.aux >> 8 == 0)
         if L.mode == 'CTR': L.iv = b2v(content[p:p + 12]); L.ctr = b2v(content[p + 12:p + 16])
         if L.mode == 'XCTR': L.iv = b2v(content[p:p + 16]); L.ctr = b2v(content[p + 16:p + 24])
         if L.mode == 'XEX': L.mask = b2v(content[p:p + 16])

@@ -711,7 +711,7 @@ Neither field may hold a value that depends on key material, a secret field, pla
 Otherwise a wrong value causes an error of the Machine that uses it; a discarded implementation-defined value causes none.
 Provisioning ignores and zeroes the _MachineUse_ of a PI and the implementation-defined subfields of its _AuxInfo_ (<<KLE-locker-management>>); the completion of a system-specific import (Rule <<KLE-GR-sysfmt-completion>>) zeroes the implementation-defined subfields of _AuxInfo_ that the declared MDH supplies.
 The rules of the Machine decide what happens to the subfields of _AuxInfo_ that it defines upon provisioning, and to both fields on entering State _Ready_.
-A Machine may use _AuxInfo_ to pass initialization parameters at provisioning: EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), for instance, records in _AuxInfo_ the modes a CC may use. GCM, CMAC, HMAC and Ascon-AEAD128 and its variants (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>) hold in it the tag length that every verification compares. The Elliptic Curve Machines hold in it their transfer counter `block_base`, which is public (<<Zkl-ISA-machines.adoc#KLE-ECC>>).
+A Machine may use _AuxInfo_ to pass initialization parameters at provisioning: EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), for instance, records in _AuxInfo_ the modes a CC may use. GCM, CMAC, HMAC and Ascon-AEAD128 and its variants (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>) hold in it the tag length that every verification compares. CFB holds in it its segment size `u` (<<Zkl-ISA-machines.adoc#KLE-chaining>>). The Elliptic Curve Machines hold in it their transfer counter `block_base`, which is public (<<Zkl-ISA-machines.adoc#KLE-ECC>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2120,7 +2120,6 @@ Any other narrowing changes no State; from the next instruction on, Rule <<Zkl-I
 // A Machine may store additional state information in _AuxInfo_, _MachineUse_ or the Content, in a Machine-specific format.
 
 _State_ encodes up to 55 Valid States: _Ready_, _Success_, _Failure_ and up to 52 States defined by the Machine.
-<<KLE-states-graph>> shows the default state transitions.
 
 ////
 [[KLE-states-graph]]
@@ -2149,13 +2148,7 @@ INSERT TIKZ HERE
 ....
 ////
 
-[[KLE-states-graph]]
-.Default State Transitions
-[float="center",align="center"]
-image::statestikz-3.svg[]
-
-//
-
+<<KLE-states-graph>> described the default state transitions that apply to all Machines.
 The legend of the graph is:
 
 * Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
@@ -2164,6 +2157,14 @@ The legend of the graph is:
 * Continuous edges: transitions induced by usage instructions.
 * Dashed edges: transitions induced by reaching the expiration date.
 * Dotted edges: transitions induced by configuration operations.
+
+[[KLE-states-graph]]
+.Default State Transitions
+[float="center",align="center"]
+image::statestikz-3.svg[]
+
+//
+
 
 //
 
@@ -3328,7 +3329,8 @@ After `kl.clearads`, a fully configured locker has _AuxDataLen_ = 0 and _ADSDrop
 ... ``AD[len_AD]`` <- ``K(i).Content1~PT~[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- the number of 128-bit blocks of `Content1`, minus `n1`.
 .. `SIV`, `Content1~CT~[]` <- +
-`{fournbsp}{fournbsp}SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[n1..n1+len_PC-1], CSK, len_AD, len_PC)`
+`{fournbsp}SCC_Encrypt(AD, zeros(96), 0,` +
+`{fournbsp}{fournbsp}K(i).Content1~PT~[n1..n1+len_PC-1], CSK, len_AD, len_PC)`
 . If _AuxDataLen_ {ge} 2, process the implementation-specific content:
 .. `len_AD2` <- 2, +
 ``AD2[0]`` <- `IMPQUAL` <- the `IMPQUAL` of the implementation (<<KLE-Auxiliary-Data-Section>>), formed from the values of `mklvendorid`, `mklarchid` and `mklimpid` out of KLE unit reset, ``AD2[1]`` <- `SIV`.
@@ -3377,17 +3379,25 @@ For an SCC whose MDH is in an Error State, use the method of <<KLE-error-state-t
 . `saved_MDH` <- the MDH image held in ``K(i)``, that is `M` with the working _ADSDropped_ and its _State_ field restored from the auxiliary operand of the completing `kl.mgmt`.
 . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1. `SCC_Decrypt` clears _ADSDropped_ in its local copy of `AD[0]` before authenticating it; the MDH held in ``K(i)`` is unchanged by that computation.
 . foreach (`j` from 0 to 10) do:
-.. If `saved_MDH`._Locality_ names Locality #j (<<KLE-locality-indexes>>), then ``AD[len_AD]`` <-  ``LST_eff[j]``, ``len_AD`` <- ``len_AD`` + 1
-. `n1` <- `SCC_ClearLen1` for `saved_MDH` (Rule <<KLE-GR-scc-clear-blocks>>); foreach (`j` from 0 to `n1` − 1) do ``AD[len_AD]`` <- ``K(i).Content1[j]``, ``len_AD`` <- ``len_AD`` + 1; then `len_PC` <- the number of 128-bit blocks of `Content1`, minus `n1`.
+.. If `saved_MDH`._Locality_ names Locality #j (<<KLE-locality-indexes>>), then:
+... ``AD[len_AD]`` <-  ``LST_eff[j]``, ``len_AD`` <- ``len_AD`` + 1
+. `n1` <- `SCC_ClearLen1` for `saved_MDH` (Rule <<KLE-GR-scc-clear-blocks>>);
+. foreach (`j` from 0 to `n1` − 1) do:
+.. ``AD[len_AD]`` <- ``K(i).Content1[j]``, ``len_AD`` <- ``len_AD`` + 1; then `len_PC` <- the number of 128-bit blocks of `Content1`, minus `n1`.
 . `correct`, ``K(i)``.`Content1[n1..n1+len_PC-1]` <- +
-`SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1[n1..n1+len_PC-1], CSK, len_AD, len_PC)`.
+`{fournbsp}SCC_Decrypt(AD, zeros(96), 0, SIV,` +
+`{fournbsp}{fournbsp}K(i).Content1[n1..n1+len_PC-1], CSK, len_AD, len_PC)`.
 . If `correct` {ne} `true`, the SCC is rejected: ``K(i)`` transitions to Error State `kl_stateext_mgmt_auth` (_Authentication Failed_, Rule <<KLE-GR-clear-locker-content-error-state>>), and the remaining steps are skipped.
 . If ``K(i)``.MDH._AuxDataLen_ {ge} 2 and ``K(i)``.MDH._ADSDropped_ = 0, process the implementation-specific content:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. If ``K(i)``.`IMPQUAL` = the `IMPQUAL` of the implementation (<<KLE-Auxiliary-Data-Section>>), formed from the values of `mklvendorid`, `mklarchid` and `mklimpid` out of KLE unit reset, then:
-... `n2` <- `SCC_ClearLen2` for `saved_MDH` and ``K(i)``.`IMPQUAL` (Rule <<KLE-GR-scc-clear-blocks>>); foreach (`j` from 0 to `n2` − 1) do ``AD2[len_AD2]`` <- ``K(i).Content2[j]``, ``len_AD2`` <- ``len_AD2`` + 1.
+... `n2` <- `SCC_ClearLen2` for `saved_MDH` and ``K(i)``.`IMPQUAL` (Rule <<KLE-GR-scc-clear-blocks>>);
+... foreach (`j` from 0 to `n2` − 1) do:
+.... ``AD2[len_AD2]`` <- ``K(i).Content2[j]``, ``len_AD2`` <- ``len_AD2`` + 1.
 ... `len_PC2` <- ``K(i)``.MDH._AuxDataLen_ − 2 − `n2`, the number of encrypted 128-bit blocks of `Content2`.
-... `correct`, ``K(i)``.`Content2[n2..n2+len_PC2-1]` <- `SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[n2..n2+len_PC2-1], CSK, len_AD2, len_PC2)`.
+... `correct`, ``K(i)``.`Content2[n2..n2+len_PC2-1]` <- +
+`{fournbsp}SCC_Decrypt(AD2, zeros(96), 1, SIV2,` +
+`{fournbsp}{fournbsp}K(i).Content2[n2..n2+len_PC2-1], CSK, len_AD2, len_PC2)`.
 .. else:
 ... `correct` <- `false`.
 .. If `correct` {ne} `true`, then:
