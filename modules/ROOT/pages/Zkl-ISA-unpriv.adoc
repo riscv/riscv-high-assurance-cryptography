@@ -1292,7 +1292,7 @@ It normally reaches the State that `#immed7` names, but some States transition a
 
 For all Machines, `#immed7` takes these values:
 
-* 0 (`kl_state_inert`) encodes `kl.clear` (<<KLE-instruction-clear>>), which clears the locker in any Form without reading any auxiliary operand, the locker-state-independent checks of Rule <<KLE-GR-management-check-order>> still applying.
+* 0 (`kl_state_inert`) encodes `kl.clear` (<<KLE-instruction-clear>>).
 * 1–53 name the _Valid_ States that _Ready_ and the Machine define (<<KLE-states-valid>>).
 * 54 and 55 name _Success_ and _Failure_ of the Machine, that cannot be set directly (Rule <<KLE-GR-success-failure-cannot-be-set-directly>>); _Failure_ is an outcome, not an error.
 * 56–63 are reserved encodings (Rule <<KLE-GR-reserved-encodings>>); with `G` = `0b11` instead of `0b00`, the values 56–58 and 63 encode `kl.mgmt` (<<KLE-instruction-mgmt>>), and 59–62 are reserved encodings.
@@ -1330,7 +1330,6 @@ Every other encoding with `G` = `0b01` is reserved, and so is `#immed7` = 6 with
 Description::
 `kl.setste` sets _State_ to 0 (_Inert_) and _StateExtension_ to `#immed7`, the code of an Error State (<<KLE-stateexts-error>>).
 The "e" stands for empty and error.
-It sets _State_ to 0 in every State.
 It is a configuration instruction, admitted in every State (Rule <<KLE-GR-error-state-can-be-reconfigured>>).
 
 [[KLE-instruction-clear]]
@@ -1366,7 +1365,7 @@ It is encoded as `kl.setst` (<<KLE-instruction-setst>>) with no auxiliary operan
 // The first usage instruction that needs the ADS regenerates it.
 `kl.clearads` is a usage instruction, admitted in every Valid State (Rule <<KLE-GR-to-ready>>).
 It leaves _State_ unchanged, and _StateExtension_, except that it clears the flag of any material that Rule <<KLE-GR-progress-discard>> destroys, such as `HasRndNum` of the ECC Machines.
-It discards the implementation-defined state, in the ADS and in _MachineUse_ and _AuxInfo_ (<<KLE-MachineUse>>), including any that an interrupted long-running operation keeps: in a State of Rule <<KLE-GR-progress-discard>> it zeroes the progress field _P_, and the operation restarts when its instruction is next issued, exactly as if the SCC exported before the `kl.clearads` had been imported on a different KLE implementation (Rule <<KLE-GR-long-running-restart>>).
+It discards the implementation-defined state, in the ADS and in _MachineUse_ and _AuxInfo_ (<<KLE-MachineUse>>), including the progress of an interrupted long-running operation (Rule <<KLE-GR-progress-discard>>).
 
 NOTE: Software uses `kl.clearads` to make the SCC smaller before exporting a locker for another target. A destination with a different KLE unit would drop the ADS anyway.
 
@@ -1386,9 +1385,9 @@ The other destructive configuration instructions are:
 
 A destructive configuration instruction destroys the CC it replaces right after the locker-state-independent checks of Rule <<KLE-GR-management-check-order>>, the check of the MDH operand of `kl.mgmt` included, whatever the outcome, unless it names `KLNL` while `klnamedlocker` = 32, when it finds no locker and performs no operation (Rule <<KLE-GR-outcome-inert>>), or it is a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker, which performs no operation (<<KLE-instruction-clone>>).
 
-Only the destination accesses of the destructive configuration instructions other than `kl.swap` are exempt from the KLE locker-Off exception (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>): a provisioning- or import-opening `kl.mgmt`, `kl.clear`, `kl.clearall`, and `kl.clone` or `kl.rename` into the locker.
-So is any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker, which performs no operation (<<KLE-instruction-clone>>).
-Every other access raises it: the source access of `kl.clone` and `kl.rename`, either access of `kl.swap`, and every access by another instruction, such as `kl.load`, `kl.mvin` or `kl.setste`, even one that writes the locker without reading it.
+Item 6 of Rule <<KLE-GR-management-check-order>> gives the accesses exempt from the KLE locker-Off exception; the source access of `kl.clone` and `kl.rename` and either access of a `kl.swap` on two lockers are not.
+// So is any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker, which performs no operation (<<KLE-instruction-clone>>).
+// Every other access raises it: the source access of `kl.clone` and `kl.rename`, either access of `kl.swap`, and every access by another instruction, such as `kl.load`, `kl.mvin` or `kl.setste`, even one that writes the locker without reading it.
 
 KLF capacity that `kl.mgmt` or `kl.clone` allocates to a locker reads as zero, to the locker's Machine and to every architectural access, until written.
 An implementation that supports Level C (<<KLE-SC-protection-levels>>) must also zeroize at once the Content and any ADS of every locker whose CC is discarded by `kl.clear`, `kl.clearall` or as the previous CC of the destination of `kl.rename` or `kl.clone`, or that transitions to an Error State (Rule <<KLE-GR-clear-locker-content-error-state>>), and the KLIOBUF bytes that a write of `kliobuflen` or a `kl.clearall` makes inaccessible (<<KLE-CSR-kliobuflen>>); any other implementation need only release them.
@@ -1439,8 +1438,7 @@ Besides the command in `#immed7`, a `kl.mgmt` that needs it receives an MDH: whe
 The Forms supply the MDH as follows:
 
 * Form A carries no auxiliary operand, and supplies an all-zero MDH (Rule <<KLE-GR-x0-operand>>).
-* Form C carries it in the lowest 128 bits of `Vs`. `VL` {times} `SEW` < 128 raises an illegal-instruction exception
-  (Rule <<KLE-GR-vector-MDH-operand>>) at its place in the order of Rule <<KLE-GR-management-check-order>>, whatever the operation and the _State_ and even if the instruction would fall through; the _State_ is kept.
+* Form C carries it in the lowest 128 bits of `Vs` (Rules <<KLE-GR-vector-MDH-operand>>, <<KLE-GR-management-check-order>> apply).
 * Form D carries it as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
   <<KLE-GR-multiple-GPRs>>).
 
@@ -1649,23 +1647,21 @@ Operand::
 +
 The _request_ `rq` is the 128-bit MDH image that these halves form; the fields of a half that the instruction does not take are not requested and stay unchanged.
 In a half that the instruction takes, a non-zero field other than these four transitions the locker to _Invalid_.
-A _MachinePolicy_ or _UsagePolicy_ of `rq` with all bits set, and a zero _Locality_ or _ExpirationDate_ of `rq`, leave the corresponding field of `md` unchanged.
 
 Per-field behavior::
 Each field of `rq` narrows the matching field of `md` (<<KLE-Metadata-narrowing>>), except as stated below for _Locality_.
 A set _MachinePolicy_ or _UsagePolicy_ bit, or an _ExpirationDate_ later than a non-zero `md`._ExpirationDate_, changes nothing and is not an error.
 A non-zero _Locality_ subfield of `rq` that differs from that of `md` and is not a permitted replacement below transitions the locker to _Privilege Violation_.
 +
-* _MachinePolicy_: no disabled function can be enabled again.
-  A request that disables the operation of the current State takes effect as Rule <<KLE-GR-policy-narrowing-state>> states.
+* _MachinePolicy_: no disabled function can be re-enabled, and a request that disables the operation associated with the current State takes effect as Rule <<KLE-GR-policy-narrowing-state>> states.
   A Machine with fields that exist only for some values of _MachinePolicy_, such as the ECC Machines (<<Zkl-ISA-machines.adoc#KLE-ECC>>), states what a narrowing does to them.
 * _Locality_: each subfield (<<KLE-locality-indexes>>), bits [1:0], [3:2], [5:4], 6, 7 and 8, is treated independently.
   A subfield of `rq` that is zero or equal to that of `md` changes nothing, and a zero subfield of `md` takes the value of `rq`.
   A non-zero HW Binding subfield may be replaced only by a stricter entry of its chain: _SiPScrt_ by _ChipFamScrt_ or _ChipScrt_, _ChipFamScrt_ by _ChipScrt_, _OEMScrt_ by _ProdScrt_ or _DevScrt_, and _ProdScrt_ by _DevScrt_.
   Any other change, including a weakening or a change of a non-zero Boot Session or SW Filter subfield, transitions the locker to _Privilege Violation_ instead of overriding the field.
   A later export binds its SCC to the new _Locality_.
-* _UsagePolicy_: each clear bit removes a permission from the corresponding bit of `md`, and each set bit changes nothing.
-* _ExpirationDate_: a non-zero value of `rq` replaces that of `md` if `md`._ExpirationDate_ is zero or `rq`._ExpirationDate_ {le} `md`._ExpirationDate_; otherwise the field is unchanged, without error.
+//  * _UsagePolicy_: each clear bit removes a permission from the corresponding bit of `md`, and each set bit changes nothing.
+//  * _ExpirationDate_: a non-zero value of `rq` replaces that of `md` if `md`._ExpirationDate_ is zero or `rq`._ExpirationDate_ {le} `md`._ExpirationDate_; otherwise the field is unchanged, without error.
 
 Validity of the result::
 Validity (<<KLE-Metadata-validity>>) is evaluated first, on the changed fields only.
@@ -1753,11 +1749,11 @@ Like the source, the copy stays usable whatever the current Locality Secrets. `k
 `kl.rename`::
 If `Ks` and `Kd` name the same locker, through `KLNL` too, no operation is performed, even if the locker is _Off_, and no `*llockerstatus` or `KLS` field is set to Dirty.
 Otherwise the CC of `Ks`, Configuration State included, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, as `kl.clear` would, `Ks` becomes _Unconfigured_, and the `*llockerstatus` fields in effect for both lockers and the `KLS` fields in effect are set to Dirty. With an _Unconfigured_ source, `kl.rename` acts as `kl.clear Kd`, except that it always sets these fields to Dirty.
-If `klnamedlocker` = `s`, it becomes `d`; otherwise, if it is `d`, it becomes 32. The source access is not exempt from the KLE locker-Off exception; the destination access is exempt, as for `kl.clone`.
+If `klnamedlocker` = `s`, it becomes `d`; otherwise, if it is `d`, it becomes 32.
 
 `kl.swap`::
 If `Ks` and `Kd` name the same locker, through `KLNL` too, no operation is performed, even if the locker is _Off_, and no `*llockerstatus` or `KLS` field is set to Dirty.
-Otherwise the CCs of `Ks` and `Kd` are exchanged, and if `klnamedlocker` {in} {`s`,`d`}, it takes the other index. Neither access is exempt from the KLE locker-Off exception. The `*llockerstatus` fields in effect for both lockers and the `KLS` fields in effect are set to Dirty.
+Otherwise the CCs of `Ks` and `Kd` are exchanged, and if `klnamedlocker` {in} {`s`,`d`}, it takes the other index. The `*llockerstatus` fields in effect for both lockers and the `KLS` fields in effect are set to Dirty.
 
 With `klnamedlocker` = 32, a `kl.clone`, `kl.rename` or `kl.swap` with a `KLNL` operand finds no locker and performs no operation, its other locker untouched (Rule <<KLE-GR-outcome-inert>>).
 
@@ -2291,7 +2287,7 @@ writes only `klnamedlocker` <- locker number, and `klstart` <- 0.
 |===
 
 [horizontal]
-[[KLE-GR-fall-through-operands,GR33]]GR33:: An instruction that falls through makes no check beyond the locker-state-independent checks of Rule <<KLE-GR-management-check-order>>, among them the vector MDH operand of a Form C `kl.mgmt` (Rule <<KLE-GR-vector-MDH-operand>>) and the effective-address alignment of `kl.load` and `kl.store`, and reads no operand other than its locker designators and those that these checks inspect: it accesses no memory, and needs neither a configured KLIOBUF nor `Zklio`.
+[[KLE-GR-fall-through-operands,GR33]]GR33:: An instruction that falls through makes no check beyond the locker-state-independent checks of Rule <<KLE-GR-management-check-order>>, and reads no operand other than its locker designators and those that these checks inspect: it accesses no memory, and needs neither a configured KLIOBUF nor `Zklio`.
 The cases that write the KLIOBUF are a Form D `kl.exec` and a KLIOBUF `kl.mvout`, which write zeros to a configured KLIOBUF (Rule <<KLE-GR-zero-unwritten-output>>).
 
 [[KLE-GR-zero-unwritten-output,GR34]]GR34:: A `kl.exec` that performs no operation under Rule <<KLE-GR-outcome-inert>> or <<KLE-GR-outcome-valid-state>>, or that transitions its locker to an Error State, whether before or during execution (including under items 2 and 3 of Rule <<KLE-GR-transfer-window-checks>>), writes zeros to every byte of its output window that it has not written: elements [`vstart`, `vl`-1] of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`-1] for a KLIOBUF output; a Form D `kl.exec` that falls through, or that item 4 of Rule <<KLE-GR-outcome-valid-state>> transitions to _Invalid_, takes a configured KLIOBUF as its output window whatever its former native Form, with no length or granularity check.
@@ -2912,7 +2908,7 @@ This section defines the operations that `kl.mgmt` performs for the `#immed7` va
 Two steps are common to every operation below and are not repeated in their descriptions; after the checks of Rule <<KLE-GR-management-check-order>>, a `kl.mgmt` with `KLNL` and `klnamedlocker` = 32 performs only these two (Rule <<KLE-GR-outcome-inert>>):
 
 . It updates `klnamedlocker` as Rule <<KLE-GR-klnamedlocker-updates>> states.
-. It clears `klstart` once it has passed items 1–6 of the locker-state-independent checks (Rule <<KLE-GR-management-check-order>>), even if it then raises an exception; if one of those checks rejects it, it leaves `klstart` unchanged, so such a `kl.mgmt` does not destroy the progress of the ongoing operation. Software restores `klstart` to resume interrupted management operations.
+. It clears `klstart` as Rule <<KLE-GR-klstart-updates>> states, so a `kl.mgmt` rejected by items 1–6 of Rule <<KLE-GR-management-check-order>> does not destroy the progress of the ongoing operation. Software restores `klstart` to resume interrupted management operations.
 
 The next six subsections describe the semantics of `kl.mgmt`:
 
