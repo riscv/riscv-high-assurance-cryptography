@@ -3987,8 +3987,9 @@ Provisioning sets the `Generator` field to the default base point (â€œgeneratorâ
 Software may overwrite the field; a Form A `kl.setst` to _Set_Generator_, or one of Form B with zero in the GPR, restores
 the default, as does a Form B `kl.setst` to _Ready_ with bit 0 of `Xs` set.
 
-With _MachineExtension_ = 1, the _public-points variant_, `Generator` and `SecondPt` are public fields, which an SCC carries in clear (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>): a scalar multiplication of `SecondPt`, which would make a shared secret, transitions the locker to Error State _Invalid_ (_Point_Mul_ below), and software loads no secret generator (Rule <<Zkl-software.adoc#KLE-SR-ecc-public-generator>>).
-The variant suits signature generation and verification, and key-pair generation; software uses _MachineExtension_ = 0 for a key exchange.
+With _MachineExtension_ = 1, the _public-points variant_, `Generator` and `SecondPt` are public fields, which an SCC carries in clear (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>): `Generator` always holds the default generator of the curve, so that _Point_Mul_ computes only a public key, and a scalar multiplication of `SecondPt`, which would make a shared secret, transitions the locker to Error State _Invalid_ (_Point_Mul_ below).
+A Form B `kl.setst` to _Set_Generator_ with a non-zero operand, or to _Ready_ with bit 5 of `Xs` set while `HasSecondPt` is set, transitions the locker to Error State _Invalid_, and a provisioning or import whose `Generator` is not the default completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
+The variant suits signature generation and verification, and key-pair generation; software uses _MachineExtension_ = 0 for a key exchange and for a custom generator.
 It is defined for every Elliptic Curve Machine, and is unsupported Metadata where not implemented (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
 All values (integers, coordinates, etc.) are in little-endian format, except the shared secret of the Weierstrass curves that _Output_ emits, which follows the byte order of its standard (see _Output_ below).
@@ -4136,7 +4137,7 @@ One that clears _MachinePolicy_[0] likewise destroys `RndNum` and clears `HasRnd
 The public fields (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>) come first: `Signature` and, with _MachineExtension_ = 1, `Generator` and `SecondPt`.
 Positions i, i.a, v and vi are present only for the values of _MachinePolicy_ given:
 
-[cols="^7%,<16%,<27%,<50%",width="100%",options="header"]
+[cols="^7%,<20%,<30%,<43%",width="100%",options="header"]
 |===
 |   Pos.  | Type                                         | Size (Bits)                               | Field
 |     i   | Public                                       | If _MachinePolicy_ {ne} 0: `vb`, else: 0  | `Signature`, R value, followed by S value if `v=2`.
@@ -4249,7 +4250,7 @@ The _Set_ states are _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ a
   . by a Form B `kl.setst` whose operand is zero, Form A included, sets the default generator of the curve, and
     `block_base` {leftarrow} `ub`/8, which completes the load;
   . by a Form B `kl.setst` whose operand is non-zero, erases `Generator` and starts a load: Form B `kl.exec` instructions then
-    load the `ub`/8 bytes of `Generator`.
+    load the `ub`/8 bytes of `Generator`; with _MachineExtension_ = 1, it transitions the locker to Error State _Invalid_ instead.
 
  ** Entering _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ or _Sign_Input_ by a Form A `kl.setst`:
   . erases the field _X_ that the State sets, `Scalar` becoming zero, and clears ``Has``_X_ where that flag exists;
@@ -4339,7 +4340,7 @@ The bits of `Scalar` beyond the key are zero.
   . First the copies are made, both from the values held before the instruction, so that bits 4 and 5 together exchange
     the two points:
   .. bit 4: `Generator` is copied onto `SecondPt`, and `HasSecondPt` is set;
-  .. bit 5: if `HasSecondPt` was set, `SecondPt` is copied onto `Generator`; otherwise bit 5 has no effect.
+  .. bit 5: if `HasSecondPt` was set, `SecondPt` is copied onto `Generator`, or, with _MachineExtension_ = 1, the locker transitions to Error State _Invalid_; otherwise bit 5 has no effect.
   . Then the fields are reset or erased:
   .. bit 0: `Generator` is reset to the default value;
   .. bit 1: `SecondPt` is erased and `HasSecondPt` is cleared;

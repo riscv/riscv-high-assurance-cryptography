@@ -2,6 +2,7 @@
 One `EccLocker` per Configuration Controlled locker.  Operations: setst(target, form, xs), exec_in(bytes) (Form B kl.exec
 of a Set State), exec_D(halt) (Form D), exec_out(n) (Form C), rstrl(policy), clearads(), clone(), shared_secret().
 Fields are bytearrays in the spec's little-endian order; an invalid configuration moves the locker to Error State Invalid.
+import_generator(g) models the Generator write of a provisioning or import.
 Not modelled: export/import, kl.derive destinations (only the source bytes), SCProtection, Progress units."""
 import copy
 from common import *
@@ -15,7 +16,7 @@ class RbgFailure(Exception): pass       # GR65: the RBG failed -> Invalid
 class RbgUnavailable(Exception): pass   # KLE RBG-unavailable exception, locker unchanged
 
 class EccLocker:
-    def __init__(self, name, policy=3, aux=1, rbg=None):
+    def __init__(self, name, policy=3, aux=1, rbg=None, ext=0):
         self.name = name; self.kind = 'ed' if name.startswith('ed') else 'mont' if name.startswith('x') else 'wei'
         self.rbg = rbg or (lambda n: __import__('os').urandom(n))
         if self.kind == 'wei':
@@ -28,7 +29,7 @@ class EccLocker:
         self.b = self.W * 8; self.ub = self.u * self.b; self.vb = self.v * self.b
         assert (policy == 0) or self.kind != 'mont'
         assert policy != 0 or self.kind != 'ed'
-        self.policy = policy; self.aux = aux & 1; self.state = RDY; self.err = None
+        self.policy = policy; self.aux = aux & 1; self.ext = ext; self.state = RDY; self.err = None   # ext: MachineExtension (1 = public-points variant)
         self.flags = 0; self.outtype = 0; self.progress = 0; self.block_base = 0
         self.Scalar = bytearray(self.W); self.SecondPt = bytearray(self.u * self.W); self.Hash = bytearray(self.h // 8)
         self.Signature = bytearray(self.v * self.W); self.RndNum = bytearray(self.j // 8)
@@ -49,12 +50,16 @@ class EccLocker:
         mu = self.outtype | (self.progress << 2)
         aux = self.aux | (self.msg_pass << 1)
         if self.err is not None:
-            return mdh_pack(Machine=10, MachinePolicy=self.policy, State=0, StateExtension=self.err, MachineUse=mu, AuxInfo=aux)
-        return mdh_pack(Machine=10, MachinePolicy=self.policy, State=self.state, StateExtension=self.flags, MachineUse=mu, AuxInfo=aux)
+            return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, State=0, StateExtension=self.err, MachineUse=mu, AuxInfo=aux)
+        return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, State=self.state, StateExtension=self.flags, MachineUse=mu, AuxInfo=aux)
     @property
     def invalid(self): return self.err == SE_INVALID
     def _inv(self):
         self.err = SE_INVALID; self.state = 0; return 'invalid'
+    def import_generator(self, g):
+        # a provisioning or import writes Generator; in the public-points variant it must be the default (KLE-MGR-check-on-write)
+        if self.ext == 1 and bytes(g) != self._default_gen(): return self._inv()
+        self.Generator[:] = g; return 'ok'
     def _live(self):
         if self.err is not None: raise AssertionError('locker is in an Error State')
     def iv(self, f): return int.from_bytes(f, 'little')
@@ -142,6 +147,7 @@ class EccLocker:
         if target == RDY: return self._to_ready(form, xs)
         self.state = target
         if target == SGEN:
+            if self.ext == 1 and form == 'B' and xs != 0: return self._inv()
             if form == 'A' or xs == 0: self.Generator[:] = self._default_gen(); self.block_base = self.ub // 8
             else: self.Generator[:] = bytes(len(self.Generator)); self.complete = False
         elif target == SSCAL:
@@ -172,6 +178,7 @@ class EccLocker:
         if form == 'B':
             gen, sec, hs = bytes(self.Generator), bytes(self.SecondPt), self.has('second')
             if xs >> 4 & 1: self.SecondPt[:] = gen; self.setf('second')
+            if xs >> 5 & 1 and hs and self.ext == 1: return self._inv()
             if xs >> 5 & 1 and hs: self.Generator[:] = sec
             if xs & 1: self.Generator[:] = self._default_gen()
             if xs >> 1 & 1: self.SecondPt[:] = bytes(len(self.SecondPt)); self.setf('second', False)
@@ -218,6 +225,7 @@ class EccLocker:
         if halt: self.progress = 1; return True
         return False
     def _wmul(self, halt):
+        if self.ext == 1 and self.has('second'): return self._inv()
         use = ['Scalar', 'SecondPt' if self.has('second') else 'Generator']
         if not self._fields_ok(use): return self._inv()
         f = self.SecondPt if self.has('second') else self.Generator
@@ -266,6 +274,7 @@ class EccLocker:
     # custom Generator also used by signing
     # ------------------------------------------------------------ Montgomery
     def _xmul(self, halt):
+        if self.ext == 1 and self.has('second'): return self._inv()
         f = self.SecondPt if self.has('second') else self.Generator
         if self._halted(halt): return 'halted'
         R = M.x_mul(self.name, bytes(self.Scalar), bytes(f))
@@ -276,6 +285,7 @@ class EccLocker:
     def _prefix_s(self): return self.E.expand(bytes(self.Scalar))
     def _dom(self, x): return self.E.dom(x, bytes(self.ctx[:self.ctxlen]))
     def _emul(self, halt):
+        if self.ext == 1 and self.has('second'): return self._inv()
         f = self.SecondPt if self.has('second') else self.Generator
         P = self._valid_ed(f)
         if P is None: return self._fail()

@@ -287,6 +287,38 @@ Ls, _ = pt_mul('sm2', 5, xy(Q, 32)); P = C.mul(5, Q)
 check('SM2 shared secret = x2||y2, each 32 bytes big-endian (64 bytes)', Ls.shared_secret() == P[0].to_bytes(32, 'big') + P[1].to_bytes(32, 'big'))
 check('derive_source outside Output -> None', EccLocker('secp256r1').derive_source() is None)
 
+section('public-points variant (MachineExtension = 1): Generator fixed, no shared secret')
+for nm, d, Qb, Z in V.ECDH[:1] + [x for x in V.ECDH if x[0] == 'secp384r1'][:1]:
+    W = EccLocker(nm).W
+    L = EccLocker(nm, ext=1)
+    check('%s MDH carries MachineExtension = 1' % nm, mdh_get(L.mdh, 'MachineExtension') == 1)
+    load(L, SSCAL, le(d, W)); L.setst(PMUL); r = L.exec_D()
+    Q = L.C.mul(d, L.C.G)
+    check('%s Point_Mul on the default Generator gives the public key d.G' % nm, r == 'output' and L.outtype == 0 and bytes(L.SecondPt) == xy(Q, W))
+    L = EccLocker(nm, ext=1); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL)
+    check('%s Point_Mul on SecondPt (ECDH) -> Invalid' % nm, L.exec_D() == 'invalid' and L.invalid)
+    L = EccLocker(nm, ext=1)
+    check('%s Form B kl.setst to Set_Generator, non-zero operand -> Invalid' % nm, L.setst(SGEN, 'B', 1) == 'invalid')
+    L = EccLocker(nm, ext=1)
+    check('%s Set_Generator Form A (default) admitted' % nm, L.setst(SGEN, 'A') == 'ok' and bytes(L.Generator) == L._default_gen() and not L.invalid)
+    L = EccLocker(nm, ext=1); load(L, S2ND, xy(Qb, W)); L.setst(RDY)
+    check('%s Ready bit 5 (SecondPt -> Generator) with HasSecondPt set -> Invalid' % nm, L.setst(RDY, 'B', 1 << 5) == 'invalid')
+    L = EccLocker(nm, ext=1)
+    check('%s Ready bit 5 without HasSecondPt has no effect' % nm, L.setst(RDY, 'B', 1 << 5) == 'ok' and not L.invalid)
+    L = EccLocker(nm, ext=1)
+    check('%s provisioning/import with a non-default Generator -> Invalid' % nm, L.import_generator(xy(Qb, W)) == 'invalid')
+    L = EccLocker(nm, ext=1)
+    check('%s provisioning/import with the default Generator admitted' % nm, L.import_generator(L._default_gen()) == 'ok' and not L.invalid)
+    L = EccLocker(nm); load(L, SSCAL, le(d, W)); load(L, SGEN, xy(Qb, W), 'B'); L.setst(PMUL); r = L.exec_D()
+    control('negative (MachineExtension = 0): a peer key in Generator makes Point_Mul write dQ to SecondPt, the gap the variant closes',
+            r == 'output' and bytes(L.SecondPt[:W]) == le(int.from_bytes(Z, 'big'), W))
+for nm in ('ed25519', 'x25519'):
+    L = EccLocker(nm, policy=3 if nm == 'ed25519' else 0, ext=1); load(L, SSCAL, le(9, L.W)); load(L, S2ND, L._default_gen())
+    r = L.setst(PMUL); r = L.exec_D() if r == 'ok' else r
+    check('%s Point_Mul on SecondPt with MachineExtension = 1 -> Invalid' % nm, r == 'invalid' and L.invalid)
+    L = EccLocker(nm, policy=3 if nm == 'ed25519' else 0, ext=1); load(L, SSCAL, le(9, L.W)); L.setst(PMUL)
+    check('%s Point_Mul on the default Generator admitted' % nm, L.exec_D() == 'output')
+
 # ------------------------------------------------------------------ 9
 section('X25519 / X448 (RFC 7748)')
 def xk(name, k, u):
