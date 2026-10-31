@@ -75,24 +75,24 @@ def main():
     # full SCC_Encrypt/Decrypt round trip and the omitted-length difference
     P = [0x1111, 0x2222, 0x3333]; AD = [mdh_pack(Machine=0x20), 0x55]
     for sep in (0, 1):
-        s_, C_ = scc_encrypt(AD, 0, sep, P, CSKV)
-        ok, P_ = scc_decrypt(AD, 0, sep, s_, C_, CSKV)
+        s_, C_ = scc_encrypt(AD, sep, P, CSKV)
+        ok, P_ = scc_decrypt(AD, sep, s_, C_, CSKV)
         check('SCC_Encrypt/Decrypt round trip, sep = %d' % sep, ok and P_ == P)
-    s0, C0 = scc_encrypt(AD, 0, 0, P, CSKV); s1, C1 = scc_encrypt(AD, 0, 1, P, CSKV)
+    s0, C0 = scc_encrypt(AD, 0, P, CSKV); s1, C1 = scc_encrypt(AD, 1, P, CSKV)
     check('sep changes SIV and keystream', s0 != s1 and C0 != C1)
-    check('sep = 1 record does not verify with sep = 0 and vice versa', not scc_decrypt(AD, 0, 0, s1, C1, CSKV)[0] and not scc_decrypt(AD, 0, 1, s0, C0, CSKV)[0])
+    check('sep = 1 record does not verify with sep = 0 and vice versa', not scc_decrypt(AD, 0, s1, C1, CSKV)[0] and not scc_decrypt(AD, 1, s0, C0, CSKV)[0])
     # versus the RFC model: AD bytes, no length block, sep, zero nonce (this is the independent derivation of SCC_Encrypt)
     for sep in (0, 1):
         ad_ = list(AD)
         if sep == 0: ad_[0] &= ~(1 << 47)
         c, t = scc_rfc_seal(CSK, bytes(12), _bytes(ad_), _bytes(P), lenblock=False, sep=sep)
-        s_, C_ = scc_encrypt(AD, 0, sep, P, CSKV)
+        s_, C_ = scc_encrypt(AD, sep, P, CSKV)
         check('SCC_Encrypt (sep=%d) equals the independent RFC model without lengths block, zero nonce, sep bit' % sep,
               v2b(s_, 16) == t and _bytes(C_) == c)
     adb = list(AD); adb[0] |= 1 << 47
-    check('sep = 0: AD[0][47] does not affect the SIV (cleared locally)', scc_encrypt(adb, 0, 0, P, CSKV)[0] == s0)
-    check('sep = 1: AD[0][47] is authenticated', scc_encrypt(adb, 0, 1, P, CSKV)[0] != s1)
-    ok, Pz = scc_decrypt(AD, 0, 0, s0 ^ 1, C0, CSKV)
+    check('sep = 0: AD[0][47] does not affect the SIV (cleared locally)', scc_encrypt(adb, 0, P, CSKV)[0] == s0)
+    check('sep = 1: AD[0][47] is authenticated', scc_encrypt(adb, 1, P, CSKV)[0] != s1)
+    ok, Pz = scc_decrypt(AD, 0, s0 ^ 1, C0, CSKV)
     check('failed authentication returns false and zeroes P[]', not ok and Pz == [0, 0, 0])
     control('negative: restoring the length block changes the SIV', polyval(scc_keyderiv(CSKV, 0)[1], AD + P + [b2v((256).to_bytes(8,'little')+(384).to_bytes(8,'little'))]) != polyval(scc_keyderiv(CSKV, 0)[1], AD + P))
 
@@ -198,11 +198,11 @@ def main():
     st, R = scc_import(im, CSKV, LSTV, IMPQ ^ 1)
     check('dropped ADS: MachineUse and AuxInfo zeroed, as implementation-defined', mdh_get(R['mdh'], 'MachineUse') == 0 and mdh_get(R['mdh'], 'AuxInfo') == 0)
     check('kept ADS: MachineUse and AuxInfo kept', scc_import(im, CSKV, LSTV, IMPQ)[1]['mdh'] == Lm['mdh'])
-    s1_ = scc_encrypt([IMPQ, 7], 0, 1, [1], CSKV)
+    s1_ = scc_encrypt([IMPQ, 7], 1, [1], CSKV)
     check('sep = 1: AD2[0][47] (IMPQUAL bit 47 = klarchid bit 15) is authenticated, not cleared',
-          scc_encrypt([IMPQ ^ (1 << 47), 7], 0, 1, [1], CSKV)[0] != s1_[0])
-    check('SIV binds segment 2 to segment 1', scc_encrypt([IMPQ, 8], 0, 1, [1], CSKV) != s1_)
-    control('negative: ADS with bit 47 kept in AD authenticates differently (sep = 1)', scc_encrypt([IMPQ | (1 << 47)], 0, 1, [1], CSKV)[0] != scc_encrypt([IMPQ & ~(1 << 47)], 0, 1, [1], CSKV)[0])
+          scc_encrypt([IMPQ ^ (1 << 47), 7], 1, [1], CSKV)[0] != s1_[0])
+    check('SIV binds segment 2 to segment 1', scc_encrypt([IMPQ, 8], 1, [1], CSKV) != s1_)
+    control('negative: ADS with bit 47 kept in AD authenticates differently (sep = 1)', scc_encrypt([IMPQ | (1 << 47)], 1, [1], CSKV)[0] != scc_encrypt([IMPQ & ~(1 << 47)], 1, [1], CSKV)[0])
 
     section('Error State transfer')
     E = dict(mdh=mdh_pack(Machine=0x20, State=0, StateExtension=4, AuxDataLen=0), c1=b'', c2=b'')
@@ -261,7 +261,7 @@ def main():
     ecc = {c: (-(-vb // 128) - (-2 * ub // 128), -(-vb // 128)) for c, (ub, vb) in {'P-256': (512, 512), 'P-384': (768, 768), 'P-521': (1152, 1152), 'ed25519': (256, 512), 'ed448': (456, 912)}.items()}
     info('ECC SCC_ClearLen1 (MachineExtension 1, 0) with MachinePolicy != 0: %s' % ecc)
     P1 = _blocks(L["c1"]); AD1 = scc_ad(L["mdh"], LSTV)
-    control("negative: a clear block left out of the AD is not authenticated", scc_encrypt(AD1, 0, 0, P1[1:], CSKV)[0] == scc_encrypt(AD1, 0, 0, P1[1:], CSKV)[0] != scc_encrypt(AD1 + [P1[0] ^ 1], 0, 0, P1[1:], CSKV)[0])
+    control("negative: a clear block left out of the AD is not authenticated", scc_encrypt(AD1, 0, P1[1:], CSKV)[0] == scc_encrypt(AD1, 0, P1[1:], CSKV)[0] != scc_encrypt(AD1 + [P1[0] ^ 1], 0, P1[1:], CSKV)[0])
 
     section('regression vectors (CSK 000102..1f, LST[j] = 16 x (0x40+j), key 8081..9f)')
     spec_note('vectors below are produced by the spec model and equal the independent RFC-based assembly checked above')

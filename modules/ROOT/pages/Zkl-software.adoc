@@ -51,7 +51,7 @@ Without Rule <<KLE-SR-klstart-save>>, interposed software would start where the 
 Without Rule <<KLE-SR-klstart-iobuf>>, a transfer through the KLIOBUF would use the wrong offset of the image or of memory, with no exception.
 
 [horizontal]
-[[KLE-SR-klstart-save,SR3]]SR3:: <<KLE-interposed-software,Interposed software>> must save `klstart` before its first KLE instruction, write 0 to it before its first instruction that honors it, and restore the saved value before control returns to the interrupted software.
+[[KLE-SR-klstart-save,SR3]]SR3:: <<KLE-interposed-software,Interposed software>> must save `klstart`, with `kl.getks` or a CSR read, before any other KLE instruction, write 0 to it before its first instruction that honors it, and restore the saved value before control returns to the interrupted software.
 A handler that skips the trapping instruction applies its retirement effects to `klstart` instead (Rule <<KLE-SR-handler-duty>>).
 
 [[KLE-SR-klstart-no-reset,SR4]]SR4:: Software should not write 0 to `klstart` to force a full restart of `kl.exec` or `kl.derive` once per-block state effects have been committed.
@@ -222,14 +222,14 @@ A handler that skips the trapping instruction applies its retirement effects to 
 . Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
 These Rules make it the owner of the authentication registers, if a locker owns them (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
-If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`:
+If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`, and transferring through GPRs or vector registers, not the KLIOBUF, which step 4 has yet to save:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is in a Configuration State.
 . With `Zklio`:
 .. save `kliobuflen` and `kliobuftop` (`kl.getbl`, `kl.getbt`);
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
-. Save every locker other than the managed locker that is not _Unconfigured_, by the paths of step 3, with `klnamedlocker` = 32 between exports.
+. For every locker other than the managed locker, act by its `*llockerstatus` field that the saving mode owns (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), a locker without such a field counting as Dirty: keep the saved image of a Clean or _Off_ locker; otherwise, save the locker by the paths of step 3 if it is not _Unconfigured_, and erase its saved image if it is. Keep `klnamedlocker` = 32 between exports.
 
 Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
 
@@ -247,23 +247,34 @@ The handler may clear a locker being provisioned or imported instead of saving i
 === Context Restore Order
 
 . Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
+. Restore the Locality Secret CSRs that the context owns, if any (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), before any import of a locker that they bind.
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
 .. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop` (`kl.setbt`), after the buffer, since a write of `kliobuflen` resets it.
-. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`.
+. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring through GPRs or vector registers, not the KLIOBUF, which step 4 has restored.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
-. Restore `klstart` last (`kl.setks`).
+. Restore `klstart` after every other KLE instruction (`kl.setks`).
+. Write the `*llockerstatus` fields that the restoring mode owns: Clean for a restored locker, _Off_ for a locker whose restoration is deferred, and Initial for a cleared locker. Then write `KLS`, after those CSRs (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
 
 The getter and setter instructions are the recommended way for software to access `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>).
-As with `vsetvl`, the same instructions give the maximum KLIOBUF length: write a large value with `kl.setbl`, then read it back with `kl.getbl`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLE-iobuf-length-probe]]
+=== Probing the Maximum KLIOBUF Length
+
+As with `vsetvl`, the getter and setter instructions give the maximum KLIOBUF length: write a large value with `kl.setbl`, then read it back with `kl.getbl`.
+A context restore does not probe: each OS, or other execution environment, probes once and keeps the value, which only an M-mode write to `mklmaxiobuflen` changes (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>).
+The probe destroys the buffer contents: save them first, or probe only while the buffer is unused.
 
 [source,asm]
 ----
   kl.getbl  t1      # save the current length
   kl.setbl  a0      # zeroes the buffer, clamps to the maximum
   kl.getbl  t0      # t0 <- length granted
+  kl.setbl  t1      # restore the length; the contents stay zero
 ----
 
 // ////////////////////////////////////////////////////////////////////
@@ -1327,19 +1338,21 @@ has carry-less multiplication, namely the `vghsh.vv` of Zvkg. Under the threat m
   addi      t1, t1, -1
   bnez      t1, 3b
 4:
-  # Final partial block, if any
+  # Final partial block, if any; without one, bypass Dec_Last_Block
   andi      t1, a5, 15
-  beqz      t1, 5f
+  bnez      t1, 6f
+  kl.setst  K0, #kl_state_dec_tag_finalize  # Form A bypass
+  j         5f
+6:
   slli      t2, t1, 3
   kl.setst  K0, #kl_state_dec_last_block, t2
   vsetvli   zero, t1, e8, m1, ta, ma
   vle8.v    v0, (t3)
-  kl.exec   v1, K0, v0
+  kl.exec   v1, K0, v0            # also enters Dec_Tag_Finalize
   vse8.v    v1, (t4)
 5:
   # Absorb the lengths and verify, with a Form B kl.exec: the recomputed
   # SIV is compared internally against the one supplied above
-  kl.setst  K0, #kl_state_dec_tag_finalize
   slli      t1, a5, 3
   slli      t2, a2, 3
   vsetivli  zero, 2, e64, m1, tu, ma # KLLEN = 128

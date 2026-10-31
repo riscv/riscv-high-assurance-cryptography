@@ -134,11 +134,11 @@ def scc_export(L, csk, lst, impq, clear1=None, clear2=0):
     assert f['ADSDropped'] == 0
     pad = L['c1'] + b'\0' * (-len(L['c1']) % 16)
     n1 = scc_clearlen1(L['mdh'], clear1); P1 = _blocks(pad)
-    siv, c1 = scc_encrypt(scc_ad(L['mdh'], lst) + P1[:n1], 0, 0, P1[n1:], csk); c1 = P1[:n1] + c1
+    siv, c1 = scc_encrypt(scc_ad(L['mdh'], lst) + P1[:n1], 0, P1[n1:], csk); c1 = P1[:n1] + c1
     img = v2b(L['mdh'], 16) + v2b(siv, 16)
     if f['AuxDataLen'] >= 2:
         P2 = _blocks(L['c2'])
-        siv2, c2 = scc_encrypt([impq, siv] + P2[:clear2], 0, 1, P2[clear2:], csk); c2 = P2[:clear2] + c2
+        siv2, c2 = scc_encrypt([impq, siv] + P2[:clear2], 1, P2[clear2:], csk); c2 = P2[:clear2] + c2
         img += v2b(impq, 16) + v2b(siv2, 16)
     else: c2 = []
     return img + _bytes(c1) + _bytes(c2)
@@ -163,14 +163,14 @@ def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None, zklexpire=False, 
     c1 = _blocks(img[o:o + c1p]); o += c1p
     c2 = _blocks(img[o:o + 16 * (f['AuxDataLen'] - 2)]) if ads and not drop else []
     n1 = scc_clearlen1(work, clear1)
-    ok, P = scc_decrypt(scc_ad(work, lst) + c1[:n1], 0, 0, siv, c1[n1:], csk, n1); P = c1[:n1] + P if ok else [0] * len(c1)
+    ok, P = scc_decrypt(scc_ad(work, lst) + c1[:n1], 0, siv, c1[n1:], csk, n1); P = c1[:n1] + P if ok else [0] * len(c1)
     if not ok:
         e = mdh_put(mdh_put(mdh_put(work, 'State', 0), 'StateExtension', 4), 'AuxDataLen', 0)
         return 'authfail', dict(mdh=mdh_put(e, 'ADSDropped', 0), c1=b'', c2=b'')
     p2 = []
     if ads and not drop:
         good = iq == impq
-        if good: good, p2 = scc_decrypt([iq, siv] + c2[:clear2], 0, 1, siv2, c2[clear2:], csk, clear2); p2 = c2[:clear2] + p2
+        if good: good, p2 = scc_decrypt([iq, siv] + c2[:clear2], 1, siv2, c2[clear2:], csk, clear2); p2 = c2[:clear2] + p2
         if not good: drop = 1
         work = mdh_put(work, 'ADSDropped', drop)
     if f['AuxDataLen'] == 0 or drop:
