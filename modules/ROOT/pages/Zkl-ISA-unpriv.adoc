@@ -100,7 +100,7 @@ CCs are saved and restored by generating Sealed Cryptographic Contexts:
 
 Definition: _Sealed Cryptographic Context_.::
 (((Cryptographic Context, sealed)))
-For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program. An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
+For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an authenticated representation, encrypted except for its public values, that can later be *imported* into a locker. Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program. An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
 
 [horizontal]
 [[KLE-ISA-Principle-no-privilege-elevation,P16]]P16:: _No operation yields a key or widens a policy: secrets flow only downhill._
@@ -379,7 +379,7 @@ In the rest of the document, “metadata” refers to the first type. The implem
 |    Field  | Size | Name               | Description
 |    [11:0] |  12  | _Machine_          | The Machine the key material is bound to. See <<KLE-Machine-field>>.
 |   [13:12] |   2  | _MachinePolicy_    | The allowed variants of the Machine, for instance encryption, decryption or both for a symmetric cipher. See <<KLE-Machine-field>>.
-|   [15:14] |   2  | _MachineExtension_ | Reserved to extend _Machine_.
+|   [15:14] |   2  | _MachineExtension_ | Zero, or a variant of the Machine that the Machine defines. See <<KLE-Machine-field>>.
 |   [17:16] |   2  | _SCProtection_     | Side-channel protection level. See <<KLE-SCProtection-field>>.
 |   [23:18] |   6  | _State_            | Current state of the locker and its Machine. See <<KLE-State-field>>.
 |   [27:24] |   4  | _StateExtension_   | Additional state information. See <<KLE-State-field>>.
@@ -389,13 +389,13 @@ In the rest of the document, “metadata” refers to the first type. The implem
 |   [45:32] |  14  | _AuxDataLen_       | Length of the ADS in 128-bit blocks, zero if none; with _ADSDropped_ = 1, the length before `Content2` was dropped; with _Version_ = 3, the length of the system-specific data after the MDH (<<KLE-system-specific-import>>).
 |   [46:46] |   1  | Reserved           | Reserved.
 |   [47:47] |   1  | _ADSDropped_       | Set if `Content2` was discarded. See <<KLE-Auxiliary-Data-Section>>.
-|   [61:48] |  14  | _MachineUse_       | Can be used for Machine-specific information, or implementation-specific where the Machine does not use it. See <<KLE-MachineUse>>.
+|   [61:48] |  14  | _MachineUse_       | Machine-specific information, or implementation-specific in the bits and States where the Machine does not use it. See <<KLE-MachineUse>>.
 |   [63:62] |   2  | _Version_          | MDH format version. See <<KLE-Machine-version>>.
 
 |   [68:64] |   5  | _UsagePolicy_      | The privilege modes that may use the locker. See <<KLE-UsagePolicy>>.
 |   [77:69] |   9  | _Locality_         | Zero, or the Locality Secrets the CC is bound to. See <<KLE-Localities>>.
 |   [79:78] |   2  | Reserved           | Reserved.
-|   [95:80] |  16  | _AuxInfo_          | Can be used for Machine-specific information, or implementation-specific where the Machine does not use it. See <<KLE-MachineUse>>.
+|   [95:80] |  16  | _AuxInfo_          | Machine-specific information, or implementation-specific in the bits and States where the Machine does not use it. See <<KLE-MachineUse>>.
 
 |  [115:96] |  20  | _ExpirationDate_   | If non-zero, the expiration date of the CC. See <<KLE-Metadata-expiration-date>>.
 | [127:116] |  12  | Reserved           | Reserved.
@@ -414,7 +414,7 @@ The meaning of _MachinePolicy_ depends on the Machine:
 * For asymmetric primitives that support signatures, bit 0 permits their generation and bit 1 verification.
 * For MACs that generate and verify tags, bit 0 permits generation and bit 1 verification.
 
-In the future, _MachineExtension_ may be used to encode more Machines.
+_MachineExtension_ is zero unless the Machine defines a non-zero value; the only one defined is 1 for the Elliptic Curve Machines, which selects their public-points variant (<<Zkl-ISA-machines.adoc#KLE-ECC>>). Other values are reserved, and may in the future encode more Machines.
 
 Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> states how _MachinePolicy_ gates the States of a Machine, and which values are valid.
 
@@ -531,7 +531,7 @@ A locker being provisioned, exported or imported is in one of the following _Con
 |===
 | Value    | Mnemonic                  | Description
 |   56     | `kl_cfg_provisioning`     | The locker is being configured.
-|   57     | `kl_cfg_exporting`        | The locker is being exported as an SCC, its contents encrypted and authenticated.
+|   57     | `kl_cfg_exporting`        | The locker is being exported as an SCC, its contents authenticated and, except for their public values, encrypted.
 |   58     | `kl_cfg_importing`        | An SCC is being imported into the locker.
 |   59     | `kl_cfg_ppi_exporting`    | The locker, whose base operation is a provisioning (see <<KLE-management-formats-and-states>>), is being exported; its image has the format of a PI.
 |   60     | `kl_cfg_ppi_importing`    | Such an image is being re-imported.
@@ -576,7 +576,7 @@ An M-mode handler that emulates a Machine and writes an ADS for the lockers it h
 _AuxDataLen_ counts these 16 bytes and the 16-byte authentication tag of the ADS, so, unless it is the length of the payload of a system-specific format, it is 0 or at least 2, and 1 is invalid.
 Outside a system-specific format, _AuxDataLen_ is implementation-dependent, and its value never depends on key material, a secret field, plaintext or ciphertext, or a value drawn for an operation: it depends only on the other fields of the MDH and on the progress that Rule <<KLE-GR-long-running-progress>> allows, since `kl.getmd*` returns it in every mode and State.
 
-_ADSDropped_, bit 47 of the MDH, is an unauthenticated format hint, ignored in an SCC whose _AuxDataLen_ is 0 and subject to the validity conditions of <<KLE-Metadata-validity>>; first-segment authentication clears it only in its local copy of the MDH.
+_ADSDropped_, bit 47 of the MDH, is an unauthenticated format hint, ignored in an SCC whose _AuxDataLen_ is 0 and subject to the validity conditions of <<KLE-Metadata-validity>>; authentication clears it only in its local copy of the MDH.
 After an import, `K(i).MDH` holds _ADSDropped_ = 0, and an absent or dropped `Content2` leaves _AuxDataLen_ = 0 (<<KLE-SCC-import>>); an export uses the _AuxDataLen_ of the MDH, which the implementation keeps up to date (<<KLE-SCC-export>>).
 With _AuxDataLen_ {ge} 2 and _ADSDropped_ = 1, `Content2` is absent, and `IMPQUAL` and `SIV2` remain as non-authoritative padding that keeps the offset of `Content1` unchanged.
 Setting _ADSDropped_ in an SCC tells the import to drop the optional `Content2`, and the import then zeroes the implementation-defined subfields of _MachineUse_ and _AuxInfo_ (<<KLE-MachineUse>>).
@@ -696,9 +696,9 @@ The evaluation proceeds as follows:
 [[KLE-MachineUse]]
 === _MachineUse_ and _AuxInfo_ Fields
 
-A Machine may use _MachineUse_ and _AuxInfo_ to store additional information.
+A Machine may use _MachineUse_ and _AuxInfo_, or subfields of them, to store additional information, in every State or only in some States.
 
-An implementation may use a field, or a subfield, that its Machine does not use: each Machine specification identifies the bits it defines, and the others, including progress in an implementation-defined format (Rule <<KLE-GR-long-running-progress>>), are _implementation-defined_.
+An implementation may use a field, or a subfield, in the States in which its Machine does not use it: each Machine specification identifies the bits it defines and the States in which it defines them, and the others, including progress in an implementation-defined format (Rule <<KLE-GR-long-running-progress>>), are _implementation-defined_.
 Their values are disposable: ignoring them preserves the architected semantics, policies and parameters of the Machine, at the cost of a restart at most.
 An implementation that uses such a value keeps _AuxDataLen_ {ge} 2 in the MDH, exactly 2 when `Content2` is empty, so that every SCC it exports includes an ADS (<<KLE-Auxiliary-Data-Section>>).
 An import, or an export completion that restores a Valid State, interprets them only if both segments authenticate, even with an empty `Content2`, and the authenticated `IMPQUAL` equals that of the importing implementation.
@@ -711,7 +711,7 @@ Neither field may hold a value that depends on key material, a secret field, pla
 Otherwise a wrong value causes an error of the Machine that uses it; a discarded implementation-defined value causes none.
 Provisioning ignores and zeroes the _MachineUse_ of a PI and the implementation-defined subfields of its _AuxInfo_ (<<KLE-locker-management>>); the completion of a system-specific import (Rule <<KLE-GR-sysfmt-completion>>) zeroes the implementation-defined subfields of _AuxInfo_ that the declared MDH supplies.
 The rules of the Machine decide what happens to the subfields of _AuxInfo_ that it defines upon provisioning, and to both fields on entering State _Ready_.
-A Machine may use _AuxInfo_ to pass initialization parameters at provisioning: EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), for instance, records in _AuxInfo_ the modes a CC may use. GCM, CMAC, HMAC and Ascon-AEAD128 and its variants (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>) hold in it the tag length that every verification compares.
+A Machine may use _AuxInfo_ to pass initialization parameters at provisioning: EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), for instance, records in _AuxInfo_ the modes a CC may use. GCM, CMAC, HMAC and Ascon-AEAD128 and its variants (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>) hold in it the tag length that every verification compares. The Elliptic Curve Machines hold in it their transfer counter `block_base`, which is public (<<Zkl-ISA-machines.adoc#KLE-ECC>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -757,7 +757,8 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _ExpirationDate_ is non-zero and `Zklexpire` is not implemented;
 * _AuxDataLen_ = 1 and _Version_ is not 3;
 * _AuxDataLen_ or _ADSDropped_ is non-zero in a PI, or in a PCCC with base type `pi` (<<KLE-management-formats-and-states>>);
-* _MachinePolicy_ has a value that Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> does not admit for the Machine, such as zero for a Machine that requires at least one set bit in it; or
+* _MachinePolicy_ has a value that Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> does not admit for the Machine, such as zero for a Machine that requires at least one set bit in it;
+* _MachineExtension_ has a value that the Machine does not define (<<KLE-Machine-field>>); or
 * a Reserved bit is non-zero.
 
 Invalid Metadata takes precedence over unsupported Metadata: the test for _unsupported_ applies only to valid Metadata, as only a valid _Version_ fixes the layout of the fields it reads.
@@ -1032,7 +1033,7 @@ Field `F` selects the Form:
 Description:: {empty}
 +
 --
-`kl.avail` (`q` = 1) tells whether the KLE unit implements the _Machine fields_ of an MDH: its _Machine_, _MachinePolicy_, _MachineExtension_, _KeyType_ and _SCProtection_ (no non-zero _MachineExtension_ is defined).
+`kl.avail` (`q` = 1) tells whether the KLE unit implements the _Machine fields_ of an MDH: its _Machine_, _MachinePolicy_, _MachineExtension_, _KeyType_ and _SCProtection_.
 `kl.size` (`q` = 0) gives the size in bytes of the external image that an MDH describes: a PI, an SCC with its tag(s) and ADS, the MDH of a system-specific format followed by its appended data (Rule <<KLE-GR-sysfmt-mdh>>), or, for an Error State, the MDH alone (<<KLE-management-formats-and-states>>, <<KLE-length-rule>>).
 
 The MDH is that of locker `Ks` in Form A, where `Ks` may be `KLNL` (Rule <<KLE-GR-klnamedlocker-override>>); bits [63:0] in `Xs`, or `X[s+1] @ Xs` on RV32, in Form B; and bits [127:0] in `Vs` in Form C.
@@ -1951,7 +1952,17 @@ Other Rules are instruction-specific.
 // The following Rules protect the Content of a CC in two ways: it leaves a locker only sealed, and CCs that pertain only to certain chip families or devices cannot be disclosed to other chip families or devices.
 
 [horizontal]
-[[KLE-GR-no-extraction,GR9]]GR9:: Once the provisioning, or the base import of a system-specific format (<<KLE-system-specific-import>>), that binds a key to its Metadata completes, no instruction returns in clear the value of the key, or of any other secret field of the Content, except as an output defined by the Machine for `kl.exec` (Rule <<KLE-GR-exec-implies-unrestricted>>).
+[[KLE-GR-no-extraction,GR9]]GR9:: Once the provisioning, or the base import of a system-specific format (<<KLE-system-specific-import>>), that binds a key to its Metadata completes, no instruction returns in clear the value of the key, or of any other secret field of the Content, except as an output defined by the Machine for `kl.exec` (Rule <<KLE-GR-exec-implies-unrestricted>>); the clear blocks of an SCC hold no secret field (Rule <<KLE-GR-scc-clear-blocks>>).
+
+[[KLE-GR-scc-clear-blocks,GR78]]GR78:: _Clear blocks:_ An SCC carries the first `SCC_ClearLen1` 128-bit blocks of `Content1`, and the first `SCC_ClearLen2` blocks of `Content2`, in clear: they are authenticated with their segment, as associated data, but not encrypted (<<KLE-SCC-export>>).
++
+--
+* `SCC_ClearLen1` is the number of whole blocks that the _public fields_ of the Machine fill, which its Serialized Content places first, together with any padding that it places after them; it is 0 for a Machine that designates no public field.
+  Which fields are public depends only on the _Machine_, _MachineExtension_ and _KeyType_ of the MDH, and their number of blocks also on the _MachinePolicy_, which determines the fields present (<<KLE-length-rule>>).
+  A public field holds, in every State and at every point of an operation, only a value that the cryptographic role of the field makes public, such as a public key, a ciphertext or a signature, or zero; it never holds a key, a SKID, a value derived from a secret field other than such a public value, or an intermediate value of an operation (Rule <<KLE-GR-long-running-progress>>) other than a part of its public result, and it is never a `kl.derive` destination.
+* `SCC_ClearLen2` is implementation-defined and documented, at most _AuxDataLen_ − 2, and depends only on `IMPQUAL` and on the fields of the MDH other than _ADSDropped_; the clear blocks of `Content2` hold only values computable from the public fields and from constants of the Machine.
+* No value of a clear block is used before its segment is authenticated (<<KLE-SCC-import>>); a failed authentication zeroes or drops the whole segment, its clear blocks included.
+--
 
 [[KLE-GR-custom-locality,GR10]]GR10:: A CC whose MDH carries a custom _Machine_ or a system-specific _Version_ must include at least one of _SiPScrt_, _ChipFamScrt_, _ChipScrt_, _OEMScrt_, _ProdScrt_, or _DevScrt_ in its _Locality_, to bind the information in the CC to its allowed consumers; otherwise the Metadata is invalid.
 
@@ -2785,14 +2796,16 @@ Up to five sections, in this order, section 5 consisting of `Content1` followed 
 | 5.a
 | `Content1`
 | A multiple of 128 bits. See <<KLE-length-rule>>.
-| Keys and other Machine-specific information that the Machine needs to function correctly. Encrypted in memory, and inside the KLE unit while the SCC is imported or exported.
+| Keys and other Machine-specific information that the Machine needs to function correctly. Its first `SCC_ClearLen1` blocks are in clear (Rule <<KLE-GR-scc-clear-blocks>>); the rest is encrypted in memory, and inside the KLE unit while the SCC is imported or exported.
 //
 | 5.b
 | `Content2`
 | A multiple of 128 bits.
 | ADS: data that the Machine does _not_ need to function correctly.
-  Encrypted in memory, and inside the KLE unit while the SCC is imported or exported.
+  Its first `SCC_ClearLen2` blocks are in clear (Rule <<KLE-GR-scc-clear-blocks>>); the rest is encrypted in memory, and inside the KLE unit while the SCC is imported or exported.
 |===
+
+The clear blocks let software read public values, such as a public key, from an SCC in memory; they are authenticated only when the SCC is imported, so software does not rely on a value read from them as authentic (Rule <<Zkl-software.adoc#KLE-SR-scc-clear-unauthenticated>>).
 
 Sections 3, 4 and 5.b form the implementation-specific ADS, of size _AuxDataLen_ (<<KLE-Auxiliary-Data-Section>>).
 KLE generates an image with _ADSDropped_ = 1 only as an SCC-shaped PCCC, when a nested export preserves an interrupted import after `Content2` was dropped; since _ADSDropped_ is unauthenticated, import also accepts this layout in an SCC modified to set the bit.
@@ -2818,7 +2831,7 @@ Definition: _Partially Configured Cryptographic Context (PCCC)_.::
 The third format is the image that an export produces on a locker already in a Configuration State: an MDH holding a Configuration State, in the format of its *base type*, without further encryption or authentication:
 +
 * base type `pi`: a _PI-shaped_ image, the MDH followed by the clear `Content` that software supplied in the PI; software clears such a locker before giving control to another software context, of the same or a lower privilege, which could otherwise export it (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>);
-* base type `scc`: an _SCC-shaped_ image, in the format of an SCC: the MDH followed by `SIV` and, when present, `IMPQUAL` and `SIV2`, as _ContentOffset_ prescribes (<<KLE-serialized-image>>), and by the `Content` already in the locker, as ciphertext; with _Version_ = 3, the MDH followed only by the `Content` as software supplied it (<<KLE-system-specific-import>>).
+* base type `scc`: an _SCC-shaped_ image, in the format of an SCC: the MDH followed by `SIV` and, when present, `IMPQUAL` and `SIV2`, as _ContentOffset_ prescribes (<<KLE-serialized-image>>), and by the `Content` already in the locker, in the form of an SCC, its clear blocks in clear and the rest as ciphertext; with _Version_ = 3, the MDH followed only by the `Content` as software supplied it (<<KLE-system-specific-import>>).
 
 The fourth format is used for CCs in an Error State.
 
@@ -2828,7 +2841,7 @@ The exported image of an Error-State locker is the MDH alone: its export reads t
 Software saves the locker's MDH as `ml` before opening an export, and an import takes `ml` from the image. The completing `kl.mgmt` restores _State_ from `ml`, so each nesting level keeps its own _State_; completing a base operation leaves the locker in a Valid or Error State, and completing a nested operation restores the Configuration State that `ml` carries (Rule <<KLE-GR-completion-state>>).
 
 Encryption during management::
-While an SCC is imported, or a locker exported as one, the locker holds its `Content` encrypted: the base export-opening `kl.mgmt` encrypts it and generates `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`; the base import- or export-completing `kl.mgmt` decrypts and authenticates it once the whole image is in place, or restores it from an internal copy (<<KLE-mgmt-completes-export>>); with _ADSDropped_ = 1, no `Content2` is loaded or authenticated.
+While an SCC is imported, or a locker exported as one, the locker holds its `Content` encrypted, except for its clear blocks (Rule <<KLE-GR-scc-clear-blocks>>): the base export-opening `kl.mgmt` encrypts it and generates `SIV` and, if _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`; the base import- or export-completing `kl.mgmt` decrypts and authenticates it once the whole image is in place, or restores it from an internal copy (<<KLE-mgmt-completes-export>>); with _ADSDropped_ = 1, no `Content2` is loaded or authenticated.
 
 [[KLE-serialized-image,serialized image]]Definition: _Serialized image_.::
 `content_size` is the length in bytes of the serialized `Content` of the locker, as a PI or an SCC according to the base type of its image (<<KLE-length-rule>>), as given by the locker's MDH.
@@ -3150,6 +3163,7 @@ the optional nonce is omitted;
 a domain separation bit, `sep`, distinguishes the two segments of the content sealed in an SCC: the architected content (`sep` = 0) and the optional implementation-specific content (`sep` = 1); `sep` replaces bit 126 of the tag input and of every counter block; and
 for `sep` = 0, bit 47 of `MDH` (the first block of the associated data), i.e.,
 the unauthenticated _ADSDropped_ bit of the MDH (<<KLE-Auxiliary-Data-Section>>), is cleared before `POLYVAL` is evaluated.
+The clear blocks of a segment (Rule <<KLE-GR-scc-clear-blocks>>) are appended to its associated data, and only the remaining blocks are encrypted.
 
 The Key Derivation (<<KLE-SCC-key-derivation>>) and POLYVAL (<<KLE-SCC-POLYVAL>>) functions are defined first, then SCC generation from a locker (<<KLE-SCC-export>>) and SCC import into a locker (<<KLE-SCC-import>>).
 
@@ -3242,7 +3256,7 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 }
 ----
 
-`len_PC` never exceeds `max_admissible` / 16 (<<KLE-serialized-image>>), and `len_AD` never exceeds 7.
+`len_PC` never exceeds `max_admissible` / 16 (<<KLE-serialized-image>>), and `len_AD` never exceeds 7 plus the number of clear blocks of the segment.
 
 [[KLE-SCC-GCM-SIV-dec]]
 .AES-GCM-SIV Decryption for SCC Import
@@ -3290,7 +3304,7 @@ It is strongly recommended that their memory accesses also be independent of the
 [[KLE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured Locker
 
-A locker ``K(i)`` in a Valid State is fully provisioned, and opening it for export creates the serialized, encrypted and authenticated SCC by the steps below.
+A locker ``K(i)`` in a Valid State is fully provisioned, and opening it for export creates the serialized and authenticated SCC, encrypted except for its clear blocks (Rule <<KLE-GR-scc-clear-blocks>>), by the steps below.
 
 The Locality substitution rules of <<KLE-Localities>> apply: `LST_eff[j]` is the value of `LST` entry _j_ after substitution, and replaces `LST[j]` in the export and import algorithms.
 An unconfigured entry (<<KLE-Localities>>) with no configured substitute makes the Metadata invalid at provisioning or import, and makes the export-opening `kl.mgmt` of a locker in a Valid State perform no operation (Rule <<Zkl-software.adoc#KLE-SR-locality-unconfigure>>). Entry 9 of `LST` is `hkllocality`, and entry 10 is `skllocality`.
@@ -3310,19 +3324,23 @@ After `kl.clearads`, a fully configured locker has _AuxDataLen_ = 0 and _ADSDrop
 .. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ names Locality #j (<<KLE-locality-indexes>>), then
 .... ``AD[len_AD]`` <-  ``LST_eff[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
-.. `len_PC` <- the number of 128-bit blocks of `Content1`.
+.. `n1` <- `SCC_ClearLen1` for `saved_MDH` (Rule <<KLE-GR-scc-clear-blocks>>); foreach(_j_ from 0 to `n1` − 1) do:
+... ``AD[len_AD]`` <- ``K(i).Content1~PT~[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
+.. `len_PC` <- the number of 128-bit blocks of `Content1`, minus `n1`.
 .. `SIV`, `Content1~CT~[]` <- +
-`{fournbsp}{fournbsp}SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[], CSK, len_AD, len_PC)`
+`{fournbsp}{fournbsp}SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[n1..n1+len_PC-1], CSK, len_AD, len_PC)`
 . If _AuxDataLen_ {ge} 2, process the implementation-specific content:
 .. `len_AD2` <- 2, +
 ``AD2[0]`` <- `IMPQUAL` <- the `IMPQUAL` of the implementation (<<KLE-Auxiliary-Data-Section>>), formed from the values of `mklvendorid`, `mklarchid` and `mklimpid` out of KLE unit reset, ``AD2[1]`` <- `SIV`.
-.. `len_PC2` <- _AuxDataLen_ − 2, the number of 128-bit blocks of `Content2`.
+.. `n2` <- `SCC_ClearLen2` for `saved_MDH` and `IMPQUAL` (Rule <<KLE-GR-scc-clear-blocks>>); foreach(_j_ from 0 to `n2` − 1) do:
+... ``AD2[len_AD2]`` <- ``K(i).Content2~PT~[``_j_``]``, ``len_AD2`` <- ``len_AD2`` + 1
+.. `len_PC2` <- _AuxDataLen_ − 2 − `n2`, the number of 128-bit blocks of `Content2` that are encrypted.
 .. `SIV2`, `Content2~CT~[]` <- +
-`{fournbsp}{fournbsp}SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)`
+`{fournbsp}{fournbsp}SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[n2..n2+len_PC2-1], CSK, len_AD2, len_PC2)`
 * A loop of `kl.store` or `kl.mvout` instructions saves the serialized image `S` (<<KLE-serialized-image>>) at offset 16 of the SCC buffer:
 [start=5]
-. If _AuxDataLen_ = 0, `S` = `SIV` {vvert} `Content1~CT~`.
-. Otherwise, `S` = `SIV` {vvert} `IMPQUAL` {vvert} `SIV2` {vvert} `Content1~CT~` {vvert} `Content2~CT~`, where `Content2~CT~` may be empty.
+. If _AuxDataLen_ = 0, `S` = `SIV` {vvert} `Content1~CL~` {vvert} `Content1~CT~`, where `Content1~CL~` is `Content1~PT~[0..n1-1]`.
+. Otherwise, `S` = `SIV` {vvert} `IMPQUAL` {vvert} `SIV2` {vvert} `Content1~CL~` {vvert} `Content1~CT~` {vvert} `Content2~CL~` {vvert} `Content2~CT~`, where `Content2~CL~` is `Content2~PT~[0..n2-1]`, and any of the four parts may be empty.
 . Store `S` to memory.
 * The completing `kl.mgmt` restores the locker as <<KLE-mgmt-completes-export>> specifies.
 --
@@ -3360,15 +3378,16 @@ For an SCC whose MDH is in an Error State, use the method of <<KLE-error-state-t
 . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1. `SCC_Decrypt` clears _ADSDropped_ in its local copy of `AD[0]` before authenticating it; the MDH held in ``K(i)`` is unchanged by that computation.
 . foreach (`j` from 0 to 10) do:
 .. If `saved_MDH`._Locality_ names Locality #j (<<KLE-locality-indexes>>), then ``AD[len_AD]`` <-  ``LST_eff[j]``, ``len_AD`` <- ``len_AD`` + 1
-. `len_PC` <- the number of 128-bit blocks of `Content1`.
-. `correct`, ``K(i)``.`Content1` <- +
-`SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1, CSK, len_AD, len_PC)`.
+. `n1` <- `SCC_ClearLen1` for `saved_MDH` (Rule <<KLE-GR-scc-clear-blocks>>); foreach (`j` from 0 to `n1` − 1) do ``AD[len_AD]`` <- ``K(i).Content1[j]``, ``len_AD`` <- ``len_AD`` + 1; then `len_PC` <- the number of 128-bit blocks of `Content1`, minus `n1`.
+. `correct`, ``K(i)``.`Content1[n1..n1+len_PC-1]` <- +
+`SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1[n1..n1+len_PC-1], CSK, len_AD, len_PC)`.
 . If `correct` {ne} `true`, the SCC is rejected: ``K(i)`` transitions to Error State `kl_stateext_mgmt_auth` (_Authentication Failed_, Rule <<KLE-GR-clear-locker-content-error-state>>), and the remaining steps are skipped.
 . If ``K(i)``.MDH._AuxDataLen_ {ge} 2 and ``K(i)``.MDH._ADSDropped_ = 0, process the implementation-specific content:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. If ``K(i)``.`IMPQUAL` = the `IMPQUAL` of the implementation (<<KLE-Auxiliary-Data-Section>>), formed from the values of `mklvendorid`, `mklarchid` and `mklimpid` out of KLE unit reset, then:
-... `len_PC2` <- the number of 128-bit blocks of `Content2`, that is ``K(i)``.MDH._AuxDataLen_ − 2.
-... `correct`, ``K(i)``.`Content2` <- `SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2, CSK, len_AD2, len_PC2)`.
+... `n2` <- `SCC_ClearLen2` for `saved_MDH` and ``K(i)``.`IMPQUAL` (Rule <<KLE-GR-scc-clear-blocks>>); foreach (`j` from 0 to `n2` − 1) do ``AD2[len_AD2]`` <- ``K(i).Content2[j]``, ``len_AD2`` <- ``len_AD2`` + 1.
+... `len_PC2` <- ``K(i)``.MDH._AuxDataLen_ − 2 − `n2`, the number of encrypted 128-bit blocks of `Content2`.
+... `correct`, ``K(i)``.`Content2[n2..n2+len_PC2-1]` <- `SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[n2..n2+len_PC2-1], CSK, len_AD2, len_PC2)`.
 .. else:
 ... `correct` <- `false`.
 .. If `correct` {ne} `true`, then:
@@ -3393,6 +3412,10 @@ The `SIV`, the GCM-SIV tag, is the encryption of the `POLYVAL` hash (<<KLE-SCC-P
 Distinct sets give the same `SIV` with probability at most max(`len_AD` + `len_PC`) {times} 2^-126^, the maximum taken over the two sets.
 Taking `SIV` as ``AD2[1]`` makes `SIV2` and the second keystream depend on the first payload, so an ADS cannot be grafted onto another SCC.
 As in AES-GCM-SIV, bit 127 separates tag inputs from keystream inputs; bit 126 separates the keystreams of the two segments, at the cost of one bit of security.
+
+The clear blocks (Rule <<KLE-GR-scc-clear-blocks>>) are associated data: the `POLYVAL` input is the same sequence of blocks as if they were encrypted, and their number is fixed by the MDH and `IMPQUAL`, which the segment authenticates, so the lengths remain implied and the bound above is unchanged.
+Leaving public fields unencrypted saves one AES-256 evaluation per clear block at export and at import, and lets software read them from the SCC.
+They are restricted to values that their role makes public because an export is not gated by _UsagePolicy_ (<<KLE-UsagePolicy>>), and because a clear block is readable on any device and after the CC expires; which fields are clear depends on no value that a `kl.rstrl` or a transition changes, so a field that held a secret never becomes clear.
 
 // ////////////////////////////////////////////////////////////////////
 

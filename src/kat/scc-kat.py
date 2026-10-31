@@ -219,6 +219,50 @@ def main():
     check('same MDH in a Valid State is checked: authentication of a 16-byte image impossible (invalid)', scc_size(mdh_put(E['mdh'], 'StateExtension', 0)) == 0)
     control('negative: a corrupted SCC image (wrong CSK) is not accepted', scc_import(scc_export(mk(), CSKV, LSTV, IMPQ), CSKV ^ 2, LSTV, IMPQ)[0] != 'ok')
 
+    section('clear blocks (GR78: SCC_ClearLen1 / SCC_ClearLen2)')
+    check('the symmetric Machines designate no public field: SCC_ClearLen1 = 0', all(scc_clearlen1(mdh_pack(Machine=m)) == 0 for m in SCC_MACHINES))
+    L = mk(adl=5, c2=bytes(range(0x30, 0x60)), js=(2, 9)); ref = scc_export(L, CSKV, LSTV, IMPQ)
+    check('clear lengths 0 give the existing image', scc_export(L, CSKV, LSTV, IMPQ, clear1=0, clear2=0) == ref)
+    ad = v2b(L['mdh'] & ~(1 << 47), 16) + LST[2] + LST[9]
+    for n1, n2 in ((1, 0), (2, 0), (0, 1), (1, 2), (2, 3)):
+        img = scc_export(L, CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
+        c1p, c2p = L['c1'], L['c2']
+        c, t = scc_rfc_seal(CSK, bytes(12), ad + c1p[:16 * n1], c1p[16 * n1:], lenblock=False, sep=0)
+        c_2, t2 = scc_rfc_seal(CSK, bytes(12), v2b(IMPQ, 16) + t + c2p[:16 * n2], c2p[16 * n2:], lenblock=False, sep=1)
+        tag = '(n1 = %d, n2 = %d)' % (n1, n2)
+        check('%s image = MDH | SIV | IMPQUAL | SIV2 | clear1 | ct1 | clear2 | ct2, clear blocks as AD of the independent model' % tag,
+              img == v2b(L['mdh'], 16) + t + v2b(IMPQ, 16) + t2 + c1p[:16 * n1] + c + c2p[:16 * n2] + c_2)
+        check('%s same length as without clear blocks (kl.size unchanged)' % tag, len(img) == len(ref) == scc_size(L['mdh']))
+        st, R = scc_import(img, CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
+        check('%s round trip' % tag, st == 'ok' and R == L)
+        o1 = 64 + 16 * n1 - 1                       # last clear byte of Content1
+        if n1:
+            st, E = scc_import(img[:o1] + bytes([img[o1] ^ 1]) + img[o1 + 1:], CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
+            check('%s a flipped clear block of Content1 fails authentication, Content cleared' % tag, st == 'authfail' and E['c1'] == b'')
+            other = scc_export(mk(adl=5, c2=L['c2'], js=(2, 9), key=bytes(32)), CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
+            spl = img[:64] + other[64:64 + 16 * n1] + img[64 + 16 * n1:]
+            check('%s clear blocks spliced from another SCC fail authentication' % tag, scc_import(spl, CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)[0] == 'authfail')
+            check('%s a different SCC_ClearLen1 at import fails authentication' % tag, scc_import(img, CSKV, LSTV, IMPQ, clear1=n1 - 1, clear2=n2)[0] == 'authfail')
+        o2 = 96 + 16 * n2 - 1                       # last clear byte of Content2
+        if n2:
+            st, R = scc_import(img[:o2] + bytes([img[o2] ^ 1]) + img[o2 + 1:], CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
+            check('%s a flipped clear block of Content2 drops the whole ADS, Content1 kept' % tag,
+                  st == 'ok' and R['c1'] == L['c1'] and R['c2'] == b'' and mdh_get(R['mdh'], 'AuxDataLen') == 0)
+    img = scc_export(L, CSKV, LSTV, IMPQ, clear1=2, clear2=3)
+    check('all blocks clear (n1 = 2 = all of Content1, n2 = 3 = all of Content2): empty plaintext, still authenticated',
+          img[64:] == L['c1'] + L['c2'] and scc_import(img, CSKV, LSTV, IMPQ, clear1=2, clear2=3)[1] == L
+          and scc_import(img[:-1] + bytes([img[-1] ^ 1]), CSKV, LSTV, IMPQ, clear1=2, clear2=3)[1]['c2'] == b'')
+    # SCC_ClearLen1 of the public-key Machines, from the field sizes of FIPS 203 / 204 (machines chapter)
+    kem = [((384 * k + 32) + 32 + ct) // 16 for k, ct in ((2, 768), (3, 1088), (4, 1568))]
+    kem_tot = [((384 * k + 32) + 32 + ct + 384 * k + 32 + 32) // 16 for k, ct in ((2, 768), (3, 1088), (4, 1568))]
+    check('ML-KEM: ek | H(ek) | ciphertext fill 100 / 144 / 198 whole blocks of 152 / 220 / 298', kem == [100, 144, 198] and kem_tot == [152, 220, 298])
+    dsa = [(pk + sg + 127) // 128 for pk, sg in ((10496, 19360), (15616, 26472), (20736, 37016))]
+    check('ML-DSA: pubkey | signature, padded to a block, fill 234 / 329 / 452 blocks', dsa == [234, 329, 452])
+    ecc = {c: (-(-vb // 128) - (-2 * ub // 128), -(-vb // 128)) for c, (ub, vb) in {'P-256': (512, 512), 'P-384': (768, 768), 'P-521': (1152, 1152), 'ed25519': (256, 512), 'ed448': (456, 912)}.items()}
+    info('ECC SCC_ClearLen1 (MachineExtension 1, 0) with MachinePolicy != 0: %s' % ecc)
+    P1 = _blocks(L["c1"]); AD1 = scc_ad(L["mdh"], LSTV)
+    control("negative: a clear block left out of the AD is not authenticated", scc_encrypt(AD1, 0, 0, P1[1:], CSKV)[0] == scc_encrypt(AD1, 0, 0, P1[1:], CSKV)[0] != scc_encrypt(AD1 + [P1[0] ^ 1], 0, 0, P1[1:], CSKV)[0])
+
     section('regression vectors (CSK 000102..1f, LST[j] = 16 x (0x40+j), key 8081..9f)')
     spec_note('vectors below are produced by the spec model and equal the independent RFC-based assembly checked above')
     for js in ((), (2,), (1, 4, 6, 8, 9, 10)):

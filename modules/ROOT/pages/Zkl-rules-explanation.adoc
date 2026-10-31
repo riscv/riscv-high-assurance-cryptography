@@ -352,7 +352,7 @@ P15: _Cryptographic Contexts keep their confidentiality and integrity also outsi
 Persistence (<<KLE-Principle-persistence>>) moves a CC through memory, storage and networks that the KLE unit does not control, and the binding of <<KLE-Principle-key-binding>> holds there only if the saved form carries them, as the locker does inside the unit (<<KLE-Principle-cia-inside>>).
 A CC outside a locker therefore reveals nothing of its secret material and cannot be altered undetected:
 
-* export seals it with an AEAD under keys derived from the CSK, with the MDH and the Localities as associated data;
+* export seals it with an AEAD under keys derived from the CSK, with the MDH, the Localities and the public fields as associated data, and encrypts the rest;
 * import verifies the seal before the CC becomes usable; a failure leaves an Error State or, for the ADS alone, drops the ADS;
 * a partial provisioning is exported as the clear PI it holds, and an unfinished system-specific import as the data that software supplied (<<Zkl-ISA-unpriv.adoc#KLE-management-formats-and-states>>); only a completed CC is sealed.
 
@@ -363,7 +363,7 @@ Implementation-defined Metadata is interpreted only by the implementation that w
 
 // A locality secret must not be withdrawn while a CC bound to it may still be exported.
 
-*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>> (the exported image), <<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>> (restricting a CC in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-import-only>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>> (system-specific import); outside the GR series, Rule <<Zkl-software.adoc#KLE-SR-locality-unconfigure>>, <<Zkl-software.adoc#KLE-SR-hypervisor-locality-clear>>.
+*Rules.* <<Zkl-ISA-unpriv.adoc#KLE-GR-no-extraction>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-zkl-load-mv-allowed>> (the exported image), <<Zkl-ISA-unpriv.adoc#KLE-SCC-AEAD>>, <<Zkl-ISA-unpriv.adoc#KLE-Localities>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-custom-locality>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>> (restricting a CC in transit), <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>, <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>> (public fields in clear), <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-import-only>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>> (system-specific import); outside the GR series, Rule <<Zkl-software.adoc#KLE-SR-locality-unconfigure>>, <<Zkl-software.adoc#KLE-SR-hypervisor-locality-clear>>, <<Zkl-software.adoc#KLE-SR-scc-clear-unauthenticated>>, <<Zkl-software.adoc#KLE-SR-ecc-public-generator>>.
 --
 
 [[KLE-Principle-no-privilege-elevation,P16]]
@@ -966,8 +966,8 @@ For each rule, the Principles and Design Decisions it follows from; each of them
 | <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>
 | <<KLE-Principle-availability>>, <<KLE-Principle-persistence>>, <<KLE-Decision-metadata>>, <<KLE-Decision-error-states>>, <<KLE-Decision-fall-through>>
 |
-|
-|
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>
+| <<KLE-Principle-hidden-keys>>, <<KLE-Principle-confidentiality-integrity>>, <<KLE-Principle-persistence>>
 
 |===
 
@@ -1022,6 +1022,7 @@ The choices below are constrained by the Principles and Design Decisions but not
 [cols="<1,<3,<3",options="header"]
 |===
 | Statement | Choice | Why, and what the Principles leave open
+| <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>> | The public fields of a Machine, placed first in its Serialized Content, and the first `SCC_ClearLen2` blocks of the ADS, are authenticated as associated data and not encrypted; which fields are public depends only on immutable MDH fields, and a public field never holds a secret, an intermediate value or a `kl.derive` destination. Only the public-key Machines designate public fields for now: ML-KEM (`ek`, `H(ek)`, `ciphertext`), ML-DSA (`pubkey`, `signature`), and the Elliptic Curve Machines (`Signature`, and `Generator` and `SecondPt` in the public-points variant, _MachineExtension_ = 1, which refuses a shared-secret computation). | Encrypting values that are public anyway costs one AES-256 per block at export and import, about two thirds of an ML-KEM SCC, and hides from software values it may need, such as a public key. Export is not gated by _UsagePolicy_, and an SCC is readable on any device and after expiry, so only values public by their role may be clear; a computed signature or ciphertext counts as released, since it reveals nothing of the key. A split that depended on _State_, _MachinePolicy_ narrowing or Content could expose a field that held a secret, and the ECC points can hold a shared secret or a password-derived generator, hence the separate variant. A value read from a clear block is unauthenticated until import (Rule <<Zkl-software.adoc#KLE-SR-scc-clear-unauthenticated>>). Symmetric Machines may follow, for instance for an IV.
 | <<Zkl-ISA-machines.adoc#KLE-MGR-form-D-where-C>> | A State that expects a Form C `kl.setst` with an `INPUT` of at most 128 bits also admits Form D, whose two (RV64) or four (RV32) GPRs carry it, and Form A, a zero; Form B only where the State says so, for an integer of at most 64 bits. | Code without vectors needs no vector register to enter such a State (<<KLE-Principle-scalable>>); how wide an `INPUT` is depends on the Machine, so the Rule is a Machine Rule.
 | <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>> | `SM4_XEX` is the XTS mode of GB/T 17964-2021, whose multiplication of the mask takes the bits of each byte in the reverse order; `AES128_XEX` and `AES256_XEX` follow SP 800-38E and IEEE 1619. | SP 800-38E and IEEE 1619 define XTS for AES only, and GB/T 17964-2021 is the standard that defines it for SM4; the IEEE construction with SM4 swapped in would match no standard, as OpenSSL's default SM4-XTS shows.
 | <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>> | Ciphertext stealing in decryption uses the Machine-defined `kl.setst` `kl_xex_state_steal`, an operation (<<Zkl-ISA-machines.adoc#KLE-operation-immediates>>), and two flags of _StateExtension_: the `kl.setst` skips mask index `m-1`, the next `kl.exec` decrypts at index `m` and steps the mask back with `update_mask_inv`, and the last one decrypts at index `m-1` and ends in _Success_. | SP 800-38E decryption uses mask index `m` before `m-1`, while the mask of the plain sequence only advances; without these steps, software needs a `kl.clone` and a discarded block operation per data unit, and a second locker. Each mask index is still used once, and the flags admit each step once and in order. Every transition, same-State `kl.setst` included, clears both flags, so a new tweak starts without them.
