@@ -691,9 +691,6 @@ The evaluation proceeds as follows:
 . The secure clock's date is converted to the _ExpirationDate_ format, in whole hours rounded down; a reading before the epoch converts to 0, and one at or after 2^20^ − 1 hours converts to 2^20^ − 1.
 . If the converted value is at least _ExpirationDate_, the locker transitions to Error State _Expired_; otherwise the instruction proceeds.
 
-An unreadable secure clock traps, rather than making the instruction a silent no-op, so that M-mode can handle the failure, which may be induced by glitching the clock.
-The instruction keeps the _State_, so that a handler that restores the clock can re-execute it; a handler that cannot restore the clock can put the locker in Error State _Expired_ with `kl.setste` (<<KLE-instruction-setste>>).
-
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-MachineUse]]
@@ -1044,7 +1041,7 @@ Form B examines only bits [63:0], since no field in bits [127:64] affects the si
 `content1_size` is the length in bytes of the `Content1` of an SCC for the given MDH, and `pi_content_size` that of the `Content` of a PI, both determined according to <<KLE-length-rule>>.
 `content2_size` is 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
 
-For both instructions, the checks of Rule <<KLE-GR-management-check-order>> come first; among them are `r` = 1 in Form B or C (a reserved encoding), `vstart` {ne} 0 in Form C (Rule <<KLE-GR-vector-legality>>) and, in Form A, a locker that is _Off_.
+The order in which the conditions are checked is given in Rule <<KLE-GR-management-check-order>>.
 The instruction then writes to `Xd` the value of the first item of its list that applies.
 
 `kl.size` returns or raises, evaluated in order:
@@ -1129,7 +1126,7 @@ Description::
 +
 --
 Performs a cryptographic operation defined by the Machine in locker `Kn` and its state, possibly taking an input and producing an output; `Kn` may be `KLNL` (Rule <<KLE-GR-klnamedlocker-override>>).
-When it performs no operation (under Rule <<KLE-GR-outcome-inert>>) or transitions the locker to an Error State, it zeroes the unwritten part of its output window instead of producing further output (Rule <<KLE-GR-zero-unwritten-output>>).
+Rule <<KLE-GR-zero-unwritten-output>> describes its output when it performs no operation or transitions the locker to an Error State.
 
 In Form A, each output block has the length of its input block and is written at the same window offset, so `Vd` and `Vs2` may always be the same register group, each block's output replacing its input; any other overlap of `Vd` with `Vs2` raises an illegal-instruction exception.
 
@@ -1186,16 +1183,12 @@ A non-zero `rs1` in variants I–III or VI, or a non-zero `rs2` in variants III�
 Description::
 +
 --
-`kl.mvin` moves the <<KLE-serialized-image,serialized image>> `S` into, and `kl.mvout` out of, the named locker (Rule <<KLE-GR-locker-less-transfers>>).
+`kl.mvin` moves the <<KLE-serialized-image,serialized image>> `S` into, and `kl.mvout` out of, the locker that `klnamedlocker` names, as `KLNL` does (Rule <<KLE-GR-locker-less-transfers>>).
 Neither transfers the MDH: for a provisioning or an import, the opening `kl.mgmt` has already loaded it (<<KLE-instruction-mgmt>>), and `kl.getmd*` reads it.
 
 [[KLE-mv-locker-checks,locker checks]]Locker checks::
-The named locker must be in a Configuration State that admits the instruction, and `klstart` must be a multiple of 16:
-+
-* `kl.mvin`, a locker being provisioned or imported: `kl_cfg_provisioning`, `kl_cfg_importing` or `kl_cfg_ppi_importing` (Rule <<KLE-GR-zkl-load-mv-allowed>>);
-* `kl.mvout`, a locker being exported: `kl_cfg_exporting` or `kl_cfg_ppi_exporting` (Rule <<KLE-GR-zkl-load-mv-allowed>>).
-+
-Otherwise an illegal-instruction exception is raised, except on an _Unconfigured_ or Error-State locker, on which the instruction performs no operation, whatever `klstart` is (Rule <<KLE-GR-outcome-inert>>).
+The named locker must be in a Configuration State that Rule <<KLE-GR-zkl-load-mv-allowed>> admits for the instruction, `kl.mvin` during a provisioning or import (nested or base) and `kl.mvout` during an export, and `klstart` must be a multiple of 16.
+Otherwise an illegal-instruction exception is raised, except on an inert locker, or with `klnamedlocker` = 32, where the instruction falls through, whatever `klstart` is (Rules <<KLE-GR-management-check-order>>, <<KLE-GR-outcome-inert>>).
 
 Transfer::
 `kl.mvin` and `kl.mvout` process the operand window in 16-byte blocks, in order: if `klstart` < `image_end`, the block of the <<KLE-serialized-image,serialized image>> `S` at offset `klstart` is transferred and `klstart` advances by 16; otherwise `kl.mvin` ignores the block, `kl.mvout` writes zeros to it, and `klstart` is unchanged. `klstart` is kept across instructions; a sequence of them transfers `S` piecewise.
@@ -1309,8 +1302,8 @@ For all Machines, `#immed7` takes these values:
 
 The State class of the locker decides the outcome of an immediate in 1–55, 64 or 66–127:
 
-* in a Valid State, Rule <<KLE-GR-outcome-valid-state>> applies: unless one of its items 1–3 applies first, an immediate that neither the architecture nor the Machine admits in the current State (Rule <<KLE-GR-setst-not-admitted>>), 54 and 55 included, or a wrong Form, transitions the locker to Error State _Invalid_;
-* in a Configuration State, Rule <<KLE-GR-outcome-config-state>> applies: a usage instruction raises a KLE privilege-violation exception and leaves the _State_ unchanged;
+* in a Valid State, an immediate that the State does not admit, 54 and 55 included, or a wrong Form transitions the locker to Error State _Invalid_ (Rules <<KLE-GR-outcome-valid-state>>, <<KLE-GR-setst-not-admitted>>, <<KLE-GR-success-failure-cannot-be-set-directly>>);
+* in a Configuration State, it raises a KLE privilege-violation exception (Rule <<KLE-GR-outcome-config-state>>);
 * on an _inert locker_ (Unconfigured, in an Error State or `KLNL` while `klnamedlocker` = 32), the instruction performs no operation (Rule <<KLE-GR-outcome-inert>>).
 
 Some values require an auxiliary operand, in GPRs (Forms B and D) or in a vector register `Vs` (Form C).
@@ -1837,7 +1830,7 @@ Let `length` be the value provided by the auxiliary GPR, and `eff_length` the nu
 A transfer is _unrestricted_ only where software could also obtain the moved data by issuing `kl.exec` instructions, as for the block cipher outputs of Rule <<KLE-GR-exec-implies-unrestricted>> and a shared secret that its Machine allows to export through `kl.exec`; otherwise it is _restricted_, as for any other shared secret (Rule <<KLE-GR-shared-secret>>).
 
 Source and destination must be different lockers, else an illegal-instruction exception is raised.
-Usage Control applies to both lockers (Rule <<KLE-GR-outcome-valid-state>>), and both are checked before any state change or transfer: first the conditions of Rule <<KLE-GR-outcome-valid-state>>, in the order of Rule <<KLE-GR-derive-check-order>>, then those of Rules <<KLE-GR-checks>> and <<KLE-GR-narrowing>>.
+Both lockers are checked before any state change or transfer: first under Rule <<KLE-GR-derive-check-order>>, then under Rules <<KLE-GR-checks>> and <<KLE-GR-narrowing>>.
 --
 
 // ////////////////////////////////////////////////////////////////////
