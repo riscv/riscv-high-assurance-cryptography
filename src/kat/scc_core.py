@@ -72,7 +72,7 @@ def scc_decrypt(AD, sep, SIV, C, K, nclear=0):
 
 # ------------------------------------------------------------------ locker model of export / import
 SCC_MACHINES = {0x20: 32, 0x00: 16}          # supported Machines: AES256_ECB, AES128_ECB (key bytes)
-SCC_CLEARLEN1 = {}                            # Machine -> SCC_ClearLen1 (GR78); the symmetric Machines have none
+SCC_CLEARLEN1 = {}                            # Machine -> SCC_ClearLen1 (GR10); the symmetric Machines have none
 def scc_clearlen1(mdh, clear1=None):
     return SCC_CLEARLEN1.get(mdh_get(mdh, 'Machine'), 0) if clear1 is None else clear1
 def scc_loc_bits(js):
@@ -127,7 +127,7 @@ def scc_ad(mdh, lst):
         if scc_includes(mdh_get(mdh, 'Locality'), j): ad.append(s)
     return ad
 def scc_export(L, csk, lst, impq, clear1=None, clear2=0):
-    """L: dict(mdh, c1 bytes, c2 bytes).  Returns the SCC image bytes.  clear1/clear2: SCC_ClearLen1/2 (GR78)."""
+    """L: dict(mdh, c1 bytes, c2 bytes).  Returns the SCC image bytes.  clear1/clear2: SCC_ClearLen1/2 (GR10)."""
     f = mdh_unpack(L['mdh'])
     if f['State'] == 0 and f['StateExtension'] in ERROR_STATES: return v2b(L['mdh'], 16)
     assert f['ADSDropped'] == 0

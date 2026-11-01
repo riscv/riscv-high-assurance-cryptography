@@ -13,9 +13,9 @@ Locker(fname, hmac=None|'NIK'|'KIP', key=bytes K0 (KIP), syskey=bytes (BLAKE2 on
         in Bits, halt=True stops at the first byte offset past klstart (see .halted)
         returns for Form B: None when complete, or the klstart of a halt (int) -> see .halted
   .derive(secret, klstart=0, stream=False, sealed=False, smdh=None) -> bool (destination side of kl.derive of a shared secret;
-        smdh: the source MDH of a restricted transfer, narrowing .mdh by GR40, or 'PrivViolation')
-  .sealed, .ksealed           `Sealed` and `KeySealed` (HMAC NIK) of StateExtension (GR79)
-  .mdh                        UsagePolicy, Locality, ExpirationDate and SCProtection, for GR40 only (default 0)
+        smdh: the source MDH of a restricted transfer, narrowing .mdh by GR42, or 'PrivViolation')
+  .sealed, .ksealed           `Sealed` and `KeySealed` (HMAC NIK) of StateExtension (GR46)
+  .mdh                        UsagePolicy, Locality, ExpirationDate and SCProtection, for GR42 only (default 0)
   .meta_ok()                  StateExtension @ State supported (KLE-Metadata-validity); import_(L): SCC import or kl.clone
 Key(n, src_out) is a key field of n bytes of another symmetric Machine in Ready, src_out marking keystream, OFB or CMAC.
   .clear();  copy.deepcopy(locker) is an export/import snapshot.
@@ -199,22 +199,22 @@ class Locker:
         s.halted = None; f = s.f; st = s.st; kl = 8 * len(data) if kllen is None else kllen
         if st in ('Invalid', 'Inert'): return None if form != 'C' else bytes(kl // 8)
         zero = bytes(kl // 8) if form == 'C' else None
-        if st in ('Output', 'Bits', 'Verify') and s.hmac and not s.policy & (2 if st == 'Verify' else 1): s.inv(); return zero   # GR25
+        if st in ('Output', 'Bits', 'Verify') and s.hmac and not s.policy & (2 if st == 'Verify' else 1): s.inv(); return zero   # GR30
         if st in ('Output', 'Bits'):
             if form != 'C' or s.sealed or s.ksealed: s.inv(); return zero
             if st == 'Bits' and s.lbl == 0: s.inv(); return zero              # read_len exhausted: a new kl.setst is needed
             return s._exec_out(kl, klstart, halt, st == 'Bits')
         if form != 'B' or st not in ('Absorb', 'Last', 'SetKey', 'Verify'): s.inv(); return zero
         if st == 'Verify':
-            if klstart * 8 >= kl: return None                          # GR52 item 1
+            if klstart * 8 >= kl: return None                          # GR25 item 1
             if kl < s.tag_len: return s.inv()
             ok = (b2v(data) & M(s.tag_len)) == (s.S & M(s.tag_len))
             s.st = 'Success' if ok else 'Failure'; return None
         if st == 'Last':
             L = s.lbl
             if L == 0: return s.inv()                                  # MR10: empty final input admits no kl.exec, even an empty window
-            if klstart * 8 >= kl: return None                          # GR52 item 1
-            if kl < L or klstart: return s.inv()                       # GR52 items 2, 3
+            if klstart * 8 >= kl: return None                          # GR25 item 1
+            if kl < L or klstart: return s.inv()                       # GR25 items 2, 3
             X = b2v(data)
             if f.kind in ('sha2', 'sm3'):
                 nb = (L + 7) // 8; q = L % 8; bs = bytearray(data[:nb])
@@ -260,7 +260,7 @@ class Locker:
             if bits and halt and ob % 8 == 0 and ob < kl: s.halted = ob // 8; return v2b(out, kl // 8)
         return v2b(out, kl // 8)
     def rstrl(s, mask):
-        """kl.rstrl narrowing MachinePolicy (GR25): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
+        """kl.rstrl narrowing MachinePolicy (GR30): a value the Machine forbids -> Invalid; a cleared gate bit fails the next gated operation."""
         if s.st in ('Invalid', 'Inert'): return
         s.policy &= mask
         if s.hmac and not s.policy & 3: s.inv()
@@ -278,14 +278,14 @@ class Locker:
         """destination side of kl.derive of a shared secret; False (and dest Invalid) if refused; srcinv: the source fails."""
         s.srcinv = False
         if s.st in ('Invalid', 'Inert'): return False
-        if klstart: s.inv(); return False                                     # GR39 item 1
+        if klstart: s.inv(); return False                                     # GR41 item 1
         if s.hmac and s.tag_len_p != s.f.t: s.inv(); return False             # MR12: a short tag_len_p is not a destination
-        if src != 'secret' and s.st == 'Absorb': s.srcinv = True; s.inv(); return False   # GR39 item 4: only a shared secret enters a message, both Invalid
+        if src != 'secret' and s.st == 'Absorb': s.srcinv = True; s.inv(); return False   # GR41 item 4: only a shared secret enters a message, both Invalid
         f = s.f; length = len(secret) if length is None else length
         if length != len(secret): s.inv(); return False
         if s.st == 'SetKey':
             if stream or len(secret) > f.b // 8: s.inv(); return False
-            if sealed and length < 16: s.srcinv = True; return False                 # GR39 item 7
+            if sealed and length < 16: s.srcinv = True; return False                 # GR41 item 7
             if not s._gr40(smdh): return False
             s.K0 = b2v(secret); s.bb = 0; s.cum = f.b; s.haskey = True; s.ksealed |= sealed; return True
         if s.st != 'Absorb': s.inv(); return False
@@ -305,14 +305,14 @@ class Locker:
         return L
 
 def derive_out(S, D, n):
-    """kl.derive D <- S, with S in Hash_Output or Hash_Output_Bits (GR43; read_len is kept): unrestricted; the destination checks see the remaining output, of which
-    the transfer takes n bytes as a Form C kl.exec would (GR38).  False if refused."""
+    """kl.derive D <- S, with S in Hash_Output or Hash_Output_Bits (GR45; read_len is kept): unrestricted; the destination checks see the remaining output, of which
+    the transfer takes n bytes as a Form C kl.exec would (GR40).  False if refused."""
     D.srcinv = False
-    if S.st not in ('Output', 'Bits'): S.inv(); D.srcinv = True; return False       # GR39 item 2: not a source endpoint
+    if S.st not in ('Output', 'Bits'): S.inv(); D.srcinv = True; return False       # GR41 item 2: not a source endpoint
     rem = (S.outl + 7) // 8 if S.outl else None                                      # None: an XOF without bound
     sealed = S.sealed or S.ksealed
     ok = D.derive(copy.deepcopy(S)._exec_out(8 * (rem or n), 0, False), length=n, stream=rem is None, src='out', sealed=sealed,
-                  smdh=S.mdh if sealed else None)                                  # GR79: a sealed hop is restricted (GR40)
+                  smdh=S.mdh if sealed else None)                                  # GR46: a sealed hop is restricted (GR42)
     if D.srcinv: S.inv()
     if ok: S._exec_out(8 * n, 0, False)
     return ok
@@ -324,8 +324,8 @@ class Key:
     _gr40 = Locker._gr40
     def derive(s, data, length, stream, src, sealed=False, smdh=None):
         s.srcinv = False
-        if sealed and s.src_out: s.inv(); s.srcinv = True; return False             # GR79: not an admitted pair, both Invalid
-        if length < s.n or len(data) < s.n: s.inv(); return False                    # GR39 item 6
+        if sealed and s.src_out: s.inv(); s.srcinv = True; return False             # GR46: not an admitted pair, both Invalid
+        if length < s.n or len(data) < s.n: s.inv(); return False                    # GR41 item 6
         if sealed and s.n < 16: s.srcinv = True; return False                        # item 7 (eff_length = n)
         if not s._gr40(smdh): return False
         s.key = data[:s.n]; return True

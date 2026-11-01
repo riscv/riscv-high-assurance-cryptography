@@ -119,12 +119,12 @@ class EccLocker:
         if self.kind != 'ed': self.RndNum[:] = bytes(len(self.RndNum)); self.setf('rnd', False)
     def setst(self, target, form='A', xs=0):
         self._live()
-        if form not in ('A', 'B'):                        # Forms C and D never name a State (GR20)
+        if form not in ('A', 'B'):                        # Forms C and D never name a State (GR24)
             return self._inv()
         if target in (54, 55, OUT) or target not in self._states() | {0}: return self._inv()
         if target == 0: raise NotImplementedError('kl.clear is out of scope')
         st = self.state
-        # Forms (GR20): Ready, Set_Generator, Set_Scalar take A or B; Set_Ctx, Msg_Absorb take B; the rest A
+        # Forms (GR24): Ready, Set_Generator, Set_Scalar take A or B; Set_Ctx, Msg_Absorb take B; the rest A
         need = {RDY: 'AB', SGEN: 'AB', SSCAL: 'AB', SCTX: 'B', MABS: 'B'}.get(target, 'A')
         if form not in need: return self._inv()
         if form == 'B' and xs == 0 and target not in (RDY, SGEN, SSCAL, MABS): return self._inv()
@@ -132,7 +132,7 @@ class EccLocker:
         # admitted source/target pairs
         if target != RDY:
             ok_src = st == RDY or st in SETS or (st == MABS)
-            if st == target and st not in SETS and st != MABS: ok_src = False       # GR21
+            if st == target and st not in SETS and st != MABS: ok_src = False       # GR26
             if st == MABS and target not in (MABS, SGN, SVER): ok_src = False
             if not ok_src: return self._inv()
         # MR14 / GR56: leaving a Set State drops an incomplete load; any setst drops Progress and RndNum
@@ -369,12 +369,12 @@ class EccLocker:
         return chunk
     sealed = property(lambda self: self.ext == 2)
     def derive_source(self):
-        """kl.derive source: Output with OutputType shared secret before any Form C (block_base = 0), unrestricted (GR42),
-        or sealed (GR79) if self.sealed; anything else is not a source. A peek: derive() consumes it."""
+        """kl.derive source: Output with OutputType shared secret before any Form C (block_base = 0), unrestricted (GR44),
+        or sealed (GR46) if self.sealed; anything else is not a source. A peek: derive() consumes it."""
         if self.state == OUT and self.outtype == 2 and self.block_base == 0: return self.shared_secret()
         return None
     def derive(self):
-        """A committed kl.derive of the shared secret (GR38): Output -> Success; outside the source State, Invalid (GR39 item 2)."""
+        """A committed kl.derive of the shared secret (GR40): Output -> Success; outside the source State, Invalid (GR41 item 2)."""
         self._live()
         z = self.derive_source()
         if z is None: return self._inv()
@@ -382,7 +382,7 @@ class EccLocker:
     # ------------------------------------------------------------ restrict / clearads / clone
     def rstrl(self, pol):
         self._live()
-        if pol & ~self.policy or (self.kind == 'ed' and pol == 0): return self._inv()   # GR25: narrowing only
+        if pol & ~self.policy or (self.kind == 'ed' and pol == 0): return self._inv()   # GR30: narrowing only
         self.policy = pol
         if pol == 0:
             self.Signature[:] = bytes(len(self.Signature)); self.Hash[:] = bytes(len(self.Hash)); self.setf('sig', False); self.setf('hash', False)

@@ -194,7 +194,7 @@ check('MachineUse: Progress in [13:2], OutputType in [1:0]', mdh_get(L.mdh, 'Mac
 L.rbg = rbg_k(9); r = L.exec_D()
 check('resume uses held RndNum (not a fresh k)', r == 'output' and (b2v(drain(L)[:32]), ) == (ref[0],))
 L = sign_setup(); L.exec_D(halt=True)
-check('same-State setst into Sign_Generate is not admitted (GR21) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
+check('same-State setst into Sign_Generate is not admitted (GR26) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
 L = sign_setup(); L.exec_D(halt=True)
 check('from halted Sign_Generate, a Set State is not admitted (only Ready/clearads) -> Invalid', L.setst(SHASH) == 'invalid')
 L = sign_setup(); L.exec_D(halt=True); L.clearads()
@@ -287,8 +287,8 @@ Ls, _ = pt_mul('sm2', 5, xy(Q, 32)); P = C.mul(5, Q)
 check('SM2 shared secret = x2||y2, each 32 bytes big-endian (64 bytes)', Ls.shared_secret() == P[0].to_bytes(32, 'big') + P[1].to_bytes(32, 'big'))
 check('derive_source outside Output -> None', EccLocker('secp256r1').derive_source() is None)
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Z5 = Lz.shared_secret()
-check('kl.derive of the shared secret: one transfer, Output -> Success (GR38)', Lz.derive() == Z5 and Lz.state == 54)
-check('a second kl.derive in Success -> Invalid (GR39 item 2)', Lz.derive() == 'invalid' and Lz.invalid)
+check('kl.derive of the shared secret: one transfer, Output -> Success (GR40)', Lz.derive() == Z5 and Lz.state == 54)
+check('a second kl.derive in Success -> Invalid (GR41 item 2)', Lz.derive() == 'invalid' and Lz.invalid)
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.derive()
 check('Form C after the kl.derive (Success) -> Invalid', Lz.exec_out(1) == 'invalid')
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.exec_out(1)
@@ -326,7 +326,7 @@ for nm in ('ed25519', 'x25519'):
     L = EccLocker(nm, policy=3 if nm == 'ed25519' else 0, ext=1); load(L, SSCAL, le(9, L.W)); L.setst(PMUL)
     check('%s Point_Mul on the default Generator admitted' % nm, L.exec_D() == 'output')
 
-section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR79)')
+section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR46)')
 for nm, d, Qb, Z in V.ECDH[:1]:
     W = EccLocker(nm).W
     L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); r = L.exec_D()

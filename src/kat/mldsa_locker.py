@@ -1,5 +1,5 @@
 """Model of an ML-DSA Machine locker, transcribed from Zkl-ISA-machines.adoc (KLE-PQC-ML-DSA, MR1-MR19)
-and Zkl-ISA-unpriv.adoc (GR20-GR25, GR34-GR35, GR55-GR57, GR65).
+and Zkl-ISA-unpriv.adoc (GR19, GR20, GR24, GR26-GR30, GR55-GR57, GR65).
 
 Locker(ps, policy=3, aux=0, rbg=None, lim=None)
   State numbers: S_READY ... ; fields: st (0 = Inert), se (StateExtension: flags bits0-3, or the Error code when st == 0),
@@ -103,17 +103,17 @@ class Locker:
         if self.inert: return
         if imm == 0:
             self._zero_all(); self.st = self.se = self.mu_use = 0; self.ads = None; return
-        if imm not in DEFINED or imm in (S_SUCCESS, S_FAILURE):      # undefined, 54, 55 (GR23, GR24)
+        if imm not in DEFINED or imm in (S_SUCCESS, S_FAILURE):      # undefined, 54, 55 (GR28, GR29)
             return self.invalid()
-        if self.st in (S_SUCCESS, S_FAILURE) and imm != S_READY:    # GR22
+        if self.st in (S_SUCCESS, S_FAILURE) and imm != S_READY:    # GR27
             return self.invalid()
         if (imm == S_SGEN and form not in ('A', 'B')) or (imm != S_SGEN and form != 'A'):
-            return self.invalid()                                    # wrong Form (GR13, GR20)
+            return self.invalid()                                    # wrong Form (GR14, GR24)
         if (imm in (S_SGEN, S_SOUT) and not self.policy & 1) or (imm in (S_SVER, S_SIN) and not self.policy & 2):
             return self.invalid()                                    # MR1
         if imm == S_SOUT: return self.invalid()                      # entered only on completion
         if imm == self.st and imm != S_READY and imm not in LOADING:
-            return self.invalid()                                    # GR21
+            return self.invalid()                                    # GR26
         # leaving the current State
         if self.st in LOADING and self.mu_use < self.size[LOADING[self.st]]:
             self._zero(LOADING[self.st])                             # MR14.5
@@ -148,7 +148,7 @@ class Locker:
         halt: for Sign_Generate, the number of iterations after which the operation is interrupted (None: never)."""
         if self.inert: return None
         st = self.st
-        if st in (S_READY, S_SUCCESS, S_FAILURE): return self.invalid()                         # GR21, GR22
+        if st in (S_READY, S_SUCCESS, S_FAILURE): return self.invalid()                         # GR26, GR27
         if (st in (S_SGEN, S_SOUT) and not self.policy & 1) or (st in (S_SVER, S_SIN) and not self.policy & 2):
             return self.invalid()                                                            # MR1
         if st in LOADING:

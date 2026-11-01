@@ -220,7 +220,7 @@ def main():
     check('same MDH in a Valid State is checked: authentication of a 16-byte image impossible (invalid)', scc_size(mdh_put(E['mdh'], 'StateExtension', 0)) == 0)
     control('negative: a corrupted SCC image (wrong CSK) is not accepted', scc_import(scc_export(mk(), CSKV, LSTV, IMPQ), CSKV ^ 2, LSTV, IMPQ)[0] != 'ok')
 
-    section('clear blocks (GR78: SCC_ClearLen1 / SCC_ClearLen2)')
+    section('clear blocks (GR10: SCC_ClearLen1 / SCC_ClearLen2)')
     check('the symmetric Machines designate no public field: SCC_ClearLen1 = 0', all(scc_clearlen1(mdh_pack(Machine=m)) == 0 for m in SCC_MACHINES))
     L = mk(adl=5, c2=bytes(range(0x30, 0x60)), js=(2, 9)); ref = scc_export(L, CSKV, LSTV, IMPQ)
     check('clear lengths 0 give the existing image', scc_export(L, CSKV, LSTV, IMPQ, clear1=0, clear2=0) == ref)
