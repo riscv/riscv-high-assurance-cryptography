@@ -22,10 +22,9 @@ Principles are labeled P__n__, where __n__ is a sequential number.
 The most important ones define what the KLE architecture is about:
 
 [horizontal]
-[[KLE-ISA-Principle-hidden-keys,P1]]P1:: _KLE allows software to use keys that are not exposed to software. It hides the internal state of the cryptographic algorithms it performs._
+[[KLE-ISA-Principle-hidden-keys,P1]]P1:: _KLE allows software to use keys that are not exposed to software. It hides the confidential parts of the internal state of the cryptographic algorithms it performs._
 [[KLE-ISA-Principle-key-binding,P2]]P2:: _KLE associates each key with an algorithm, and with policies that limit its use to certain privilege modes and bind it to software and hardware environments_.
-[[KLE-ISA-Principle-prefix-complete,P3]]P3:: _Every cryptographic operation is atomic. +
-If an instruction performs multiple cryptographic operations, it reports prefix-complete progress._
+[[KLE-ISA-Principle-prefix-complete,P3]]P3:: _Every cryptographic operation is atomic. When an instruction performs a well-defined sequence of similar cryptographic operations, it reports prefix-complete progress of that sequence._
 [[KLE-ISA-Principle-multiple-algorithms,P4]]P4:: _Multiple keys can be in use at the same time, and their algorithms composed_.
 
 //
@@ -39,7 +38,7 @@ A CC is an indivisible structure consisting of a *Metadata Header* (MDH), with a
 (((Cryptographic Context, Content)))
 The Content holds the secrets, such as keys, and other sensitive material, as well as public material derived from the secrets, such as public keys.
 (((Cryptographic Context, Metadata Header)))
-The MDH binds the use of the secrets in the Content to one set of cryptographic algorithms, and, optionally, to a process, VM, security state, boot cycle, expiration date, or other policies.
+The MDH binds the use of the information in the Content to one set of cryptographic algorithms, and, optionally, to a process, VM, security state, boot cycle, expiration date, or other policies.
 The MDH requires integrity, except for _ADSDropped_, an unauthenticated format hint (<<KLE-Auxiliary-Data-Section>>); the Content requires integrity, as well as confidentiality for all the information that is not supposed to be public (such as public keys).
 KLE and the algorithms it implements enforce these requirements architecturally.
 
@@ -54,13 +53,13 @@ This requires an architectural place for them.
 
 //
 
-KLE applies this Principle by defining Cryptographic Lockers.
+KLE realizes this Principle by defining Cryptographic Lockers and the means by which the architecture manages them.
 
 Definition: _Cryptographic Locker_.::
 (((Cryptographic Locker)))
 *Cryptographic Lockers* (_lockers_ for short) are per-hart architectural containers that safeguard their contents.
 CCs are created by writing Metadata and Content into a locker, a process called *Provisioning*, which also binds them to each other.
-A CC is usable only while in a locker, where only the KLE unit accesses or modifies it, under the rules of the architecture and its Machine; no instruction returns its secrets in clear, except as Rule <<KLE-GR-no-extraction>> allows.
+A CC is usable only while in a locker, where only the KLE unit accesses or modifies it, under the rules of the architecture and of the algorithm; no instruction returns its secrets in clear, except where the algorithm allows it.
 
 //
 
@@ -68,7 +67,7 @@ A KLE implementation supports 32 lockers.
 
 [horizontal]
 [[KLE-ISA-Principle-scalable,P7]]P7:: _KLE is scalable: it works on small and larger cores, with and without vector registers._
-[[KLE-ISA-Principle-small-instructions-code,P8]]P8:: _Instructions are as simple as possible, in accord with the RISC-V philosophy, while code sequences stay short._
+[[KLE-ISA-Principle-small-instructions-code,P8]]P8:: _Instructions perform tasks that are as simple as possible, in accord with the RISC-V philosophy, while code sequences stay short. An instruction performs a complex task only if it is necessary for security reasons, i.e., when breaking it up further would lead to a violation of a security-related Principle, such as <<KLE-ISA-Principle-hidden-keys>>, <<KLE-ISA-Principle-key-binding>>, <<KLE-ISA-Principle-cia-inside>>, <<KLE-ISA-Principle-confidentiality-integrity>> and <<KLE-ISA-Principle-no-privilege-elevation>>._
 [[KLE-ISA-Principle-encoding-pressure,P9]]P9:: _Minimize the pressure on the instruction encoding space._
 
 //
@@ -90,7 +89,11 @@ A small set of KLE instructions operates all Machines: their inputs and outputs 
 Encapsulating Machine-specific behavior in the MDH rather than the instructions lets different primitives (e.g., AES-128, AES-256 and SM4) be used in the same modes (e.g., ECB, GCM-SIV and XTS) without changing the compiled code, and supports side-channel-resistant variants transparently.
 
 [horizontal]
-[[KLE-ISA-Principle-no-misuse,P11]]P11:: _A Machine admits only the sequences of operations that its specification defines._
+[[KLE-ISA-Principle-no-misuse,P11]]P11:: _Besides the operations that are always allowed by the architecture, a Machine admits only the sequences of operations that its specification defines._
+
+Machines use the state of Principle <<KLE-ISA-Principle-contexts-stateful>> to enforce this Principle.
+
+[horizontal]
 [[KLE-ISA-Principle-cia-inside,P12]]P12:: _Inside a locker, a CC is accessed only through its Machine and the instructions managing it._
 [[KLE-ISA-Principle-availability,P13]]P13:: _Software can always configure a new CC, after clearing other lockers if necessary._
 [[KLE-ISA-Principle-persistence,P14]]P14:: _A CC can be saved and restored, also into a different locker or on a different implementation, to support features such as context switching, sleep, hibernation and VM migration._
@@ -136,7 +139,7 @@ The entire architecture follows from these Principles and Definitions.
 [[KLE-architectural-model]]
 === Architectural Model
 
-KLE is architected as an interface to an _attached_ unit: its instructions are messages over a tightly coupled coprocessor interface, and the KLE unit executes them independently of the issuing hart and returns the results.
+KLE is architected as an interface to an _attached_ unit: its instructions behave like messages over a tightly coupled coprocessor interface, and the KLE unit executes them independently of the issuing hart and returns the results.
 
 This keeps the hart side simple: software implements the locker-configuration logic, the KLE unit the cryptography, and several cores may share one KLE unit.
 
@@ -178,8 +181,23 @@ This convention lets CCs migrate between harts of different endianness.
 [[KLE-extensions-overview-unpriv]]
 == Extensions Overview
 
-KLE comprises several sub-extensions. Those that define ISA features follow; those that define cryptographic algorithms are listed in <<Zkl-ISA-machines.adoc#KLE-exec-encodings>>.
+The principal KLE instructions, defined in full in <<KLE-instructions-detailed>>, are:
 
+* `<<KLE-instruction-setst,kl.setst>>` moves the CC in a locker between the states of its Machine.
+* `<<KLE-instruction-mgmt,kl.mgmt>>` moves a locker through its management lifecycle, and,
+with the management transfer instructions `<<KLE-instructions-memory,kl.load>>`, `<<KLE-instructions-memory,kl.store>>`, `<<KLE-instruction-mv,kl.mvin>>`, and `<<KLE-instruction-mv,kl.mvout>>`
+performs the management operations (<<KLE-management-operations>>), each in several instructions, except on a locker in an Error State (<<KLE-error-state-transfer>>):
+ ** *provisioning* loads metadata and clear Content into a locker, binding them;
+ ** *export* writes a locker to memory as an SCC;
+ ** *import* loads an SCC into a locker.
+* `<<KLE-instruction-clear,kl.clear>>` unconfigures and clears a locker. It is a pseudo-instruction of `kl.setst`, and never part of a management operation.
+* `<<KLE-instruction-exec,kl.exec>>` performs the cryptographic operations that the Machine configured in a locker defines for the locker's current state.
+* `<<KLE-instruction-getmd,kl.getmd*>>` reads the metadata of a locker.
+The pseudo-instruction `<<KLE-instruction-getst,kl.getst>>`, built on `kl.getmdl`, extracts the state of a locker from its MDH and reports errors.
+
+KLE comprises several sub-extensions. Those that define ISA features are given in <<KLE-table-extensions-overview-unpriv>>; those that define cryptographic algorithms are listed in <<Zkl-ISA-machines.adoc#KLE-exec-encodings>>.
+
+[[KLE-table-extensions-overview-unpriv]]
 .Extensions defining KLE ISA features
 [,%header,cols="<14%,<56%,<30%"]
 |===
@@ -199,24 +217,11 @@ KLE comprises several sub-extensions. Those that define ISA features follow; tho
 
 KLE instructions may raise the standard RISC-V exceptions and a few KLE-specific exception types, listed in <<Zkl-ISA-priv.adoc#KLE-exception-codes>>.
 
-With trap-and-emulate, the hardware raises an illegal-instruction exception for instructions it does not implement, which the platform must deliver to M-mode (`medeleg` bit 2 zero); the encodings are assigned, not reserved (<<KLE-second-group-ILL-grounds>>).
-The emulating code moves data between memory and the locker with `Zklmv` (item 3).
-`kl.load` and `kl.store` are always present; `Zklmv` and `Zklexpire` are otherwise optional.
-
 `Zklv` requires the KLV subset of the vector extension (<<KLE-KLV>>) with `VLEN` {ge} 128, that is, `Zvl128b` or a larger `Zvl*b`, which every vector Form that carries an MDH or a 128-bit block needs.
 
-The principal KLE instructions, defined in full below, are:
-
-* `kl.mgmt` (<<KLE-instruction-mgmt>>) moves a locker through its management lifecycle, and,
-with the management transfer instructions `kl.load` and `kl.store` (<<KLE-instructions-memory>>), `kl.mvin` and `kl.mvout` (<<KLE-instruction-mv>>),
-performs the management operations (<<KLE-management-operations>>), each in several instructions, except on a locker in an Error State (<<KLE-error-state-transfer>>):
- ** *provisioning* loads metadata and clear Content into a locker, binding them;
- ** *export* writes a locker to memory as an SCC;
- ** *import* loads an SCC into a locker.
-* `kl.clear` (<<KLE-instruction-clear>>) unconfigures and clears a locker. It is a pseudo-instruction of `kl.setst`, and never part of a management operation.
-* `kl.exec` (<<KLE-instruction-exec>>) performs the cryptographic operations that the Machine configured in a locker defines for the locker's current state.
-* `kl.setst` (<<KLE-instruction-setst>>) moves the CC in a locker between the states of its Machine.
-* `kl.getmd*` (<<KLE-instruction-getmd>>) reads the metadata of a locker. The pseudo-instruction `kl.getst` (<<KLE-instruction-getst>>), built on `kl.getmdl`, extracts the state of a locker from its MDH and reports errors.
+With trap-and-emulate, the hardware raises an illegal-instruction exception for instructions it does not implement, which the platform must deliver to M-mode (`medeleg` bit 2 zero).
+The emulating code moves data between memory and the locker with `Zklmv`.
+`kl.load` and `kl.store` are always present; `Zklmv` and `Zklexpire` are otherwise optional.
 
 <<KLE-instruction-extension-matrix>> gives, for each instruction and for each CSR that software below M-mode accesses through KLE instructions, the extension that defines it and its Forms or availability with `Zklv` and with `Zklio`.
 
@@ -225,7 +230,7 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 [width="100%",cols="<30%,^16%,<27%,<27%",options="header"]
 |===
 | Instruction / CSR        | Defined by         | With `Zklv` | With `Zklio`
-| `kl.size` / `kl.avail`   | `Zkl` common       | Forms A–C   | Forms A and B
+| ``kl.size`` / ``kl.avail``   | `Zkl` common       | Forms A–C   | Forms A and B
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D, natively or as the substitution (Rule <<KLE-GR-substitution>>) of a Form A–C
 | `kl.mvin`, `kl.mvout`    | `Zklmv`         | GPR and vector variants | GPR and KLIOBUF variants; each only when `Zklmv` is implemented, which is mandatory in hardware if `Zklmem` is emulated
 | `kl.setst`, `kl.setstq` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D
@@ -271,21 +276,18 @@ and `Content2`, any implementation-specific content.
 
 (((Cryptographic Locker File)))Lockers reside in a per-hart _cryptographic locker file_ (KLF), a memory that only the KLE implementation can access; where the implementation is emulated, in part or in full, only M-mode firmware accesses it, through an implementation-defined mechanism that the implementation must provide.
 
-The KLF protects the confidentiality and integrity of its contents, also against rollback through any access this specification does not permit.
-Every path that handles a locker's secrets, emulated ones included, must resist timing, other side-channel and fault-injection attacks at least as well as the locker's Machine does at its _SCProtection_ level (<<KLE-SCProtection-field>>); a path that serves lockers of several levels does so at the highest of them.
-These paths are reconstruction, re-sharing, KLF access, the `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` of the locker's export and import, the import of a system-specific format into the locker (<<KLE-system-specific-import>>), and every use of the CSK and its derived keys for the locker.
-Only the certifications that the implementer provides, if any, establish what an implementation achieves.
+The KLF protects the confidentiality and integrity of its contents, also against rollback through any access that this specification does not define.
+Every path that handles a locker's secrets, emulated ones included, must resist timing, other side-channel and fault-injection attacks at least as well as the locker's Machine at its _SCProtection_ level (<<KLE-SCProtection-field>>), and a path that serves several levels, at the highest of them.
+These paths are reconstruction, re-sharing, KLF access, `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` in export and import (<<KLE-SCC-export-import>>), system-specific import (<<KLE-system-specific-import>>), and every use of the CSK and its derived keys.
+Only the implementer's certifications, if any, establish what an implementation achieves.
 
-NOTE: The KLE unit computes `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` with the AES and POLYVAL hardware of its Machines, so export and import can protect a locker as well as its Machine does.
-An implementation that supports several levels offers each of them to export and import: for instance, a timing-protected AES and POLYVAL engine for the lockers of Level A, and a more protected engine for those of Levels B and C.
-Every level excludes timing leakage, so software below M-mode, which chooses the SCCs that an import decrypts and can time each `kl.mgmt`, cannot use timing to recover the keys derived from the CSK, which would let it decrypt and forge every SCC sealed under that CSK.
-One risk is accepted: the CSK alone determines the keys that seal every SCC, whatever its level, so with several levels, every SCC resists differential side-channel and fault-injection attacks only as well as the least-protected engine that handles these keys (<<Zkl-introduction.adoc#KLE-open-points>>).
+NOTE: The KLE unit computes the functions `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` with the AES and POLYVAL hardware of its Machines, and
+for the import and export of lockers implementing a Machine at a certain _SCProtection_ level, these functions must offer the same or higher level of side-channel and fault-injection attack protection.
+One risk is accepted: these keys seal every SCC, so with several levels, each SCC resists differential side-channel and fault-injection attacks only as well as the least-protected engine that uses them (<<Zkl-introduction.adoc#KLE-open-points>>).
 
-NOTE: The KLF resists rollback, but an SCC does not: as long as it exists, it can be imported again under the same CSK and Localities.
-Any party that holds an SCC can thus replay an earlier CC state: the software that stores it, and any mode that could export the locker.
-This may enable multi-time-pad or nonce-reuse attacks on every Machine whose security rests on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
-A CC owner must trust the party that stores its SCCs for freshness, clear its lockers before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>), use a Machine whose security survives replay, or accept the risk.
-Policies cannot readily tell misuse from legitimate re-import, such as retrying an operation after payload corruption.
+NOTE: Unlike the KLF, an SCC does not resist rollback: while it exists, any party that holds it, such as the software that stores it or any mode that could export the locker, can import it again under the same CSK and Localities and so replay an earlier CC state.
+This may enable multi-time-pad or nonce-reuse attacks on the Machines that rely on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
+A CC owner must trust the party that stores its SCCs for freshness, clear its lockers before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>), use a Machine whose security survives replay, or accept the risk; policies cannot readily tell misuse from legitimate re-import, such as a retry after payload corruption.
 
 Architecturally, whatever the implementation, the KLF has two parts:
 
@@ -655,7 +657,7 @@ Without `Zklexpire`, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metad
 
 A non-zero 20-bit _ExpirationDate_ gives the CC's expiration in whole hours since 00:00 UTC, 1 January 2027, spanning about 119 years and 7 months, independent of time zones.
 Software below M-mode must not be able to set the clock.
-A secure clock reports monotonically non-decreasing time, even under attempts to roll it back.
+A secure clock always reports monotonically non-decreasing time.
 
 [NOTE]
 ====
@@ -769,7 +771,7 @@ For any other _Machine_, the Metadata is unsupported, and an M-mode handler that
 [[KLE-Metadata-narrowing]]
 === Narrowing of Metadata
 
-Several operations narrow the policies of a CC by those of another source, by the narrowing defined below: the resolution of a SKID (<<KLE-system-keys>>),
+Several operations narrow the policies of a CC by those of another source: the resolution of a SKID (<<KLE-system-keys>>),
 a restricted `kl.derive` (Rule <<KLE-GR-narrowing>>), the import of a system-specific format (<<KLE-system-specific-import>>),
 and `kl.rstr*`, at the request of software (<<KLE-instruction-restrict>>).
 
@@ -812,7 +814,8 @@ The `KLS` field in effect controls access to these CSRs: while it is Off, every 
 With `Smstateen`, the KLE bit of the `*stateen0` CSRs (<<Zkl-ISA-priv.adoc#KLE-privileged-CSRs>>) also gates all of them and the KLE instructions; a denied access raises the exception that `Smstateen` prescribes for the executing mode and the denying gate.
 
 Context-switch code saves `klstart` and `klnamedlocker` first and restores them last, and saves and restores `kliobuflen`, `kliobuftop` and the KLIOBUF contents (<<Zkl-software.adoc#KLE-state-save-and-restore-order>>, Rule <<Zkl-software.adoc#KLE-SR-klstart-save>>).
-[[KLE-auth-reg-association]]The KLE unit does not record which locker the values in the authentication registers belong to: the registers keep what the last instruction to write them stored (<<KLE-KLF>>). Software keeps track of their owner, the locker whose import or export is open and that no nested export has saved, by keeping `klnamedlocker` at that locker's number, or at 32 while that locker is the only one in State `kl_cfg_importing` or `kl_cfg_exporting` (Rules <<Zkl-software.adoc#KLE-SR-nested-export-first>> and <<Zkl-software.adoc#KLE-SR-no-interleaving>>). Context-switch code finds the owner this way, exports it before the other lockers and imports it after them, so that its import restores `SIV` and, if they are used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>).
+
+[[KLE-auth-reg-association,Ownership of Authentication Registers]]The KLE unit does not record which locker the values in the authentication registers belong to: they hold what the last instruction to write them stored (<<KLE-KLF>>). Their owner is the locker whose import or export is open and that no nested export has saved. Software keeps `klnamedlocker` at the number of that locker, or at 32, which names no locker, but only while that locker is the only one in State `kl_cfg_importing` or `kl_cfg_exporting` (Rules <<Zkl-software.adoc#KLE-SR-nested-export-first>> and <<Zkl-software.adoc#KLE-SR-no-interleaving>>). Context-switch code finds the owner this way, exports it before the other lockers and imports it after them, so that its import restores `SIV` and, if used, `IMPQUAL` and `SIV2` (<<Zkl-software.adoc#KLE-save-order>>, <<Zkl-software.adoc#KLE-restore-order>>).
 
 A CSR whose description gives a maximum is WARL: writing a larger value sets the maximum, so software must read it back (preferably with the getter instructions of <<KLE-instruction-getter-setter>>).
 Writing a reserved value (33 and above) to `klnamedlocker` leaves it unchanged (<<KLE-CSR-klnamedlocker>>).
@@ -951,9 +954,9 @@ A Machine whose interruption points are not multiples of `SEW`/8, such as CFB wi
 
 Setting aside the handling of lockers in an Error State, a *management* operation takes three steps: the first and the last are one KLE instruction each, and the second is one or more `kl.mvin` or `kl.mvout` (alternatively, `kl.load` or `kl.store`) instructions:
 
-. An opening `kl.mgmt` (<<KLE-instruction-mgmt>>) prepares the locker for the management operation.
+. An *opening* `kl.mgmt` (<<KLE-instruction-mgmt>>) prepares the locker for the management operation.
 . One or more `kl.mvin` (<<KLE-instruction-mv>>) load the rest of the information into the locker, or one or more `kl.mvout` move the locker's information out.
-. A completing `kl.mgmt` ends the management operation and makes the locker available to software.
+. A *completing* `kl.mgmt` ends the management operation and makes the locker available to software.
 
 // Setting error handling aside, *provisioning* consists of the following three steps:
 //
@@ -1145,7 +1148,8 @@ The `Zklmv` subextension adds dedicated move instructions between scalar/vector 
 The instructions in this extension are encoded as new forms of `kl.exec`.
 
 Synopsis::
-  Move content between scalar/vector registers or the KLIOBUF and the locker under management, which is in a Configuration State.
+  Move content between scalar/vector registers or the KLIOBUF and the named locker, which is in a Configuration State.
+  These instructions do not encode an operand locker (Rule <<KLE-GR-locker-less-transfers>>).
 
 Mnemonics::
 +
@@ -1154,14 +1158,12 @@ Mnemonics::
 (((KLE, instruction, kl.mvin)))(((KLE, instruction, kl.mvout)))
 
 [upperroman]
-. `kl.mvin Xs2` copies 128 bits from two or four GPRs into the locker.
-. `kl.mvin Vs2` copies one or more 128-bit blocks from a vector register into the locker.
-. `kl.mvin KLIOBUF` copies one or more 128-bit blocks from the KLIOBUF into the locker.
-. `kl.mvout Xs1` copies 128 bits from the locker into two or four GPRs at `Xs1`.
-. `kl.mvout Vs1` copies one or more 128-bit blocks from the locker into a vector register `Vs1`.
-. `kl.mvout KLIOBUF` copies one or more 128-bit blocks from the locker into the KLIOBUF.
-
-The locker is not an operand: the instruction acts on the locker that `klnamedlocker` names (Rule <<KLE-GR-locker-less-transfers>>).
+. `kl.mvin Xs2` copies 128 bits from two or four GPRs into the named locker.
+. `kl.mvin Vs2` copies one or more 128-bit blocks from a vector register into the named locker.
+. `kl.mvin KLIOBUF` copies one or more 128-bit blocks from the KLIOBUF into the named locker.
+. `kl.mvout Xs1` copies 128 bits from the named locker into two or four GPRs at `Xs1`.
+. `kl.mvout Vs1` copies one or more 128-bit blocks from the named locker into a vector register `Vs1`.
+. `kl.mvout KLIOBUF` copies one or more 128-bit blocks from the named locker into the KLIOBUF.
 --
 
 Encodings::
@@ -1662,7 +1664,7 @@ The `kl.rstr` instructions are not usage instructions (Rule <<KLE-GR-usage-polic
 They act only in a Valid State: on an _Unconfigured_ or Error-State locker they perform no operation (Rule <<KLE-GR-outcome-inert>>), and in a Configuration State Rule <<KLE-GR-outcome-config-state>> applies.
 --
 
-NOTE: A `kl.rstr` narrows only the CC in `Kd`. Copies of the same secret made earlier, such as SCCs exported before the narrowing or clones in other lockers, keep their wider policies (<<KLE-KLF>>).
+NOTE: A `kl.rstr` narrows only the CC in `Kd`. Copies of the same secret made earlier, such as clones made or SCCs exported before the narrowing, keep their wider policies (<<KLE-KLF>>).
 // Memory carries no attributes that could track such copies, so making a narrowing effective everywhere is up to the discipline of the software that holds them.
 
 // ////////////////////////////////////////////////////////////////////
@@ -3121,6 +3123,7 @@ B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 
 // ///////////////////////////////////////////////////////////////////////////
 
+[[KLE-SCC-export-import]]
 === SCC Export and Import Algorithms
 
 Section <<KLE-SCC-AEAD>> defines the authenticated encryption scheme, and <<KLE-SCC-export>> and <<KLE-SCC-import>> the SCC export and import algorithms.
