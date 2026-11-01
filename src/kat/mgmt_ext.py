@@ -18,19 +18,6 @@ class Mem:
 
 def ks_block(content, j): return v2b(content ^ ((j + 1) * 0x0101010101010101), 16)      # toy keystream block j
 
-def narrow(dmd, smd):
-    """Metadata narrowing of dmd by smd (<<KLE-Metadata-narrowing>>), UsagePolicy, Locality, ExpirationDate; None on failure."""
-    m = mdh_put(dmd, 'UsagePolicy', mdh_get(dmd, 'UsagePolicy') & mdh_get(smd, 'UsagePolicy'))
-    a, b = mdh_get(dmd, 'Locality'), mdh_get(smd, 'Locality')
-    out = 0
-    for sh in (0, 2): out |= max(a >> sh & 3, b >> sh & 3) << sh
-    ba, bb = a >> 4 & 3, b >> 4 & 3
-    if ba and bb and ba != bb: return None
-    out |= (ba or bb) << 4 | ((a | b) & 0x1C0)
-    m = mdh_put(m, 'Locality', out)
-    e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
-    return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
-
 class KLE2(KLE):
     def __init__(s, *a, **kw):
         KLE.__init__(s, *a, **kw)
@@ -359,7 +346,9 @@ class KLE2(KLE):
         hin = dst == 2 and dm == M_HASH
         if not (keyf or hin): s.err(d, SE_INVALID); return 'invalid'
         # 4: admitted pair (GR42 secret -> key field or hash input, restricted; GR43 cipher output -> key field, unrestricted)
-        if sm == M_ENC and not keyf: s.err(d, SE_INVALID); s.err(src, SE_INVALID); return 'invalid'
+        sealed = sm == M_KEM and mdh_get(ms, 'MachineExtension') == 1      # toy sealed variant (GR79)
+        if sm == M_ENC and not keyf or sealed and dm == M_ENC:            # GR79: M_ENC's output is a source, as keystream's
+            s.err(d, SE_INVALID); s.err(src, SE_INVALID); return 'invalid'
         restricted = sm == M_KEM
         dl = CONTENT[dm] if keyf else None
         eff = min(length, dl) if keyf else length
@@ -368,7 +357,8 @@ class KLE2(KLE):
         # 6: whole-value destinations
         if keyf and (length < dl or (sm == M_KEM and CONTENT[M_KEM] < dl)): s.err(d, SE_INVALID); return 'invalid'
         if hin and sm == M_KEM and length != CONTENT[M_KEM]: s.err(d, SE_INVALID); return 'invalid'
-        # 7: source supplies the bytes: both toy sources supply any length
+        # 7: source supplies the bytes: both toy sources supply any length; a sealed one moves >= 16 bytes
+        if sealed and eff < 16: s.err(src, SE_INVALID); return 'invalid'
         if restricted and eff:                                # GR40
             if mdh_get(md_, 'SCProtection') < mdh_get(ms, 'SCProtection'): s.err(d, SE_PRIV_VIOLATION); return 'pv'
             nm = narrow(md_, ms)
@@ -379,7 +369,10 @@ class KLE2(KLE):
         val = val[:eff]
         if keyf: s.L[d].content = int.from_bytes(val + bytes(dl - len(val)), 'little')
         else: s.L[d].content = int.from_bytes(val, 'little')
+        if sealed and hin: md_ = mdh_put(md_, 'StateExtension', mdh_get(md_, 'StateExtension') | 2)   # Sealed
         s.L[d].mdh = md_
+        if sm == M_KEM and eff:                               # GR38: a field is the source of one kl.derive; sharedkey_Output -> Ready
+            s.L[src].mdh = mdh_put(s.md(src), 'State', 1); s.L[src].content = 0
         return 'ok'
     # ---- reset (<<KLE-out-of-reset-unpriv>>)
     def reset(s):

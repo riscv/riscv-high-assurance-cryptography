@@ -7,15 +7,20 @@ L = Locker(kind, policy=0, K=b'', S=b'', key=b'', tag_len_p=None);  L.setst(imm,
 L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 when the instruction completed)
   Form B: inp = INPUT bytes;  Form C/A output: out = bytearray (window, KLLEN = len(out)); Form A input: inp.
   halt = n: stop at the first interruption point with at least n bytes done (resumable via klstart').
-L.export() / L.import_(sc, st)  serialized content; L.mdh_state() -> (State, StateExtension).
+  Hash_Output_Bits: L.setst(BITS, 'B', r) sets read_len = r (L.lbl); its interruption points are all byte offsets.
+  From Hash_Absorb (or Last with lbl = 0) it first does what a Form A L.setst(OUTPUT_, 'A') does.
+L.export() / L.import_(sc, st, se=0)  serialized content, se the StateExtension; L.mdh_state() -> (State, StateExtension).
+L.mdh: the MDH fields that GR40 narrows (UsagePolicy, Locality, ExpirationDate); L.scprot: SCProtection.
 Also modeled: AEAD variants _NONCE/_NONCE_MASK, SKID (sks dict), rstrl, unsupported MachinePolicy, exec_d (Form D), Secret/derive.
-Not modeled: SCC authentication, GR40 SCProtection narrowing.
+Not modeled: SCC authentication.
 """
 from common import *
+import copy
 import sponge_ref as R
 
 READY, ABSORB, LAST, VERIFY, OUTPUT, ENC, DEC, ENCLAST, DECLAST, AUX = 1, 2, 3, 5, 6, 7, 8, 9, 10, 13
 SUCCESS, FAILURE = 54, 55
+BITS = 16                                           # Hash_Output_Bits: read_len = lbl, the alias of last_block_len
 SE_INV = 2
 _BI = lambda v, n: R.bits_of(v, n)
 
@@ -56,19 +61,19 @@ class Locker:
             if not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
         else: raise ValueError(kind)
         self.P = R.keccak_f if self.n == 1600 else R.ascon12
-        self.st, self.se = READY, 0
+        self.st, self.se, self.mdh = READY, 0, 0
         self._ready()
         if bad: self.invalid()
         elif policy and (self.fam in ('sha3', 'ahash') or (self.fam == 'kmac' and self.xof)):
             self.invalid(); self.se = 1             # unsupported Metadata: State 0, StateExtension 1
 
     # ---- helpers
-    def mdh_state(self): return (self.st, self.se)
+    def mdh_state(self): return (self.st, self.se if self.st == 0 else 2 * self.sealed)   # Sealed: StateExtension bit 1
     def is_error(self): return self.st == 0 and self.se != 0
     def inert(self): return self.st == 0 and self.se == 0
 
     def _ready(self):
-        self.bb = self.lbl = self.ol = self.cum = 0
+        self.bb = self.lbl = self.ol = self.cum = 0; self.sealed = False   # Sealed (GR79), cleared only on entering Ready
         self.L = 0; self.zlen = 0; self.tag_len = self.tag_len_p if self.fam == 'aead' else 128
         if self.fam in ('sha3', 'kmac'): self.s = 0
         elif self.fam == 'ahash':
@@ -121,7 +126,13 @@ class Locker:
             if form != 'A': return self.invalid()   # wrong Form: GR20 item 4, no exception
             self._ready(); self.st = READY; return
         if self.st in (SUCCESS, FAILURE): return self.invalid()
-        if imm in (SUCCESS, FAILURE): return self.invalid()
+        if imm in (SUCCESS, FAILURE) or imm in (BITS, VERIFY) and self.sealed: return self.invalid()
+        if imm == BITS and self.fam != 'aead':
+            if self.st in (ABSORB, LAST):                                    # ends the message: a Form A Hash_Output, then this kl.setst
+                self.setst(OUTPUT_, 'A')
+                if self.is_error(): return
+            if self.st not in (OUTPUT_, BITS) or form != 'B' or not 0 < xs < 1 << 16: return self.invalid()
+            self.lbl = xs; self.st = BITS; return                            # no finalize(); block_base, out_len kept
         getattr(self, '_setst_' + self.fam)(imm, form, xs, inp)
 
     def _gen_setst(self, imm, form, xs):
@@ -228,7 +239,8 @@ class Locker:
         if st in (ABSORB, LAST, AUX):
             if form != 'B': return self._inv_exec(out)
             return self._exec_in(st, inp, klstart, halt)
-        if st == OUTPUT_ and form == 'C': return self._exec_out(klstart, out, halt)
+        if st == OUTPUT_ and form == 'C' and not self.sealed: return self._exec_out(klstart, out, halt)
+        if st == BITS and form == 'C': return self._exec_out(klstart, out, halt, True) if self.lbl else self._inv_exec(out)
         if st == VERIFY and form == 'B': return self._exec_verify(inp, klstart)
         return self._inv_exec(out)
 
@@ -265,24 +277,30 @@ class Locker:
             if ib < K and halt is not None and ib // 8 >= halt: return ib // 8
         return 0
 
-    def _exec_out(self, klstart, out, halt):
+    def _exec_out(self, klstart, out, halt, bits=False):
+        """Form C loop of Hash_Output; with bits, of Hash_Output_Bits (read_len = self.lbl)."""
         K = 8 * len(out); ob = 8 * klstart
         if ob >= K: return 0
-        if klstart and self.bb != 0: self.invalid(); self._zero(out); return 0
+        if klstart and self.bb != 0 and not bits: self.invalid(); self._zero(out); return 0
         res = b2v(out); keep = res & mask(ob)
         while ob < K:
             a = min(K - ob, self.t - self.bb)
             if self.ol: a = min(a, self.ol)
+            if bits: a = min(a, self.lbl, 8 - ob % 8 if halt is not None else a)   # a halt splits the loop at a byte
             keep |= ((self.s >> self.bb) & mask(a)) << ob
             ob += a; self.bb += a
+            if bits: self.lbl -= a
             if self.ol:
                 self.ol -= a
                 if self.ol == 0:
                     out[:] = v2b(keep, len(out)); self.st = SUCCESS; return 0
             if self.bb == self.t:
                 self.s = self.P(self.s); self.bb = 0
-                if ob < K and halt is not None and ob // 8 >= halt:
+                if not bits and ob < K and halt is not None and ob // 8 >= halt:
                     out[:] = v2b(keep, len(out)); return ob // 8
+            if bits and self.lbl == 0: break                                   # read done: rest of OUTPUT cleared
+            if bits and halt is not None and ob % 8 == 0 and ob < K and ob // 8 >= halt:
+                out[:] = v2b(keep, len(out)); return ob // 8
         out[:] = v2b(keep, len(out)); return 0
 
     def _exec_verify(self, inp, klstart=0):
@@ -319,7 +337,7 @@ class Locker:
         st = self.st
         if self.is_error() or self.inert():
             iobuf[klstart:top] = bytes(max(0, top - klstart)); return 0     # GR34
-        nat = {ABSORB: 'B', LAST: 'B', AUX: 'B', VERIFY: 'B', OUTPUT_: 'C', ENC: 'A', DEC: 'A', ENCLAST: 'A', DECLAST: 'A'}.get(st)
+        nat = {ABSORB: 'B', LAST: 'B', AUX: 'B', VERIFY: 'B', OUTPUT_: 'C', BITS: 'C', ENC: 'A', DEC: 'A', ENCLAST: 'A', DECLAST: 'A'}.get(st)
         if self.fam == 'aead' and st == VERIFY: nat = 'B'
         if nat is None:
             self.invalid(); iobuf[klstart:top] = bytes(max(0, top - klstart)); return 0
@@ -388,8 +406,8 @@ class Locker:
             head += v2b(self.cs, self.b // 8) + (v2b(self.skid, 8) if self.skid is not None else v2b(self.kb, self.b // 8))
         return head
 
-    def import_(self, sc, st, tag_len_p=None):
-        """st: State to restore; tag_len_p: AuxInfo of the MDH (None: 128)."""
+    def import_(self, sc, st, se=0, tag_len_p=None):
+        """st, se: State and StateExtension to restore; tag_len_p: AuxInfo of the MDH (None: 128)."""
         if self.fam == 'aead':
             o = 8 if self.skid is not None else 16
             if self.skid is not None:
@@ -411,37 +429,118 @@ class Locker:
             if self.fam == 'kmac':
                 rb = self.b // 8; self.cs = b2v(sc[n + 8:n + 8 + rb])
                 if self.skid is None: self.kb = b2v(sc[n + 8 + rb:n + 8 + 2 * rb])
-                self.L = self.ol if st in (OUTPUT_, VERIFY) else 0
-        self.st, self.se = st, 0
+                self.L = self.ol if st in (OUTPUT_, BITS, VERIFY) else 0
+        if se & 2 and (self.fam == 'aead' or st not in (ABSORB, LAST, OUTPUT_, SUCCESS)): return self.invalid()   # Sealed @ State unsupported
+        self.st, self.se, self.sealed = st, 0, bool(se & 2)
 
 
 # ---- kl.derive (GR37-GR43, endpoint table of KLE-derive-endpoints)
 class Secret:
     """A source: restricted=True is an ML-KEM sharedkey; False an ECC shared secret in Output or a GR43 output (CMAC, keystream).
-    shared=False marks a non-shared-secret output (CMAC tag): admitted into a key, not into a hash input."""
-    def __init__(self, data, restricted=True, shared=True, scprot=1): self.data, self.restricted, self.shared, self.bad, self.scprot = data, restricted, shared, False, scprot
+    shared=False marks a non-shared-secret output (CMAC tag): admitted into a key, not into a hash input.
+    sealed=True marks a sealed source (GR79), always restricted."""
+    def __init__(self, data, restricted=True, shared=True, scprot=1, sealed=False, mdh=0):
+        self.data, self.restricted, self.shared, self.bad, self.scprot, self.sealed, self.mdh = data, restricted or sealed, shared, False, scprot, sealed, mdh
+        self.used = False   # GR38: a shared-secret field is the source of one kl.derive
     def invalid(self): self.bad = True; self.data = b''
 
 def derive(src, dst, length, klstart=0):
     """kl.derive dst, src, length. Returns nothing; endpoints become Invalid per GR39 (checked in order)."""
     if isinstance(src, Locker) and (src.is_error() or src.inert()) or isinstance(dst, Locker) and (dst.is_error() or dst.inert()): return
     if klstart: return dst.invalid()                                                      # 1
-    if not isinstance(src, Secret): return src.invalid()                                  # 2: not a source endpoint
+    lk = None
+    if isinstance(src, Secret) and src.used: return src.invalid()                         # 2: its locker left the source State
+    if isinstance(src, Locker):                                                           # GR43: Hash_Output of a hash, MAC or XOF
+        if src.fam == 'aead' or src.st not in (OUTPUT_, BITS): return src.invalid()       # 2: not a source endpoint (read_len is kept)
+        lk = src; o = bytearray(length); copy.deepcopy(lk)._exec_out(0, o, None)          # what a Form C kl.exec would emit
+        src = Secret(bytes(o[:(lk.ol + 7) // 8 if lk.ol else length]), restricted=False, shared=False, sealed=lk.sealed,
+                     scprot=getattr(lk, 'scprot', 1), mdh=lk.mdh)
     fam = dst.fam
     key_n = {'base': 16, 'mask': 32}.get(getattr(dst, 'var', None)) if fam == 'aead' else None
     ok = (key_n and dst.st == READY and dst.skid is None and dst.tag_len_p == 128) or (fam != 'aead' and dst.st == ABSORB)
     if not ok: return dst.invalid()                                                       # 3: not a destination endpoint
     if fam != 'aead' and not src.shared or key_n == 32 and src.restricted:                # 4: pair not admitted
-        dst.invalid(); return src.invalid()
+        dst.invalid(); return (lk or src).invalid()
     if key_n:
         if length < key_n: return dst.invalid()                                           # 6
-        if len(src.data) < key_n: return src.invalid()                                    # 7
+        if len(src.data) < key_n: return dst.invalid()                                    # 6: a key field needs a source of dest_length bytes
     elif length != len(src.data) or length == 0: return dst.invalid()                     # 6 (hash input = whole secret)
-    if src.restricted and getattr(dst, 'scprot', 1) < src.scprot:                         # GR40: SCProtection (MDH narrowing not modelled)
+    if src.sealed and min(length, key_n or length) < 16: return (lk or src).invalid()     # 7: a sealed source moves >= 16 bytes
+    nm = narrow(dst.mdh, src.mdh) if src.restricted else dst.mdh                          # GR40: narrowing of a restricted transfer
+    if nm is None or src.restricted and getattr(dst, 'scprot', 1) < src.scprot:           # ... and SCProtection
         dst.invalid(); dst.se = 5; return
+    dst.mdh = nm
     if key_n:
+        if lk: lk._exec_out(0, bytearray(key_n), None)                                    # GR38: the source advances by eff_length
         dst.key = b2v(src.data[:16]); dst.k2 = b2v(src.data[16:32]) if key_n == 32 else 0
         if dst.skid is not None: dst.skid = None   # a derived key is not an SKID key
-    else: dst.exec('B', src.data)
+    else: dst.exec('B', src.data); dst.sealed |= src.sealed
+    src.used = src.shared
 
 OUTPUT_ = OUTPUT = 6
+
+
+# ---- Hash_Output_Bits test plan shared by the sponge KATs (keccak, kmac, ascon)
+def read_bits(L, r, kl=None, halts=False):
+    """kl.setst Hash_Output_Bits with Xs = r, then Form C kl.execs of kl bits (default: one that holds r) until read_len
+    is used up or the output ends, resuming after halts at every byte. -> (bits as int, number read, OUTPUT cleared beyond)."""
+    kl = kl or 8 * ((r + 7) // 8); L.setst(BITS, 'B', r); v = got = 0; clean = True
+    while L.st == BITS and L.lbl:
+        rl = L.lbl; o = bytearray(b'\xa5' * (kl // 8)); k = 0
+        while True:
+            k = L.exec('C', out=o, klstart=k, halt=1 if halts else None)
+            if not k: break
+        n = rl - L.lbl; x = b2v(o); clean &= x >> n == 0; v |= (x & mask(n)) << got; got += n
+    return v, got, clean
+
+def bits_checks(name, mk, ref, bounded=True, nbits=None):
+    """Hash_Output_Bits (State 16) on mk() -> a locker in Hash_Output; ref: its whole output (bounded, of nbits bits
+    if given) or a prefix."""
+    section('%s: Hash_Output_Bits' % name)
+    R = b2v(ref); D = nbits or 8 * len(ref)
+    plans = [((1, 3, 7, 8, 13), None, False), ((61, 5, 100), 16, True), ((3, 4000), 24, True), ((min(D, 65535),), 8, True)]
+    if not bounded: plans.append(((65535,), None, False))
+    for pieces, kl, halts in plans:
+        L = mk(); v = got = 0; clean = True; i = 0
+        while L.st in (OUTPUT, BITS) and got < D:
+            p = pieces[i % len(pieces)]; x, n, c = read_bits(L, p if bounded else min(p, D - got), kl, halts)
+            v |= x << got; got += n; clean &= c; i += 1
+        check('%s reads of %s bits (KLLEN %s%s): the output LSB first, zero-filled, then %s' % (name, pieces, kl or 'fitting', ', halt at every byte' if halts else '', 'Success' if bounded else 'more'),
+              (v, got, clean, L.st) == (R, D, True, SUCCESS if bounded else BITS), (hex(v)[:40], got))
+    L = mk(); o = bytearray(5); L.exec('C', out=o); x, n, _ = read_bits(L, 13)
+    check('%s Hash_Output (5 bytes) then Hash_Output_Bits: the stream continues, block_base kept' % name, (bytes(o), x, L.st) == (ref[:5], (R >> 40) & mask(13), BITS))
+    x, n, _ = read_bits(L, 3); check('%s ... and continues across a new kl.setst' % name, x == (R >> 53) & 7)
+    L = mk(); L.setst(BITS, 'B', 20); o = bytearray(1); L.exec('C', out=o)
+    check('%s read_len > KLLEN: read_len carries to the next kl.exec' % name, (bytes(o), L.st, L.lbl) == (ref[:1], BITS, 12))
+    L.setst(BITS, 'B', 4); o = bytearray(b'\xff'); L.exec('C', out=o)
+    check('%s a new kl.setst drops the unread bits; the read of 4 bits is zero-filled' % name, (bytes(o), L.lbl) == (bytes([ref[1] & 15]), 0))
+    o = bytearray(b'\xff'); L.exec('C', out=o); check('%s Form C with read_len = 0 -> Invalid, OUTPUT zeroed' % name, L.is_error() and o == bytes(1))
+    for xs, form, why in ((0, 'B', 'Xs = 0'), (1 << 16, 'B', 'Xs = 2^16'), (0, 'A', 'Form A')):
+        L = mk(); L.setst(BITS, form, xs); check('%s kl.setst Hash_Output_Bits with %s -> Invalid' % (name, why), L.is_error())
+    L = mk(); L.setst(BITS, 'B', 65535); check('%s Xs = 2^16 - 1 admitted' % name, (L.st, L.lbl) == (BITS, 65535))
+    L = mk(); L.setst(BITS, 'B', 8); L.exec('B', b'x'); check('%s Form B kl.exec in Hash_Output_Bits -> Invalid' % name, L.is_error())
+    L = mk(); L.setst(BITS, 'B', 8); L.setst(OUTPUT, 'A'); check('%s Hash_Output_Bits -> Hash_Output: not a transition, Invalid' % name, L.is_error())
+    L = mk(); L.setst(BITS, 'B', 8); L.setst(READY, 'A'); check('%s Hash_Output_Bits -> Ready' % name, L.st == READY)
+    def via(last, direct):
+        L = mk(); L.setst(READY, 'A'); L.setst(ABSORB, 'A'); L.exec('B', b'xyz')
+        if last: L.setst(LAST, 'A')
+        if not direct: L.setst(OUTPUT, 'A')
+        L.setst(BITS, 'B', 13); o = bytearray(2); L.exec('C', out=o); return L, bytes(o)
+    for last in (False, True):
+        (A, a), (B, b) = via(last, True), via(last, False)
+        check('%s kl.setst Hash_Output_Bits from %s = Form A Hash_Output then the same kl.setst' % (name, 'Hash_Absorb_Last_Block' if last else 'Hash_Absorb'),
+              (a, A.st, A.export()) == (b, B.st, B.export()) and A.is_error() == (A.fam == 'kmac' and not A.xof))
+    L = mk(); read_bits(L, 3); L.setst(BITS, 'B', 40); o = bytearray(b'\xff' * 8); L.exec('C', out=o, klstart=2)
+    check('%s klstart = 2 with block_base = 3 (any byte offset): bits at OUTPUT byte 2, bytes 0-1 kept, the rest cleared' % name,
+          (bytes(o), L.lbl) == (b'\xff\xff' + v2b((R >> 3) & mask(40), 5) + bytes(1), 0))
+    L = mk(); read_bits(L, 3); L.setst(BITS, 'B', 40); o = bytearray(8); k = L.exec('C', out=o, halt=1)
+    check('%s halt inside the output block at byte offset 1, read_len kept' % name, (k, L.lbl) == (1, 32))
+    L.exec('C', out=o, klstart=k); check('%s ... the resume gives the same 40 bits' % name, b2v(o) == (R >> 3) & mask(40))
+    L = mk(); L.setst(BITS, 'B', 100); L.exec('C', out=bytearray(3)); sc = L.export(); n0 = 200 if L.n == 1600 else 40
+    L2 = copy.deepcopy(mk()); L2.import_(sc, BITS); o = bytearray(10); L2.exec('C', out=o)
+    check('%s export mid-read: last_block_len holds read_len = 76, block_base = 24; the import continues the read' % name,
+          (b2v(sc[n0:n0 + 2]), b2v(sc[n0 + 2:n0 + 4]), b2v(o)) == (24, 76, (R >> 24) & mask(76)))
+    if D >= 8 * 2 + 13 + 128:
+        L = mk(); read_bits(L, 13); L.setst(BITS, 'B', 16); K = Locker('ASCON-AEAD128'); derive(L, K, 16); o = bytearray(2); L.exec('C', out=o)
+        check('%s kl.derive from Hash_Output_Bits (block_base = 13) into an AEAD key: the next 128 bits; read_len kept' % name,
+              (K.key, b2v(o), L.lbl) == ((R >> 13) & mask(128), (R >> 141) & mask(16), 0))

@@ -300,6 +300,17 @@ for scd, scs, want in ((1, 2, 5), (2, 1, 0), (2, 2, 0)):
 d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; s = Secret(bytes(range(32)), restricted=False, scprot=2); derive(s, d, 32)
 check('GR41 unrestricted transfer applies no SCProtection check', d.se == 0 and d.key != 0)
 
+def _mko(kind, xs=0, Z=None):
+    def mk():
+        L = Locker(kind)
+        if Z: L.setst(13, 'B', 8 * len(Z)); L.exec('B', Z)
+        L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B' if xs else 'A', xs); return L
+    return mk
+abc = (b2v(b'abc'), 24)
+bits_checks('ASCON-HASH256', _mko('ASCON-HASH256'), href('ASCON-HASH256', *abc, 32))
+bits_checks('ASCON-XOF128 Xs=2400', _mko('ASCON-XOF128', 2400), href('ASCON-XOF128', *abc, 300))
+bits_checks('ASCON-XOF128 unbounded', _mko('ASCON-XOF128'), href('ASCON-XOF128', *abc, 16384), bounded=False)
+bits_checks('ASCON-CXOF128 unbounded', _mko('ASCON-CXOF128', Z=b'cust'), href('ASCON-CXOF128', *abc, 16384, Z=(b2v(b'cust'), 32)), bounded=False)
 section('Negative controls')
 m = msg(12)
 control('domain separation: XOF128 differs from Hash256 on the same message', href('ASCON-XOF128', b2v(m), 96, 32) != href('ASCON-HASH256', b2v(m), 96, 32))
@@ -378,14 +389,23 @@ d, s = dk(kind='ASCON-AEAD128_NONCE_MASK'); check('restricted shared secret into
 d, s = dk(kind='ASCON-AEAD128_NONCE', restricted=False, nonce=NN, key=KEY); check('_Nonce is not a destination -> dest Invalid', d.se == SE_INV and not s.bad)
 for nm, kw in (('length 15', dict(length=15)), ('length 0', dict(length=0)), ('klstart 8', dict(ks=1))):
     d, s = dk(restricted=False, **kw); check('derive %s -> destination Invalid' % nm, d.se == SE_INV and not s.bad)
-d, s = dk(data=bytes(12), length=16, restricted=False); check('12-byte source shorter than the key -> source Invalid (GR39.7)', s.bad and d.se == 0 and d.st == READY)
+d, s = dk(data=bytes(12), length=16, restricted=False); check('12-byte source shorter than the key -> destination Invalid, source untouched (GR39.6)', d.se == SE_INV and not s.bad)
 d = Locker('ASCON-AEAD128', key=KEY); d.setst(2, 'C', inp=NONCE); derive(Secret(bytes(16), False), d, 16); check('destination not in Ready -> Invalid (GR39.3)', d.se == SE_INV)
 for kind in ('ASCON-AEAD128', 'ASCON-AEAD128_NONCE_MASK'):
     d, s = dk(kind=kind, restricted=False, tag_len_p=96); check('%s tag_len_p=96 < 128: not a derive destination -> Invalid (MR12)' % kind, d.se == SE_INV and not s.bad)
 d = Locker('ASCON-AEAD128', skid=0x0101010101010101, sks={0x0101010101010101: KEY}); derive(Secret(bytes(16), False), d, 16); check('SKID-keyed destination refuses derive (KeyType 1) -> Invalid', d.se == SE_INV)
 d, s = dk(shared=False, restricted=False, data=bytes(range(16))); check('CMAC-type output into AEAD key: admitted (GR43)', d.se == 0 and d.key == b2v(bytes(range(16))))
 d, s = dk(kind='ASCON-AEAD128_NONCE_MASK', shared=False, restricted=False, data=bytes(16)); check('16-byte CMAC-type output into K1|K2 (32 B needed): dest Invalid', d.se == SE_INV)
-o = Locker('ASCON-XOF128'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128'); derive(o, d, 16); check('sponge Hash_Output is not a source: source Invalid, dest untouched', o.se == SE_INV and d.st == READY)
+o = Locker('ASCON-XOF128'); o.setst(2, 'A'); o.exec('B', b'kdf'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128'); derive(o, d, 16); x = bytearray(8); o.exec('C', out=x)
+z = href('ASCON-XOF128', b2v(b'kdf'), 24, 24); c, nb, tg = R.ref_ascon_aead(z[:16], NONCE, b'', b'abc')
+check('XOF128 Hash_Output -> AEAD key (GR43): key = first 16 output bytes, the next Form C returns bytes 16..23', full(d, (2, 'C', 0, NONCE), b'', b'abc') == (v2b(c, 3), v2b(tg, 16)) and bytes(x) == z[16:24] and o.st == OUTPUT_)
+o = Locker('ASCON-HASH256'); o.setst(2, 'A'); o.setst(6, 'A'); d1, d2, d3 = (Locker('ASCON-AEAD128') for _ in range(3)); derive(o, d1, 16); derive(o, d2, 16)
+check('Hash256 output (32 B) -> two AEAD keys: the second exhausts it, source Success', d1.key == b2v(href('ASCON-HASH256', 0, 0, 32)[:16]) and d2.key == b2v(href('ASCON-HASH256', 0, 0, 32)[16:]) and o.st == SUCCESS)
+derive(o, d3, 16); check('exhausted source (Success) is not a source endpoint: source Invalid, destination untouched (GR39.2)', o.se == SE_INV and d3.st == READY and d3.se == 0)
+o = Locker('ASCON-HASH256'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128_NONCE_MASK'); derive(o, d, 32); derive(o, Locker('ASCON-AEAD128'), 16)
+check('Hash256 output -> K1|K2 (32 B): unrestricted, admitted; source exhausted', d.se == 0 and d.key == b2v(href('ASCON-HASH256', 0, 0, 32)[:16]) and o.se == SE_INV)
+o = Locker('ASCON-XOF128'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-HASH256'); d.setst(2, 'A'); derive(o, d, 32)
+check('XOF128 output -> a hash input: pair not admitted, both Invalid (GR39.4)', o.se == SE_INV and d.se == SE_INV)
 t2 = Locker('ASCON-AEAD128', key=KEY); ct, t_ = enc(t2, b'', b'x'); d = Locker('ASCON-AEAD128'); derive(t2, d, 16); check('AEAD tag output is not a source', t2.se == SE_INV and d.st == READY)
 
 section('kl.derive into Ascon hashes (shared secret as message)')

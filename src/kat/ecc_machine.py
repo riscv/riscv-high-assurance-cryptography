@@ -29,7 +29,8 @@ class EccLocker:
         self.b = self.W * 8; self.ub = self.u * self.b; self.vb = self.v * self.b
         assert (policy == 0) or self.kind != 'mont'
         assert policy != 0 or self.kind != 'ed'
-        self.policy = policy; self.aux = aux & 1; self.ext = ext; self.state = RDY; self.err = None   # ext: MachineExtension (1 = public-points variant)
+        self.policy = policy; self.aux = aux & 1; self.ext = ext; self.state = RDY; self.err = None   # ext: MachineExtension (1 = public-points, 2 = sealed variant)
+        if ext == 2 and self.kind == 'ed': self.err = SE_UNSUPPORTED; self.state = 0         # no sealed EdDSA
         self.flags = 0; self.outtype = 0; self.progress = 0; self.block_base = 0
         self.Scalar = bytearray(self.W); self.SecondPt = bytearray(self.u * self.W); self.Hash = bytearray(self.h // 8)
         self.Signature = bytearray(self.v * self.W); self.RndNum = bytearray(self.j // 8)
@@ -58,7 +59,7 @@ class EccLocker:
         self.err = SE_INVALID; self.state = 0; return 'invalid'
     def import_generator(self, g):
         # a provisioning or import writes Generator; in the public-points variant it must be the default (KLE-MGR-check-on-write)
-        if self.ext == 1 and bytes(g) != self._default_gen(): return self._inv()
+        if self.ext and bytes(g) != self._default_gen(): return self._inv()
         self.Generator[:] = g; return 'ok'
     def _live(self):
         if self.err is not None: raise AssertionError('locker is in an Error State')
@@ -147,7 +148,7 @@ class EccLocker:
         if target == RDY: return self._to_ready(form, xs)
         self.state = target
         if target == SGEN:
-            if self.ext == 1 and form == 'B' and xs != 0: return self._inv()
+            if self.ext and form == 'B' and xs != 0: return self._inv()
             if form == 'A' or xs == 0: self.Generator[:] = self._default_gen(); self.block_base = self.ub // 8
             else: self.Generator[:] = bytes(len(self.Generator)); self.complete = False
         elif target == SSCAL:
@@ -178,7 +179,7 @@ class EccLocker:
         if form == 'B':
             gen, sec, hs = bytes(self.Generator), bytes(self.SecondPt), self.has('second')
             if xs >> 4 & 1: self.SecondPt[:] = gen; self.setf('second')
-            if xs >> 5 & 1 and hs and self.ext == 1: return self._inv()
+            if xs >> 5 & 1 and hs and self.ext: return self._inv()
             if xs >> 5 & 1 and hs: self.Generator[:] = sec
             if xs & 1: self.Generator[:] = self._default_gen()
             if xs >> 1 & 1: self.SecondPt[:] = bytes(len(self.SecondPt)); self.setf('second', False)
@@ -360,16 +361,24 @@ class EccLocker:
         return {0: bytes(self.SecondPt), 1: bytes(self.Signature), 2: self.shared_secret()}[self.outtype]
     def exec_out(self, n):
         self._live()
-        if self.state != OUT: return self._inv()
+        if self.state != OUT or self.ext == 2 and self.outtype == 2: return self._inv()   # sealed: no Form C of a shared secret
         o = self._outbytes()
         if self.outtype == 3 or self.block_base + n > len(o): return self._inv()
         chunk = o[self.block_base:self.block_base + n]; self.block_base += n
         if self.block_base == len(o): self.state = 54
         return chunk
+    sealed = property(lambda self: self.ext == 2)
     def derive_source(self):
-        """kl.derive source: Output with OutputType shared secret, unrestricted (GR42); anything else is not a source."""
-        if self.state == OUT and self.outtype == 2: return self.shared_secret()
+        """kl.derive source: Output with OutputType shared secret before any Form C (block_base = 0), unrestricted (GR42),
+        or sealed (GR79) if self.sealed; anything else is not a source. A peek: derive() consumes it."""
+        if self.state == OUT and self.outtype == 2 and self.block_base == 0: return self.shared_secret()
         return None
+    def derive(self):
+        """A committed kl.derive of the shared secret (GR38): Output -> Success; outside the source State, Invalid (GR39 item 2)."""
+        self._live()
+        z = self.derive_source()
+        if z is None: return self._inv()
+        self.state = 54; return z
     # ------------------------------------------------------------ restrict / clearads / clone
     def rstrl(self, pol):
         self._live()

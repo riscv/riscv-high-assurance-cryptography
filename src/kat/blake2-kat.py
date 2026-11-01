@@ -81,7 +81,9 @@ for fn in FN:
     f = Locker(fn).f; bs = f.b // 8
     L = cfg(fn, 24, 2); L.setst('absorb'); run(L, [msg_of(bs)]); fl = {n: v for n, v, _ in L.fields()}
     check('%s full block is held: block_base = b, cumul_len = b, nn/kk in Positions v, vi' % fn, (fl['block_base'], fl['cumul_len'], fl['nn'], fl['kk']) == (f.b, f.b, 24, 2))
-    names = [n for n, _, _ in L.fields()]; check('%s Serialized Content fields end with nn, kk (16 bits each)' % fn, names[-2:] == ['nn', 'kk'])
+    names = [n for n, _, _ in L.fields()]; check('%s Serialized Content: nn, kk (16 bits each) in Positions v, vi, then cumul_len, block' % fn, names == ['state', 'last_block_len', 'block_base', 'nn', 'kk', 'cumul_len', 'block'], names)
+    L.setst('output', 'B', 8 * 20); L.exec('C', kllen=8 * 3); L.setst('bits', 'B', 9); fl = L.fields()
+    check('%s Hash_Output_Bits: read_len in Position iii, out_len in Position vii (64 bits)' % fn, [(n, v) for n, v, _ in fl][1:3] == [('last_block_len', 9), ('block_base', 24)] and fl[5] == ('out_len', 8 * 17, 64))
     L = cfg(fn, None, 0, b'sec'); check('%s system key: SKID leads the Serialized Content, no key bytes' % fn, L.fields()[0][0] == 'SKID' and L.fields()[0][2] == 64)
     L.setst('absorb'); check('%s system key pending: cumul_len = 0 before the first byte' % fn, L.cum == 0)
     run(L, [b'x']); check('%s ... compressed by the instruction absorbing the first byte: cumul_len = b + 8' % fn, L.cum == f.b + 8)
@@ -110,6 +112,17 @@ for fn in FN:
     L = _ab(fn); L.exec('B', b'abc'); L.clear(); L.setst('output'); check('%s kl.clear then setst is a no-op' % fn, L.st == 'Inert')
     L = cfg(fn); L.setst('absorb'); L.exec('B', b'abc'); L.setst('ready'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('output')
     check('%s Absorb -> Ready -> Absorb restarts the message' % fn, out_all(L, R.B2[fn][3]) == HLIB[fn](b'abc').digest())
+for fn in FN:
+    for nn, kk in ((None, 0), (20, 0), (32, 5)):
+        def mk(fn=fn, nn=nn, kk=kk):
+            L = cfg(fn, nn, kk); L.setst('absorb')
+            if kk: run(L, [pad(fn, b'k' * kk)])
+            run(L, [b'abc']); L.setst('output'); return L
+        bits_checks('%s nn=%s kk=%d' % (fn, nn or 'max', kk), mk, HLIB[fn](b'abc', digest_size=nn or Locker(fn).f.nnmax, key=b'k' * kk).digest())
+for fn in FN:
+    def _abk(fn=fn): L = cfg(fn, None, 0, b'k' * 4); L.setst('absorb'); return L
+    sealed_checks(fn, lambda fn=fn: _ab(fn), lambda m, fn=fn: HLIB[fn](m).digest())
+    sealed_checks(fn + ' system key', _abk, lambda m, fn=fn: HLIB[fn](m, key=b'k' * 4).digest())
 section('Negative controls')
 fn = 'BLAKE2s'; bs = 64
 m = msg_of(bs); good = HLIB[fn](m).digest()

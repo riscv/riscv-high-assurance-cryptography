@@ -194,6 +194,13 @@ for k in ('SHA3-384', 'SHAKE256'):
         o, o2 = bytearray(30), bytearray(30); L.exec('C', out=o); L2.exec('C', out=o2)
         check('%s export/import in %s: identical continuation' % (k, stage), o == o2)
 
+def _mko(k, xs=0):
+    def mk(): L = Locker(k); absorb(L, b'abc'); L.setst(OUTPUT, 'B' if xs else 'A', xs); return L
+    return mk
+for k in FN: bits_checks(k, _mko(k), ref(k, b'abc', 0))
+for k in XOF:
+    bits_checks(k + ' unbounded', _mko(k), ref(k, b'abc', 16384), bounded=False)
+    bits_checks(k + ' Xs=2400', _mko(k, 2400), ref(k, b'abc', 300))
 section('Negative controls')
 m = msg(20)
 def raw(suffix_bits, m, kind='SHA3-256'):
@@ -222,8 +229,67 @@ d, s = drv('SHA3-256', st='last'); check('destination in Last_Block -> dest Inva
 d = Locker('SHA3-256'); derive(Secret(b'S' * 32), d, 32); check('destination in Ready (hash) -> Invalid', d.se == SE_INV)
 d, s = drv('SHA3-256', shared=False); check('CMAC-type output into a hash input: pair not admitted, both Invalid (GR39.4)', d.se == SE_INV and s.bad)
 o = Locker('SHAKE128'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('SHA3-256'); d.setst(2, 'A'); derive(o, d, 32)
-check('SHAKE128 Hash_Output is not a source: source Invalid, dest untouched (GR39.2)', o.se == SE_INV and d.st == ABSORB)
+check('SHAKE128 output -> a hash input: pair not admitted, both Invalid (GR39.4)', o.se == SE_INV and d.se == SE_INV)
+o = Locker('SHAKE128'); o.setst(2, 'A'); o.exec('B', b'ikm'); o.setst(6, 'A'); o.exec('C', out=bytearray(160)); d = Locker('ASCON-AEAD128'); derive(o, d, 16); x = bytearray(8); o.exec('C', out=x)
+z = hashlib.shake_128(b'ikm').digest(184)
+check('SHAKE128 output -> AEAD key across a squeeze (bytes 160..175), next Form C returns 176..183 (GR43, GR38)', d.key == b2v(z[160:176]) and bytes(x) == z[176:184])
+o = Locker('SHA3-256'); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128_NONCE_MASK'); derive(o, d, 32)
+check('SHA3-256 digest (32 B) -> K1|K2: admitted, source Success', d.se == 0 and d.key == b2v(hashlib.sha3_256(b'').digest()[:16]) and o.st == SUCCESS)
+o = Locker('SHA3-256'); o.setst(2, 'A'); o.setst(6, 'A'); o.exec('C', out=bytearray(24)); d = Locker('ASCON-AEAD128'); derive(o, d, 16)
+check('8 bytes left of a SHA3-256 digest -> 16-byte key: destination Invalid, source keeps its State (GR39.6)', d.se == SE_INV and o.st == OUTPUT_)
 d = Locker('SHA3-256'); d.setst(2, 'A'); d.clear(); derive(Secret(b'S' * 32), d, 32); check('inert destination: no-op', d.inert())
+z = Secret(b'S' * 32); d = Locker('SHA3-256'); d.setst(2, 'A'); derive(z, d, 32); e = Locker('SHA3-256'); e.setst(2, 'A'); derive(z, e, 32)
+check('a shared secret feeds one kl.derive: a second makes the source Invalid, its destination unchanged (GR38, GR39.2)', not d.se and z.bad and e.se == 0 and e.bb == 0)
+
+section('Sealed locker (GR79)')
+def sl(kind='SHA3-256'):
+    d = Locker(kind); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True), d, 32); d.setst(6, 'A'); return d
+for kind, want in (('SHA3-256', hashlib.sha3_256(b'S' * 32).digest()), ('SHAKE128', hashlib.shake_128(b'S' * 32).digest(32))):
+    d = sl(kind); o = bytearray(b'\xff' * 8); d.exec('C', out=o)
+    check('%s a sealed secret in the message sets Sealed; Form C kl.exec in Hash_Output -> Invalid, output zero' % kind, d.se == SE_INV and bytes(o) == bytes(8))
+    d = sl(kind); d.setst(BITS, 'B', 8); check('%s ... kl.setst naming Hash_Output_Bits -> Invalid' % kind, d.se == SE_INV)
+    d = sl(kind); k = Locker('ASCON-AEAD128'); derive(d, k, 16)
+    check('%s ... its output into an AEAD key: the output prefix' % kind, k.se == 0 and k.key == b2v(want[:16]))
+    d = sl(kind); k = Locker('ASCON-AEAD128_NONCE_MASK'); derive(d, k, 32)
+    check('%s ... into K1|K2: not admitted, both Invalid (an unsealed digest is admitted above)' % kind, d.se == SE_INV and k.se == SE_INV)
+d = sl(); d.setst(1, 'A'); d.setst(2, 'A'); d.exec('B', b'abc'); d.setst(6, 'A'); o = bytearray(32); d.exec('C', out=o)
+check('Ready clears Sealed: the next digest is readable', bytes(o) == hashlib.sha3_256(b'abc').digest())
+for n in (15, 16):
+    d = Locker('SHA3-256'); d.setst(2, 'A'); s = Secret(b'S' * n, sealed=True); derive(s, d, n)
+    check('a sealed secret of %d bytes: %s' % (n, 'the source Invalid, the message unchanged (GR39 item 7)' if n < 16 else 'enters, Sealed set'),
+          (s.bad and d.se == 0 and d.bb == 0 and not d.sealed) if n < 16 else (not s.bad and d.sealed))
+for sealed in (False, True):
+    d = Locker('KMAC128', K=b'k' * 16); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=sealed), d, 32); d.setst(VERIFY, 'B', 256)
+    check('KMAC128 %s secret in the message: kl.setst naming Hash_Verify %s' % (('a sealed', '-> Invalid') if sealed else ('an unsealed', 'admitted')),
+          d.se == SE_INV if sealed else d.st == VERIFY)
+# StateExtension @ State at an SCC import (KLE-Metadata-validity)
+d = sl(); c = Locker('SHA3-256'); c.import_(d.export(), *d.mdh_state()); o = bytearray(8); c.exec('C', out=o)
+check('a sealed Hash_Output reports StateExtension 2, and its import keeps Sealed: Form C -> Invalid', d.mdh_state() == (OUTPUT_, 2) and c.se == SE_INV)
+d = Locker('SHA3-256'); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True), d, 32); c = Locker('SHA3-256'); c.import_(d.export(), *d.mdh_state())
+check('... in Hash_Absorb too', c.sealed and c.st == ABSORB)
+for st in (READY, BITS):
+    c = Locker('SHA3-256'); c.import_(sl().export(), st, se=2); check('Sealed in State %d: unsupported StateExtension @ State, the import -> Invalid' % st, c.se == SE_INV)
+c = Locker('KMAC128', K=b'k' * 16); c.import_(c.export(), VERIFY, se=2); check('KMAC128 Sealed in Hash_Verify: the import -> Invalid', c.se == SE_INV)
+c = Locker('ASCON-AEAD128'); c.import_(c.export(), READY, se=2); check('Ascon-AEAD128 has no Sealed: the import -> Invalid', c.se == SE_INV)
+# GR40: a sealed hop is a restricted transfer that narrows the destination MDH; an unsealed output narrows nothing (GR43)
+d = Locker('SHA3-256'); d.mdh = mdh_pack(UsagePolicy=0x7); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True, mdh=mdh_pack(UsagePolicy=0x5, ExpirationDate=7)), d, 32)
+d.setst(6, 'A'); k = Locker('ASCON-AEAD128'); k.mdh = mdh_pack(UsagePolicy=0x6); derive(d, k, 16)
+check('GR40 across two sealed hops: the AEAD key gets UsagePolicy 0x4 and the ExpirationDate of the secret',
+      k.se == 0 and (mdh_get(k.mdh, 'UsagePolicy'), mdh_get(k.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(d.mdh, 'UsagePolicy') == 5)
+d = sl(); d.scprot = 2; k = Locker('ASCON-AEAD128'); k.scprot = 1; derive(d, k, 16)
+check('GR40: an AEAD key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output', k.se == 5 and d.st == OUTPUT_)
+d = Locker('SHA3-256'); d.mdh = mdh_pack(Locality=0x10); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True, mdh=mdh_pack(Locality=0x20)), d, 32)
+check('GR40: failed narrowing (boot subfields differ) -> Privilege Violation, nothing absorbed', d.se == 5 and not d.sealed)
+d = Locker('SHA3-256'); d.mdh = mdh_pack(UsagePolicy=1); d.setst(2, 'A'); d.exec('B', b'abc'); d.setst(6, 'A'); k = Locker('ASCON-AEAD128'); k.mdh = mdh_pack(UsagePolicy=6); derive(d, k, 16)
+check('an unsealed output is unrestricted (GR43): no narrowing', k.se == 0 and mdh_get(k.mdh, 'UsagePolicy') == 6)
+section('Software example KLE-pseudocode-SampleNTT: FIPS 203 SampleNTT by 12-bit reads in Hash_Output_Bits')
+import mlkem_model as MK
+for B in (bytes(range(32)) + bytes([1, 2]), bytes(34), b'\xff' * 34):
+    L = Locker('SHAKE128'); L.setst(2, 'A'); L.exec('B', B); a = []; top = 0              # the first Hash_Output_Bits pads
+    while len(a) < 256:
+        L.setst(BITS, 'B', 12); o = bytearray(b'\xff\xff'); L.exec('C', out=o); v = int.from_bytes(o, 'little'); top |= v >> 12
+        if v < 3329: a.append(v)
+    check('SampleNTT(%s...) from Hash_Absorb = mlkem_model.sample_ntt, each read zero-extended to 16 bits' % B[:3].hex(), a == MK.sample_ntt(B) and top == 0)
 section('Provisioning with MachinePolicy != 0 and rstrl (ungated Machine)')
 for k in ('SHA3-256', 'SHAKE128'):
     l = Locker(k, policy=1); check(k + ' PI with MachinePolicy=1 -> State 0, StateExtension 1 (unsupported Metadata)', (l.st, l.se) == (0, 1))

@@ -40,6 +40,27 @@ for fn in ('SHA-256', 'SHA-512'):
     for nb in (1, 55, 56, 63, 64, 65, 111, 112, 127, 128, 129, 200, 513):
         vector(fn, lambda fn=fn: Locker(fn), msg_of(nb), 8 * nb, lambda m, n, fn=fn: oracle(fn, m), nlabel='oracle hashlib', plans=('chunks', 'export', 'last'))
 for fn in R.SHA2: machine_checks(fn, lambda m, fn=fn: oracle(fn, m))
+section('Software example KLE-pseudocode-ECDH-KDF: P-256 ECDH, SP 800-56C one-step KDF with SHA-256, AES-256 key')
+from ecc_machine import EccLocker, SSCAL, S2ND, PMUL, RDY
+import ecc_model as EM
+C = EM.Wei('secp256r1'); _, d, Q, Z = V0 = __import__('ecc_vectors').ECDH[0]; fi = b'FixedInfo'
+Qb = Q[0].to_bytes(32, 'little') + Q[1].to_bytes(32, 'little'); dG = C.mul(d, C.G)
+def ecdh_kdf(ext, Qb=Qb):
+    """the listing: a random Scalar, its public key, [d]Q, then K = SHA-256(00000001 || Z || FixedInfo) into a key"""
+    E = EccLocker('secp256r1', policy=0, ext=ext, rbg=lambda n: (d - 1).to_bytes(n, 'big'))   # the RBG gives d (FIPS 186-5 A.2.2)
+    E.setst(SSCAL, 'B', 1); E.setst(PMUL); E.exec_D(); pub = E.exec_out(64)
+    E.setst(RDY); E.setst(S2ND); E.exec_in(Qb); E.setst(PMUL); E.exec_D()
+    H = Locker('SHA-256'); H.setst('absorb'); H.exec('B', b'\0\0\0\1')
+    z = E.derive(); ok = z != 'invalid' and H.derive(z, sealed=E.sealed); H.exec('B', fi); H.setst('output')
+    K = Key(32); ok = ok and derive_out(H, K, 32); return E, H, K, pub, ok
+for ext in (0, 2):
+    E, H, K, pub, ok = ecdh_kdf(ext)
+    check('%s: the public key is readable, K = SHA-256(00000001 || Z || FixedInfo) over CAVP CDH P-256 COUNT=0' % ('sealed' if ext else 'unsealed'),
+          ok and pub == dG[0].to_bytes(32, 'little') + dG[1].to_bytes(32, 'little') and K.key == hashlib.sha256(b'\0\0\0\1' + Z + fi).digest())
+    check('... K1 and K0 end in Success, and K0 is %s' % ('sealed' if ext else 'not sealed'), E.state == 54 and H.st == 'Success' and H.sealed == bool(ext))
+E, H, K, pub, ok = ecdh_kdf(0, Qb[:63] + bytes([Qb[63] ^ 1]))
+check('a Q off the curve: Point_Mul -> Failure, the kl.derive leaves K1 outside Success, which the listing checks', not ok and E.state != 54)
+
 section('Negative controls')
 fn = 'SHA-256'; good = oracle(fn, b'abc')
 w, bb, t = R.SHA2[fn]

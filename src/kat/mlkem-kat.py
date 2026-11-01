@@ -29,8 +29,8 @@ class RBG:
         r = s.q.pop(0); assert len(r) == n; return r
 
 class Mach:
-    def __init__(s, mode, rbg=None, policy=0, faults=(), limit=None):
-        s.mode, s.p, s.rbg, s.f, s.limit = mode, NAMES[mode], rbg, set(faults), limit
+    def __init__(s, mode, rbg=None, policy=0, faults=(), limit=None, ext=0):
+        s.mode, s.p, s.rbg, s.f, s.limit, s.mext = mode, NAMES[mode], rbg, set(faults), limit, ext   # ext 1: sealed variant
         s.k = M.PARAMS[s.p][0]; s.sz = M.SIZES[s.p]; s.eo = 384 * s.k
         s.err = SE_UNSUPPORTED if policy else None      # MachinePolicy != 0: unsupported Metadata
         s.dk, s.ct, s.ss = bytearray(s.sz[1]), bytearray(s.sz[2]), bytearray(32)
@@ -38,7 +38,7 @@ class Mach:
     # ---- observation
     def ext(s): return s.he | s.hd << 1 | s.hc << 2 | s.hs << 3
     def mdh(s):
-        return mdh_pack(Machine=0xB0 | s.mode, State=s.st, MachineUse=s.W,
+        return mdh_pack(Machine=0xB0 | s.mode, MachineExtension=s.mext, State=s.st, MachineUse=s.W,
                         StateExtension=s.err if s.st == 0 else s.ext())
     def serialized(s): return bytes(s.dk) + bytes(s.ct) + bytes(s.ss)
     # ---- helpers
@@ -124,19 +124,23 @@ class Mach:
         finally: M.SAMPLE_LIMIT[0] = None
         s._goto(nxt)
     def derive(s, dest, length=None):
-        """kl.derive from sharedkey (GR38-GR42). dest: ('key', dest_length), ('hash',) = kl.exec input of a hash/MAC/XOF
-        listed for it, or ('other',) = any other endpoint. Returns the bytes the destination receives, or None when the
+        """kl.derive from sharedkey (GR38-GR42, GR79). dest: ('key', dest_length[, src_out]), src_out marking the key of keystream
+        generation, OFB or CMAC; ('hash',) = kl.exec input of a hash/MAC/XOF listed for it, or ('other',) = any other endpoint. Returns the bytes the destination receives, or None when the
         destination (or, for a pair not admitted, both lockers) goes to Invalid."""
         if s.st == 0: return None
         if s.st != S_SOUT: s._invalid(); return None   # not a source endpoint in this State: the source transitions
         if dest[0] == 'other' and 'norestrict' not in s.f: s._invalid(); return None   # pair not admitted: both transition
+        if s.mext == 1 and dest[2:] == (True,): s._invalid(); return None                # GR79: sealed, excluded destination
         if dest[0] == 'key':
             dl = dest[1]; ln = dl if length is None else length
             if 'nolen' not in s.f and (ln < dl or dl > 32): return None
-            return bytes(s.ss[:dl]) + bytes(max(0, dl - 32))
-        ln = 32 if length is None else length
-        if 'nolen' not in s.f and ln != 32: return None
-        return bytes(s.ss)
+            out = bytes(s.ss[:dl]) + bytes(max(0, dl - 32))
+        else:
+            ln = 32 if length is None else length
+            if 'nolen' not in s.f and ln != 32: return None
+            out = bytes(s.ss)
+        if 'reuse' not in s.f: s._goto(ST_READY)            # GR38: one kl.derive per field source; sharedkey_Output -> Ready
+        return out
 
 CH = [1, 8, 16, 32, 64, 100, 7]
 def load_all(m, data, ch=CH):
@@ -235,10 +239,7 @@ def G_vec(mk, mode):
         a(t + 'emitted ciphertext = OpenSSL ct', sha(ct) == v['ct'])
         a(t + 'ciphertext complete -> sharedkey_Output', st(m) == S_SOUT and m.W == 0 and m.ext() == 15)
         a(t + 'derive hash input = OpenSSL K', m.derive(('hash',)) == K)
-        a(t + 'derive key of 16/24/32 bytes = first bytes of K', all(m.derive(('key', n)) == K[:n] for n in (16, 24, 32)))
-        a(t + 'derive repeatable, State unchanged', m.derive(('hash',)) == K and st(m) == S_SOUT)
-        m.setst(ST_READY)
-        a(t + 'leaving sharedkey_Output zeroes sharedkey', bytes(m.ss) == bytes(32) and m.ext() == 7)
+        a(t + 'the derive leaves sharedkey_Output for Ready, sharedkey zeroed', st(m) == ST_READY and bytes(m.ss) == bytes(32) and m.ext() == 7)
         m.setst(S_DEC); m.exec()
         a(t + 'Decapsulate -> sharedkey_Output', st(m) == S_SOUT and m.ext() == 15)
         a(t + 'Decapsulate K = OpenSSL K', m.derive(('hash',)) == K)
@@ -457,16 +458,18 @@ def G_lock(mk, mode):
     m = mk(mode); m.setst(S_DIN); load_all(m, dk); m.setst(ST_READY)
     a('completed decapsk kept on leaving: both flags set', bytes(m.dk) == dk and m.ext() == 3)
     # ---- restricted sharedkey derive (GR38-GR42, KLE-ML-KEM)
-    m = sk()
-    for n in (16, 24, 32): a('key field of %d bytes receives the first %d bytes of the secret' % (n, n), m.derive(('key', n)) == bytes(m.ss[:n]))
-    a('shared key of Decapsulate = ACVP/OpenSSL K, first bytes into keys', all(m.derive(('key', n)) == bytes(m.ss[:n]) for n in (16, 24, 32)) and m.derive(('key', 32)) == K)
-    a('key field of 16 bytes with length 40 > dest_length: first 16 bytes', m.derive(('key', 16), 40) == K[:16])
-    a('derive leaves the source State and the secret unchanged', st(m) == S_SOUT and bytes(m.ss) == K and m.ext() == 15)
+    a('shared key of Decapsulate = ACVP/OpenSSL K', bytes(sk().ss) == K)
+    for n in (16, 24, 32): a('key field of %d bytes receives the first %d bytes of the secret' % (n, n), sk().derive(('key', n)) == K[:n])
+    m = sk(); a('key field of 16 bytes with length 40 > dest_length: first 16 bytes', m.derive(('key', 16), 40) == K[:16])
+    a('the derive leaves sharedkey_Output for Ready: sharedkey zeroed, HasSharedKey clear (GR38)', st(m) == ST_READY and bytes(m.ss) == bytes(32) and m.ext() == 7)
+    m.derive(('key', 16)); a('a second kl.derive of sharedkey: source Invalid (GR38, GR39 item 2)', inv(m))
+    m = sk(); m.setst(ST_READY); a('leaving sharedkey_Output by kl.setst zeroes sharedkey', bytes(m.ss) == bytes(32) and m.ext() == 7)
     for n in (33, 48, 64):
         m = sk(); r = m.derive(('key', n)); a('key field of %d bytes (longer than the secret): destination Invalid, nothing transferred, source unchanged' % n, r is None and st(m) == S_SOUT and bytes(m.ss) == K)
     for n, ln in ((16, 15), (32, 31), (24, 0)):
         m = sk(); a('key field of %d bytes with length %d < dest_length: destination Invalid' % (n, ln), m.derive(('key', n), ln) is None and st(m) == S_SOUT)
-    m = sk(); a('hash/MAC/XOF input with length 32 receives the whole secret', m.derive(('hash',)) == K and m.derive(('hash',), 32) == K)
+    a('hash/MAC/XOF input with length 32 receives the whole secret', sk().derive(('hash',), 32) == K)
+    m = sk()
     for ln in (0, 16, 31, 33, 64):
         a('message input with length %d != 32: destination Invalid' % ln, m.derive(('hash',), ln) is None and st(m) == S_SOUT)
     m = sk(); r = m.derive(('other',)); a('any other destination (no pair admitted): both lockers Invalid, source Content cleared', r is None and inv(m) and m.serialized() == zero)
@@ -475,7 +478,14 @@ def G_lock(mk, mode):
     m = mk(mode, RBG(d + z, mm)); m.setst(S_GEN); m.exec(); m.setst(ST_READY); m.setst(S_ENC); m.exec()
     a('Encapsulate result: ciphertext_Output holds sharedkey, kl.derive refused (only in sharedkey_Output)', st(m) == S_COUT and m.hs == 1 and m.derive(('key', 16)) is None and inv(m))
     m = mk(mode, RBG(d + z, mm)); m.setst(S_GEN); m.exec(); m.setst(ST_READY); m.setst(S_ENC); m.exec(); emit_all(m, sz[2])
-    a('Encapsulate result: derive in sharedkey_Output = ACVP/OpenSSL K', m.derive(('hash',)) == K and m.derive(('key', 24)) == K[:24])
+    a('Encapsulate result: derive in sharedkey_Output = ACVP/OpenSSL K', m.derive(('key', 24)) == K[:24])
+    # ---- sealed variant (MachineExtension = 1, GR79)
+    m = sk(); a('base variant: sharedkey into the key of keystream generation, OFB or CMAC admitted', m.derive(('key', 16, True)) == K[:16])
+    def sealed():
+        m = mk(mode, RBG(d + z, mm), ext=1); m.setst(S_GEN); m.exec(); m.setst(ST_READY); m.setst(S_ENC); m.exec(); emit_all(m, sz[2]); return m
+    m = sealed(); a('sealed variant: MDH carries MachineExtension = 1; sharedkey into a key and a hash input as in the base variant',
+      mdh_get(m.mdh(), 'MachineExtension') == 1 and m.derive(('key', 16)) == K[:16] and sealed().derive(('hash',)) == K)
+    m = sealed(); r = m.derive(('key', 16, True)); a('sealed variant: into the key of keystream generation, OFB or CMAC: both lockers Invalid', r is None and inv(m))
     return R
 
 def run_group(G, title, faults, label):
@@ -507,7 +517,7 @@ for k_, v in VEC.items():
 run_group(G_vec, 'Flows against the oracle', ['noreject'], 'implicit rejection disabled')
 run_group(G_checks, 'Input checks and outcomes', ['nomod', 'nohash', 'noexcess', 'nozero'], 'check disabled')
 run_group(G_sm, 'State machine', [], '')
-run_group(G_lock, 'Locker level: errors, forms, long fields, restricted derive', ['noclear', 'nolen', 'norestrict', 'nozero'], 'locker fault')
+run_group(G_lock, 'Locker level: errors, forms, long fields, restricted derive', ['noclear', 'nolen', 'norestrict', 'nozero', 'reuse'], 'locker fault')
 section('Controls')
 control('RBG failure path is reachable (RBG without data fails the scripted read)', raises(RBG().read, 32, exc=RBGFail))
 control('SampleNTT limit path is reachable', raises(lambda: (M.SAMPLE_LIMIT.__setitem__(0, 1), M.keygen_internal('ML-KEM-512', bytes(32), bytes(32))), exc=M.SampleNTTLimit))

@@ -657,7 +657,7 @@ The architecture does not enforce these sequences or their order.
 [[KLE-machine-code-examples]]
 == Code for the Machines
 
-The listings of <<KLE-machine-code-examples>> are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target throughout. Listing <<KLE-pseudocode-GCM-encryption-alternate>> also needs Zvkg (`vghsh.vv`).
+The listings of <<KLE-machine-code-examples>> are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target, and <<KLE-pseudocode-ECDH-KDF>> also uses `K1` and `K2`. Listing <<KLE-pseudocode-GCM-encryption-alternate>> also needs Zvkg (`vghsh.vv`).
 Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown, which erases the output buffer of a decryption before it reports (Rule <<KLE-SR-unverified-plaintext>>).
 `import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`; it changes no `a` register, `s9` or `s10`, but it changes `vtype`.
 A 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, as in most examples, where `b` = 128; a shorter piece of `p` bytes is processed with `vl` = `p`, so `KLLEN` = 8 {times} `p`.
@@ -1625,4 +1625,106 @@ is replaced by:
   bnez      t4, 1b
 2:
   kl.setst  K0, #kl_state_hash_absorb # pad Z; M follows as above
+----
+
+[[KLE-ECDH-KDF-example]]
+=== Key Agreement and Key Derivation
+
+The following sequence runs an ephemeral P-256 key agreement, derives an AES-256 key `K` = SHA-256(`00000001` {vvert} `Z` {vvert} `FixedInfo`) from its shared secret `Z` with the one-step key-derivation function of cite:[NIST-SP-800-56Cr2] {sect}4.1, and places `K` in a GCM locker. Software sees neither `Z` nor `K`.
+
+* *Lockers.* `K1` holds an ECC Machine for secp256r1, `K0` a SHA-256 Machine and `K2` a GCM Machine with AES-256 and the full `tag_len_p`, each in _Ready_.
+The ECC States have no named constants, so the listing writes them by number (<<Zkl-ISA-machines.adoc#KLE-ECC>>).
+* *Points.* The listing returns the ephemeral public key for the peer.
+The peer's public key `Q` arrives encoded as <<Zkl-ISA-machines.adoc#KLE-ECC>> specifies: its X coordinate, then its Y coordinate, each 32 bytes little-endian.
+_Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid point.
+* *The check after the first `kl.derive`.* A `kl.derive` from a locker in _Failure_ makes that locker _Invalid_ and leaves `K0` unchanged, so `K` would be derived without `Z`; the `kl.getst` that follows rejects that case.
+* *FixedInfo* takes at most 16 bytes here; a longer one is absorbed in chunks, as in <<KLE-pseudocode-hash>>.
+
+[[KLE-pseudocode-ECDH-KDF]]
+.ECDH and One-Step Key Derivation into an AES-256 Key
+----
+# a0 = SCC of ECC secp256r1, a1 = SCC of SHA-256, a2 = SCC of GCM with AES-256,
+# a3 = peer public key Q, 64 bytes, a4 = buffer for the ephemeral public key,
+# 64 bytes, a5 = FixedInfo, a6 = its length in bytes, 1 to 16
+
+  import_scc 1, a0
+  import_scc 0, a1
+  import_scc 2, a2
+  li        t2, 1
+  kl.setst  K1, #3, t2            # Set_Scalar, Xs != 0: a random scalar d
+  kl.setst  K1, #4                # Point_Mul
+  kl.exec   K1                    # Form D: SecondPt <- [d]G, to Output
+  li        t1, 64
+  vsetvli   zero, t1, e8, m4, ta, ma # KLLEN = 512: one point
+  kl.exec   v0, K1                # emit [d]G, to Success
+  vse8.v    v0, (a4)              # the ephemeral public key, for the peer
+  kl.setst  K1, #kl_state_ready   # Form A keeps d
+  kl.setst  K1, #8                # Set_SecondPt
+  vle8.v    v0, (a3)
+  kl.exec   K1, v0                # load Q, set HasSecondPt
+  kl.setst  K1, #4                # Point_Mul
+  kl.exec   K1                    # SecondPt <- [d]Q, to Output with a
+                                  # shared secret, or Failure for a bad Q
+  kl.setst  K0, #kl_state_hash_absorb
+  lui       t1, 0x01000           # the counter 00000001, big-endian
+  vsetivli  zero, 1, e32, m1, ta, ma # KLLEN = 32
+  vmv.s.x   v0, t1
+  kl.exec   K0, v0                # absorb the counter
+  li        t1, 32
+  kl.derive K0, K1, t1            # absorb Z, 32 bytes; K1 to Success
+  kl.getst  t3, K1
+  li        t4, 54
+  bne       t3, t4, error         # K1 not in Success: Z did not enter K0
+  vsetvli   zero, a6, e8, m1, ta, ma
+  vle8.v    v0, (a5)
+  kl.exec   K0, v0                # absorb FixedInfo
+  kl.setst  K0, #kl_state_hash_output # pad: the digest is K
+  kl.derive K2, K0, t1            # K into the AES-256 key; K0 to Success
+----
+
+*Sealed variant.* With _MachineExtension_ = 2 in the ECC SCC, the same listing also keeps `Z` and `K` from software that controls the lockers (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>).
+The public key stays readable, but a Form C `kl.exec` of `Z` makes `K1` _Invalid_, and `Z` seals `K0` when it enters it, so a Form C `kl.exec` of the digest makes `K0` _Invalid_.
+Both `kl.derive` instructions are then restricted: each moves at least 16 bytes, and each narrows the Metadata of its destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-narrowing>>), so that `K2` ends with no wider a _UsagePolicy_, _Locality_ or _ExpirationDate_ than `K1`.
+`K0` and `K2` therefore need an _SCProtection_ at least that of `K1`.
+
+*Longer keys.* `Z` feeds one `kl.derive` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), sealed or not, so the counter cannot advance to `00000002`.
+A key longer than the digest, or several keys, need a longer output from one hash locker: SHA-512, or KMAC256 with `L` set to the total length, `S` = "KDF" and an agreed salt of at most 131 bytes as `K` (Option 3 of cite:[NIST-SP-800-56Cr2] {sect}4.1; the 132-byte `default_salt` spans two `key_block` blocks).
+Each `kl.derive` from that output takes its next bytes.
+
+[[KLE-SampleNTT-example]]
+=== Rejection Sampling from an XOF
+
+_Hash_Output_Bits_ reads an XOF output a set number of bits at a time, which suits rejection sampling.
+The following sequence computes SampleNTT of cite:[nist-fips-203] Algorithm 7, with which ML-KEM expands its matrix from a seed.
+It reads the SHAKE128 output for `B` = `ρ` {vvert} `j` {vvert} `i` in 12-bit pieces, and keeps each value below `q` = 3329 until it has 256 coefficients.
+
+* SHAKE128 emits each output byte from its least significant bit, so consecutive 12-bit pieces are the values `d~1~`, `d~2~` that Algorithm 7 forms from each 3 bytes, in order.
+* Each `kl.setst` sets `read_len` to 12. The first also ends the message, as a Form A `kl.setst` naming _Hash_Output_ would, for an unbounded output.
+* The Form C `kl.exec` that follows, with `KLLEN` = 16, emits those 12 bits and clears the 4 above them, so `vmv.x.s` returns the value itself.
+* SampleNTT runs on public data, since `ρ` is part of the encapsulation key, so its variable number of reads reveals nothing secret.
+
+[[KLE-pseudocode-SampleNTT]]
+.SampleNTT from SHAKE128
+----
+# a0 = SCC of SHAKE128, a1 = B = rho || j || i, 34 bytes,
+# a2 = output, 256 coefficients of 16 bits
+
+  import_scc 0, a0
+  kl.setst  K0, #kl_state_hash_absorb
+  li        t1, 34
+  vsetvli   zero, t1, e8, m4, ta, ma # KLLEN = 272
+  vle8.v    v0, (a1)
+  kl.exec   K0, v0                # absorb B
+  vsetivli  zero, 1, e16, m1, ta, ma # KLLEN = 16
+  li        t2, 12
+  li        t3, 3329              # q
+  addi      t4, a2, 512           # the end of the output
+1:
+  kl.setst  K0, #kl_state_hash_output_bits, t2 # read_len = 12; the first pads
+  kl.exec   v0, K0                # the next 12 bits, zero-extended
+  vmv.x.s   t1, v0
+  bgeu      t1, t3, 1b            # reject a value >= q
+  sh        t1, 0(a2)
+  addi      a2, a2, 2
+  bne       a2, t4, 1b
 ----
