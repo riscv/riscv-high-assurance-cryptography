@@ -401,7 +401,7 @@ e = enc(); e.start = 8; check('klstart not an interruption point -> Invalid (GR2
 e = enc(); check('length invalid for the Machine (24 bytes) -> Invalid (GR25.2)', e.execw(1, form='A', data=dd[:24]) == 'invalid' and stx(e, 1) == INV)
 e = enc(); e.start = 40; r = e.execw(1, form='A', data=dd); check('GR25.1 precedes GR25.3: klstart 40 (not a multiple of 16) >= length 32 is an empty window, not Invalid', r == bytes(32) and e.start == 0 and e.getst(1) == 2)
 e = enc(); dd4 = bytes(range(64)); h, part = e.execw(1, form='A', data=dd4, halt_after=2)
-check('halt at an interruption point: klstart = 32, prefix committed, not retired (GR51)', h == 'halted' and e.start == 32 and part[:32] == x(dd4[:32]))
+check('halt at an interruption point: klstart = 32, prefix committed, not retired (GR49)', h == 'halted' and e.start == 32 and part[:32] == x(dd4[:32]))
 r = e.execw(1, form='A', data=dd4); check('resumed from klstart 32 completes; klstart 0 on retire', r[32:] == x(dd4[32:]) and e.start == 0)
 e = enc(); e.nl = 1; e.start = 5; e.setnl(32); e.execw(0, r=1, form='A', data=dd); check('exec falling through (klnamedlocker 32): klstart written 0 (<<KLE-GR-outcomes>>)', e.start == 0)
 e = enc(); e.setst(1, 1); e.start = 7; check('kl.setst leaves klstart (GR19: kl.setst does not honor klstart)', e.start == 7)

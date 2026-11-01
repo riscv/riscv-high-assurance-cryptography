@@ -5,23 +5,21 @@ ifdef::env-site[]
 include::partial$Zkl-symbols.adoc[]
 endif::[]
 
-_This section is normative. It fixes the notation for values, concatenation, operators and functions. Every formula is read under these conventions, and no Machine description may introduce a different one._
+_This section is normative: every formula is read under these conventions, and no Machine description may introduce a different one._
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Notation-values]]
 == Values, Bits, and Byte Strings
 
-A value is a bit string whose length is fixed by its context.
-For a value `V` of `n` bits, `V[i]` denotes its ``i``-th bit and `V[j:i]`, with
-`0` {le} `i` {le} `j` < `n`, the bit slice from bit `i` to bit `j`, both inclusive.
-Bit `0` is the least significant bit.
+A value is a bit string whose length its context fixes.
+For an ``n``-bit value `V`, `V[i]` is its ``i``-th bit, bit `0` being the least significant, and `V[j:i]`, with
+`0` {le} `i` {le} `j` < `n`, the slice from bit `i` to bit `j`, both inclusive.
 
 A referenced standard may specify an input, output, key, state field, or constant as a *byte string* `M` = `M~0~`, `M~1~`, {ellipsis}, `M~n-1~`, `M~0~` being the first (leftmost, lowest-addressed) byte.
-This specification represents it by the `8n`-bit value `V` with `V[8i+7 : 8i]` = `M~i~` for `0` {le} `i` < `n`, and uses no other string-to-value mapping.
-The mapping is little-endian, like RISC-V: for a KLE memory operation with effective address `A`, the byte at `A + i` is `V[8i+7 : 8i]`; a vector register (group) that supplies `INPUT` or receives `OUTPUT` holds the result of a unit-stride byte load (`vle8.v`) of that memory, and a unit-stride byte store (`vse8.v`) reproduces the memory content.
-The mapping does not depend on `SEW` and `VL`, of which KLE uses only the product (<<Zkl-ISA-machines.adoc#KLE-algo-notation>>).
-KLE memory instructions are independent of the data endianness of the hart (<<Zkl-ISA-unpriv.adoc#KLE-Notation-endianness>>).
+This specification represents it by the `8n`-bit value `V` with `V[8i+7 : 8i]` = `M~i~` for `0` {le} `i` < `n`, and by no other mapping.
+The mapping is little-endian, like RISC-V: for a KLE memory operation with effective address `A`, the byte at `A + i` is `V[8i+7 : 8i]`; a vector register (group) that supplies `INPUT` or receives `OUTPUT` holds what a unit-stride byte load (`vle8.v`) of that memory gives, and a unit-stride byte store (`vse8.v`) reproduces the memory.
+The mapping does not depend on `SEW` and `VL`, of which KLE uses only the product (<<Zkl-ISA-machines.adoc#KLE-algo-notation>>), and KLE memory instructions ignore the data endianness of the hart (<<Zkl-ISA-unpriv.adoc#KLE-Notation-endianness>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -35,46 +33,45 @@ For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value
 
 * `x {leftarrow} y`, also in listings (`x <- y` in inline code): assignment of `y` to `x`.
 * `x = y`, `x {ne} y` (`x != y` in listings), `<`, `{le}`, `>`, `{ge}`: equality, inequality and the usual integer comparisons.
-* `+`, `-`, `{times}`: integer addition, subtraction and multiplication; `a / b`: exact division, used only where `b` divides `a`, or inside `ceil` or `floor`, where it is the real quotient; `a mod b`, for `b` > 0, the remainder of `a` divided by `b`, in the range `0` to `b-1`.
-* `[k]P`: the scalar multiple of the elliptic-curve point `P` by the integer `k`, that is, `P` added to itself `k` times by the group law of its curve.
+* `+`, `-`, `{times}`: integer addition, subtraction and multiplication; `a / b`: exact division, used only where `b` divides `a`, or inside `ceil` or `floor` as the real quotient; `a mod b`, for `b` > 0: the remainder of `a` divided by `b`, from `0` to `b-1`.
+* `[k]P`: the elliptic-curve point `P` added to itself `k` times by the group law of its curve.
 * `V xor W`, `V and W`, `V or W`: bitwise operations on values of equal length.
-* `V << k`, `V >> k`: logical shifts of `V` by `k` bits within its declared width, discarding the bits shifted out and shifting in zeros; a left shift moves data toward the *later* bytes of the string.
+* `V << k`, `V >> k`: logical shifts of `V` by `k` bits within its declared width, shifting in zeros; a left shift moves data toward the *later* bytes of the string.
 * `A @ B`: concatenation (<<KLE-Notation-concatenation>>).
-* `X {vvert} Y`, for byte strings or arrays of blocks: `X` followed by `Y`, `X` at the lower offsets or indices; for arrays, the elements of `X` first, in index order. This specification uses `{vvert}` only in this little-endian sense and transcribes a standard's formula into it (<<KLE-Notation-transcription>>); a standard's own `{vvert}` appears only in those examples and in the conventions of the standards (<<KLE-Notation-standards>>).
-* `foreach(i from a to b) do:` (the body follows, indented): executes its body for each integer `i` from `a` to `b`, both included, in increasing order, and not at all if `a` > `b`; `foreach(i from a to b by s)` advances `i` in steps of `s` > 0.
-* `if (c) then:` performs the indented lines that follow only if `c` holds; a following `else:` performs its own indented lines otherwise. `while (c) do:` performs its indented lines as long as `c` holds, testing `c` before each pass.
-* `x^k^`: `x` raised to the power `k`; in a field, `x` may be the polynomial variable and `·` the product in the field, with `x^-128^` the inverse of `x^128^`; `x**k` in listing blocks. As an operand of `@` or `{vvert}`, `0^k^` and `1^k^` are instead `zeros(k)` and `ones(k)`, the empty string for `k` = 0.
-* `local x : T`, or `local a, b : T`: internal variables of the pseudocode, not part of any architectural state. A variable first assigned in a listing without `local` is local to that function.
-* `function f(a : T, {ellipsis}) → T' = { {ellipsis} }`, `struct { {ellipsis} }`, `array [i..j] of T`, `return`: function definition, record, array type, and result. `struct { f = v, {ellipsis} }` builds a record and `r.f` selects its field `f`; `A[]` is a whole array of unspecified bounds, `A[i]` its element `i`, which may be sliced (`A[i][j:k]`) and assigned to as a slice.
+* `X {vvert} Y`, for byte strings or arrays of blocks: `X` followed by `Y`, `X` at the lower offsets or indices. This specification uses `{vvert}` only in this little-endian sense, into which it transcribes a standard's formula (<<KLE-Notation-transcription>>); a standard's own `{vvert}` appears only in those examples and in <<KLE-Notation-standards>>.
+* `foreach(i from a to b) do:` executes the indented body that follows for each integer `i` from `a` to `b`, both included, in increasing order, and not at all if `a` > `b`; `foreach(i from a to b by s)` steps `i` by `s` > 0.
+* `if (c) then:` performs the indented lines that follow only if `c` holds, and a following `else:` its own lines otherwise; `while (c) do:` performs its indented lines while `c` holds, testing `c` before each pass.
+* `x^k^` (`x**k` in listing blocks): `x` to the power `k`; in a field, `x` may be the polynomial variable and `·` the field product, with `x^-128^` the inverse of `x^128^`. As an operand of `@` or `{vvert}`, `0^k^` and `1^k^` are instead `zeros(k)` and `ones(k)`, empty for `k` = 0.
+* `local x : T`, `local a, b : T`: pseudocode variables, outside any architectural state; a variable first assigned in a listing without `local` is also local to its function.
+* `function f(a : T, {ellipsis}) → T' = { {ellipsis} }`, `struct { {ellipsis} }`, `array [i..j] of T`, `return`: function definition, record, array type, and result. `struct { f = v, {ellipsis} }` builds a record and `r.f` selects its field `f`; `A[]` is a whole array of unspecified bounds and `A[i]` its element `i`, which may be sliced (`A[i][j:k]`) and assigned to as a slice.
 * `x {in} {a, b}`: set membership.
-* Where a bit string is expected, a string of binary digits, with or without the prefix `0b`, is a bit string with one bit per digit, the most significant first, as in the RISC-V ISA manual: `10` is the 2-bit value `V` with `V[1]` = 1 and `V[0]` = 0, and a bare `0` or `1` is a single bit.
+* Where a bit string is expected, binary digits, with or without the prefix `0b`, are a bit string, the most significant first, as in the RISC-V ISA manual: `10` is the 2-bit `V` with `V[1]` = 1 and `V[0]` = 0, and a bare `0` or `1` is one bit.
 Where an ``n``-bit value is expected, a hexadecimal numeral `0x`{ellipsis} of value `v` stands for `bin(v, n)`.
 Every other numeral is an integer.
 * `(a, b)` after `return`, and `x, y {leftarrow} f({ellipsis})`: a result with several components and its component-wise assignment, in declaration order; a result type written `{x : T, {ellipsis}}` is such a tuple.
-* `bool`, `true`, `false`: the Boolean type and its values; `int`: the integer type; `bits(n)`: the type of an `n`-bit value.
-* `X[r]`: the GPR whose number is `r`, as in the RISC-V ISA manual, so `X[rs1]` is the GPR named by field `rs1`; `X[s+1] @ X[s]` is the pair of GPRs that holds a 64-bit value on RV32.
+* `bool`, `true`, `false`: the Boolean type and its values; `int`: the integer type; `bits(n)`: the type of an ``n``-bit value.
+* `X[r]`: GPR number `r`, as in the RISC-V ISA manual (`X[rs1]` is the GPR that field `rs1` names); `X[s+1] @ X[s]` is the GPR pair that holds a 64-bit value on RV32.
 * `sext(x)`: `x` sign-extended to XLEN bits.
 
 [[KLE-Notation-functions]]
 == Functions
 
-* `0`, `1`, and other binary and hexadecimal numerals: bit strings or integers, according to their context (<<KLE-Notation-operators>>).
-* `bin(n,m)`: the `m` least significant bits of the unsigned integer `n`, zero-extended if needed; bit `i` is the coefficient of 2^i^, so `bin(int(V), m)` = `V` for an `m`-bit `V`, and `int(bin(n, m))` = `n` mod 2^m^.
-* `bswap(m)`: the byte string `m` with its byte order reversed; for a value `V` of `8n` bits, the value whose byte `i` is byte `n-1-i` of `V`.
-  `bswap(m, n)` = `bswap(m[8n-1:0])`: the `n` least significant bytes of `m`, reversed, as an `8n`-bit value.
-* `brev8(V)`: for a value `V` of `8n` bits, the value with the bits of each byte in reverse order: `brev8(V)[8i+j]` = `V[8i+7-j]` for `0` {le} `i` < `n` and `0` {le} `j` < 8, as the instruction `brev8` of the Zbkb extension does.
+* `bin(n,m)`: the `m` least significant bits of the unsigned integer `n`, zero-extended if needed, bit `i` being the coefficient of 2^i^: `bin(int(V), m)` = `V` for an ``m``-bit `V`, and `int(bin(n, m))` = `n` mod 2^m^.
+* `bswap(m)`: the byte string `m` in reverse byte order; for an ``8n``-bit value `V`, byte `i` of the result is byte `n-1-i` of `V`.
+  `bswap(m, n)` = `bswap(m[8n-1:0])`.
+* `brev8(V)`: for an ``8n``-bit value `V`, the value with the bits of each byte reversed, `brev8(V)[8i+j]` = `V[8i+7-j]` for `0` {le} `i` < `n` and `0` {le} `j` < 8, as the Zbkb instruction `brev8` computes.
 * `ceil(x)`, also `{lceil}x{rceil}`: the smallest integer at least `x`; `floor(x)`, also `{lfloor}x{rfloor}`: the largest integer at most `x`.
 * `double(S)`: doubling in GF(2^`b`^), as <<Zkl-ISA-machines.adoc#KLE-OCB-mode>> and <<Zkl-ISA-machines.adoc#KLE-CMAC-mode>> define it; the two coincide for `b` = 128.
-* `Galoismul(a, b)`: multiplication of `a` and `b` in the GHASH field (<<Zkl-ISA-machines.adoc#KLE-GCM-mode>>).
+* `Galoismul(a, b)`: multiplication in the GHASH field (<<Zkl-ISA-machines.adoc#KLE-GCM-mode>>).
 * `int(V)`: `V` read as a little-endian unsigned binary number, bit `V[i]` being the coefficient of 2^i^.
 * `lcm(a, b)`: the least common multiple of the positive integers `a` and `b`.
 * `len_in_bits(M)`: the length of the value or string `M` in bits; `len_in_bytes(M)` = `len_in_bits(M) / 8`, defined only when `len_in_bits(M)` is a multiple of 8.
 * `log~2~(x)`: the base-2 logarithm of the real number `x` > 0.
 * `lsb(x)`, `msb(x)`: the least, resp. most, significant bit of `x`; `lsb~c~(x)`, `msb~c~(x)`: its `c` least, resp. most, significant bits.
-* `m[i .. j]`: the bytes ``i`` to ``j`` of byte array `m`, both inclusive; the bits of a value are indexed as `V[i]` and `V[j:i]` (<<Zkl-notation.adoc#KLE-Notation-values>>).
-* `min(x, y, {ellipsis})`, `max(x, y, {ellipsis})`: the smallest, resp. largest, of the arguments.
+* `m[i .. j]`: bytes ``i`` to ``j`` of the byte array `m`, both inclusive; bits are indexed as in <<KLE-Notation-values>>.
+* `min(x, y, {ellipsis})`, `max(x, y, {ellipsis})`: the smallest, resp. largest, argument.
 * `Montmul(a, b)`: the POLYVAL field operation (<<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>).
-* `ones(i)`, `zeros(i)`: a sequence of `i` ones, resp. zeros.
+* `ones(i)`, `zeros(i)`: `i` ones, resp. zeros.
 * `update_mask(M)`: the XEX/XTS mask update (<<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>); a Machine that uses it names the one it means.
 
 // ////////////////////////////////////////////////////////////////////
@@ -85,16 +82,16 @@ Every other numeral is an integer.
 Referenced standards often use the big-endian notation of communication protocols; this specification is little-endian.
 A formula from a standard is transcribed in two steps, in this order:
 
-. *Reverse the concatenation:* `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` becomes `A~m-1~ @ {ellipsis} @ A~1~ @ A~0~`, where each `A~i~` is a whole field of the standard, such as a byte string or an encoded integer, and never a part of one.
-  A wrong ordering is the most common error in transcribing a standard.
+. *Reverse the concatenation:* `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` becomes `A~m-1~ @ {ellipsis} @ A~1~ @ A~0~`, where each `A~i~` is a whole field of the standard, such as a byte string or an encoded integer, never a part of one.
+  A wrong ordering is the most common transcription error.
   Long messages formed by concatenation keep “{vvert}”, in the little-endian sense of <<KLE-Notation-operators>>, since the standard's own “{vvert}” may be ambiguous.
-. *Encode each integer explicitly:* a field that the standard specifies as a big-endian integer becomes `bswap(bin(n, m))`, and one specified as little-endian `bin(n, m)`; neither is written as a bare numeral.
+. *Encode each integer explicitly:* a field that the standard specifies as a big-endian integer becomes `bswap(bin(n, m))`, and a little-endian one `bin(n, m)`; neither is a bare numeral.
 
 Two examples:
 
 * cite:[RFC8452] {sect}4 builds each key-derivation input as the four-byte little-endian counter followed by the twelve-byte nonce, `LE32(i) {vvert} N`: step 1 gives `N @ LE32(i)`, and step 2 `N @ bin(i,32)`.
-* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV, `J0` = `IV {vvert} 0^31^ {vvert} 1`, whose trailing four bytes are the big-endian encoding of the integer 1: step 1 gives `(0^31^ {vvert} 1) @ IV`, the 32-bit counter field counting as one field, and step 2 encodes it as `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
-  The left-to-right transcription `IV @ zeros(31) @ 1` would place the IV in `J0[127:32]` and the counter in `J0[31:0]`, the reverse of what cite:[nist-SP-800-38D] requires.
+* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV, `J0` = `IV {vvert} 0^31^ {vvert} 1`, whose last four bytes encode the integer 1 big-endian: step 1 gives `(0^31^ {vvert} 1) @ IV`, the 32-bit counter counting as one field, and step 2 `J0` {leftarrow} `bswap(bin(1,32)) @ IV`.
+  The left-to-right transcription `IV @ zeros(31) @ 1` would put the IV in `J0[127:32]` and the counter in `J0[31:0]`, the reverse of what cite:[nist-SP-800-38D] requires.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -103,7 +100,7 @@ Two examples:
 
 In a standard, `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` may make `A~0~` the most significant element, or the least.
 The table records, for each standard whose algorithms this specification reproduces, its convention and the resulting obligation.
-This table is informative: where it differs from a Machine description or a Rule, the Machine description or the Rule prevails, and an algorithm description must still be explicit.
+It is informative: where it differs from a Machine description or a Rule, these prevail, and an algorithm description must still be explicit.
 
 [float="center",align="center",width="100%",cols="<24%,<36%,<40%",options="header"]
 |===
@@ -112,34 +109,34 @@ This table is informative: where it differs from a Machine description or a Rule
 | byte strings; SP 800-38A, Appendix B, permits different counter constructions that ensure uniqueness;
   the CMAC subkey shift is over the big-endian string; the XTS tweak and mask are
   little-endian.
-| Direct mapping for ECB and for the XTS data path, with `update_mask` as defined in <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
+| Direct mapping for ECB and the XTS data path, with the `update_mask` of <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
   KLE selects a 32-bit big-endian counter in the trailing bytes of the CTR counter block, assembled via `bswap` (<<Zkl-ISA-machines.adoc#KLE-keystream-modes>>), and
-  CMAC's subkeys via the big-endian `double` (<<Zkl-ISA-machines.adoc#KLE-CMAC-mode>>).
-  CFB with a segment of `u` bits, a multiple of 8 or not, takes the first bit of a byte string as the most significant bit of its first byte, and the first `u` bits as its first segment: KLE applies `brev8` to the operands and takes the segments from the least significant bits (<<Zkl-ISA-machines.adoc#KLE-chaining>>); the result is direct for a multiple of 8.
+  the CMAC subkeys via the big-endian `double` (<<Zkl-ISA-machines.adoc#KLE-CMAC-mode>>).
+  CFB with a segment of `u` bits takes the first bit of a byte string as the most significant bit of its first byte, and the first `u` bits as its first segment: KLE applies `brev8` to the operands and takes the segments from the least significant bits (<<Zkl-ISA-machines.adoc#KLE-chaining>>), which is direct when `u` is a multiple of 8.
 | GB/T 17964-2021 (XTS with SM4)
 | byte strings; the multiplication that updates the mask takes the bits of each byte in the reverse order of SP 800-38E.
-| `update_mask` of `SM4_XEX` as defined in <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
+| The `update_mask` of `SM4_XEX` in <<Zkl-ISA-machines.adoc#KLE-XEX-XTS-modes>>.
 | HCTR2 (XCTR)
 | byte strings; the block counter is a little-endian integer, XORed into the IV.
 | Direct mapping: the input block is `IV xor (zeros(b - j) @ ctr)`, with no `bswap` (<<Zkl-ISA-machines.adoc#KLE-keystream-modes>>).
 | SP 800-38D (GCM)
 | byte strings; GHASH field bit-reflected within bytes; counters big-endian.
-| `Galoismul` as defined in <<Zkl-ISA-machines.adoc#KLE-GCM-mode>>; every counter and length field via `bswap`.
+| The `Galoismul` of <<Zkl-ISA-machines.adoc#KLE-GCM-mode>>; every counter and length field via `bswap`.
 | RFC 8452 (AES-GCM-SIV)
 | byte strings; POLYVAL field fully little-endian; block counter little-endian.
-| `Montmul` as defined in <<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>; counters and length blocks via `bin`.
+| The `Montmul` of <<Zkl-ISA-unpriv.adoc#KLE-SCC-POLYVAL>>; counters and length blocks via `bin`.
 | RFC 7253 (OCB3)
 | bit strings, first bit most significant; `double` and the `Stretch` window are
   big-endian.
-| `double` as defined in <<Zkl-ISA-machines.adoc#KLE-OCB-mode>>; `bswap` written explicitly wherever the algorithm operates
+| The `double` of <<Zkl-ISA-machines.adoc#KLE-OCB-mode>>; explicit `bswap` wherever the algorithm operates
   on the big-endian view.
 | FIPS 202 (SHA-3, SHAKE)
 | bit strings mapped to the state by {sect}3.1; lanes little-endian.
-| Direct mapping of the absorbed string; the lane indexing of FIPS 202 {sect}3.1 applies
+| Direct mapping of the absorbed string, with the lane indexing of FIPS 202 {sect}3.1
   unchanged; a final piece of any bit length maps directly, its last bits in the least significant positions (<<Zkl-ISA-machines.adoc#KLE-SHA-3>>).
 | SP 800-185 (cSHAKE, KMAC)
 | bit strings as in FIPS 202; `left_encode` and `right_encode` write an integer big-endian, most significant byte first.
-| As FIPS 202; `right_encode` as defined in <<Zkl-ISA-machines.adoc#KLE-KMAC>>. The `cshake_block` and `key_block` use the same order, whether the provisioner forms them or, for a system key or a random key (_KeyType_ = 1 or 2), the KLE unit.
+| As FIPS 202; the `right_encode` of <<Zkl-ISA-machines.adoc#KLE-KMAC>>. The `cshake_block` and `key_block` use the same order whether the provisioner forms them or, for a system key or a random key (_KeyType_ = 1 or 2), the KLE unit.
 | RFC 7693 (BLAKE2)
 | byte strings; words, counter and parameter block little-endian.
 | Direct mapping: words and counter via `bin`, no `bswap`; a final piece is a whole number of bytes (<<Zkl-ISA-machines.adoc#KLE-BLAKE2>>).
@@ -154,7 +151,7 @@ This table is informative: where it differs from a Machine description or a Rule
 | Every value little-endian via `bin`, converted by the caller (<<Zkl-ISA-machines.adoc#KLE-ECC>>); `Hash` holds `bin(e, h)` of the big-endian digest integer `e`; the shared secret that _Output_ emits keeps the big-endian order of its standard, via `bswap`.
 | RFC 7748, RFC 8032 (X25519, X448, EdDSA)
 | little-endian integers, _u_-coordinates and point encodings.
-| Direct mapping via `bin`, the shared secret `K` and the encoded points and signatures included (<<Zkl-ISA-machines.adoc#KLE-X25519-X448>>, <<Zkl-ISA-machines.adoc#KLE-EdDSA>>).
+| Direct mapping via `bin`, including the shared secret `K` and the encoded points and signatures (<<Zkl-ISA-machines.adoc#KLE-X25519-X448>>, <<Zkl-ISA-machines.adoc#KLE-EdDSA>>).
 | FIPS 198-1 (HMAC)
 | bit strings, as in its hash function; `ipad` and `opad` repeat a single byte.
 | Direct mapping; a final piece in the bit order of `H` (<<Zkl-ISA-machines.adoc#KLE-HMAC>>).
