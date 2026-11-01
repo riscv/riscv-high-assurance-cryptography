@@ -36,9 +36,10 @@ def main():
     check('POLYVAL of no blocks is zeros(128)', polyval(b2v(h), []) == 0)
     # RFC 8452 C.2 #2 intermediates are not remembered verbatim; key derivation is cross-checked against the independent model
     nonce = H('030000000000000000000000'); key = H('0100000000000000000000000000000000000000000000000000000000000000')
-    ek, ak = scc_keyderiv(b2v(key), b2v(nonce))
-    rak, rek = scc_rfc_keys(key, nonce)
-    check('SCC_KeyDeriv equals RFC per-message key derivation (nonce @ counter = counter LE || nonce)', v2b(ak, 16) == rak and v2b(ek, 32) == rek)
+    ek, ak = scc_keyderiv(b2v(key))
+    rak, rek = scc_rfc_keys(key, bytes(12))
+    check('SCC_KeyDeriv equals RFC per-message key derivation with the all-zero nonce (bin(i,128) = counter LE || zeros(96))', v2b(ak, 16) == rak and v2b(ek, 32) == rek)
+    control('negative: a nonzero RFC nonce gives other keys', scc_rfc_keys(key, nonce) != (rak, rek))
 
     section('AEAD core vs RFC 8452 (length block restored, sep = RFC bit 126)')
     c, t = scc_rfc_seal(H('01' + '00' * 15), H('030000000000000000000000'), b'', b'', True)
@@ -56,14 +57,14 @@ def main():
     rnd = random.Random(8452)
     nsame = nnot = 0
     for trial in range(8):
-        key = bytes(rnd.randrange(256) for _ in range(32)); nonce = bytes(rnd.randrange(256) for _ in range(12))
+        key = bytes(rnd.randrange(256) for _ in range(32)); nonce = bytes(12)    # SCC omits the nonce: RFC with the all-zero nonce
         na, npt = rnd.randrange(1, 3), rnd.randrange(1, 4)
         aad = bytes(rnd.randrange(256) for _ in range(16 * na)); pt = bytes(rnd.randrange(256) for _ in range(16 * npt))
         c, t = scc_rfc_seal(key, nonce, aad, pt, True)
-        # spec model with the RFC nonce and the length block appended as an extra POLYVAL input
-        ek_, ak_ = scc_keyderiv(b2v(key), b2v(nonce))
+        # spec model with the length block appended as an extra POLYVAL input
+        ek_, ak_ = scc_keyderiv(b2v(key))
         lenblk = b2v((len(aad) * 8).to_bytes(8, 'little') + (len(pt) * 8).to_bytes(8, 'little'))
-        s = polyval(ak_, _blocks(aad) + _blocks(pt) + [lenblk]) ^ b2v(nonce)
+        s = polyval(ak_, _blocks(aad) + _blocks(pt) + [lenblk])
         s_in = s
         sep = (s >> 126) & 1                     # the RFC keeps POLYVAL's bit 126; sep = that bit reproduces the RFC
         tag = _E(ek_, cat((0, 1), (sep, 1), (sl(s_in, 125, 0), 126)))
@@ -94,7 +95,7 @@ def main():
     check('sep = 1: AD[0][47] is authenticated', scc_encrypt(adb, 1, P, CSKV)[0] != s1)
     ok, Pz = scc_decrypt(AD, 0, s0 ^ 1, C0, CSKV)
     check('failed authentication returns false and zeroes P[]', not ok and Pz == [0, 0, 0])
-    control('negative: restoring the length block changes the SIV', polyval(scc_keyderiv(CSKV, 0)[1], AD + P + [b2v((256).to_bytes(8,'little')+(384).to_bytes(8,'little'))]) != polyval(scc_keyderiv(CSKV, 0)[1], AD + P))
+    control('negative: restoring the length block changes the SIV', polyval(scc_keyderiv(CSKV)[1], AD + P + [b2v((256).to_bytes(8,'little')+(384).to_bytes(8,'little'))]) != polyval(scc_keyderiv(CSKV)[1], AD + P))
 
     section('MDH and Locality field')
     allf = sorted(MDH_FIELDS, key=lambda t: t[1])

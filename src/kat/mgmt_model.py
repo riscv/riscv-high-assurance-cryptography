@@ -334,4 +334,6 @@ class KLE:
         if mst not in adm: raise IllegalInstruction('ml.State not admitted')
         if v3 and mst == 0: return s._sysfmt_complete(k)
         l.mdh = mdh_put(m, 'State', mst)
+        if 1 <= mst <= 55 and not all(s.conf(j) for j in loc_entries(mdh_get(m, 'Locality'))):
+            s.err(k, SE_INVALID); return       # completion into a Valid State naming an unconfigured entry with no substitute: Invalid, no decryption
         if st in (58, 60) and 1 <= mst <= 55 and l.tag != toy_tag(l.content): s.err(k, SE_MGMT_AUTH)

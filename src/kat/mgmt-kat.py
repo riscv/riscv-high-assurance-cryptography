@@ -585,6 +585,16 @@ for j, nm in ((6, 'PhysBootScrt'), (7, 'VirtBootScrt'), (8, 'MLocality'), (9, 'H
     check('%s unconfigured (zero or CSR group absent): Invalid; configured: valid' % nm, e1 == INV and stx(e, 1) == (56, 0))
 e = E2(); e.lst = [0] * 11; check('kl.size Form C applies the same Locality check (GR10): 0 for an unconfigured entry, else the size', e.size(form='C', md=mk(Locality=LOC(2))) == 0 and E2().size(form='C', md=mk(Locality=LOC(2))) == 32)
 e = E2(); e.lst[5] = 0; e.lst[3] = 0; e.lst[4] = 0; e.mgmt(0, 58, md=mk(State=1, Locality=LOC(3))); check('import applies the Locality check too: Invalid', stx(e, 0) == INV)
+def cmpl(kind, lst_after):                  # Locality entry 4 (OEM chain 3-4-5), LST changed after the opening
+    e = E2(); c = 0xABCD
+    if kind == 'import': e.mgmt(0, 58, md=mk(State=1, Locality=LOC(4))); e.mvin(c, toy_tag(c))
+    else: prov(e, 0, md=mk(Locality=LOC(4))); e.mgmt(0, 57, form='A')
+    for j, v in lst_after.items(): e.lst[j] = v
+    e.mgmt(0, 63, form='C', md=mk(State=1)); return e
+for kind in ('import', 'export'):
+    check('%s completion into a Valid State, named entry unconfigured since the opening with no substitute: Invalid, no authentication' % kind, stx(cmpl(kind, {4: 0, 5: 0}), 0) == INV)
+    check('%s completion, unconfigured entry with a configured substitute: State restored' % kind, stx(cmpl(kind, {4: 0}), 0) == (1, 0))
+control('negative: with the entry still configured, the import completion restores the State', stx(cmpl('import', {}), 0) == (1, 0))
 section('SKID, KeyType 1, kl.avail of unsupported KeyTypes  <<KLE-system-keys>>, <<KLE-KeyType-field>>')
 K64 = 0x1122334455667788
 def skp(**ov):

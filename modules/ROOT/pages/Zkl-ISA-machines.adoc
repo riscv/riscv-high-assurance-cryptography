@@ -180,7 +180,7 @@ With `Zklio`, a substitution may replace any native Form of `kl.exec`, however t
 (<<Zkl-ISA-unpriv.adoc#KLE-usage-input-output>>, Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-substitution>>):
 a Form D `kl.exec` replaces a Form A, B or C `kl.exec`.
 Where a State expects a Form B or D `kl.setst`, a Form A one is admitted too, with a zero operand; where it expects
-Form C, a Form A or D one is admitted (Rule <<KLE-MGR-form-D-where-C>>), and a Form B one where the State says so.
+Form C with an `INPUT` of at most 128 bits, a Form A or D one is admitted (Rule <<KLE-MGR-form-D-where-C>>), and a Form B one where the State says so.
 A substitution issued without the required KLIOBUF setup fails as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-iobuf-configured>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-substitution-failures>> state.
 A Form that is neither a native Form of the State nor, with `Zklio`, its substitution is a wrong Form (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-form-mismatch>>).
 `kl.input` and `kl.output` access no locker, so the state machine does not restrict them.
@@ -307,12 +307,12 @@ A State that writes fewer bits than the window holds clears the rest of the wind
 This concerns the bits *within* the operand; the tail-agnostic policy of <<Zkl-ISA-unpriv.adoc#KLE-KLV>> governs the elements beyond `VL`.
 
 [[KLE-MGR-single-last-block,MR10]]MR10:: _Final fractional block._
-A Machine whose input ends in a fractional block processes it in a State of its own, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_, the _final-block State_, always as follows; a `kl.exec` in it is checked first against the State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>), then against its transfer window (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>), then by the Machine:
+A Machine whose input ends in a fractional block processes it in a State of its own, such as _Enc_Last_Block_, _Dec_Last_Block_ or _Hash_Absorb_Last_Block_, the _final-block State_, as follows, unless the Machine defines otherwise; a `kl.exec` in it is checked first against the State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>), then against its transfer window (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>), then by the Machine:
 +
 --
 . The caller determines the bit length `n` of the final block (Rule <<KLE-MGR-last-blk-len>>) and tests whether it is zero.
 . If `n` = 0, no `kl.exec` is needed: a `kl.setst` into the final-block State with `n` = 0 (`Xs` = 0, or Form A) records `last_block_len` = 0 and performs the operations of the final block on empty input; where the Machine has a single successor of the final-block State, the locker enters it at once (item 3), unless the Machine defines otherwise.
-A `kl.setst` from the State preceding the final-block State to its successor, bypassing the final-block State, is equivalent to this and must be of Form A; where `n` is determined by the Machine (`max_len` != 0 in <<KLE-process-VLI>>) and is not zero, the bypass transitions the locker to Error State _Invalid_.
+A `kl.setst` from the State preceding the final-block State to its successor, bypassing the final-block State, is equivalent to this and must be of Form A, unless the Machine names another Form, as <<KLE-GCM-mode>> does; where `n` is determined by the Machine (`max_len` != 0 in <<KLE-process-VLI>>) and is not zero, the bypass transitions the locker to Error State _Invalid_.
 . If `n` != 0, a `kl.setst` into the final-block State records `last_block_len` = `n`, and a single `kl.exec` (Rule <<KLE-MGR-one-klexec-per-block>>) processes the `n` least significant bits of its `INPUT` and ignores the other bits (Rule <<KLE-MGR-fixed-width-input>>); a `KLLEN` smaller than `n` is not zero-padded but violates the granularity (Rule <<KLE-MGR-granularity>>), and an empty transfer window does not reach the Machine (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 Once the final block is processed, the locker transitions to the successor of the final-block State that the Machine names, and no `kl.setst` is needed to leave the final-block State.
 . Where software chooses among several successors, as for the digest of a hash function (_Hash_Output_ or _Hash_Verify_, which may be gated separately by Rule <<KLE-MGR-policy-gate>>), or the entry of the successor takes an operand that the final-block State cannot supply, as the length block of _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_ in <<KLE-GCM-mode>>, the Machine names no successor: the locker stays in the final-block State once the block is processed, or on entering it with `n` = 0, and software selects the successor with a `kl.setst`.
@@ -395,7 +395,7 @@ A digest or XOF output that a State emits from its internal state is not a long 
 . *`PROCESS_VLI`.* A load by `PROCESS_VLI` (<<KLE-process-VLI>>) passes `max_len` = the size of the field and `cumul_len` = _W_.
   A field stored as loaded also passes `block` = `state`, `b` = `n` = its size, `mode` = `assign` and `process_block` = `finalize` = `None`; a field processed as loaded, such as the IV of <<KLE-GCM-mode>>, passes the functions and `mode` that its Machine states.
 
-[[KLE-MGR-caller-limits,MR15]]MR15:: A Machine enforces only the per-message limits that its correctness needs at practical lengths, such as the 32-bit counters of <<KLE-GCM-mode>> and <<KLE-GCM-SIV-mode>> and the bound on the `L[i]` array of <<KLE-OCB-mode>>.
+[[KLE-MGR-caller-limits,MR15]]MR15:: A Machine enforces only the per-message limits that its correctness needs at practical lengths and that it can track from its own state, such as the 32-bit counters of <<KLE-GCM-mode>> and <<KLE-GCM-SIV-mode>> and the bound on the `L[i]` array of <<KLE-OCB-mode>>.
 A Machine also fixes the verification length of each locker (Rule <<KLE-MGR-tag-verify>>).
 The caller keeps every other limit; no Machine counts or enforces it:
 +
@@ -794,7 +794,9 @@ whole blocks would; the unused bytes of the last block are discarded.
     (Rule <<KLE-operation-immediates>>).
 
 NOTE: Setting the counter gives random access into a keystream, for example to resume an interrupted stream.
-No check detects `ctr` wrapping around (Rule <<KLE-MGR-caller-limits>>).
+`ctr` wraps modulo 2^`j`^ and never carries into `IV`, so one `IV` yields at most 2^`j`^ distinct counter blocks (in CTR mode, the incrementing function of cite:[nist-SP-800-38A-1] Appendix B.1 with m = `j`).
+No check detects the wrap (Rule <<KLE-MGR-caller-limits>>), since the Machine does not know where a message starts.
+In CTR mode, software that follows a protocol incrementing the whole counter block splits the `kl.exec` at the wrap, then sets the incremented `IV` and `ctr` = 0.
 
 Code examples are in <<Zkl-software.adoc#KLE-pseudocode-keystream-modes>> (for `b` = 128).
 
@@ -916,7 +918,7 @@ State Machine::
 * *Allowed State Transitions:*
  ** _Ready_, _Encrypt_ or _Decrypt_ -> _Encrypt_, if encryption is allowed (Rule <<KLE-MGR-policy-gate>>).
  ** _Ready_, _Encrypt_ or _Decrypt_ -> _Decrypt_, if decryption is allowed (Rule <<KLE-MGR-policy-gate>>).
-// ** _Decrypt_ -> _Success_, by the last `kl.exec` of ciphertext stealing.
+ ** _Decrypt_ with `StealBack` set -> _Success_, by the Form A `kl.exec` that ends ciphertext stealing.
  ** _Encrypt_, _Decrypt_ or _Success_ -> _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior:*
@@ -1220,7 +1222,7 @@ At a halt, `input_base` is a whole number of bytes, so `klstart` never describes
  . If `max_len` = 0, a Form B `kl.setst` with auxiliary operand `Xs`, `Xs` = 0 for Form A:
  .. sets `last_block_len` {leftarrow} `Xs`;
  .. transitions the locker to Error State _Invalid_ unless `0` {le} `Xs` {le} `b` and `Xs` meets Rule <<KLE-MGR-last-blk-len>>;
- .. if `Xs` is smaller than the transfer window of the `kl.exec` of `last_block_state`, shortens that window to the bytes holding `Xs` bits, so that for `Xs` = 0 it is empty; the final piece is then empty, and any later Form B `kl.exec` transitions the locker to Error State _Invalid_ (step 1 below, Rule <<KLE-MGR-single-last-block>>).
+ .. the `kl.exec` of `last_block_state` processes the `Xs` least significant bits of its `INPUT` and ignores the others; with `Xs` = 0, a `kl.exec` of Forms A to C in it transitions the locker to Error State _Invalid_ (step 1 below, Rule <<KLE-MGR-single-last-block>>).
  . If `max_len` != 0, the `kl.setst` is of Form A and sets `last_block_len` {leftarrow} `max_len` − `cumul_len`.
  ..  If this new `last_block_len` > `b`, the locker transitions to Error State _Invalid_.
  . `finalize()` is not performed.
@@ -1475,7 +1477,7 @@ exported part-way through a non-96-bit IV could not resume.
 ** When entering State _Enc_Last_Block_:
  . A Form B `kl.setst` with immediate `kl_state_enc_last_block` and auxiliary operand `Xs` sets the bit length of the last block:
    `last_block_len <- Xs`.
- . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>); any other `Xs` transitions the locker to Error State _Invalid_.
+ . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>); any other `Xs` transitions the locker to Error State _Invalid_. An empty final block takes the bypass of Rule <<KLE-MGR-single-last-block>> instead.
 +
 NOTE: cite:[nist-SP-800-38D] admits any bit length, but numbers the bits of a byte from the most significant.
 A truncation to the least significant bits does not map onto that order, so the lengths are multiples of 8.
@@ -1540,7 +1542,7 @@ A Form C `kl.setst` from _Encrypt_ into _Enc_Tag_Finalize_, resp. from _Decrypt_
 ** When entering State _Dec_Last_Block_:
  . A Form B `kl.setst` with immediate `kl_state_dec_last_block` and auxiliary operand `Xs` sets the bit length of the last block:
    `last_block_len <- Xs`.
- . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>); any other `Xs` transitions the locker to Error State _Invalid_.
+ . `Xs` must be a multiple of 8 with `8` {le} `Xs` {le} `120` (Rule <<KLE-MGR-last-blk-len>>); any other `Xs` transitions the locker to Error State _Invalid_. An empty final block takes the bypass of Rule <<KLE-MGR-single-last-block>> instead.
 
 ** In State _Dec_Last_Block_, a single Form A `kl.exec` absorbs the zero-padded final block
    of the ciphertext into `tag` and decrypts `INPUT` into `OUTPUT`:
@@ -1878,6 +1880,7 @@ Every bit of the final partial block beyond the end of its data must be zero.
    . `last_block_len <- Xs`, the bit length of the last block.
 +
 Any other `Xs` transitions the locker to Error State _Invalid_.
+An empty final block skips _Enc_Last_Block_: the message ends in _Encrypt_.
 
 ** In State _Enc_Last_Block_, a single Form A ``kl.exec`` instruction is expected, encrypting `INPUT` into `OUTPUT`
       as follows (Rule <<KLE-MGR-single-last-block>>; the Machine names no successor of _Enc_Last_Block_, so the locker stays in it):
@@ -1902,6 +1905,7 @@ Any other `Xs` transitions the locker to Error State _Invalid_.
    . `last_block_len <- Xs`.
 +
 Any other `Xs` transitions the locker to Error State _Invalid_.
+An empty final block takes the bypass of Rule <<KLE-MGR-single-last-block>> instead.
 
 ** In State _Dec_Last_Block_, a single Form A ``kl.exec`` instruction is expected, decrypting `INPUT` into `OUTPUT` and
       absorbing the zero-padded plaintext into the partial tag, as follows (Rule <<KLE-MGR-single-last-block>>; the locker then transitions to _Dec_Tag_Finalize_):
@@ -4294,6 +4298,7 @@ The bits of `Scalar` beyond the key are zero.
     (cite:[nist-fips-186-5] {sect}6.4.1);
   . for SM2, whenever `r` = 0, `r` + `k` = `n`, or `s` = 0 (cite:[GMT-0003-2-2012]);
   . the Edwards curves use no random secret, and have no retry rules.
+  . each retry draws `k` as _Sign_Generate_ does and sets `RndNum` {leftarrow} `bin(k, j)` before it records any further progress.
 
  ** In State _Point_Mul_, a single Form D `kl.exec` performs a scalar multiplication:
   . The base point `P` is `SecondPt` if `HasSecondPt` is set, and `Generator` otherwise.
@@ -4372,8 +4377,12 @@ The bits of `Scalar` beyond the key are zero.
   . Every field whose bit is clear is kept. A Form A `kl.setst` sets no bit, and keeps all five fields.
 
  ** `Progress`, bits [13:2] of _MachineUse_, is the field _P_ of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-progress-discard>> for _Point_Mul_,
-    _Sign_Generate_ and _Sign_Verify_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>), and `RndNum` is its
-    material: each event of that Rule that zeroes `Progress` also destroys `RndNum` and clears `HasRndNum`.
+    _Sign_Generate_ and _Sign_Verify_, and, in the EdDSA Machines (<<KLE-EdDSA>>), for a `kl.setst` that enters or leaves
+    _Msg_Absorb_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-progress>>).
+    Its material is `RndNum`, where the Machine uses it, and the intermediate values that the operation keeps in the ADS;
+    for a `kl.setst` that enters or leaves _Msg_Absorb_, these include the expanded seed, the hash states being finalized,
+    and `r`, `R`, `k'` and `A` before the operation completes.
+    Each event of that Rule that zeroes `Progress` also destroys the material and, where the Machine has it, clears `HasRndNum`.
 
 // ////////////////////////////////////////////////////////////////////
 

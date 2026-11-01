@@ -47,27 +47,26 @@ def scc_rfc_seal(key, nonce, aad, pt, lenblock=True, sep=None):
     return c, tag
 
 # ------------------------------------------------------------------ (2) spec pseudocode
-def scc_keyderiv(key, nonce):                       # key: 256-bit value, nonce: 96-bit value
-    A = [b2v(aes_enc(v2b(key, 32), v2b(cat((nonce, 96), (i, 32)), 16))) for i in range(6)]
+def scc_keyderiv(key):                              # key: 256-bit value; A[i] = AESE256(key, bin(i,128))
+    A = [b2v(aes_enc(v2b(key, 32), v2b(i, 16))) for i in range(6)]
     return (cat((sl(A[5], 63, 0), 64), (sl(A[4], 63, 0), 64), (sl(A[3], 63, 0), 64), (sl(A[2], 63, 0), 64)),
             cat((sl(A[1], 63, 0), 64), (sl(A[0], 63, 0), 64)))
 def _E(k, v): return b2v(aes_enc(v2b(k, 32), v2b(v, 16)))
 def _ctr(sep, siv, i): return cat((1, 1), (sep, 1), (sl(siv, 125, 32), 94), ((sl(siv, 31, 0) + i) % 2**32, 32))
-def scc_encrypt(AD, N, sep, P, K):
-    ek, ak = scc_keyderiv(K, N)
+def scc_encrypt(AD, sep, P, K):
+    ek, ak = scc_keyderiv(K)
     ad = list(AD)
     if sep == 0: ad[0] &= ~(1 << 47)
     siv = polyval(ak, ad + list(P))
-    siv ^= N
     siv = _E(ek, cat((0, 1), (sep, 1), (sl(siv, 125, 0), 126)))
     return siv, [p ^ _E(ek, _ctr(sep, siv, i)) for i, p in enumerate(P)]
-def scc_decrypt(AD, N, sep, SIV, C, K, nclear=0):
+def scc_decrypt(AD, sep, SIV, C, K, nclear=0):
     assert len(AD) <= 7 + nclear
-    ek, ak = scc_keyderiv(K, N)
+    ek, ak = scc_keyderiv(K)
     ad = list(AD)
     if sep == 0: ad[0] &= ~(1 << 47)
     P = [c ^ _E(ek, _ctr(sep, SIV, i)) for i, c in enumerate(C)]
-    t = polyval(ak, ad + P) ^ N
+    t = polyval(ak, ad + P)
     t = _E(ek, cat((0, 1), (sep, 1), (sl(t, 125, 0), 126)))
     return (True, P) if t == SIV else (False, [0] * len(C))
 
