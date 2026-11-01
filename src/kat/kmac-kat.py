@@ -146,6 +146,12 @@ L = Locker('KMAC128', K=KEY); L.setst(2, 'A'); ks = L.exec('B', m, halt=1); L2 =
 L2.exec('B', m, klstart=ks); L2.setst(6, 'B', 256); o = bytearray(32); L2.exec('C', out=o)
 check('halt, export, import, resume = reference', ks == 168 and bytes(o) == want)
 
+def _mko(kind, xs):
+    def mk(): L = Locker(kind, K=KEY, S=b'cust'); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B' if xs else 'A', xs); return L
+    return mk
+for kind, xs in (('KMAC128', 256), ('KMAC256', 77), ('KMACXOF128', 2400)): bits_checks('%s L=%d' % (kind, xs), _mko(kind, xs), refmac(kind, KEY, b'abc', b'cust', xs), nbits=xs)
+for kind in ('KMACXOF128', 'KMACXOF256'):
+    bits_checks(kind + ' unbounded', _mko(kind, 0), v2b(R.ref_kmac(RATE[kind], KEY, b'abc', 8 * 16384, b'cust', xof=True), 16384), bounded=False)
 section('Negative controls')
 x = R.ref_kmac(168, KEY, bytes(4), 256, b'')
 rep = lambda enc: R.bytepad(R.encode_string(KEY), 168) + bytes(4) + enc
@@ -169,7 +175,12 @@ for nm, kw in (('length 0', dict(length=0)), ('length 31', dict(length=31)), ('k
 d, s = kd(shared=False); check('non-shared-secret source into KMAC input: both Invalid (GR39.4)', d.se == SE_INV and s.bad)
 d = Locker('KMAC128', K=KEY); derive(Secret(b'S' * 32), d, 32); check('destination in Ready -> Invalid (GR39.3)', d.se == SE_INV)
 o = Locker('KMAC128', K=KEY); o.setst(2, 'A'); o.setst(6, 'B', 128); d = Locker('KMAC256', K=KEY); d.setst(2, 'A'); derive(o, d, 32)
-check('KMAC Hash_Output is not a source: source Invalid, dest untouched', o.se == SE_INV and d.st == ABSORB)
+check('KMAC output -> a KMAC input: pair not admitted, both Invalid (GR39.4)', o.se == SE_INV and d.se == SE_INV)
+o = Locker('KMAC128', K=KEY); o.setst(2, 'A'); o.exec('B', b'ctx'); o.setst(6, 'B', 128); d = Locker('ASCON-AEAD128'); derive(o, d, 16)
+check('KMAC128 (L = 128) -> AEAD key: key = KMAC(K, ctx, 128), source Success (GR43)', d.key == R.ref_kmac(168, KEY, b'ctx', 128) and o.st == SUCCESS)
+o = Locker('KMACXOF256', K=KEY); o.setst(2, 'A'); o.setst(6, 'A'); d = Locker('ASCON-AEAD128'); derive(o, d, 16); x = bytearray(8); o.exec('C', out=x)
+z = v2b(R.ref_kmac(136, KEY, b'', 192, xof=True), 24)
+check('KMACXOF256 -> AEAD key, then Form C continues the output (GR38)', d.key == b2v(z[:16]) and bytes(x) == z[16:])
 
 section('SKID key, MachinePolicy, rstrl, unsupported policy')
 SKS = {0x0101010101010101: KEY}

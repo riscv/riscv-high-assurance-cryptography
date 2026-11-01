@@ -417,7 +417,7 @@ def dv(srcm=M_KEM, dstm=M_KEY32, sst=2, dst=1, sup=0x4, dup=0x4, sprot=0, dprot=
     if dst != 1: e.setst(2, dst)
     return e
 e = dv(); r = e.derive(2, 1, 32)
-check('shared secret -> 32-byte key field: ok, all 32 bytes (GR38, GR42)', r == 'ok' and e.L[2].content == SEC and e.getst(2) == 1 and e.getst(1) == 2)
+check('shared secret -> 32-byte key field: ok, all 32 bytes (GR38, GR42); the source leaves to Ready', r == 'ok' and e.L[2].content == SEC and e.getst(2) == 1 and e.getst(1) == 1)
 e = dv(dup=0x6, sup=0x5); e.derive(2, 1, 32); check('restricted transfer narrows dest UsagePolicy by AND (GR40); State of dest stays Ready', mdh_get(e.md(2), 'UsagePolicy') == 0x4)
 e = dv(sloc=0x10, dloc=0x20); r = e.derive(2, 1, 32); check('GR40: narrowing fails (boot subfields differ) -> dest Privilege Violation, nothing transferred', r == 'pv' and stx(e, 2) == (0, SE_PRIV_VIOLATION) and e.getst(1) == 2)
 e = dv(sprot=2, dprot=1); r = e.derive(2, 1, 32); check('GR40: dest SCProtection lower than source -> dest Privilege Violation', stx(e, 2) == (0, SE_PRIV_VIOLATION))
@@ -425,6 +425,8 @@ e = dv(sprot=1, dprot=2); check('dest SCProtection >= source: ok', e.derive(2, 1
 for ln in (0, 31): e = dv(); e.derive(2, 1, ln); check('shared secret into a key field requires length >= dest_length (%d) -> dest Invalid (GR39.6)' % ln, stx(e, 2) == INV and e.getst(1) == 2)
 e = dv(); r = e.derive(2, 1, 33); check('shared secret, length 33 > dest_length 32: the key field receives the first 32 bytes (GR38, GR39.6)', r == 'ok' and e.L[2].content == SEC)
 e = dv(sst=1); r = e.derive(2, 1, 32); check('source not a source endpoint (Ready) -> source Invalid (GR39.2)', stx(e, 1) == INV and e.getst(2) == 1)
+e = dv(); e.derive(2, 1, 32); check('a field source feeds one kl.derive: the source leaves to Ready, sharedkey zeroed (GR38)', e.getst(1) == 1 and e.L[1].content == 0)
+r = e.derive(2, 1, 32); check('a second kl.derive of the same field -> source Invalid (GR38, GR39.2)', r == 'invalid' and stx(e, 1) == INV)
 e = dv(dstm=M_ENC); e.setst(2, 2); r = e.derive(2, 1, 32); check('dest not a destination endpoint (key field outside Ready) -> dest Invalid (GR39.3)', stx(e, 2) == INV and e.getst(1) == 2)
 e = dv(dstm=M_KEY, KeyType=1); e.derive(2, 1, 32); check('a SKID key field (KeyType 1) is never a destination -> dest Invalid', stx(e, 2) == INV)
 e = dv(srcm=M_ENC, dstm=M_KEY, spol=3, dprot=0, sprot=2, sloc=0x10, dloc=0x20); e.L[1].content = K; r = e.derive(2, 1, 16)
@@ -446,6 +448,12 @@ e = dv(); e.L[2].mdh = mdh_put(e.md(2), 'State', 56); check('Configuration State
 e = dv(); e.L[2].mdh = mdh_put(e.md(2), "State", 56); e.setnl(32); check("KLNL source with klnamedlocker 32 falls through even with a Configuration State dest (GR32, GR16 item 5)", e.derive(2, "NL", 32) == "inert")
 e = dv(); e.L[1].mdh = mdh_put(e.md(1), 'ExpirationDate', 5); e.clock = 9; r = e.derive(2, 1, 32); check('expired source: Error State Expired, nothing transferred', stx(e, 1) == (0, SE_EXPIRED) and e.L[2].content == 0)
 e = dv(); e.clear(2); check('inert destination: no operation', e.derive(2, 1, 32) == 'inert' and e.getst(1) == 2)
+def sdv(**kw): e = dv(**kw); e.L[1].mdh = mdh_put(e.md(1), 'MachineExtension', 1); return e   # toy sealed variant (GR79)
+e = sdv(dup=0x6, sup=0x5); r = e.derive(2, 1, 32); check('sealed source -> key field: restricted, dest UsagePolicy narrowed (GR79, GR40)', r == 'ok' and e.L[2].content == SEC and mdh_get(e.md(2), 'UsagePolicy') == 0x4)
+e = sdv(sprot=2, dprot=1); check('sealed source, dest SCProtection lower -> dest Privilege Violation', e.derive(2, 1, 32) == 'pv' and stx(e, 2) == (0, SE_PRIV_VIOLATION))
+e = sdv(dstm=M_ENC); r = e.derive(2, 1, 16); check('sealed source -> key of a Machine whose output is a source: not admitted, both Invalid (GR39.4)', r == 'invalid' and stx(e, 1) == INV and stx(e, 2) == INV)
+e = sdv(dstm=M_HASH, dst=2); r = e.derive(2, 1, 32); check('sealed source -> hash input: the destination becomes sealed (StateExtension bit 1)', r == 'ok' and e.getstx(2) & 2)
+e = dv(dstm=M_HASH, dst=2); e.derive(2, 1, 32); check('control: an unsealed shared secret leaves the hash unsealed', not e.getstx(2) & 2)
 
 section('Encodings, GR1 GR2 GR6 GR7  <<KLE-GR-reserved-encodings>>, <<KLE-instruction-exec>>, <<KLE-instruction-mv>>')
 n, f = decode(enc_rtype(5, 3, 7, form=0)); check('kl.exec Form A: rd=Vd, rs1=Kn, rs2=Vs2', n == 'exec' and f['form'] == 'A' and f['kn'] == 3 and f['rd'] == 5 and f['rs2'] == 7)
@@ -741,9 +749,9 @@ for st_ in (59, 60):
     e = KLE(); e.mgmt(1, 56, md=mk()); e.mgmt(1, 57, form='A'); e.mgmt(1, 63, form='C', md=mk(State=st_)); check('ppi export completed with ml.State %d (nesting): restored' % st_, e.getst(1) == st_)
 
 section('Routed derive checks: tag/XOF sources, CMAC absorb, NIK KeyType  <<KLE-derive-endpoints>>, <<KLE-GR-derive-checks>>')
-for nm, m in (('hash/XOF (Hash_Output / XOF output)', M_XOF), ('hash', M_HASH)):
+for nm, m in (('XOF', M_XOF), ('hash', M_HASH)):
     e = dv(srcm=m, spol=0); e.L[1].mdh = mdh_put(e.md(1), 'State', 2)
-    e.derive(2, 1, 16); check('%s is not a kl.derive source here (only keystream, ECC/ML-KEM secrets, CMAC output via Hash_Output): source Invalid, destination untouched (GR39.2)' % nm,
+    e.derive(2, 1, 16); check('%s in Hash_Absorb (State 2) is not a kl.derive source (a hash, MAC or XOF is one only in Hash_Output, which the hash harnesses test): source Invalid, destination untouched (GR39.2)' % nm,
                               stx(e, 1) == INV and e.getst(2) == 1 and e.L[2].content == 0)
 e = dv(dstm=M_CMAC, dst=2); e.derive(2, 1, 32); check('CMAC Hash_Absorb is not a destination endpoint (shared secret): destination Invalid, source untouched (GR39.3)', stx(e, 2) == INV and e.getst(1) == 2)
 for m, nm in ((M_HASH, 'hash'), (M_XOF, 'XOF'), (M_CMAC, 'CMAC'), (M_VER, 'VERIFY')):

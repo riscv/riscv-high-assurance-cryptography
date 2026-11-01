@@ -341,6 +341,22 @@ def mdh_pack(**fields):
         m = mdh_put(m, k, v)
     return m
 def mdh_unpack(mdh): return {n: mdh_get(mdh, n) for n, _, _ in MDH_FIELDS}
+def narrow(dmd, smd):
+    """Metadata narrowing of dmd by smd (<<KLE-Metadata-narrowing>>), UsagePolicy, Locality, ExpirationDate; None on failure."""
+    m = mdh_put(dmd, 'UsagePolicy', mdh_get(dmd, 'UsagePolicy') & mdh_get(smd, 'UsagePolicy'))
+    a, b = mdh_get(dmd, 'Locality'), mdh_get(smd, 'Locality')
+    out = 0
+    for sh in (0, 2): out |= max(a >> sh & 3, b >> sh & 3) << sh
+    ba, bb = a >> 4 & 3, b >> 4 & 3
+    if ba and bb and ba != bb: return None
+    out |= (ba or bb) << 4 | ((a | b) & 0x1C0)
+    m = mdh_put(m, 'Locality', out)
+    e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
+    return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
+def gr40(dmd, smd):
+    """Rule GR40 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
+    SCProtection or a failed narrowing."""
+    return None if mdh_get(dmd, 'SCProtection') < mdh_get(smd, 'SCProtection') else narrow(dmd, smd)
 
 ST_INERT, ST_READY, ST_SUCCESS, ST_FAILURE = 0, 1, 54, 55
 CFG_PROVISIONING, CFG_EXPORTING, CFG_IMPORTING, CFG_PPI_EXPORTING, CFG_PPI_IMPORTING = 56, 57, 58, 59, 60

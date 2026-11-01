@@ -286,6 +286,13 @@ check('CAVP CDH P-256 COUNT=0: Z = 46fc6210...bd7b', Lc.shared_secret().hex() ==
 Ls, _ = pt_mul('sm2', 5, xy(Q, 32)); P = C.mul(5, Q)
 check('SM2 shared secret = x2||y2, each 32 bytes big-endian (64 bytes)', Ls.shared_secret() == P[0].to_bytes(32, 'big') + P[1].to_bytes(32, 'big'))
 check('derive_source outside Output -> None', EccLocker('secp256r1').derive_source() is None)
+Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Z5 = Lz.shared_secret()
+check('kl.derive of the shared secret: one transfer, Output -> Success (GR38)', Lz.derive() == Z5 and Lz.state == 54)
+check('a second kl.derive in Success -> Invalid (GR39 item 2)', Lz.derive() == 'invalid' and Lz.invalid)
+Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.derive()
+check('Form C after the kl.derive (Success) -> Invalid', Lz.exec_out(1) == 'invalid')
+Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.exec_out(1)
+check('kl.derive once Form C has emitted a byte (block_base != 0) -> Invalid', Lz.derive() == 'invalid' and Lz.invalid)
 
 section('public-points variant (MachineExtension = 1): Generator fixed, no shared secret')
 for nm, d, Qb, Z in V.ECDH[:1] + [x for x in V.ECDH if x[0] == 'secp384r1'][:1]:
@@ -318,6 +325,28 @@ for nm in ('ed25519', 'x25519'):
     check('%s Point_Mul on SecondPt with MachineExtension = 1 -> Invalid' % nm, r == 'invalid' and L.invalid)
     L = EccLocker(nm, policy=3 if nm == 'ed25519' else 0, ext=1); load(L, SSCAL, le(9, L.W)); L.setst(PMUL)
     check('%s Point_Mul on the default Generator admitted' % nm, L.exec_D() == 'output')
+
+section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR79)')
+for nm, d, Qb, Z in V.ECDH[:1]:
+    W = EccLocker(nm).W
+    L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); r = L.exec_D()
+    check('%s Point_Mul on SecondPt: a sealed kl.derive source = Z' % nm, r == 'output' and L.outtype == 2 and L.sealed and L.derive_source() == Z)
+    check('%s Form C kl.exec of the shared secret -> Invalid' % nm, L.exec_out(1) == 'invalid' and L.invalid)
+    L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); L.setst(PMUL); r = L.exec_D()
+    check('%s Point_Mul on the default Generator: the public key d.G stays readable' % nm, r == 'output' and L.exec_out(2 * W) == xy(L.C.mul(d, L.C.G), W))
+    check('%s Form B kl.setst to Set_Generator, non-zero operand -> Invalid' % nm, EccLocker(nm, ext=2).setst(SGEN, 'B', 1) == 'invalid')
+    L = EccLocker(nm, ext=2); load(L, S2ND, xy(Qb, W)); L.setst(RDY)
+    check('%s Ready bit 5 (SecondPt -> Generator) with HasSecondPt set -> Invalid' % nm, L.setst(RDY, 'B', 1 << 5) == 'invalid')
+    check('%s provisioning/import with a non-default Generator -> Invalid' % nm, EccLocker(nm, ext=2).import_generator(xy(Qb, W)) == 'invalid')
+L = EccLocker('x25519', policy=0, ext=2); load(L, SSCAL, H('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4'))
+load(L, S2ND, H('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c')); L.setst(PMUL); L.exec_D()
+check('x25519 sealed: RFC 7748 5.2 vector 1 as a sealed derive source; Form C -> Invalid',
+      L.sealed and L.derive_source().hex() == 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552' and L.exec_out(32) == 'invalid')
+L = EccLocker('x25519', policy=0, ext=2); load(L, SSCAL, H('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4'))
+load(L, S2ND, H('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c')); L.setst(PMUL); L.exec_D()
+check('x25519 sealed: one kl.derive, then Success; a second -> Invalid',
+      L.derive().hex() == 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552' and L.state == 54 and L.derive() == 'invalid')
+check('ed25519 with MachineExtension = 2: unsupported Metadata', EccLocker('ed25519', ext=2).err == SE_UNSUPPORTED)
 
 # ------------------------------------------------------------------ 9
 section('X25519 / X448 (RFC 7748)')

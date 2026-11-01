@@ -238,7 +238,7 @@ A bit gates the States of its operation and every State that follows uniquely fr
 ** decryption: _Decrypt_, _Dec_Last_Block_, _Dec_Tag_Finalize_ and, in <<KLE-GCM-mode>>, <<KLE-OCB-mode>> and <<KLE-Ascon-AEAD128>>, _Hash_Verify_;
 ** signature generation: _Sign_Generate_, _Output_ with a signature, and _Sign_Output_;
 ** signature verification: _Sign_Input_ and _Sign_Verify_;
-** MAC generation and verification: _Hash_Output_ and _Hash_Verify_, respectively; and
+** MAC generation: _Hash_Output_ and _Hash_Output_Bits_; MAC verification: _Hash_Verify_; and
 * its _entry conditions_: what the State requires, such as the `Has` flags, the mode, and the other configuration of the CC that it uses.
 
 Unless the Machine states otherwise, a zero _MachinePolicy_ is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>) for a Machine that encrypts and decrypts, or that generates and verifies MACs, and valid for one that generates and verifies signatures: it then disables these operations and leaves the others, if any, available.
@@ -315,7 +315,7 @@ A Machine whose input ends in a fractional block processes it in a State of its 
 A `kl.setst` from the State preceding the final-block State to its successor, bypassing the final-block State, is equivalent to this and must be of Form A, unless the Machine names another Form, as <<KLE-GCM-mode>> does; where `n` is determined by the Machine (`max_len` != 0 in <<KLE-process-VLI>>) and is not zero, the bypass transitions the locker to Error State _Invalid_.
 . If `n` != 0, a `kl.setst` into the final-block State records `last_block_len` = `n`, and a single `kl.exec` (Rule <<KLE-MGR-one-klexec-per-block>>) processes the `n` least significant bits of its `INPUT` and ignores the other bits (Rule <<KLE-MGR-fixed-width-input>>); a `KLLEN` smaller than `n` is not zero-padded but violates the granularity (Rule <<KLE-MGR-granularity>>), and an empty transfer window does not reach the Machine (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 Once the final block is processed, the locker transitions to the successor of the final-block State that the Machine names, and no `kl.setst` is needed to leave the final-block State.
-. Where software chooses among several successors, as for the digest of a hash function (_Hash_Output_ or _Hash_Verify_, which may be gated separately by Rule <<KLE-MGR-policy-gate>>), or the entry of the successor takes an operand that the final-block State cannot supply, as the length block of _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_ in <<KLE-GCM-mode>>, the Machine names no successor: the locker stays in the final-block State once the block is processed, or on entering it with `n` = 0, and software selects the successor with a `kl.setst`.
+. Where software chooses among several successors, as for the digest of a hash function (_Hash_Output_, _Hash_Output_Bits_ or _Hash_Verify_, which may be gated separately by Rule <<KLE-MGR-policy-gate>>), or the entry of the successor takes an operand that the final-block State cannot supply, as the length block of _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_ in <<KLE-GCM-mode>>, the Machine names no successor: the locker stays in the final-block State once the block is processed, or on entering it with `n` = 0, and software selects the successor with a `kl.setst`.
 A State whose final block is empty or already processed (`last_block_len` = 0) admits no `kl.exec` of Forms A to C, whatever its transfer window, even an empty one: one transitions the locker to Error State _Invalid_.
 . A `kl.setst`, other than one naming _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>), leaving the final-block State with `n` != 0 before its `kl.exec` transitions the locker to Error State _Invalid_, unless the Machine defines otherwise.
 --
@@ -519,6 +519,7 @@ Absorb data: the message of a hash function, MAC or XOF, or the associated data 
 |  13   |  `kl_state_set_aux_value`        | _Set_Aux_Value_     | Set a public/auxiliary value in a cryptographic scheme implemented by the Machine.
 |  14   |  `kl_state_set_aux_value_2`      | _Set_Aux_Value_2_   | Set a second public/auxiliary value in a cryptographic scheme implemented by the Machine.
 |  15   |  `kl_state_set_key`              | _Set_Key_           | Reconfigure a key field.
+|  16   |  `kl_state_hash_output_bits`     | _Hash_Output_Bits_  | Output the hash a set number of bits at a time.
 |===
 
 Rule <<KLE-operation-immediates>> applies to the Machines that use
@@ -2579,11 +2580,14 @@ Data Structures::
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
  ** `last_block_len`: int. Bit length of the final piece to be absorbed in _Hash_Absorb_Last_Block_.
+    In _Hash_Output_Bits_, after the message has ended, the field is called `read_len`: the number of bits still to be read before the next `kl.setst`.
  ** `input_base`/`output_base` (same field): int. Offset within the input or output at which to read or write.
- ** `block_base`: int. Length of the data absorbed so far into the current block or, in _Hash_Output_, emitted so far from the current `t`-bit output block.
- ** `out_len`: int. In _Hash_Output_, the number of output bits still to be emitted, or 0 for an XOF without bound; zero in every other State.
+ ** `block_base`: int. Length of the data absorbed so far into the current block or, in _Hash_Output_ and _Hash_Output_Bits_, emitted so far from the current `t`-bit output block.
+ ** `out_len`: int. In _Hash_Output_ and _Hash_Output_Bits_, the number of output bits still to be emitted, or 0 for an XOF without bound; zero in every other State.
  ** `cumul_len`: int. Cumulative length of the data absorbed so far.
  ** `block`: `b` bits. Present only if a partial block is kept separately, for instance when inputs are not absorbed directly into `state`.
+ ** `Sealed`: Boolean, bit 1 of _StateExtension_, set when a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>) enters the message input, and cleared only on entering _Ready_.
+    A _StateExtension_ @ _State_ with `Sealed` set in a State other than _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_ and _Success_ is not supported by the Machine: an SCC that carries it is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
 * *Serialized Content*:
 +
@@ -2594,8 +2598,8 @@ Data Structures::
 .2+| i  | If keyed: `k` or 64  | `key` or SKID     | --
 <|        If unkeyed: 0        | none              | --
 |   ii | `n`                  | `state`           | --
-|  iii | 16                   | `last_block_len`    | The bit length of the final piece still to be absorbed, 0 once the message ends; in _Hash_Output_, `out_len` where the Machine says so, as <<KLE-BLAKE2>> does.
-|   iv | 16                    | `block_base`     | Amount of data, in bits, stored so far into `block` or accumulated (usually XORed) into `state`; in _Hash_Output_, the amount emitted from the current output block.
+|  iii | 16                   | `last_block_len`    | The bit length of the final piece still to be absorbed, 0 once the message ends; in _Hash_Output_Bits_, `read_len`.
+|   iv | 16                    | `block_base`     | Amount of data, in bits, stored so far into `block` or accumulated (usually XORed) into `state`; in _Hash_Output_ and _Hash_Output_Bits_, the amount emitted from the current output block.
 | v, vi | 32                   | `out_len`         | Unless the Machine uses these bits otherwise, as <<KLE-BLAKE2>> does.
 |   vii | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far; its width limits the length of a message (Rule <<KLE-MGR-caller-limits>>). Present only if the padding or another function of the Machine uses it, or under HMAC (<<KLE-HMAC>>).
 |  viii | `b`                  | `block`           | Only if the block is stored separately from the `state`.
@@ -2616,22 +2620,24 @@ Machine-Specific Functions::
 
 State Machine::
 
-* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_ and _Success_.
+* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_, _Hash_Output_Bits_ and _Success_.
 
  ** _Ready_: The CC is ready.
  ** _Hash_Absorb_: Absorb the message into the hash function.
  ** _Hash_Absorb_Last_Block_: Set the bit length of the final piece of the message, then absorb it.
  ** _Hash_Output_: Output the hash.
+ ** _Hash_Output_Bits_: Output the hash a set number of bits at a time.
  ** _Success_: The CC has completed the operation (an XOF reaches it only with a bounded output).
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> { _Hash_Absorb_Last_Block_ -> } _Hash_Output_ -> _Success_.
- ** The Machine makes no transition into _Hash_Output_, or into the _Hash_Verify_ of a MAC, by itself: a `kl.setst` naming it ends the message.
+ ** _Hash_Absorb_, or _Hash_Absorb_Last_Block_ with `last_block_len` = 0, -> _Hash_Output_Bits_; _Hash_Output_ -> _Hash_Output_Bits_ -> _Success_; and _Hash_Output_Bits_ -> _Hash_Output_Bits_.
+ ** The Machine makes no transition into _Hash_Output_, _Hash_Output_Bits_, or the _Hash_Verify_ of a MAC, by itself: a `kl.setst` naming it from _Hash_Absorb_ or _Hash_Absorb_Last_Block_ ends the message.
  ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
 
 * *Behavior:*
  ** Upon entering State _Ready_:
-  *** `last_block_len`, `block_base`, `cumul_len`, `out_len` and `block` are set to zero.
+  *** `last_block_len`, `block_base`, `cumul_len`, `out_len` and `block` are set to zero, and `Sealed` is cleared.
   *** `state`: the initial value is set as specified by the Machine.
 
  ** The `kl.setst` that enters _Hash_Absorb_ is of Form A, unless the Machine states otherwise.
@@ -2683,7 +2689,7 @@ No `kl.exec` is needed; any `kl.exec` transitions the locker to Error State _Inv
 Any other non-zero `Xs` transitions the locker to Error State _Invalid_, before `finalize()`.
 --
 +
-In _Hash_Absorb_Last_Block_, `last_block_len` {ne} 0 means that the final piece is not yet absorbed: a `kl.setst` naming _Hash_Output_, or the _Hash_Verify_ of a MAC, then transitions the locker to Error State _Invalid_.
+In _Hash_Absorb_Last_Block_, `last_block_len` {ne} 0 means that the final piece is not yet absorbed: a `kl.setst` naming _Hash_Output_, _Hash_Output_Bits_, or the _Hash_Verify_ of a MAC, then transitions the locker to Error State _Invalid_.
 
  ** In State _Hash_Output_:
  *** Upon entering the state, the following operations are first performed:
@@ -2718,6 +2724,24 @@ In _Hash_Absorb_Last_Block_, `last_block_len` {ne} 0 means that the final piece 
 The output has as many bits as `out_len` holds on entering the State, or is unbounded for an XOF without bound, and is emitted in any whole number of bytes.
 +
 The interruption points of `kl.exec` in _Hash_Output_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>) are 0 and, if the locker holds `block_base` = 0 when the `kl.exec` is issued, any byte offset, whatever `out_len`.
+
+ ** In State _Hash_Output_Bits_:
+ *** A Form B `kl.setst` with immediate `kl_state_hash_output_bits` and auxiliary operand `Xs`, issued in _Hash_Output_ or _Hash_Output_Bits_, enters or stays in the State and sets `read_len <- Xs`.
+     It performs no `finalize()`, keeps `block_base` and `out_len`, and discards any bits that an earlier `read_len` left unread.
+     Issued from _Hash_Absorb_, or from _Hash_Absorb_Last_Block_ with `last_block_len` = 0, it ends the message: it gives the result of a Form A `kl.setst` naming _Hash_Output_ followed by the same `kl.setst`.
+     The output is then that of a Form A entry, unbounded for an XOF, and a Machine that requires Form B into _Hash_Output_, as <<KLE-KMAC>> does for KMAC128 and KMAC256, transitions the locker to Error State _Invalid_.
+     A Form A `kl.setst`, `Xs` = 0, or `Xs` {ge} 2^16^ transitions the locker to Error State _Invalid_.
+ *** Each Form C `kl.exec` runs the loop of _Hash_Output_ with these changes:
+  . `amount` is also at most `read_len`, and `read_len <- read_len - amount` follows `block_base <- block_base + amount`;
+  . after the `block_base` = `t` step, if `read_len` = 0, any bits of `OUTPUT` beyond `output_base` are cleared, and the instruction returns, the locker staying in _Hash_Output_Bits_;
+  . the instruction can be interrupted wherever `output_base` is a multiple of 8 and less than `KLLEN` and `read_len` {ne} 0, inside a block too, and nowhere else, with `klstart <- output_base / 8`.
++
+A Form C `kl.exec` issued with `read_len` = 0 transitions the locker to Error State _Invalid_.
+The interruption points of `kl.exec` in _Hash_Output_Bits_ are 0 and any byte offset, whatever `block_base`.
+As a `kl.derive` source (<<KLE-derive-endpoints>>), the locker supplies the output that follows `block_base`, as in _Hash_Output_, and keeps `read_len`.
+
+ ** A _sealed_ locker, one with `Sealed` set or, in <<KLE-HMAC>>, `KeySealed`, admits no `kl.exec` in _Hash_Output_ and no `kl.setst` naming _Hash_Output_Bits_ or _Hash_Verify_: each transitions it to Error State _Invalid_.
+    Its output in _Hash_Output_ is a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>).
 
 The following are Machine-specific, and the code example of <<Zkl-software.adoc#KLE-pseudocode-hash>> uses none of them:
 
@@ -2881,7 +2905,7 @@ A caller with its own key absorbs it (see below).
 * *Serialized Content*: as in <<KLE-hash-functions-MACs-XOFs>>, with `cumul_len` and `block` present, and:
  ** the SKID, if any, in Position i;
  ** `nn` in Position v and `kk` in Position vi, 16 bits each, `nn` in the lower half;
- ** in _Hash_Output_, `out_len` in Position iii.
+ ** in _Hash_Output_ and _Hash_Output_Bits_, `out_len` in the lower 32 bits of Position vii, the upper 32 bits zero, in place of `cumul_len`, which `finalize()` has consumed.
 
 Machine-Specific Functions::
 
@@ -2898,7 +2922,7 @@ Machine-Specific Functions::
 
 State Machine::
 
-* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_, and _Success_.
+* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_, _Hash_Output_Bits_, and _Success_.
 
 * *Allowed State Transitions:*
  ** As in <<KLE-hash-functions-MACs-XOFs>>; the `kl.setst` naming _Hash_Output_ ends the message held in `block`, also
@@ -3017,14 +3041,16 @@ A system-specific import (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sysfmt-completion>>)
   *** `state`: `n` bits.
   *** `last_block_len`, `out_len`: int (<<KLE-hash-functions-MACs-XOFs>>).
   *** `input_base`: int. Offset within input/output to read from/write to.
-  *** `block_base`: int. Length of the data absorbed so far into the current block or, in _Hash_Output_, emitted so far from the current `t`-bit output block (<<KLE-hash-functions-MACs-XOFs>>).
+  *** `block_base`: int. Length of the data absorbed so far into the current block or, in _Hash_Output_ and _Hash_Output_Bits_, emitted so far from the current `t`-bit output block (<<KLE-hash-functions-MACs-XOFs>>).
   *** `cumul_len`: int. Cumulative length of data absorbed so far, tracked by every HMAC Machine (for the `K0` load in _Set_Key_, and for the padding of SHA-2 and SM3).
   *** `block`: `b` bits. Included only if a partial block is maintained, for instance when the inputs are not directly absorbed into `state`.
  ** `K0`: `b` bits, the value `K0` as per cite:[nist-fips-198-1] {sect}4, Steps 1 to 3.
  ** `tag_len`: the number of bits that _Hash_Verify_ compares, 64 to `t`, or 0 before it is set.
  ** `tag_len_p`: the number of bits that every verification compares (Rule <<KLE-MGR-tag-verify>>): a multiple of 8 from 64 to `t`, and `t` if _KeyType_ = 1; held in _AuxInfo_, not serialized.
  ** `HasKey` (NIK variant only): Boolean, bit 0 of _StateExtension_, recording that `K0` holds a completely loaded key (Rule <<KLE-MGR-load-long-field>>).
-    The KIP variant does not use _StateExtension_.
+ ** `KeySealed` (NIK variant only): Boolean, bit 2 of _StateExtension_, set when a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>) loads `K0`, and cleared on entering _Set_Key_.
+    A _StateExtension_ @ _State_ with `KeySealed` set and `HasKey` clear, or set in _Hash_Output_Bits_, _Hash_Verify_ or _Failure_, is not supported by the Machine: an SCC that carries it is invalid Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
+    The KIP variant uses only `Sealed` (<<KLE-hash-functions-MACs-XOFs>>).
 
 * *Serialized Content*:
 +
@@ -3067,7 +3093,7 @@ A loaded key is kept across a return to _Ready_, so that one load of `K0` serves
  ** For the KIP variant: _Ready_ -> _Hash_Absorb_; then as in the underlying hash function.
  ** _Hash_Absorb_, or _Hash_Absorb_Last_Block_ with `last_block_len` = 0, -> _Hash_Verify_ -> _Success_ or _Failure_.
  ** From any valid state to State _Ready_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-to-ready>>).
- ** _Hash_Output_ is enabled by _MachinePolicy_[0], and _Hash_Verify_ by
+ ** _Hash_Output_ and _Hash_Output_Bits_ are enabled by _MachinePolicy_[0], and _Hash_Verify_ by
     _MachinePolicy_[1]; no other State is gated (Rule <<KLE-MGR-policy-gate>>); at least one bit must be set
     (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
@@ -3075,7 +3101,7 @@ A loaded key is kept across a return to _Ready_, so that one load of `K0` serves
  ** When entering _Ready_: `tag_len` {leftarrow} 0.
 
  ** When entering State _Set_Key_, also by a same-State `kl.setst`, which restarts the load
-    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>): `K0` is zeroed, `HasKey` is cleared, and `input_base`, `block_base`
+    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>): `K0` is zeroed, `HasKey` and `KeySealed` are cleared, and `input_base`, `block_base`
     and `cumul_len` are set to zero.
 
  ** While in State _Set_Key_:
@@ -3091,9 +3117,9 @@ where `g` is the granularity of `H`;
   . a `kl.derive` into `K0` (<<KLE-derive-endpoints>>) transfers a whole key `K` of `eff_length` {le} `b`/8 bytes
     (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> items 1 and 6):
   .. it requires `klstart` = 0 and a source of exactly `eff_length` bytes: a source field, or the remaining `kl.exec` output of the source;
-  .. otherwise, the destination locker transitions to Error State _Invalid_, and the source is unchanged; a keystream of a keystream Machine (<<KLE-keystream-modes>>, OFB of <<KLE-chaining>>) has no length of its own and never meets the requirement of the previous step, so its `kl.derive` into `K0` always has this outcome;
+  .. otherwise, the destination locker transitions to Error State _Invalid_, and the source is unchanged; a keystream of a keystream Machine (<<KLE-keystream-modes>>, OFB of <<KLE-chaining>>), or the output of an XOF without bound, has no length of its own and never meets the requirement of the previous step, so its `kl.derive` into `K0` always has this outcome;
   .. it replaces all of `K0`, whatever a `kl.exec` loaded before it: `K0` {leftarrow} `K` zero-filled to `b` bits (cite:[nist-fips-198-1] {sect}4, Step 3);
-  .. it sets `block_base` {leftarrow} 0 and `cumul_len` {leftarrow} `b`, and sets `HasKey`.
+  .. it sets `block_base` {leftarrow} 0 and `cumul_len` {leftarrow} `b`, and sets `HasKey`, and `KeySealed` for a sealed source.
 
  ** When entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
@@ -3315,7 +3341,7 @@ With _KeyType_ = 1, the `state` field of the Serialized Content holds `state xor
 
 * *Internal State*: as for <<KLE-SHA-3>>, with the addition of `cshake_block` and `key_block`, and with `L` in place of `out_len`:
  ** `cshake_block`, `key_block`: `b` bits each; and
- ** `L`: 32 bits, the output length or bound in bits, or 0 for an unbounded KMACXOF output; in _Hash_Output_, the bits still to be emitted, as `out_len` (<<KLE-hash-functions-MACs-XOFs>>); from _Hash_Verify_ on, the tag length in bits.
+ ** `L`: 32 bits, the output length or bound in bits, or 0 for an unbounded KMACXOF output; in _Hash_Output_ and _Hash_Output_Bits_, the bits still to be emitted, as `out_len` (<<KLE-hash-functions-MACs-XOFs>>); from _Hash_Verify_ on, the tag length in bits.
 
 * *Serialized Content*: as for <<KLE-SHA-3>>, with `L` in Position iv in place of `out_len`, and `cshake_block`
   and `key_block` appended, followed by an empty Padding. Explicitly:
@@ -3347,19 +3373,19 @@ Machine-Specific Functions::
 
 State Machine::
 
-* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_ and _Success_, and, for `KMAC128` and
+* *States:* _Ready_, _Hash_Absorb_, _Hash_Absorb_Last_Block_, _Hash_Output_, _Hash_Output_Bits_ and _Success_, and, for `KMAC128` and
   `KMAC256` only, _Hash_Verify_ and _Failure_.
 
 * *Allowed State Transitions:*
  ** As in <<KLE-SHA-3>>.
  ** For `KMAC128` and `KMAC256`: _Hash_Absorb_, or _Hash_Absorb_Last_Block_ with `last_block_len` = 0, ->
     _Hash_Verify_ -> _Success_ or _Failure_.
- ** For `KMAC128` and `KMAC256`, _Hash_Output_ is enabled by _MachinePolicy_[0], and
+ ** For `KMAC128` and `KMAC256`, _Hash_Output_ and _Hash_Output_Bits_ are enabled by _MachinePolicy_[0], and
     _Hash_Verify_ by _MachinePolicy_[1]; no other State is gated (Rule <<KLE-MGR-policy-gate>>); at least one bit must be set
     (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
  ** `KMACXOF128` and `KMACXOF256`, which serve as key derivation functions, gate no State
     (Rule <<KLE-MGR-policy-gate>>), and a non-zero _MachinePolicy_ is unsupported Metadata for them
-    (<<KLE-hash-functions-MACs-XOFs>>).
+    (<<KLE-hash-functions-MACs-XOFs>>); a `kl.derive` moves their output directly into a key (<<KLE-derive-endpoints>>).
 
 * *Behavior:* as in <<KLE-SHA-3>>, with the following differences.
 
@@ -3843,8 +3869,8 @@ The *Provisioning Input* contains only the MDH.
 |   iv  | 64              | `state`[3]
 |    v  | 64              | `state`[4]
 |   vi  | 16              | `block_base`, in bits
-|  vii  | 16              | `last_block_len`, in bits
-| viii  | 32              | `out_len` in _Hash_Output_; in _Set_Aux_Value_ of <<KLE-Ascon-CXOF128>>, `Z_len` in bits [15:0] and `cumul_len` in bits [31:16]; zero otherwise
+|  vii  | 16              | `last_block_len`, in bits; `read_len` in _Hash_Output_Bits_
+| viii  | 32              | `out_len` in _Hash_Output_ and _Hash_Output_Bits_; in _Set_Aux_Value_ of <<KLE-Ascon-CXOF128>>, `Z_len` in bits [15:0] and `cumul_len` in bits [31:16]; zero otherwise
 |   ix  | 0               | Padding
 |===
 
@@ -4005,7 +4031,7 @@ Two Rules limit the remaining risks:
 The x25519 and x448 Machines (<<KLE-X25519-X448>>) provide only the former.
 
 NOTE: KDFs, hash functions and formats vary too much for general KEM or PKE support; among the elliptic curve standards, only SM2 fully specifies an integrated encryption scheme cite:[GMT-0003-4-2012].
-Software builds such schemes on scalar multiplication, and `kl.derive` moves the shared secret into the hash function of the KDF without exposing it.
+Software builds such schemes on scalar multiplication, and `kl.derive` moves the shared secret into the hash function of the KDF, and the KDF output into the key of a symmetric Machine, without exposing them.
 A key that is exposed anyway should be provisioned into a locker, and its exposed copy erased at once.
 
 Provisioning sets the `Generator` field to the default base point (“generator”) that the standards listed below define for the curve.
@@ -4013,9 +4039,13 @@ Software may overwrite the field; a Form A `kl.setst` to _Set_Generator_, or one
 the default, as does a Form B `kl.setst` to _Ready_ with bit 0 of `Xs` set.
 
 With _MachineExtension_ = 1, the _public-points variant_, `Generator` and `SecondPt` are public fields, which an SCC carries in clear (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-scc-clear-blocks>>): `Generator` always holds the default generator of the curve, so that _Point_Mul_ computes only a public key, and a scalar multiplication of `SecondPt`, which would make a shared secret, transitions the locker to Error State _Invalid_ (_Point_Mul_ below).
-A Form B `kl.setst` to _Set_Generator_ with a non-zero operand, or to _Ready_ with bit 5 of `Xs` set while `HasSecondPt` is set, transitions the locker to Error State _Invalid_, and a provisioning or import whose `Generator` is not the default completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
+In this variant and the sealed one, a Form B `kl.setst` to _Set_Generator_ with a non-zero operand, or to _Ready_ with bit 5 of `Xs` set while `HasSecondPt` is set, transitions the locker to Error State _Invalid_, and a provisioning or import whose `Generator` is not the default completes into Error State _Invalid_ (Rule <<KLE-MGR-check-on-write>>).
 The variant suits signature generation and verification, and key-pair generation; software uses _MachineExtension_ = 0 for a key exchange and for a custom generator.
 It is defined for every Elliptic Curve Machine, and is unsupported Metadata where not implemented (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
+
+With _MachineExtension_ = 2, the _sealed variant_, `Generator` always holds the default generator, as in the public-points variant, but both points are private, _Point_Mul_ may multiply `SecondPt`, and the shared secret is a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>) that no `kl.exec` emits (_Output_ below).
+It suits a key exchange whose key derivation runs in lockers.
+It is defined for every Elliptic Curve Machine except those of <<KLE-EdDSA>>, and is unsupported Metadata where not implemented.
 
 All values (integers, coordinates, etc.) are in little-endian format, except the shared secret of the Weierstrass curves that _Output_ emits, which follows the byte order of its standard (see _Output_ below).
 
@@ -4120,7 +4150,7 @@ The Elliptic Curve Machines use the _MachineUse_ field as follows:
 |  [13:2] | `Progress`      |   Tracks, in an implementation-defined and non-portable unit, the progress of long-running operations such as scalar multiplications. Whenever it is non-zero, the SCC must include an ADS (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-long-running-restart>>).
 |===
 
-NOTE: _Output_ explicitly allows the export of a shared secret through `kl.exec`, like any other output, so the caller can read it. Too many protocols process the ECDH shared secret themselves to list them as `kl.derive` destinations. Its `kl.derive` transfers are therefore unrestricted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), and the exclusion of `K1 {vvert} K2` of nonce masking as a destination (<<KLE-derive-endpoints>>) applies only to a secret that `kl.exec` cannot read, such as the ML-KEM `sharedkey`.
+NOTE: Except in the sealed variant, _Output_ explicitly allows the export of a shared secret through `kl.exec`, like any other output, so the caller can read it. Too many protocols process the ECDH shared secret themselves to list them as `kl.derive` destinations. Its `kl.derive` transfers are therefore unrestricted (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), and the exclusion of `K1 {vvert} K2` of nonce masking as a destination (<<KLE-derive-endpoints>>) applies only to a secret that `kl.exec` cannot read, such as the ML-KEM `sharedkey` or a sealed shared secret.
 
 For ECC Machines (Rule <<KLE-MGR-policy-gate>>), _MachinePolicy_[0] gates _Sign_Generate_ and _Output_ with a signature, _MachinePolicy_[1] gates _Sign_Input_ and _Sign_Verify_, and _MachinePolicy_ {ne} 0 gates _Set_Hash_, since its field `Hash` exists only then.
 All four combinations are admissible, except as <<KLE-X25519-X448>> and <<KLE-EdDSA>> restrict them.
@@ -4179,7 +4209,7 @@ Positions i, i.a, v and vi are present only for the values of _MachinePolicy_ gi
 The padding `p1` = (−``vb``) mod 128 and `p3` = (−2 {times} ``ub``) mod 128 ends `Signature`, resp. `Generator` {vvert} `SecondPt`, at a 128-bit boundary; it is 112 for ed448 and 0 for the other curves.
 The final Padding `p6` = (−(``b`` + (_MachinePolicy_ {ne} 0) {times} ``h`` + _MachinePolicy_[0] {times} ``j``)) mod 128 ends `Content1`.
 The transfer counter `block_base` is not serialized: it is held in the MDH (_AuxInfo_[15:8]).
-`SCC_ClearLen1` is (_MachinePolicy_ {ne} 0) {times} {lceil}``vb`` / 128{rceil} with _MachineExtension_ = 0, and (_MachinePolicy_ {ne} 0) {times} {lceil}``vb`` / 128{rceil} + {lceil}2 {times} ``ub`` / 128{rceil} with _MachineExtension_ = 1.
+`SCC_ClearLen1` is (_MachinePolicy_ {ne} 0) {times} {lceil}``vb`` / 128{rceil} with _MachineExtension_ {ne} 1, and (_MachinePolicy_ {ne} 0) {times} {lceil}``vb`` / 128{rceil} + {lceil}2 {times} ``ub`` / 128{rceil} with _MachineExtension_ = 1.
 `Signature` holds only a signature loaded for verification, or one that _Sign_Generate_ has completed, or its `R` as <<KLE-EdDSA>> states, or zero.
 
 Which fields are serialized depends only on _MachinePolicy_, never on _State_ or _StateExtension_ (<<Zkl-ISA-unpriv.adoc#KLE-length-rule>>):
@@ -4247,7 +4277,7 @@ The _Set_ states are _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ a
  ** _Point_Mul_ or _Sign_Generate_ -> _Output_, made only by the Form D `kl.exec` of the State
     (Rule <<KLE-MGR-machine-transitions>>), or -> _Failure_ when a point that the operation uses is not valid
     (Rule <<KLE-MGR-config-data-error>>).
- ** _Output_ -> _Success_, when the output is complete (Rule <<KLE-MGR-load-long-field>>).
+ ** _Output_ -> _Success_, when the output is complete (Rule <<KLE-MGR-load-long-field>>), or on the first committed unit of a `kl.derive` of the shared secret.
  ** _Sign_Verify_ -> _Success_ or _Failure_.
  ** A `kl.setst` into _Set_Generator_, _Set_Scalar_ or _Ready_ is of Form A or B, as the Behavior states; into any
     other State of this Machine it is of Form A, except _Set_Ctx_ and _Msg_Absorb_ of <<KLE-EdDSA>>, which take Form B
@@ -4275,7 +4305,7 @@ The _Set_ states are _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ a
   . by a Form B `kl.setst` whose operand is zero, Form A included, sets the default generator of the curve, and
     `block_base` {leftarrow} `ub`/8, which completes the load;
   . by a Form B `kl.setst` whose operand is non-zero, erases `Generator` and starts a load: Form B `kl.exec` instructions then
-    load the `ub`/8 bytes of `Generator`; with _MachineExtension_ = 1, it transitions the locker to Error State _Invalid_ instead.
+    load the `ub`/8 bytes of `Generator`; with _MachineExtension_ {ne} 0, it transitions the locker to Error State _Invalid_ instead.
 
  ** Entering _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ or _Sign_Input_ by a Form A `kl.setst`:
   . erases the field _X_ that the State sets, `Scalar` becoming zero, and clears ``Has``_X_ where that flag exists;
@@ -4346,10 +4376,13 @@ The bits of `Scalar` beyond the key are zero.
 
  ** In State _Output_, Form C `kl.exec` instructions emit the output (Rule <<KLE-MGR-load-long-field>>). Once the output is
     complete, the state machine transitions to _Success_, in which no `kl.derive` is admitted.
-  *** This State allows the export of the shared secret through `kl.exec`. The shared secret is also an
-      unrestricted `kl.derive` source, as a field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), any number of
-      times while the locker is in _Output_.
-      Each transfer reads it from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>): for
+  *** This State allows the export of the shared secret through `kl.exec`, except in the sealed variant, where a Form C
+      `kl.exec` with `OutputType` = _shared secret_ transitions the locker to Error State _Invalid_.
+      The shared secret is also a `kl.derive` source, unrestricted, or sealed in the sealed variant (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>), as a field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), of one
+      `kl.derive`, and only while `block_base` = 0, before a Form C `kl.exec` has emitted any of it: that `kl.derive`
+      transitions the locker to _Success_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), and one made
+      once `block_base` {ne} 0 transitions it to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 2).
+      The transfer reads it from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>): for
       X25519 and X448, a key field receives the first `eff_length` bytes of the shared secret; for the other curves, a
       key field is not a destination (<<KLE-derive-endpoints>>); a message input receives the whole shared secret, with
       `length` equal to the length of the shared secret
@@ -4367,7 +4400,7 @@ The bits of `Scalar` beyond the key are zero.
   . First the copies are made, both from the values held before the instruction, so that bits 4 and 5 together exchange
     the two points:
   .. bit 4: `Generator` is copied onto `SecondPt`, and `HasSecondPt` is set;
-  .. bit 5: if `HasSecondPt` was set, `SecondPt` is copied onto `Generator`, or, with _MachineExtension_ = 1, the locker transitions to Error State _Invalid_; otherwise bit 5 has no effect.
+  .. bit 5: if `HasSecondPt` was set, `SecondPt` is copied onto `Generator`, or, with _MachineExtension_ {ne} 0, the locker transitions to Error State _Invalid_; otherwise bit 5 has no effect.
   . Then the fields are reset or erased:
   .. bit 0: `Generator` is reset to the default value;
   .. bit 1: `SecondPt` is erased and `HasSecondPt` is cleared;
@@ -4805,8 +4838,9 @@ The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized
 
 The granularity of the ML-KEM Machines is 8 bits: a field can be transferred with any `SEW` from 8 to 64 bits that divides its size, or through the KLIOBUF in any number of bytes.
 
-In State _sharedkey_Output_, `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves the `sharedkey` that _Encapsulate_ or _Decapsulate_ produced into a second, already provisioned locker.
+In State _sharedkey_Output_, one `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves the `sharedkey` that _Encapsulate_ or _Decapsulate_ produced into a second, already provisioned locker.
 The destination is a key field of a symmetric Machine, or the `kl.exec` input of a hash function, MAC or XOF, that <<KLE-derive-endpoints>> lists as a destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
+With _MachineExtension_ = 1, the _sealed variant_, `sharedkey` is moreover a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>); the variant is unsupported Metadata where not implemented (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 
 Data Structures::
 
@@ -4915,6 +4949,7 @@ ML-KEM Machines define the following States:
  ** On completion of its `kl.exec`: _GenerateKeyPair_ -> _encapsk_Output_; _Encapsulate_ -> _ciphertext_Output_; _Decapsulate_ -> _sharedkey_Output_.
  ** When a `SampleNTT` limit is reached (see above): _GenerateKeyPair_, _Encapsulate_ or _Decapsulate_ -> _Failure_.
  ** Once its field has been completely emitted: _encapsk_Output_ -> _Ready_; _ciphertext_Output_ -> _sharedkey_Output_ if `HasSharedKey` is set, as after _Encapsulate_, and -> _Ready_ otherwise.
+ ** On the first committed unit of a `kl.derive` of `sharedkey`: _sharedkey_Output_ -> _Ready_.
  ** Once its field has been completely loaded: _ciphertext_Input_ -> _Ready_, or -> _Failure_ if the ciphertext type check fails;
     _encapsk_Input_ -> _Failure_ if the encapsulation key check fails.
  ** When an import restores an `encapsk` that `HasEncapsk` marks and that fails the encapsulation key check: -> _Failure_.
@@ -5046,8 +5081,9 @@ ML-KEM is IND-CCA2 secure under that interface.
   . besides the instructions that move or copy the whole CC, an export and import, `kl.clone`, `kl.rename` and
     `kl.swap`, only `kl.derive` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-derive>>) moves it, as a field source
     (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), and only in State _sharedkey_Output_ (<<KLE-derive-endpoints>>);
-  . that State admits no `kl.exec`, and any number of `kl.derive` until the caller leaves it;
-  . each `kl.derive` reads the field from its first byte: a key field receives its first `eff_length` bytes, and a
+  . that State admits no `kl.exec`, and one `kl.derive`, which transitions the locker to _Ready_
+    (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>);
+  . the `kl.derive` reads the field from its first byte: a key field receives its first `eff_length` bytes, and a
     message input the whole field, with `length` = 32 (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>,
     <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 6 and <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 // Before byte-granular hash inputs:
@@ -5371,7 +5407,7 @@ ML-DSA Machines define:
 // | <<KLE-CMAC-mode,CMAC>>, with any 64- or 128-bit block cipher | `kl.exec` input, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts (a derived value cannot end the message: the last block is supplied by `kl.exec` in _Hash_Absorb_Last_Block_) | destination | _Hash_Absorb_
 
 | <<KLE-ECC,Elliptic Curve>>
-| the shared secret as _Output_ emits it, formed from `SecondPt` | source      | _Output_ with `OutputType` = _shared secret_
+| the shared secret as _Output_ emits it, formed from `SecondPt` | source      | _Output_ with `OutputType` = _shared secret_ and `block_base` = 0
 // Not an admissible pair for now:
 // | `Scalar`, except of a shared secret that Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>> restricts | destination | _Set_Scalar_
 
@@ -5379,12 +5415,12 @@ ML-DSA Machines define:
 
 | <<KLE-keystream-modes,Keystream generation>>, <<KLE-chaining,OFB>> | the keystream (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Operate_
 
-| <<KLE-CMAC-mode,CMAC>> | the CMAC (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Hash_Output_
+| <<KLE-CMAC-mode,CMAC>>, and the hash functions, MACs and XOFs listed above as destinations | the `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | _Hash_Output_, and _Hash_Output_Bits_ where the Machine has it
 // Before the simplification of the admissible pairs:
 // | Any Machine | `kl.exec` output (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>>) | source | any State in which Form C `kl.exec` emits output, except ECC _Output_ with `OutputType` = _shared secret_, whose source is the field
 |===
 
-A source and a destination form a pair only as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>> admit.
+A source and a destination form a pair only as Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>–<<Zkl-ISA-unpriv.adoc#KLE-GR-exec-implies-unrestricted>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>> admit.
 For now, the admissible pairs move:
 
 * an ML-KEM `sharedkey`, or the shared secret of an x25519 or x448 Machine (<<KLE-X25519-X448>>), into a listed key of a
@@ -5392,11 +5428,14 @@ For now, the admissible pairs move:
 * a shared secret of any ECC or ML-KEM Machine into the input of a listed hash function, HMAC, KMAC or XOF, as the
   input of a key-derivation method of cite:[NIST-SP-800-56Cr2]; for the other ECC Machines, whose shared secret is
   not a uniform string, this is the only destination, as cite:[NIST-SP-800-56Ar3] {sect}5.8 requires for `Z`;
-* the keystream of a keystream Machine, or the CMAC of a CMAC Machine, into a listed key of a symmetric Machine.
+* the keystream of a keystream Machine, or the output of a CMAC, hash function, MAC or XOF Machine, into a listed key of a
+  symmetric Machine, as the key-derivation methods of cite:[NIST-SP-800-56Cr2] and cite:[nist-SP-800-108-r1] produce it;
+* a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>) as above, but never into the key of keystream generation, OFB or CMAC, whose outputs are
+  sources, nor into `K1 {vvert} K2`; a hash, MAC or XOF input, or an HMAC `K0`, that receives it makes its locker sealed.
 
 A destination key field still sets its own length conditions (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 6): the `K0` of
-HMAC takes only a source of exactly `eff_length` bytes, which a keystream is not, so a keystream into `K0` invalidates the
-destination alone.
+HMAC takes only a source of exactly `eff_length` bytes, which a keystream or the output of an XOF without bound is not, so
+either one into `K0` invalidates the destination alone.
 A locker of a Machine that Rule <<KLE-MGR-tag-verify>> lists, whose `tag_len_p` is shorter than the full length, is not a destination.
 Every such `kl.derive` is uninterruptible (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruptibility-classes>>).
 

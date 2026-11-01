@@ -2,7 +2,7 @@
 (Hash_Absorb chunks / halts / export-import / Hash_Absorb_Last_Block / Hash_Output pieces) and compare with a reference."""
 import copy, random, hashlib, hmac as _hmac
 from common import *
-from hash_model import Locker, Metadata, run, digest
+from hash_model import Locker, Metadata, run, digest, derive_out, Key, import_
 
 HL = {'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 'sha384', 'SHA-512': 'sha512', 'SHA-512/224': 'sha512_224',
       'SHA-512/256': 'sha512_256', 'SM3': 'sm3', 'SHA3-224': 'sha3_224', 'SHA3-256': 'sha3_256', 'SHA3-384': 'sha3_384',
@@ -132,6 +132,108 @@ def machine_checks(fn, ref):
     L = at('A', ab); L.setst('last', 'B', 8); check('%s derive is not an endpoint in Hash_Absorb_Last_Block' % fn, not L.derive(b'a') and inv(L))
     check('%s derive is not an endpoint in Ready' % fn, not mk().derive(b'a'))
     L = _out(ab, mk); check('%s derive not an endpoint in Hash_Output (digest is not a destination)' % fn, not L.derive(b'a') and inv(L))
+
+    sealed_checks(fn, lambda: at('A'), ref)
+
+    bits_checks(fn, lambda: _out(ab, mk), ref(ab))
+
+def sealed_checks(fn, mk, ref):
+    """Sealed locker (GR79), its GR40 narrowing and its StateExtension validity; mk() -> a locker in Hash_Absorb with
+    no message byte absorbed, ref(msg_bytes) -> its digest of msg."""
+    section('%s: sealed locker (GR79)' % fn)
+    sec = msg_of(32); ab = b'abc'; d = len(ref(ab))
+    def sl(): L = mk(); L.derive(sec, sealed=True); L.setst('output'); return L
+    L = sl(); check('%s a sealed secret entering the message sets Sealed; Form C kl.exec in Hash_Output -> Invalid, output zero' % fn,
+                    L.sealed and L.exec('C', kllen=64) == bytes(8) and inv(L))
+    check('%s ... kl.setst naming Hash_Output_Bits -> Invalid' % fn, inv(_do(sl(), 'bits', 'B', 8)))
+    L = sl(); K = Key(16); check('%s ... its output moves into a 16-byte key: the digest prefix' % fn, derive_out(L, K, 16) and K.key == ref(sec)[:16])
+    L = sl(); K = Key(16, True); check('%s ... into the key of keystream generation, OFB or CMAC: both Invalid' % fn, not derive_out(L, K, 16) and inv(L) and K.st == 'Invalid')
+    L = sl(); L2 = mk(); check('%s ... into a message input: both Invalid' % fn, not derive_out(L, L2, d) and inv(L) and inv(L2))
+    L = sl(); L.setst('ready'); ok = not L.sealed; L.setst('absorb'); run(L, [ab]); L.setst('output')
+    check('%s Ready clears Sealed: the next digest is readable' % fn, ok and out_all(L, d) == ref(ab))
+    L = mk(); f0 = L.fields(); check('%s a sealed secret of 15 bytes: the source fails, the message is unchanged (GR39 item 7)' % fn,
+                       not L.derive(sec[:15], sealed=True) and L.srcinv and L.st == 'Absorb' and L.fields() == f0 and not L.sealed)
+    L = mk(); check('%s ... one of 16 bytes enters' % fn, L.derive(sec[:16], sealed=True) and L.sealed)
+    # GR40: each sealed hop is a restricted transfer that narrows the next MDH
+    src = mdh_pack(UsagePolicy=0x5, ExpirationDate=7, SCProtection=1)
+    L = mk(); L.mdh = mdh_pack(UsagePolicy=0x7, SCProtection=1); L.derive(sec, sealed=True, smdh=src); L.setst('output')
+    K = Key(16, mdh=mdh_pack(UsagePolicy=0x6, SCProtection=2)); ok = derive_out(L, K, 16)
+    check('%s GR40 across two sealed hops: the key gets UsagePolicy 0x4 and the ExpirationDate of the secret' % fn,
+          ok and (mdh_get(K.mdh, 'UsagePolicy'), mdh_get(K.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(L.mdh, 'UsagePolicy') == 5)
+    L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR40: a hash of lower SCProtection than the secret -> Privilege Violation, nothing absorbed' % fn,
+                                                    not L.derive(sec, sealed=True, smdh=src) and L.st == 'PrivViolation' and not L.sealed)
+    L = sl(); L.mdh = mdh_pack(SCProtection=1); K = Key(16, mdh=mdh_pack(SCProtection=0))
+    check('%s GR40: a key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output' % fn,
+          not derive_out(L, K, 16) and K.st == 'PrivViolation' and L.st == 'Output' and L.outl == 8 * d)
+    L = mk(); L.mdh = mdh_pack(Locality=0x10); check('%s GR40: failed narrowing (boot subfields differ) -> Privilege Violation' % fn,
+                                                  not L.derive(sec, sealed=True, smdh=mdh_pack(Locality=0x20)) and L.st == 'PrivViolation')
+    # StateExtension @ State at an SCC import or kl.clone (KLE-Metadata-validity)
+    L = sl(); C = import_(L); check('%s import of a sealed Hash_Output keeps Sealed: Form C -> Invalid' % fn, C.sealed and C.exec('C', kllen=64) == bytes(8) and inv(C))
+    L = sl(); derive_out(L, Key(d), d); check('%s Sealed in Success, reached after the whole output, is supported' % fn, L.st == 'Success' and L.sealed and not inv(import_(L)))
+    L = mk(); L.derive(sec, sealed=True); ok = not inv(import_(L)); L.setst('last', 'B', 8); ok &= L.st == 'Last' and not inv(import_(L))
+    check('%s Sealed in Hash_Absorb and Hash_Absorb_Last_Block is supported' % fn, ok)
+    for st in ('Ready', 'Bits', 'Verify', 'Failure'):
+        L = sl(); L.st = st; check('%s Sealed in %s: unsupported StateExtension @ State, the import -> Invalid' % (fn, st), inv(import_(L)))
+
+def read_bits(L, r, kl=None, halts=False):
+    """kl.setst Hash_Output_Bits with Xs = r, then Form C kl.execs of kl bits (default: one that holds r) until read_len
+    is used up or the output ends, resuming after halts. -> (bits as int, number read, OUTPUT cleared beyond them)."""
+    kl = kl or 8 * ((r + 7) // 8); L.setst('bits', 'B', r); v = got = 0; clean = True
+    while L.st == 'Bits' and L.lbl:
+        rl = L.lbl; k = 0; buf = bytes(kl // 8)
+        while True:
+            o = L.exec('C', kllen=kl, klstart=k, halt=halts); buf = buf[:k] + o[k:]
+            if L.halted is None: break
+            k = L.halted
+        n = rl - L.lbl; x = b2v(buf); clean &= x >> n == 0; v |= (x & mask(n)) << got; got += n
+    return v, got, clean
+
+def bits_checks(fn, mk, ref):
+    """Hash_Output_Bits (State 16) of KLE-hash-functions-MACs-XOFs; mk() -> a locker in Hash_Output whose output is ref."""
+    section('%s: Hash_Output_Bits' % fn)
+    R = b2v(ref); D = 8 * len(ref)
+    for pieces, kl, halts in (((1, 3, 7, 8, 13), None, False), ((61, 5, 100), 16, True), ((3, 4000), 24, True), ((D,), 8, True)):
+        L = mk(); v = got = 0; clean = True; i = 0
+        while L.st == 'Output' or L.st == 'Bits':
+            x, n, c = read_bits(L, pieces[i % len(pieces)], kl, halts); v |= x << got; got += n; clean &= c; i += 1
+        check('%s reads of %s bits (KLLEN %s%s): the output LSB first, zero-filled, then Success' % (fn, pieces, kl or 'fitting', ', halt at every byte' if halts else ''),
+              (v, got, clean, L.st) == (R, D, True, 'Success'), (hex(v), got))
+    L = mk(); o = L.exec('C', kllen=40); x, n, _ = read_bits(L, 13)
+    check('%s Hash_Output (5 bytes) then Hash_Output_Bits: the stream continues, block_base and out_len kept' % fn, (o, x, L.st, L.bb, L.outl) == (ref[:5], (R >> 40) & mask(13), 'Bits', 53, D - 53))
+    x, n, _ = read_bits(L, 3); check('%s ... and continues across a new kl.setst' % fn, x == (R >> 53) & 7 and L.bb == 56)
+    L = mk(); L.setst('bits', 'B', 20); o = L.exec('C', kllen=8)
+    check('%s read_len > KLLEN: read_len carries to the next kl.exec' % fn, (o, L.st, L.lbl) == (ref[:1], 'Bits', 12))
+    L.setst('bits', 'B', 4); o = L.exec('C', kllen=8)
+    check('%s a new kl.setst drops the unread bits; the read of 4 bits is zero-filled' % fn, (o, L.lbl, L.bb) == (bytes([ref[1] & 15]), 0, 12))
+    check('%s Form C with read_len = 0 -> Invalid' % fn, L.exec('C', kllen=8) == bytes(1) and inv(L))
+    for Xs, form, why in ((0, 'B', 'Xs = 0'), (1 << 16, 'B', 'Xs = 2^16'), (0, 'A', 'Form A')):
+        L = mk(); L.setst('bits', form, Xs); check('%s kl.setst Hash_Output_Bits with %s -> Invalid' % (fn, why), inv(L))
+    L = mk(); L.setst('bits', 'B', 65535); check('%s Xs = 2^16 - 1 admitted' % fn, (L.st, L.lbl) == ('Bits', 65535))
+    def via(last, direct):
+        L = mk(); L.setst('ready'); L.setst('absorb'); run(L, [b'xyz'])
+        if last: L.setst('last')
+        if not direct: L.setst('output')
+        L.setst('bits', 'B', 13); return L, L.exec('C', kllen=16)
+    for last in (False, True):
+        (A, a), (B, b) = via(last, True), via(last, False)
+        check('%s kl.setst Hash_Output_Bits from %s = Form A Hash_Output then the same kl.setst' % (fn, 'Hash_Absorb_Last_Block' if last else 'Hash_Absorb'),
+              not inv(B) and (a, A.st, A.bb, A.outl) == (b, B.st, B.bb, B.outl) and A.bb == 13)
+    L = mk(); L.setst('bits', 'B', 8); L.exec('B', b'x'); check('%s Form B kl.exec in Hash_Output_Bits -> Invalid' % fn, inv(L))
+    L = mk(); L.setst('bits', 'B', 8); L.setst('output'); check('%s Hash_Output_Bits -> Hash_Output: not a transition, Invalid' % fn, inv(L))
+    L = mk(); L.setst('bits', 'B', 8); L.setst('ready'); check('%s Hash_Output_Bits -> Ready' % fn, L.st == 'Ready')
+    L = mk(); read_bits(L, 3); L.setst('bits', 'B', 40); o = L.exec('C', kllen=64, klstart=2)
+    check('%s klstart = 2 with block_base = 3 (any byte offset): the bits land at OUTPUT byte 2, the rest cleared' % fn,
+          (o, L.lbl, L.bb) == (bytes(2) + v2b((R >> 3) & mask(40), 5) + bytes(1), 0, 43))
+    L = mk(); read_bits(L, 3); L.setst('bits', 'B', 40); o = L.exec('C', kllen=64, halt=True)
+    check('%s halt inside the output block at byte offset 1 (block_base = 11), then resume' % fn, (L.halted, L.bb, L.lbl) == (1, 11, 32))
+    o = o[:1] + L.exec('C', kllen=64, klstart=1)[1:]; check('%s ... to the same 40 bits' % fn, b2v(o) == (R >> 3) & mask(40))
+    L = mk(); L.setst('bits', 'B', 100); L.exec('C', kllen=24); fl = {n: v for n, v, _ in L.fields()}
+    L2 = copy.deepcopy(L); o = L2.exec('C', kllen=80)
+    check('%s export mid-read: last_block_len holds read_len = 76; the import continues the read' % fn,
+          (fl['last_block_len'], fl['block_base'], b2v(o)) == (76, 24, (R >> 24) & mask(76)))
+    L = mk(); read_bits(L, 5); E = Locker('SHA-256', 'NIK'); E.setst('setkey'); n = (D - 5 + 7) // 8
+    if n <= 64: check('%s kl.derive from Hash_Output_Bits (block_base = 5) into K0: the rest of the output, source Success' % fn,
+                      derive_out(L, E, n) and E.K0 == R >> 5 and L.st == 'Success')
 
 def _do(L, imm, form='A', Xs=0): L.setst(imm, form, Xs); return L
 def _out(msg, mk): L = mk(); L.setst('absorb'); run(L, [msg]); L.setst('output'); return L
