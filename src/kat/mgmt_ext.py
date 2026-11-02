@@ -144,7 +144,7 @@ class KLE2(KLE):
         if nm is None or mdh_get(m, 'SCProtection') < ent.get('minprot', 0): s.err(k, SE_PRIV_VIOLATION); return
         l.mdh = nm; l.skid = skid; l.content = ent['key']
     def _sysfmt_complete(s, k):
-        """Toy GR71: S = tag(8) || payload; payload[:c1] is the key."""
+        """Toy GR51: S = tag(8) || payload; payload[:c1] is the key."""
         l = s.L[k]; im = bytes(s.img(k)); m = l.mdh; c1 = CONTENT[mdh_get(m, 'Machine')]
         pay = int.from_bytes(im[8:], 'little')
         if int.from_bytes(im[:8], 'little') != toy_tag(pay): s.err(k, SE_MGMT_AUTH); return
@@ -253,10 +253,10 @@ class KLE2(KLE):
             if store: mem.b[addr + j] = s.iobuf[j]
             else: s.iobuf[j] = mem.b[addr + j]
         s.start = 0
-    # ---- kl.exec with transfer window (GR12-16, GR24, GR25)
+    # ---- kl.exec with transfer window (GR10-16, GR13.5, GR18)
     def execw(s, kd=0, r=0, form='A', data=None, halt_after=None):
         res = s._execw(kd, r, form, data, halt_after)
-        if res in ('invalid', 'inert') or (isinstance(res, bytes) and False):   # GR19: zero the unwritten output window
+        if res in ('invalid', 'inert') or (isinstance(res, bytes) and False):   # GR14: zero the unwritten output window
             if form == 'D' and s.zklio and s.kliobuflen: s.iobuf[s.start:s.kliobuftop] = bytes(max(s.kliobuftop - s.start, 0))
             s.vout = bytes(len(data)) if data is not None else None
         return res
@@ -269,15 +269,15 @@ class KLE2(KLE):
         m = s.md(k)
         if s.config(m): raise Trap('privilege_violation')
         subst = form == 'D'
-        if subst and s.zklio and s.kliobuflen == 0: raise IllegalInstruction('GR24 item 1')
+        if subst and s.zklio and s.kliobuflen == 0: raise IllegalInstruction('GR13.5 item 1')
         if not s.usage_gate(k): return 'expired'
         if mdh_get(m, 'State') != 2 or not s.machine_admits(k, None) or form not in ('A', 'D') or (subst and not s.zklio):
             s.err(k, SE_INVALID); return 'invalid'
         win = bytearray(s.iobuf[:s.kliobuftop]) if subst else bytearray(data)
         n = len(win)
-        if s.start >= n: s.start = 0; return bytes(0) if subst else bytes(n)                                   # GR25.1
-        if n % 16: s.err(k, SE_INVALID); return 'invalid'   # GR16, GR25.2
-        if s.start % 16: s.err(k, SE_INVALID); return 'invalid'                                                  # GR25.3
+        if s.start >= n: s.start = 0; return bytes(0) if subst else bytes(n)                                   # GR18 item 1
+        if n % 16: s.err(k, SE_INVALID); return 'invalid'   # GR10.2, GR18 item 2
+        if s.start % 16: s.err(k, SE_INVALID); return 'invalid'                                                  # GR18 item 3
         key = v2b(s.L[k].content, 16); out = bytearray(win); blocks = 0; j = s.start
         while j < n:
             if halt_after is not None and blocks == halt_after:
@@ -295,7 +295,7 @@ class KLE2(KLE):
         if r != 'ok': return r
         l = s.L[kd]; ok = v2b(l.content, 16) == bytes(tag)
         l.mdh = mdh_put(l.mdh, 'State', 54 if ok else 55); return mdh_get(l.mdh, 'State')
-    # ---- long-running operation (GR54-58): M_SIG State 3
+    # ---- long-running operation (GR36-58): M_SIG State 3
     def lr(s, kd=0, budget=2):
         l0 = s.L[kd]
         r = s.usage(kd, 0, None)
@@ -319,7 +319,7 @@ class KLE2(KLE):
         d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
         if d != src and d != NONE and mdh_get(s.md(d), 'Machine') == M_SIG and mdh_get(s.md(d), 'State') in (2, 3):
             s.L[d].steps = 0; s.L[d].mdh = mdh_put(s.md(d), 'MachineUse', 0)
-    # ---- kl.derive (GR39-GR45)
+    # ---- kl.derive (GR27-GR31.2)
     def derive(s, d, src, length):
         s.common()
         d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
@@ -327,7 +327,7 @@ class KLE2(KLE):
         if d == NONE or src == NONE: return 'inert'
         ms, md_ = s.md(src), s.md(d)
         if mdh_get(ms, 'State') == 0 or mdh_get(md_, 'State') == 0: return 'inert'
-        for k in (src, d):                                    # GR39: State class, source first
+        for k in (src, d):                                    # GR27: State class, source first
             if s.config(s.md(k)): raise Trap('privilege_violation')
         for k in (src, d):
             if not (mdh_get(s.md(k), 'UsagePolicy') >> s.mode & 1): raise Trap('privilege_violation')
@@ -337,7 +337,7 @@ class KLE2(KLE):
                 if min(max(s.clock, 0), mask(20)) >= mdh_get(s.md(k), 'ExpirationDate'): s.err(k, SE_EXPIRED); return 'expired'
         sm, dm = mdh_get(ms, 'Machine'), mdh_get(md_, 'Machine')
         sst, dst = mdh_get(ms, 'State'), mdh_get(md_, 'State')
-        if s.start != 0: s.err(d, SE_INVALID); return 'invalid'   # GR41 1: klstart = 0
+        if s.start != 0: s.err(d, SE_INVALID); return 'invalid'   # GR29 1: klstart = 0
         # 2: source endpoint
         if not (sst == 2 and sm in (M_KEM, M_ENC)) or mdh_get(ms, 'KeyType') == 1 and False:
             s.err(src, SE_INVALID); return 'invalid'
@@ -345,9 +345,9 @@ class KLE2(KLE):
         keyf = dst == 1 and dm in (M_ENC, M_KEY, M_KEY32) and mdh_get(md_, 'KeyType') != 1
         hin = dst == 2 and dm == M_HASH
         if not (keyf or hin): s.err(d, SE_INVALID); return 'invalid'
-        # 4: admitted pair (GR44 secret -> key field or hash input, restricted; GR45 cipher output -> key field, unrestricted)
-        sealed = sm == M_KEM and mdh_get(ms, 'MachineExtension') == 1      # toy sealed variant (GR46)
-        if sm == M_ENC and not keyf or sealed and dm == M_ENC:            # GR46: M_ENC's output is a source, as keystream's
+        # 4: admitted pair (GR31.1 secret -> key field or hash input, restricted; GR31.2 cipher output -> key field, unrestricted)
+        sealed = sm == M_KEM and mdh_get(ms, 'MachineExtension') == 1      # toy sealed variant (GR31.3)
+        if sm == M_ENC and not keyf or sealed and dm == M_ENC:            # GR31.3: M_ENC's output is a source, as keystream's
             s.err(d, SE_INVALID); s.err(src, SE_INVALID); return 'invalid'
         restricted = sm == M_KEM
         dl = CONTENT[dm] if keyf else None
@@ -359,7 +359,7 @@ class KLE2(KLE):
         if hin and sm == M_KEM and length != CONTENT[M_KEM]: s.err(d, SE_INVALID); return 'invalid'
         # 7: source supplies the bytes: both toy sources supply any length; a sealed one moves >= 16 bytes
         if sealed and eff < 16: s.err(src, SE_INVALID); return 'invalid'
-        if restricted and eff:                                # GR42
+        if restricted and eff:                                # GR30
             if mdh_get(md_, 'SCProtection') < mdh_get(ms, 'SCProtection'): s.err(d, SE_PRIV_VIOLATION); return 'pv'
             nm = narrow(md_, ms)
             if nm is None: s.err(d, SE_PRIV_VIOLATION); return 'pv'
@@ -371,7 +371,7 @@ class KLE2(KLE):
         else: s.L[d].content = int.from_bytes(val, 'little')
         if sealed and hin: md_ = mdh_put(md_, 'StateExtension', mdh_get(md_, 'StateExtension') | 2)   # Sealed
         s.L[d].mdh = md_
-        if sm == M_KEM and eff:                               # GR40: a field is the source of one kl.derive; sharedkey_Output -> Ready
+        if sm == M_KEM and eff:                               # GR28: a field is the source of one kl.derive; sharedkey_Output -> Ready
             s.L[src].mdh = mdh_put(s.md(src), 'State', 1); s.L[src].content = 0
         return 'ok'
     # ---- reset (<<KLE-out-of-reset-unpriv>>)
@@ -411,6 +411,6 @@ def decode(w, xlen=64):
     raise NotImplementedError('funct2 %d' % f2)
 
 def vec_mdh_ok(instr, vl, sew, vstart):
-    """GR6, GR7 for the vector MDH operand."""
-    if vl * sew < 128: raise IllegalInstruction('GR6')
-    if vstart != 0 and instr in ('getmdv', 'rstrv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C'): raise IllegalInstruction('GR7')
+    """GR5, GR6 for the vector MDH operand."""
+    if vl * sew < 128: raise IllegalInstruction('GR5')
+    if vstart != 0 and instr in ('getmdv', 'rstrv', 'size_C', 'avail_C', 'setst_C', 'mgmt_C'): raise IllegalInstruction('GR6')

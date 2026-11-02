@@ -1,5 +1,5 @@
 """Model of an ML-DSA Machine locker, transcribed from Zkl-ISA-machines.adoc (KLE-PQC-ML-DSA, MR1-MR19)
-and Zkl-ISA-unpriv.adoc (GR19, GR20, GR24, GR26-GR30, GR55-GR57, GR65).
+and Zkl-ISA-unpriv.adoc (GR14, GR15, GR13.5, GR19.2-GR20, GR37-GR38, GR45).
 
 Locker(ps, policy=3, aux=0, rbg=None, lim=None)
   State numbers: S_READY ... ; fields: st (0 = Inert), se (StateExtension: flags bits0-3, or the Error code when st == 0),
@@ -103,22 +103,22 @@ class Locker:
         if self.inert: return
         if imm == 0:
             self._zero_all(); self.st = self.se = self.mu_use = 0; self.ads = None; return
-        if imm not in DEFINED or imm in (S_SUCCESS, S_FAILURE):      # undefined, 54, 55 (GR28, GR29)
+        if imm not in DEFINED or imm in (S_SUCCESS, S_FAILURE):      # undefined, 54, 55 (GR19.4, GR19.5)
             return self.invalid()
-        if self.st in (S_SUCCESS, S_FAILURE) and imm != S_READY:    # GR27
+        if self.st in (S_SUCCESS, S_FAILURE) and imm != S_READY:    # GR19.3
             return self.invalid()
         if (imm == S_SGEN and form not in ('A', 'B')) or (imm != S_SGEN and form != 'A'):
-            return self.invalid()                                    # wrong Form (GR14, GR24)
+            return self.invalid()                                    # wrong Form (GR19.1, GR13.5)
         if (imm in (S_SGEN, S_SOUT) and not self.policy & 1) or (imm in (S_SVER, S_SIN) and not self.policy & 2):
             return self.invalid()                                    # MR1
         if imm == S_SOUT: return self.invalid()                      # entered only on completion
         if imm == self.st and imm != S_READY and imm not in LOADING:
-            return self.invalid()                                    # GR26
+            return self.invalid()                                    # GR19.2
         # leaving the current State
         if self.st in LOADING and self.mu_use < self.size[LOADING[self.st]]:
             self._zero(LOADING[self.st])                             # MR14.5
             if self.st == S_MUIN: self._setflag(HAS_MU, False)
-        if self.st == S_SGEN and self.mu_use:                        # GR56.3
+        if self.st == S_SGEN and self.mu_use:                        # GR38 item 2
             self.mu_use, self.rnd, self.ads = 0, bytes(32), None
         # entering imm
         if imm == S_READY: return self._enter_ready()
@@ -148,7 +148,7 @@ class Locker:
         halt: for Sign_Generate, the number of iterations after which the operation is interrupted (None: never)."""
         if self.inert: return None
         st = self.st
-        if st in (S_READY, S_SUCCESS, S_FAILURE): return self.invalid()                         # GR26, GR27
+        if st in (S_READY, S_SUCCESS, S_FAILURE): return self.invalid()                         # GR19.2, GR19.3
         if (st in (S_SGEN, S_SOUT) and not self.policy & 1) or (st in (S_SVER, S_SIN) and not self.policy & 2):
             return self.invalid()                                                            # MR1
         if st in LOADING:
@@ -201,7 +201,7 @@ class Locker:
             return self._to(S_FAILURE)
 
     def _sign(self, halt):
-        if self.mu_use and self.ads is None:                          # restart (GR56.1, GR57)
+        if self.mu_use and self.ads is None:                          # restart (GR38 item 1, GR38)
             self.mu_use, self.rnd = 0, bytes(32)
         if not self.mu_use:
             if self.flag(HEDGED):
@@ -243,5 +243,5 @@ class Locker:
         lk.ads = dict(s['ads']) if (content2 and s['ads']) else None
         if lk.flag(HAS_PRIV) and not M.sk_ok(ps, lk.privkey): lk.invalid()               # MR3
         elif lk.st == S_SGEN and lk.mu_use and lk.ads is None:
-            lk.mu_use, lk.rnd = 0, bytes(32)                                              # GR57
+            lk.mu_use, lk.rnd = 0, bytes(32)                                              # GR38
         return lk

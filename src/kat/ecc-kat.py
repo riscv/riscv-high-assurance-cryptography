@@ -125,7 +125,7 @@ for nm in ('secp256r1', 'brainpoolP256r1', 'sm2'):
     check(nm + ': Output 24+24+16 bytes of 64-byte field -> Success', (lambda L: (L.exec_out(24) + L.exec_out(24) + L.exec_out(16) if W == 32 else 0) and L.state == 54)(pt_mul(nm, 5)[0]) if W == 32 else True)
     L, r = pt_mul(nm, 5); L.exec_out(60); check(nm + ': excess emit -> Invalid', L.exec_out(8) == 'invalid')
 L = EccLocker('secp256r1', rbg=lambda n: (_ for _ in ()).throw(RbgFailure()))
-check('GR65: RBG failure on random Scalar -> Invalid', L.setst(SSCAL, 'B', 1) == 'invalid' and L.invalid)
+check('GR45: RBG failure on random Scalar -> Invalid', L.setst(SSCAL, 'B', 1) == 'invalid' and L.invalid)
 L = EccLocker('secp256r1', rbg=lambda n: (_ for _ in ()).throw(RbgUnavailable()))
 check('RBG unavailable raises, locker unchanged', raises(L.setst, SSCAL, 'B', 1, exc=RbgUnavailable) and not L.invalid)
 L = EccLocker('secp256r1', rbg=rbg_k(7)); L.setst(SSCAL, 'B', 1)
@@ -184,7 +184,7 @@ check('SM2 verify with wrong e -> Failure', verify(EccLocker('sm2'), xy(Q, 32), 
 check('SM2 verify t = (r+s) mod n = 0 -> Failure', verify(EccLocker('sm2'), xy(Q, 32), le(sm2r, 32) + le(C.n - sm2r, 32), le(e, 32)) == 'failure')
 
 # ------------------------------------------------------------------ 6
-section('Progress, halting, resume (GR56), clone (GR57), clearads')
+section('Progress, halting, resume (GR38), clone (GR38), clearads')
 def sign_setup(nm='secp256r1', k=5):
     L = EccLocker(nm, rbg=rbg_k(k)); load(L, SSCAL, le(0x1234, L.W)); load(L, SHASH, le(0x777, L.W)); L.setst(SGN); return L
 ref = M.ecdsa_sign(M.Wei('secp256r1'), 0x1234, 0x777, 5)
@@ -194,7 +194,7 @@ check('MachineUse: Progress in [13:2], OutputType in [1:0]', mdh_get(L.mdh, 'Mac
 L.rbg = rbg_k(9); r = L.exec_D()
 check('resume uses held RndNum (not a fresh k)', r == 'output' and (b2v(drain(L)[:32]), ) == (ref[0],))
 L = sign_setup(); L.exec_D(halt=True)
-check('same-State setst into Sign_Generate is not admitted (GR26) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
+check('same-State setst into Sign_Generate is not admitted (GR19.2) -> Invalid', L.setst(SGN) == 'invalid' and L.invalid)
 L = sign_setup(); L.exec_D(halt=True)
 check('from halted Sign_Generate, a Set State is not admitted (only Ready/clearads) -> Invalid', L.setst(SHASH) == 'invalid')
 L = sign_setup(); L.exec_D(halt=True); L.clearads()
@@ -287,8 +287,8 @@ Ls, _ = pt_mul('sm2', 5, xy(Q, 32)); P = C.mul(5, Q)
 check('SM2 shared secret = x2||y2, each 32 bytes big-endian (64 bytes)', Ls.shared_secret() == P[0].to_bytes(32, 'big') + P[1].to_bytes(32, 'big'))
 check('derive_source outside Output -> None', EccLocker('secp256r1').derive_source() is None)
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Z5 = Lz.shared_secret()
-check('kl.derive of the shared secret: one transfer, Output -> Success (GR40)', Lz.derive() == Z5 and Lz.state == 54)
-check('a second kl.derive in Success -> Invalid (GR41 item 2)', Lz.derive() == 'invalid' and Lz.invalid)
+check('kl.derive of the shared secret: one transfer, Output -> Success (GR28)', Lz.derive() == Z5 and Lz.state == 54)
+check('a second kl.derive in Success -> Invalid (GR29 item 2)', Lz.derive() == 'invalid' and Lz.invalid)
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.derive()
 check('Form C after the kl.derive (Success) -> Invalid', Lz.exec_out(1) == 'invalid')
 Lz, _ = pt_mul('secp256r1', 5, xy(Cc.G, 32)); Lz.exec_out(1)
@@ -326,7 +326,7 @@ for nm in ('ed25519', 'x25519'):
     L = EccLocker(nm, policy=3 if nm == 'ed25519' else 0, ext=1); load(L, SSCAL, le(9, L.W)); L.setst(PMUL)
     check('%s Point_Mul on the default Generator admitted' % nm, L.exec_D() == 'output')
 
-section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR46)')
+section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR31.3)')
 for nm, d, Qb, Z in V.ECDH[:1]:
     W = EccLocker(nm).W
     L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); r = L.exec_D()
