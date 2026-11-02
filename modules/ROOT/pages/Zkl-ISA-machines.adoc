@@ -1251,9 +1251,9 @@ Each one applies the Machine Rules that it cites; a Machine that invokes it does
 
 Invoked by the `kl.setst` that enters a State, or that performs an operation (Rule <<KLE-operation-immediates>>), and takes a value of `w` bits as `INPUT`:
 
-. Its native Form is C; where `w` {le} 128, Forms A and D are admitted too (Rule <<KLE-MGR-form-D-where-C>>), and Form B where the invocation passes `B` as a third parameter.
+. Its native Form is C. Where `w` {le} 128, Forms A and D are admitted too (Rule <<KLE-MGR-form-D-where-C>>); where the invocation passes `B` as a third parameter, Form B is admitted, whatever `w`.
 . `field` {leftarrow} `INPUT[w-1:0]`; the other bits of `INPUT` are ignored (Rule <<KLE-MGR-fixed-width-input>>).
-. A same-State `kl.setst` that the Machine allows (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) does the same: it replaces `field` and performs the steps that the Machine adds, and changes nothing else.
+. Where the macro is invoked on entering a State, a same-State `kl.setst` into that State that the Machine allows (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>) does the same: it replaces `field` and performs the steps that the Machine adds, and changes nothing else.
 
 [[KLE-op-load-long-field]]
 ==== `LOAD_LONG_FIELD(len, block, state, n, process_block(), finalize(), mode, g)`
@@ -1524,8 +1524,8 @@ For an empty final block, a Form C `kl.setst` from _Encrypt_ into _Enc_Tag_Final
 
 ** In State _Decrypt_, (multi-block) Form A `kl.exec` instructions decrypt `INPUT` into `OUTPUT`
    and absorb the ciphertext `INPUT` into `tag`:
-  . `OUTPUT <- INPUT xor next_ks()`.
   . `absorb(INPUT)`.
+  . `OUTPUT <- INPUT xor next_ks()`.
 
 ** When entering State _Dec_Last_Block_, a Form B `kl.setst` with immediate `kl_state_dec_last_block` performs `FINAL_BLOCK_ENTRY(8, 120, 8)` (<<KLE-op-final-block-entry>>): `last_block_len <- Xs`, a multiple of 8 from 8 to 120; an empty final block takes the bypass above.
 
@@ -2103,7 +2103,7 @@ These States are the exception to item 2 of Rule <<KLE-MGR-single-last-block>>: 
 +
 --
 . `last_offset()`.
-. `OUTPUT <- trunc(INPUT[127:0] xor enc_blk(key, offset), last_block_len)`. // enc_blk(key, offset) is Pad in RFC{nbsp}7253
+. `OUTPUT <- trunc(INPUT, last_block_len) xor trunc(enc_blk(key, offset), last_block_len)`. // enc_blk(key, offset) is Pad in RFC{nbsp}7253
 . `ocb_tag(offset xor pad10(P, last_block_len))`.
 
 If `last_block_len` is zero, a single Form D `kl.exec` is expected instead, which performs `ocb_tag(offset)`.
@@ -2330,7 +2330,7 @@ A `kl.exec` with `absorbed_all` = `true` transitions the locker to Error State _
 
 ** A `kl.setst` with immediate `kl_state_hash_output` enters State _Hash_Output_; with `absorbed_all` = `false`, it transitions the locker to Error State _Invalid_ instead.
 
-** In State _Hash_Output_, a single Form C `kl.exec` outputs the CMAC:
+** In State _Hash_Output_, a single Form C `kl.exec`, which processes a single block (Rule <<KLE-MGR-one-klexec-per-block>>), outputs the CMAC:
 +
 --
 . `OUTPUT <- trunc(hash, tag_len_p)`, the first `tag_len_p`/8 bytes of `hash` and the truncated tag of cite:[nist-SP-800-38B] {sect}6.2 when `tag_len_p` < `b`; a `KLLEN` smaller than `tag_len_p` violates the granularity of the State, and a larger one receives the MAC with the bits beyond `tag_len_p` cleared (Rule <<KLE-MGR-tag-verify>>).
@@ -3372,7 +3372,7 @@ No ``kl.exec`` is then needed in this State (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-t
  . `ASCON(8)`
 --
 ** When entering State _Enc_Last_Block_, resp. _Dec_Last_Block_, the Form B `kl.setst` with immediate `kl_state_enc_last_block`, resp. `kl_state_dec_last_block`, and auxiliary operand `Xs` invokes
-   `FINAL_BLOCK_ENTRY(0, 127, 1)` (<<KLE-op-final-block-entry>>): it admits any bit length `Xs` of the final block from 0 to 127 and sets `last_block_len <- Xs`.
+   `FINAL_BLOCK_ENTRY(0, 127, 1)` (<<KLE-op-final-block-entry>>): it admits any bit length `Xs` of the final block from 0 to 127 and sets `last_block_len <- Xs`, which, unlike item 4 of the macro, the `kl.exec` leaves unchanged.
    `Xs` need not be a multiple of 8 (Rule <<KLE-MGR-last-blk-len>>): cite:[nist-SP-800-232] orders the bits within
    a byte as <<Zkl-notation.adoc#KLE-Notation>> does, so `pad` places the terminating `1` at bit position `Xs` for any `Xs`.
    If `Xs` = 0, the `kl.setst` pads the empty final block, `state[0] <- state[0] xor bin(1,64)` (this is `pad(∅,128)` =
@@ -4442,7 +4442,7 @@ State Machine::
     _Invalid_.
   . If `ctxlen` {ne} 0, Form B `kl.exec` instructions then load the `ctxlen` bytes of `ctx`, whose other bytes stay zero, following Rule <<KLE-MGR-load-long-field>> as the
     _Set_ states of <<KLE-ECC>> do, with the progress recorded in `block_base`; a load left incomplete zeroes `ctx` and
-    `ctxlen`.
+    `ctxlen` (Rule <<KLE-MGR-load-long-field>>).
 
 ** Entering _Msg_Absorb_ (pure mode only) is done by a Form B `kl.setst` whose `Xs` selects the pass:
 +
