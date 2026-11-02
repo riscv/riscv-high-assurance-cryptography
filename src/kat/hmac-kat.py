@@ -83,7 +83,7 @@ for fn in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
         wo = wo if isinstance(wo, bytes) else v2b(wo, Locker(fn).f.t // 8)
         check('%s %d bytes then %d-bit piece (block_base %% b = %d)' % (fn, N, M, (8 * N) % b), got == wo, got, wo)
 for fn in FNS:
-    L = mkkip(fn, b'key'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR24)' % fn, inv(L))
+    L = mkkip(fn, b'key'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR13.5)' % fn, inv(L))
 section('Set_Key (NIK), HasKey, kl.derive')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)
@@ -180,9 +180,9 @@ check('_Machine_ encodings (KIP Type/Mode, NIK Type/Mode): HMAC-SHA-256 5/7 and 
 for fn in ('SHA-256', 'SHA3-512', 'SM3'):
     L = mkkip(fn, b'key'); L.clear(); S0 = (L.S, L.K0)
     L.setst('success'); L.setst('absorb'); L.exec('B', b'x'); L.setst('failure'); L.setst('ready')
-    check('%s kl.clear: Unconfigured, later kl.setst/kl.exec change nothing (GR37)' % fn, L.st == 'Inert' and (L.S, L.K0) == S0 and L.exec('C', kllen=64) == bytes(8))
-    L = mkkip(fn, b'key'); L.setst('absorb'); L.setst('success'); check('%s kl.setst naming Success -> Invalid (GR29)' % fn, inv(L))
-section('kl.rstrl (GR30, MR1) and the gates of Output and Verify')
+    check('%s kl.clear: Unconfigured, later kl.setst/kl.exec change nothing (GR13.2)' % fn, L.st == 'Inert' and (L.S, L.K0) == S0 and L.exec('C', kllen=64) == bytes(8))
+    L = mkkip(fn, b'key'); L.setst('absorb'); L.setst('success'); check('%s kl.setst naming Success -> Invalid (GR19.5)' % fn, inv(L))
+section('kl.rstrl (GR20, MR1) and the gates of Output and Verify')
 for fn in ('SHA-256', 'SHA3-256'):
     k = b'key'; m = b'abc'
     L = mkkip(fn, k, 3); L.setst('absorb'); run(L, [m]); L.setst('output'); L.rstrl(2)
@@ -198,31 +198,31 @@ for fn in ('SHA-256', 'SHA3-256', 'SM3'):
     check('HMAC-%s rstrl clearing bit 0 in Hash_Output_Bits (a Gated State, MR1): the kl.exec -> Invalid, OUTPUT zeroed' % fn, inv(L) and o == bytes(1))
     L = mkkip(fn, b'key', 2); L.setst('absorb'); run(L, [b'abc']); L.setst('bits', 'B', 8)
     check('HMAC-%s MachinePolicy = 2: kl.setst Hash_Output_Bits from Hash_Absorb -> Invalid (MR1)' % fn, inv(L))
-section('kl.derive source and pair rules (GR41, GR44)')
+section('kl.derive source and pair rules (GR29, GR31.1)')
 IKM, SALT, INFO = b'\x0b' * 22, bytes(range(13)), bytes(range(0xf0, 0xfa))     # RFC 5869 A.1
 OKM = bytes.fromhex('3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865')
 X = mkkip('SHA-256', SALT); X.setst('absorb'); run(X, [IKM]); X.setst('output'); E = Locker('SHA-256', 'NIK'); E.setst('setkey')
 ok = derive_out(X, E, 32); t1 = tag(E, INFO + b'\x01'); E.setst('ready'); t2 = tag(E, t1 + INFO + b'\x02')
-check('RFC 5869 A.1: Extract output -> Expand K0 by kl.derive, then T(1) | T(2) = OKM (GR45)', ok and X.st == 'Success' and (t1 + t2)[:42] == OKM)
+check('RFC 5869 A.1: Extract output -> Expand K0 by kl.derive, then T(1) | T(2) = OKM (GR31.2)', ok and X.st == 'Success' and (t1 + t2)[:42] == OKM)
 X = mkkip('SHA-256', SALT); X.setst('absorb'); X.setst('output', 'B', 128); E = Locker('SHA-512', 'NIK'); E.setst('setkey')
 check('HMAC output with out_len 128 -> K0 with length 16: admitted, exhausts the source', derive_out(X, E, 16) and E.haskey and X.st == 'Success')
 for sfn in ('SM3', 'SHA3-256', 'SHA-512/256'):
     X = Locker(sfn); X.setst('absorb'); run(X, [b'abc']); X.setst('output'); E = Locker('SHA-256', 'NIK'); E.setst('setkey')
-    check('%s digest -> HMAC-SHA-256 K0 (GR45): K0 = digest, source Success' % sfn, derive_out(X, E, 32) and E.K0 == b2v(Hf(sfn)(b'abc')) and X.st == 'Success')
+    check('%s digest -> HMAC-SHA-256 K0 (GR31.2): K0 = digest, source Success' % sfn, derive_out(X, E, 32) and E.K0 == b2v(Hf(sfn)(b'abc')) and X.st == 'Success')
 X = Locker('SHA-256'); X.setst('absorb'); X.setst('output'); E = Locker('SHA-256', 'NIK'); E.setst('setkey')
 check('SHA-256 digest (32 B) -> K0 with length 16: not exactly the source length, destination Invalid, source unchanged', not derive_out(X, E, 16) and inv(E) and X.st == 'Output')
 X = Locker('SHA-256'); X.setst('absorb'); X.setst('output'); E = mknik('SHA-256', msg_of(40)); E.setst('absorb')
-check('hash output -> a message input: pair not admitted, both Invalid (GR41 item 4)', not derive_out(X, E, 32) and inv(X) and inv(E))
+check('hash output -> a message input: pair not admitted, both Invalid (GR29 item 4)', not derive_out(X, E, 32) and inv(X) and inv(E))
 X = Locker('SHA-256'); X.setst('absorb'); E = Locker('SHA-256', 'NIK'); E.setst('setkey')
-check('hash in Hash_Absorb is not a source: source Invalid, destination unchanged (GR41 item 2)', not derive_out(X, E, 32) and inv(X) and E.st == 'SetKey' and not E.haskey)
+check('hash in Hash_Absorb is not a source: source Invalid, destination unchanged (GR29 item 2)', not derive_out(X, E, 32) and inv(X) and E.st == 'SetKey' and not E.haskey)
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     b = bsz(fn); k = msg_of(40)
     L = mknik(fn, k); L.setst('absorb'); ok = L.derive(msg_of(32), src='hmac_tag')
-    check('%s an HMAC tag into Hash_Absorb: pair not admitted (GR41 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
+    check('%s an HMAC tag into Hash_Absorb: pair not admitted (GR29 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
     L = mknik(fn, k); L.setst('absorb'); ok = L.derive(msg_of(16), src='cmac')
-    check('%s CMAC -> HMAC Hash_Absorb: pair not admitted (GR41 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
+    check('%s CMAC -> HMAC Hash_Absorb: pair not admitted (GR29 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(msg_of(32), src='hmac_tag')
-    check('%s HMAC tag (32 B) -> K0 with length 32 (GR45): K0 zero-filled, HasKey' % fn, ok and L.haskey and L.K0 == b2v(msg_of(32)))
+    check('%s HMAC tag (32 B) -> K0 with length 32 (GR31.2): K0 zero-filled, HasKey' % fn, ok and L.haskey and L.K0 == b2v(msg_of(32)))
     L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(msg_of(32), src='xof', stream=True)
     check('%s XOF output without bound -> K0: no length of its own, destination Invalid, source unchanged' % fn, not ok and not L.srcinv and inv(L))
     for sz, nm in ((16, 'CMAC-AES'), (8, 'CMAC-TDEA')):
@@ -230,14 +230,14 @@ for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
         check('%s %s (%d B) -> K0 with length = source length: K0 zero-filled, HasKey' % (fn, nm, sz), ok and L.haskey and L.K0 == b2v(msg_of(sz)))
     for st_ in ('Ready',):
         for v in ('NIK', 'KIP'):
-            L = Locker(fn, 'NIK') if v == 'NIK' else mkkip(fn, k); check('%s %s: K0 is not a destination in Ready (GR41 item 3) -> Invalid' % (fn, v), not L.derive(msg_of(16)) and inv(L))
+            L = Locker(fn, 'NIK') if v == 'NIK' else mkkip(fn, k); check('%s %s: K0 is not a destination in Ready (GR29 item 3) -> Invalid' % (fn, v), not L.derive(msg_of(16)) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte field, length %d < field -> K0 dest Invalid (source must be exactly eff_length)' % (fn, b, b // 2), not L.derive(msg_of(b), length=b // 2) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte secret, length %d > secret -> K0 dest Invalid' % (fn, b // 2, b), not L.derive(msg_of(b // 2), length=b) and inv(L))
     for ln in (0, 29, 31, 2**60):
-        L = mknik(fn, k); L.setst('absorb'); check('%s shared secret (30 B) into Hash_Absorb with length %d != 30 -> dest Invalid (GR41 item 6)' % (fn, ln), not L.derive(msg_of(30), length=ln) and inv(L))
+        L = mknik(fn, k); L.setst('absorb'); check('%s shared secret (30 B) into Hash_Absorb with length %d != 30 -> dest Invalid (GR29 item 6)' % (fn, ln), not L.derive(msg_of(30), length=ln) and inv(L))
     L = mknik(fn, k); L.setst('absorb'); L.exec('B', b'prefix'); L.derive(msg_of(30)); L.exec('B', b'suffix'); L.setst('output')
     check('%s shared secret (30 B) between "prefix" and "suffix" in Hash_Absorb' % fn, out_all(L, L.f.t // 8) == ref(fn, k, b'prefix' + msg_of(30) + b'suffix'))
-section('Sealed HMAC (GR46): KeySealed, and sealed X25519 -> HKDF-SHA-256 -> a 16-byte key')
+section('Sealed HMAC (GR31.3): KeySealed, and sealed X25519 -> HKDF-SHA-256 -> a 16-byte key')
 from ecc_machine import EccLocker, SSCAL, S2ND, PMUL
 fn = 'SHA-256'; k = msg_of(20)
 def sealed_out(xs=0):
@@ -255,7 +255,7 @@ F = ksl(); F.setst('absorb'); F.setst('ready'); F.setst('setkey'); ok = not (F.k
 check('%s entering Set_Key clears KeySealed: a key that software loads gives a readable tag' % fn, ok and tag(F, b'abc') == ref(fn, k, b'abc'))
 for n in (15, 16):
     S = sealed_out(8 * n); F = Locker(fn, 'NIK'); F.setst('setkey'); ok = derive_out(S, F, n)
-    check('%s a sealed transfer of %d bytes into K0: %s' % (fn, n, 'the source Invalid, K0 not loaded (GR41 item 7)' if n < 16 else 'admitted'),
+    check('%s a sealed transfer of %d bytes into K0: %s' % (fn, n, 'the source Invalid, K0 not loaded (GR29 item 7)' if n < 16 else 'admitted'),
           (not ok and inv(S) and F.st == 'SetKey' and not F.haskey) if n < 16 else (ok and F.ksealed))
 # KeySealed @ State at an SCC import or kl.clone (KLE-Metadata-validity)
 F = ksl(); ok = not inv(import_(F)); F.setst('absorb'); ok &= not inv(import_(F)); F.setst('ready'); ok &= not inv(import_(F))
