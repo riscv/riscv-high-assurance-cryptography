@@ -354,7 +354,7 @@ def narrow(dmd, smd):
     e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
     return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
 def gr40(dmd, smd):
-    """Rule GR42 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
+    """Rule GR30 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
     SCProtection or a failed narrowing."""
     return None if mdh_get(dmd, 'SCProtection') < mdh_get(smd, 'SCProtection') else narrow(dmd, smd)
 

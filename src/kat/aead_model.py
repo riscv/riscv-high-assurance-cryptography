@@ -12,7 +12,7 @@ Interface (all Machines):
   m.derive_dest(keybytes)  kl.derive into the key field; m.rstr(mask) narrows MachinePolicy.
   policy= defaults to 3, and to 2 for GCM_IV and OCB_NONCE, which admit no other value (MR1).
   tag_len_p= (GCM, GCM_IV, CMAC) defaults to the full tag length (MR12); a value not admitted gives INV.
-Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR20).
+Any rule violation sets m.st = INV; every later instruction keeps it there (content cleared, GR15).
 """
 from common import *
 
@@ -72,9 +72,9 @@ class Base:
             cur = self.st
             if st == READY:
                 need(form == 'A'); self.st = READY; self._ready(); return
-            need(cur not in (SUCCESS, FAILURE))                      # GR27
-            need(st in self.TRANS.get(cur, ()) or st == cur and cur in self.SAMEOK)   # GR24/22/24
-            need(self._formok(self.SETF.get(st), form, xs, inp))     # GR14
+            need(cur not in (SUCCESS, FAILURE))                      # GR19.3
+            need(st in self.TRANS.get(cur, ()) or st == cur and cur in self.SAMEOK)   # GR13.5/22/24
+            need(self._formok(self.SETF.get(st), form, xs, inp))     # GR19.1
             if st in self.GATE: need(self.policy >> self.GATE[st] & 1)
             if st != cur: self._leave(cur, st)
             self.st = st
@@ -90,7 +90,7 @@ class Base:
             if self.zklio and form == 'D': form = self._expform(self.st)   # KLIOBUF substitution of the native Form
             if self.st in self.GATE: need(self.policy >> self.GATE[self.st] & 1)   # MR1 at issue
             need(form == self._expform(self.st))
-            if kllen is not None and klstart * 8 >= kllen and not self._noexec(self.st): return 0   # GR25 item 1: empty window
+            if kllen is not None and klstart * 8 >= kllen and not self._noexec(self.st): return 0   # GR18 item 1: empty window
             out = self._exec(self.st, inp, kllen, klstart, halt_at)
             return out & mask(kllen) if kllen is not None else out
         except Inv:
@@ -104,7 +104,7 @@ class Base:
     def _multi(self, inp, kllen, klstart, halt_at, fn):
         b = self.B
         need(kllen is not None and kllen % b == 0)      # MR6 granularity
-        need(klstart * 8 % b == 0)                                    # GR25 item 3
+        need(klstart * 8 % b == 0)                                    # GR18 item 3
         out = 0; self.out_partial = 0
         for i in range(klstart * 8 // b, kllen // b):
             if halt_at is not None and i * b == 8 * halt_at and i * b > 8 * klstart:

@@ -7,7 +7,7 @@ OpenSSL 3.5.9 ML-KEM (key generation from d||z, encapsulation, decapsulation inc
 outputs were compared byte for byte with the model for 2 seeds per parameter set; the VEC table below stores
 the seeds, the message m recovered from the OpenSSL ciphertext, SHA-256 digests of ek, dk, ct, and the keys K.
 The Machine itself is an abstract executable reading of the State Machine text (setst / load / emit / exec /
-derive); the ISA layer (SEW, KLIOBUF, ADS, export/import, GR56 halting and resumption) is NOT modelled.
+derive); the ISA layer (SEW, KLIOBUF, ADS, export/import, GR38 halting and resumption) is NOT modelled.
 Every group of checks is also run against a Machine with one deliberate fault: it must then fail (controls).
 """
 import sys, hashlib
@@ -45,9 +45,9 @@ class Mach:
     def _clear(s): s.dk[:] = bytes(s.sz[1]); s.ct[:] = bytes(s.sz[2]); s.ss[:] = bytes(32); s.he = s.hd = s.hc = s.hs = 0
     def _invalid(s):
         s.st, s.err = 0, SE_INVALID
-        if 'noclear' not in s.f: s._clear()                # GR20: Content cleared on transition to an Error State
+        if 'noclear' not in s.f: s._clear()                # GR15: Content cleared on transition to an Error State
     def setste(s, e):
-        """kl.setste: any State, Error State e (GR38)."""
+        """kl.setste: any State, Error State e (GR26)."""
         s.st, s.err = 0, e
         if 'noclear' not in s.f: s._clear()
     def _fail(s): s.st, s.W = ST_FAILURE, 0
@@ -124,13 +124,13 @@ class Mach:
         finally: M.SAMPLE_LIMIT[0] = None
         s._goto(nxt)
     def derive(s, dest, length=None):
-        """kl.derive from sharedkey (GR40-GR44, GR46). dest: ('key', dest_length[, src_out]), src_out marking the key of keystream
+        """kl.derive from sharedkey (GR28-GR31.1, GR31.3). dest: ('key', dest_length[, src_out]), src_out marking the key of keystream
         generation, OFB or CMAC; ('hash',) = kl.exec input of a hash/MAC/XOF listed for it, or ('other',) = any other endpoint. Returns the bytes the destination receives, or None when the
         destination (or, for a pair not admitted, both lockers) goes to Invalid."""
         if s.st == 0: return None
         if s.st != S_SOUT: s._invalid(); return None   # not a source endpoint in this State: the source transitions
         if dest[0] == 'other' and 'norestrict' not in s.f: s._invalid(); return None   # pair not admitted: both transition
-        if s.mext == 1 and dest[2:] == (True,): s._invalid(); return None                # GR46: sealed, excluded destination
+        if s.mext == 1 and dest[2:] == (True,): s._invalid(); return None                # GR31.3: sealed, excluded destination
         if dest[0] == 'key':
             dl = dest[1]; ln = dl if length is None else length
             if 'nolen' not in s.f and (ln < dl or dl > 32): return None
@@ -139,7 +139,7 @@ class Mach:
             ln = 32 if length is None else length
             if 'nolen' not in s.f and ln != 32: return None
             out = bytes(s.ss)
-        if 'reuse' not in s.f: s._goto(ST_READY)            # GR40: one kl.derive per field source; sharedkey_Output -> Ready
+        if 'reuse' not in s.f: s._goto(ST_READY)            # GR28: one kl.derive per field source; sharedkey_Output -> Ready
         return out
 
 CH = [1, 8, 16, 32, 64, 100, 7]
@@ -380,7 +380,7 @@ def G_sm(mk, mode):
     return R
 
 def G_lock(mk, mode):
-    """Locker level: error cases, forms, MR14 long fields, restricted sharedkey derive (GR19, GR20, GR24-GR44)."""
+    """Locker level: error cases, forms, MR14 long fields, restricted sharedkey derive (GR14, GR15, GR13.5, GR18-GR31.1)."""
     p = NAMES[mode]; R = []; a = lambda n, ok: R.append((n, bool(ok)))
     inv = lambda m: is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_INVALID
     v = [x for k, x in VEC.items() if k.startswith(p + '/')][0]
@@ -394,11 +394,11 @@ def G_lock(mk, mode):
     zero = bytes(sz[1] + sz[2] + 32)
     # ---- Content cleared and inert Error States
     m = sk(); a('premise: Decapsulate result held in sharedkey_Output', st(m) == S_SOUT and m.serialized() != zero)
-    m.exec(); a('Invalid clears the whole Content (GR20)', inv(m) and m.serialized() == zero and m.ext() == 0)
+    m.exec(); a('Invalid clears the whole Content (GR15)', inv(m) and m.serialized() == zero and m.ext() == 0)
     snap = m.mdh()
     m.setst(ST_READY); m.load(b'\1'); m.emit(1); m.exec(); m.derive(('hash',))
-    a('Error State is inert: setst, load, emit, exec, derive change nothing (GR37)', m.mdh() == snap and m.serialized() == zero)
-    m.setste(SE_OUT_OF_MEMORY); a('kl.setste in an Error State: the new Error State replaces it (GR38)', is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_OUT_OF_MEMORY)
+    a('Error State is inert: setst, load, emit, exec, derive change nothing (GR13.2)', m.mdh() == snap and m.serialized() == zero)
+    m.setste(SE_OUT_OF_MEMORY); a('kl.setste in an Error State: the new Error State replaces it (GR26)', is_error_state(m.mdh()) and mdh_get(m.mdh(), 'StateExtension') == SE_OUT_OF_MEMORY)
     for nm, mkm in (('Ready', full), ('sharedkey_Output', sk)):
         m = mkm(); m.setste(SE_PRIV_VIOLATION)
         a('kl.setste from %s: Error State, Content cleared' % nm, is_error_state(m.mdh()) and m.serialized() == zero)
@@ -413,7 +413,7 @@ def G_lock(mk, mode):
     for n in (S_GEN, S_ENC, S_EIN, S_COUT, 55):
         m2 = mk(mode, RBG(d + z), limit=1); m2.setst(S_GEN); m2.exec(); m2.setst(n)
         a('from Failure, kl.setst #%d: Invalid' % n, inv(m2))
-    # ---- Forms in each State: only the Form of the State is admitted (GR24, GR56)
+    # ---- Forms in each State: only the Form of the State is admitted (GR13.5, GR38)
     forms = {'load': lambda m: m.load(b'\1' * 16), 'emit': lambda m: m.emit(16), 'exec': lambda m: m.exec(), 'derive': lambda m: m.derive(('hash',))}
     for f in forms:
         m3 = mk(mode, RBG(d + z), limit=1); m3.setst(S_GEN); m3.exec(); fl = st(m3) == ST_FAILURE; forms[f](m3)
@@ -457,12 +457,12 @@ def G_lock(mk, mode):
     a('completed decapsk replaced by entering encapsk_Input: whole decapsk zeroed, both flags clear', bytes(m.dk) == bytes(sz[1]) and m.ext() == 0)
     m = mk(mode); m.setst(S_DIN); load_all(m, dk); m.setst(ST_READY)
     a('completed decapsk kept on leaving: both flags set', bytes(m.dk) == dk and m.ext() == 3)
-    # ---- restricted sharedkey derive (GR40-GR44, KLE-ML-KEM)
+    # ---- restricted sharedkey derive (GR28-GR31.1, KLE-ML-KEM)
     a('shared key of Decapsulate = ACVP/OpenSSL K', bytes(sk().ss) == K)
     for n in (16, 24, 32): a('key field of %d bytes receives the first %d bytes of the secret' % (n, n), sk().derive(('key', n)) == K[:n])
     m = sk(); a('key field of 16 bytes with length 40 > dest_length: first 16 bytes', m.derive(('key', 16), 40) == K[:16])
-    a('the derive leaves sharedkey_Output for Ready: sharedkey zeroed, HasSharedKey clear (GR40)', st(m) == ST_READY and bytes(m.ss) == bytes(32) and m.ext() == 7)
-    m.derive(('key', 16)); a('a second kl.derive of sharedkey: source Invalid (GR40, GR41 item 2)', inv(m))
+    a('the derive leaves sharedkey_Output for Ready: sharedkey zeroed, HasSharedKey clear (GR28)', st(m) == ST_READY and bytes(m.ss) == bytes(32) and m.ext() == 7)
+    m.derive(('key', 16)); a('a second kl.derive of sharedkey: source Invalid (GR28, GR29 item 2)', inv(m))
     m = sk(); m.setst(ST_READY); a('leaving sharedkey_Output by kl.setst zeroes sharedkey', bytes(m.ss) == bytes(32) and m.ext() == 7)
     for n in (33, 48, 64):
         m = sk(); r = m.derive(('key', n)); a('key field of %d bytes (longer than the secret): destination Invalid, nothing transferred, source unchanged' % n, r is None and st(m) == S_SOUT and bytes(m.ss) == K)
@@ -479,7 +479,7 @@ def G_lock(mk, mode):
     a('Encapsulate result: ciphertext_Output holds sharedkey, kl.derive refused (only in sharedkey_Output)', st(m) == S_COUT and m.hs == 1 and m.derive(('key', 16)) is None and inv(m))
     m = mk(mode, RBG(d + z, mm)); m.setst(S_GEN); m.exec(); m.setst(ST_READY); m.setst(S_ENC); m.exec(); emit_all(m, sz[2])
     a('Encapsulate result: derive in sharedkey_Output = ACVP/OpenSSL K', m.derive(('key', 24)) == K[:24])
-    # ---- sealed variant (MachineExtension = 1, GR46)
+    # ---- sealed variant (MachineExtension = 1, GR31.3)
     m = sk(); a('base variant: sharedkey into the key of keystream generation, OFB or CMAC admitted', m.derive(('key', 16, True)) == K[:16])
     def sealed():
         m = mk(mode, RBG(d + z, mm), ext=1); m.setst(S_GEN); m.exec(); m.setst(ST_READY); m.setst(S_ENC); m.exec(); emit_all(m, sz[2]); return m
@@ -522,5 +522,5 @@ section('Controls')
 control('RBG failure path is reachable (RBG without data fails the scripted read)', raises(RBG().read, 32, exc=RBGFail))
 control('SampleNTT limit path is reachable', raises(lambda: (M.SAMPLE_LIMIT.__setitem__(0, 1), M.keygen_internal('ML-KEM-512', bytes(32), bytes(32))), exc=M.SampleNTTLimit))
 M.SAMPLE_LIMIT[0] = None
-spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR56 halting and resumption of long-running exec); GR42 narrowing and SCProtection checks of derive.')
+spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR38 halting and resumption of long-running exec); GR30 narrowing and SCProtection checks of derive.')
 done()

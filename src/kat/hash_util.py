@@ -79,8 +79,8 @@ def machine_checks(fn, ref):
     check('%s Xs > b -> Invalid' % fn, inv(_do(at('A'), 'last', 'B', b + 8)))
     L = at('A', ab); L.setst('last', 'B', 16); L.setst('output'); check('%s Last with last_block_len != 0 -> Output Invalid' % fn, inv(L))
     L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'\x01\x02', 0); check('%s final piece with KLLEN < last_block_len -> Invalid' % fn, inv(L))
-    L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'', 0); check('%s KLLEN = 0 with last_block_len != 0: empty window, State kept (GR25 item 1)' % fn, L.st == 'Last' and L.lbl == 24)
-    L = at('A', ab); L.setst('last'); L.exec('B', b'', 0); check('%s Xs=0 then an empty-window kl.exec (KLLEN=0) -> Invalid (MR10, GR24)' % fn, inv(L))
+    L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'', 0); check('%s KLLEN = 0 with last_block_len != 0: empty window, State kept (GR18 item 1)' % fn, L.st == 'Last' and L.lbl == 24)
+    L = at('A', ab); L.setst('last'); L.exec('B', b'', 0); check('%s Xs=0 then an empty-window kl.exec (KLLEN=0) -> Invalid (MR10, GR13.5)' % fn, inv(L))
     L = at('A', ab); L.setst('last'); L.exec('B', b'xy', 2); check('%s Xs=0 then an empty window klstart=KLLEN/8 -> Invalid (MR10)' % fn, inv(L))
     L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'xyzw', 1); check('%s final piece klstart != 0 -> Invalid' % fn, inv(L))
     L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'abc'); L.exec('B', b'a'); check('%s a second final-piece exec -> Invalid (MR10)' % fn, inv(L))
@@ -138,9 +138,9 @@ def machine_checks(fn, ref):
     bits_checks(fn, lambda: _out(ab, mk), ref(ab))
 
 def sealed_checks(fn, mk, ref):
-    """Sealed locker (GR46), its GR42 narrowing and its StateExtension validity; mk() -> a locker in Hash_Absorb with
+    """Sealed locker (GR31.3), its GR30 narrowing and its StateExtension validity; mk() -> a locker in Hash_Absorb with
     no message byte absorbed, ref(msg_bytes) -> its digest of msg."""
-    section('%s: sealed locker (GR46)' % fn)
+    section('%s: sealed locker (GR31.3)' % fn)
     sec = msg_of(32); ab = b'abc'; d = len(ref(ab))
     def sl(): L = mk(); L.derive(sec, sealed=True); L.setst('output'); return L
     L = sl(); check('%s a sealed secret entering the message sets Sealed; Form C kl.exec in Hash_Output -> Invalid, output zero' % fn,
@@ -151,21 +151,21 @@ def sealed_checks(fn, mk, ref):
     L = sl(); L2 = mk(); check('%s ... into a message input: both Invalid' % fn, not derive_out(L, L2, d) and inv(L) and inv(L2))
     L = sl(); L.setst('ready'); ok = not L.sealed; L.setst('absorb'); run(L, [ab]); L.setst('output')
     check('%s Ready clears Sealed: the next digest is readable' % fn, ok and out_all(L, d) == ref(ab))
-    L = mk(); f0 = L.fields(); check('%s a sealed secret of 15 bytes: the source fails, the message is unchanged (GR41 item 7)' % fn,
+    L = mk(); f0 = L.fields(); check('%s a sealed secret of 15 bytes: the source fails, the message is unchanged (GR29 item 7)' % fn,
                        not L.derive(sec[:15], sealed=True) and L.srcinv and L.st == 'Absorb' and L.fields() == f0 and not L.sealed)
     L = mk(); check('%s ... one of 16 bytes enters' % fn, L.derive(sec[:16], sealed=True) and L.sealed)
-    # GR42: each sealed hop is a restricted transfer that narrows the next MDH
+    # GR30: each sealed hop is a restricted transfer that narrows the next MDH
     src = mdh_pack(UsagePolicy=0x5, ExpirationDate=7, SCProtection=1)
     L = mk(); L.mdh = mdh_pack(UsagePolicy=0x7, SCProtection=1); L.derive(sec, sealed=True, smdh=src); L.setst('output')
     K = Key(16, mdh=mdh_pack(UsagePolicy=0x6, SCProtection=2)); ok = derive_out(L, K, 16)
-    check('%s GR42 across two sealed hops: the key gets UsagePolicy 0x4 and the ExpirationDate of the secret' % fn,
+    check('%s GR30 across two sealed hops: the key gets UsagePolicy 0x4 and the ExpirationDate of the secret' % fn,
           ok and (mdh_get(K.mdh, 'UsagePolicy'), mdh_get(K.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(L.mdh, 'UsagePolicy') == 5)
-    L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR42: a hash of lower SCProtection than the secret -> Privilege Violation, nothing absorbed' % fn,
+    L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR30: a hash of lower SCProtection than the secret -> Privilege Violation, nothing absorbed' % fn,
                                                     not L.derive(sec, sealed=True, smdh=src) and L.st == 'PrivViolation' and not L.sealed)
     L = sl(); L.mdh = mdh_pack(SCProtection=1); K = Key(16, mdh=mdh_pack(SCProtection=0))
-    check('%s GR42: a key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output' % fn,
+    check('%s GR30: a key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output' % fn,
           not derive_out(L, K, 16) and K.st == 'PrivViolation' and L.st == 'Output' and L.outl == 8 * d)
-    L = mk(); L.mdh = mdh_pack(Locality=0x10); check('%s GR42: failed narrowing (boot subfields differ) -> Privilege Violation' % fn,
+    L = mk(); L.mdh = mdh_pack(Locality=0x10); check('%s GR30: failed narrowing (boot subfields differ) -> Privilege Violation' % fn,
                                                   not L.derive(sec, sealed=True, smdh=mdh_pack(Locality=0x20)) and L.st == 'PrivViolation')
     # StateExtension @ State at an SCC import or kl.clone (KLE-Metadata-validity)
     L = sl(); C = import_(L); check('%s import of a sealed Hash_Output keeps Sealed: Form C -> Invalid' % fn, C.sealed and C.exec('C', kllen=64) == bytes(8) and inv(C))

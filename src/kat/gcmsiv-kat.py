@@ -118,7 +118,7 @@ check('Hash_Absorb -> Decrypt without Set_Aux_Value_2 is allowed (policy)', (lam
 check('Decrypt -> Enc_Last_Block: Invalid', inv((lambda m: (m.setst(ELB, 'B', 8), m)[1])(dec_at(DEC))))
 check('Encrypt -> Dec_Last_Block: Invalid', inv((lambda m: (m.setst(DLB, 'B', 8), m)[1])(enc_at(ENC))))
 check('Encrypt -> Enc_Tag_Finalize again: Invalid', inv((lambda m: (m.setst(ETF, 'A'), m)[1])(enc_at(ENC))))
-check('Encrypt -> Encrypt same State: Invalid (GR26)', inv((lambda m: (m.setst(ENC), m)[1])(enc_at(ENC))))
+check('Encrypt -> Encrypt same State: Invalid (GR19.2)', inv((lambda m: (m.setst(ENC), m)[1])(enc_at(ENC))))
 check('setst Ready from any State', all((lambda m: (m.setst(READY), m.st == READY)[1])(f()) for f in (lambda: enc_at(ENC), lambda: dec_at(DEC), lambda: setup())))
 check('Success: setst Encrypt Invalid', inv((lambda m: (m.exec('B', 0, 128), m.setst(ENC), m)[2])(dec_at(DTF))))
 for pol in (1, 2):
@@ -202,7 +202,7 @@ m = mk(k); m.derive_dest(k2); m.setst(SAV, 'C', inp=1); check('after derive, Rea
 
 section('kl.rstrl')
 m = mk(k); m.rstr(1); check('restrict 3 -> 1 (encrypt only)', m.st == READY and m.policy == 1)
-m.rstr(2); check('restrict to disjoint (policy would be 0): Invalid (GR30)', inv(m))
+m.rstr(2); check('restrict to disjoint (policy would be 0): Invalid (GR20)', inv(m))
 m = mk(k); m.rstr(0); check('restrict to 0: Invalid', inv(m))
 m = mk(k); m.rstr(0xff); check('restrict with a superset mask leaves the policy', m.policy == 3)
 
