@@ -88,13 +88,15 @@ The last two columns give the CSR groups implemented with each extension and the
 This section describes the error conditions that raise exceptions, not those that set an Error State (<<Zkl-ISA-unpriv.adoc#KLE-State-field>>).
 
 When an exception is raised, `*cause` holds the cause, as <<KLE-exception-codes>> describes.
-The table lists the causes in decreasing priority order.
+The table lists exception causes and conditions.
+Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> orders the locker-state-independent checks.
+Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-state-dependent-checks>> and each instruction's stated steps order the subsequent checks.
 
 The KLE fatal-error exception precedes every exception that depends on the state of the KLE unit, including the address-misaligned, access-fault and page-fault exceptions of KLE memory instructions, whose transfer bounds are computed from that state (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>).
 Only the exceptions of the instruction fetch, an instruction-address breakpoint included, and the illegal-instruction or virtual-instruction exceptions of the <<Zkl-ISA-unpriv.adoc#KLE-first-group-ILL-grounds>> precede it; it precedes the other illegal-instruction grounds.
 
 [[KLE-exception-codes]]
-.Exception causes in decreasing priority order
+.Exception causes and conditions
 [float="center",align="center",width="100%",cols="^10%,<24%,<66%",options="header"]
 |===
 | Exception Code(s)    | Mnemonic/RISC-V type           | Examples in KLE (((KLE, error codes)))
@@ -103,13 +105,14 @@ Only the exceptions of the instruction fetch, an instruction-address breakpoint 
 |  2, 22               | Illegal-instruction, virtual-instruction | One of the conditions in the <<Zkl-ISA-unpriv.adoc#KLE-first-group-ILL-grounds>> is satisfied.
 | TBD                  | *KLE fatal-error*              | Fatal system failure in the KLE unit.
 |  2                   | Illegal-instruction            | One of the conditions in the <<Zkl-ISA-unpriv.adoc#KLE-second-group-ILL-grounds>> is satisfied.
-| TBD                  | *KLE missing-CSK*              | Use of the KLE unit while no CSK is configured (none has been established, or each has been erased or is partially written), or an export or import at a level whose CSK is not in use (see <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>, <<KLE-CSR-mklcfg>>). `mtval` gives the subcause (<<KLE-CSR-mklcfg>>). Only M-mode can write the `mklcsk` group or `mklcfg`, or control implementation-specific components that set the CSK.
+| TBD                  | *KLE missing-CSK*              | No CSK is configured (none has been established, or each has been erased or is partially written): `mtval` = 0 (<<KLE-CSR-mklcfg>>). Checked at item 4 of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, before locker-Off. Only M-mode can establish a CSK (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
 | TBD                  | *KLE locker-Off*               | Any access, as defined in <<KLE-CSR-llockerstatus>>, to a locker whose `*llockerstatus` field is _Off_; it reaches the mode that owns the _Off_ field by delegation or forwarding. This exception enables on-demand (lazy) locker loading and trap-and-emulate.
 |  2                   | Illegal-instruction            | One of the conditions in the <<Zkl-ISA-unpriv.adoc#KLE-third-group-ILL-grounds>> is satisfied.
 |  3                   | Load/store address breakpoint  | On the address of the first component access of `kl.load` or `kl.store`, before the address-misaligned check (<<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, item 8).
 | 4, 6                 | Load address misaligned, Store/AMO address misaligned | On the effective address of `kl.load`, resp. `kl.store`, with `klnamedlocker` < 32, before any component access (<<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>); never raised by a KLE memory instruction with `klnamedlocker` = 32.
 |  2                   | Illegal-instruction            | One of the conditions in the <<Zkl-ISA-unpriv.adoc#KLE-fourth-group-ILL-grounds>> is satisfied, in the order of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-state-dependent-checks>>.
 | TBD                  | *KLE unsupported-Metadata*     | Unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>) when opening a provisioning or import.
+| TBD                  | *KLE missing-CSK*              | An export or import at level L finds CSK~L~ not in use: `mtval` = 8 + L (<<KLE-CSR-mklcfg>>). This locker-state-dependent condition is checked in the management instruction's stated steps, after the applicable locker-Off check; an import opening checks Metadata validity and support first (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>).
 | TBD                  | *KLE privilege-violation*      | A usage instruction that the _UsagePolicy_ denies (<<Zkl-ISA-unpriv.adoc#KLE-GR-usage-policy>>), or any use, clone or restriction of a locker in a Configuration State, which is forbidden at all privilege levels (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-config-state>>).
 | TBD                  | *KLE clock-unavailable*        | With `Zklexpire`, a _usage_ instruction on a locker with a non-zero _ExpirationDate_ while the secure clock cannot be read (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-expiration-date>>).
 | TBD                  | *KLE out-of-memory*            | Insufficient KLF capacity when opening a provisioning or import, or cloning.
@@ -461,7 +464,7 @@ It has the accessibility of the `mklcsk` group (<<KLE-CSR-mklcsk>>), and is acce
 [float="center",align="center",cols="^12%,^14%,<74%",options="header"]
 |===
 | Bits       | Field       | Description
-| [2:0]      | _CSKSel_    | WARL. The level L of the selected CSK, CSK~L~; the legal values are the levels that the hart implements (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
+| [2:0]      | _CSKSel_    | WARL. The side-channel protection level L of the selected CSK, CSK~L~. A value is legal only if the implementation defines that level (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
 | 3          | _CSKErase_  | Writing 1 erases a CSK, as described below. Reads as 0.
 | MXLEN−1:4  | —           | Reserved: writes are ignored, and reads return zero.
 |===
