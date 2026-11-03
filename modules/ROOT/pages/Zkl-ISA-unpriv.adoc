@@ -283,7 +283,7 @@ Only the implementer's certifications, if any, establish what an implementation 
 
 NOTE: The KLE unit computes the functions `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` with the AES and POLYVAL hardware of its Machines, and
 for the import and export of lockers implementing a Machine at a certain _SCProtection_ level, these functions must offer the same or higher level of side-channel and fault-injection attack protection.
-One risk is accepted: these keys seal every SCC, so with several levels, each SCC resists differential side-channel and fault-injection attacks only as well as the least-protected engine that uses them (<<Zkl-introduction.adoc#KLE-open-points>>).
+Each level has its own CSK (<<KLE-CSK-requirements>>), so an attack on the engine of one level exposes only the SCCs of that level.
 
 NOTE: Unlike the KLF, an SCC does not resist rollback: while it exists, any party that holds it, such as the software that stores it or any mode that could export the locker, can import it again under the same CSK and Localities and so replay an earlier CC state.
 This may enable multi-time-pad or nonce-reuse attacks on the Machines that rely on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
@@ -418,7 +418,7 @@ Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> states how _MachinePolicy_ ga
 === _SCProtection_ Field
 
 KLE defines three side-channel protection levels, Levels A, B and C, encoded in _SCProtection_ as the values 0, 1 and 2.
-Value 3 is reserved, and makes the Metadata invalid (<<KLE-Metadata-validity>>).
+Value 3 is reserved for an implementation-defined level; unless the implementation defines level 3, it makes the Metadata invalid (<<KLE-Metadata-validity>>).
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
 
 [[KLE-SC-protection-levels]]
@@ -433,7 +433,12 @@ detection of injected faults, followed either by completion with the correct res
 a transition to a fatal error condition (see <<KLE-error-architecture>>).
 |===
 
-A level applies to the export and import of the locker (<<KLE-KLF>>) and to the operations that need it for security, such as signature generation but not signature verification, and only as far as the cryptographic method of the Machine needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
+A level applies only to the _protected_ operations of a Machine, those that handle a secret, and only as far as the cryptographic method needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
+Every protected operation has at least the protection of Level A, and the export and import of a locker are always protected (<<KLE-KLF>>).
+An _exempt_ operation, such as signature verification, handles no secret and needs no side-channel protection, not even against timing leakage.
+
+NOTE: Exempt operations include signature verification (ECDSA, EdDSA and ML-DSA), checks of public inputs alone, such as the ML-KEM encapsulation-key checks and the validation of a peer's point before a scalar multiplication, and every operation of a locker that holds only a public key.
+These remain protected: MAC and tag verification, which compares against a secret value; ML-KEM encapsulation, which draws a secret; key generation; public-key derivation; and unkeyed hashing, whose input may be secret.
 
 (((KLE, Machine, side-channel protection variants)))
 A side-channel-protected Machine is an implementation variant of the unprotected one, distinguished architecturally only by the _SCProtection_ field of the MDH.
@@ -793,7 +798,7 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _Version_ is 3 at import and any of the following holds: _State_ is not _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`; _AuxDataLen_ is zero; or one of _StateExtension_, _KeyType_, _ADSDropped_ and _MachineUse_ is non-zero (<<KLE-system-specific-import>>);
 * _KeyType_ is 1 or 2 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 3, or 2 outside a PI and a PCCC of base type `pi`;
-* _SCProtection_ is 3, a reserved value (<<KLE-SCProtection-field>>);
+* _SCProtection_ is 3, unless the implementation defines level 3 (<<KLE-SCProtection-field>>);
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret without a configured substitute (<<KLE-Localities>>);
 * the MDH carries a custom _Machine_ or a system-specific _Version_, and its _Locality_ includes none of _SiPScrt_, _ChipFamScrt_, _ChipScrt_, _OEMScrt_, _ProdScrt_ and _DevScrt_, which bind the CC to its allowed consumers;
 * _State_ is not 0, or _StateExtension_ is non-zero (an Error State), at provisioning, or _State_ is 0 and _StateExtension_ is 7–15 at import;
@@ -1098,7 +1103,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, 16 if the locker is in an Error State, and otherwise the size of item 7;
 . Forms B and C: 0 if _State_ is 61–63, or is 0 with a _StateExtension_ of 7–15 (reserved);
 . 16 if _State_ is 0 with a _StateExtension_ of 1–5, or 6 with `Zklexpire` (an Error State) (<<KLE-error-state-transfer>>);
-. 0 if _Version_ is 1 or 2, or if _SCProtection_ or _KeyType_ holds a reserved value;
+. 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is 3, unless the implementation defines level 3;
 . [[KLE-size-avail-lookup,5]]if the KLE unit does not natively implement the Machine fields: an illegal-instruction exception if `mstatus.kleemulation` = 1 (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>), so that M-mode can supply the value, and 0 otherwise;
 . 0 if the MDH is unsupported or invalid Metadata (<<KLE-Metadata-validity>>), evaluated as at provisioning when _State_ is 0 and _Version_ is not 3, and as at import otherwise;
 . the size:
@@ -1110,7 +1115,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 `kl.avail` returns or raises, evaluated in order:
 
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, and otherwise 1 if the KLE unit implements the Machine fields of the MDH, and 0 if not;
-. Forms B and C: 0 if _Version_ is 1 or 2, or if _SCProtection_ or _KeyType_ holds a reserved value;
+. Forms B and C: 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is 3, unless the implementation defines level 3;
 . if the KLE unit does not natively implement the Machine fields: same as item <<KLE-size-avail-lookup>> of `kl.size`;
 . 1 otherwise, whatever the other fields hold: a 1 does not exclude a KLE unsupported-Metadata exception that a Machine specification attaches to another field, such as the _AuxInfo_ of EdDSA.
 
@@ -2047,7 +2052,7 @@ An unconfigured KLIOBUF is a ground of the <<KLE-third-group-ILL-grounds>> for `
 . the <<KLE-first-group-ILL-grounds>>: illegal-instruction exception, or virtual-instruction exception where the group states it;
 . a pending fatal condition: KLE fatal-error exception;
 . the <<KLE-second-group-ILL-grounds>>: illegal-instruction exception;
-. no active CSK: KLE missing-CSK exception (<<KLE-CSK-requirements>>);
+. no configured CSK: KLE missing-CSK exception (<<KLE-CSK-requirements>>);
 . the _klnamedlocker check_: `KLNL`, `kl.mvin`, `kl.mvout`, and `kl.load` and `kl.store` other than `kl.input` and `kl.output`, designate the locker that `klnamedlocker` names (Rule <<KLE-GR-klnamedlocker-override>>); if it is 32, they designate none, item 6 is skipped, and the instruction falls through after item 8 (Rule <<KLE-GR-outcome-inert>>);
 . an access to a locker whose `*llockerstatus` field in effect is _Off_, except as KLE locker-Off in <<KLE-exceptions-grounds>> states: KLE locker-Off exception;
 . the <<KLE-third-group-ILL-grounds>>: illegal-instruction exception;
@@ -2429,7 +2434,7 @@ A conflicting access is:
 * an ordinary load or store overlapping the memory region of the in-flight KLE operation;
 * an access to a locker that the operation uses, including the issue of another KLE instruction involving it;
 * a read or write of `klstart`, `vstart`, `klnamedlocker`, `kliobuflen` or `kliobuftop`, including by the getter and setter instructions (<<KLE-instruction-getter-setter>>);
-* a write to a privileged CSR that governs the operation: the `mklcsk` group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>), `mklmaxiobuflen` (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>), a Locality CSR (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), a `*llockerstatus` CSR (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), a `*stateen0` CSR, or a write to `mstatus`, `sstatus` or `vsstatus` that changes `KLS`;
+* a write to a privileged CSR that governs the operation: the `mklcsk` group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>), `mklcfg` (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>), `mklmaxiobuflen` (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>), a Locality CSR (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), a `*llockerstatus` CSR (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), a `*stateen0` CSR, or a write to `mstatus`, `sstatus` or `vsstatus` that changes `KLS`;
 * the issue of a KLE instruction that reads or writes the authentication registers `SIV`, `IMPQUAL` and `SIV2`, such as an export- or import-opening `kl.mgmt`, while the operation reads or writes them;
 * a read or write of a GPR, a vector register or a KLIOBUF byte that the operation writes, including the issue of a `kl.output`, of `kl.mvin KLIOBUF`, or of any other instruction that reads or writes the KLIOBUF; or
 * a write to a vector register or to the KLIOBUF that the operation reads, including the issue of a `kl.input` targeting it.
@@ -2646,7 +2651,7 @@ These grounds depend only on the instruction encoding, the GPR numbers, the vect
 . An encoding of an unimplemented extension.
 --
 
-KLE missing-CSK:: No CSK is active (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>); raised by every KLE instruction and KLE CSR access, except as <<KLE-CSK-requirements>> states.
+KLE missing-CSK:: No CSK is configured: raised by every KLE instruction and KLE CSR access, except as <<KLE-CSK-requirements>> states. Or the CSK of the level of an export or import is not in use: raised by its opening `kl.mgmt`, or by an import-completing `kl.mgmt` (<<KLE-locker-management>>).
 
 KLE locker-Off:: An access to a locker marked _Off_, except the destination access of a destructive configuration instruction other than `kl.swap`, and any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker (<<KLE-destructive-config>>, <<KLE-instruction-clone>>, <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>); `kl.load`, `kl.mvin` and `kl.setste` are not exempt.
 
@@ -2960,6 +2965,7 @@ The `kl.mgmt` instruction:
 ... requires `M`._AuxDataLen_ and `M`._ADSDropped_ to be 0: if either is non-zero, the locker transitions to Error State _Invalid_ and the instruction terminates;
 .. transitions the locker to Error State _Invalid_ if `M` is invalid Metadata (<<KLE-Metadata-validity>>), an _Unconfigured_ `ml` being invalid for an import unless `ml`._Version_ is 3, and skips the steps below;
 .. raises a KLE unsupported-Metadata exception if `M` is unsupported Metadata (<<KLE-Metadata-validity>>);
+.. for an import whose `ml`._Version_ is not 3 and that sets _State_ `kl_cfg_importing` below, raises a KLE missing-CSK exception if the CSK of level `M`._SCProtection_ is not in use (<<KLE-CSK-selection>>);
 .. attempts to allocate the KLF capacity that the fields _Machine_, _MachinePolicy_, _MachineExtension_, _SCProtection_ and _KeyType_ of `M` require (<<KLE-length-rule>>) and, if `M`._Version_ is 3, the capacity for 16 {times} `M`._AuxDataLen_ bytes of data (Rule <<KLE-GR-sysfmt-as-received>>), and raises a KLE out-of-memory exception if it cannot;
 .. for a *provisioning*, installs `M` as the locker's MDH, with _State_ `kl_cfg_provisioning`;
 .. for an *import*:
@@ -2985,7 +2991,8 @@ Software first saves a copy, `ml`, of the locker's MDH, to restore the _State_ w
 
 .. An Error State: the locker is unchanged, and no management operation is opened (Rule <<KLE-GR-error-state-can-be-reconfigured>>); <<KLE-error-state-transfer>> details this short export path.
 
-.. A Valid State: if the _Locality_ of the MDH names an unconfigured entry without a configured substitute (<<KLE-Localities>>), no operation and no exception: no management operation is opened, the _State_ and the authentication registers are unchanged, and only the common steps above take effect.
+.. A Valid State: if the CSK of the locker's _SCProtection_ level is not in use (<<KLE-CSK-selection>>), a KLE missing-CSK exception, with the locker and the authentication registers unchanged.
+Otherwise, if the _Locality_ of the MDH names an unconfigured entry without a configured substitute (<<KLE-Localities>>), no operation and no exception: no management operation is opened, the _State_ and the authentication registers are unchanged, and only the common steps above take effect.
 Otherwise the instruction prepares the locker to produce an SCC, encrypting its contents and computing the authentication tag(s) as <<KLE-SCC-export>> specifies, and sets its _State_ to `kl_cfg_exporting`.
 The opening `kl.mgmt` changes no MDH field other than _State_: an implementation that creates or changes an ADS, or uses _MachineUse_, always keeps _AuxDataLen_ and _MachineUse_ current, so that the MDH software reads before opening the export is the one the export authenticates.
 
@@ -3044,6 +3051,7 @@ The image authenticated as ``AD[0]`` is the MDH held in the target locker, i.e.,
 
 ... If locker.MDH._Version_ is 3 and `ml`._State_ is 0, the instruction completes the system-specific import as <<KLE-system-specific-import>> states.
 ... If `ml`._State_ is a Valid State (the import of the export of a fully configured locker):
+.... If the CSK of the locker's _SCProtection_ level is not in use (<<KLE-CSK-selection>>), the instruction raises a KLE missing-CSK exception and leaves the locker unchanged: the content is never decrypted under the CSK of another level.
 .... locker.MDH._State_ is set to `ml`._State_.
 .... The KLE unit decrypts and authenticates the locker's content.
 .... If authentication fails, the target locker transitions to Error State _Authentication Failed_, without an exception. Otherwise, the ADS is processed, or dropped, as <<KLE-SCC-import>> states; then, if _KeyType_ = 1, the SKID is resolved, and the narrowing of <<KLE-system-keys>> is applied.
@@ -3302,7 +3310,8 @@ function SCC_Decrypt(AD[] : array of bits(128), sep: bits(1),
 ----
 
 The comparison `tmp {ne} SIV` is performed in constant time.
-`SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of the _SCProtection_ level of the locker that is exported or imported (<<KLE-KLF>>); at every level, they take a time independent of the CSK, the derived keys, the Locality Secrets and the plaintext.
+In the algorithms below, `CSK` is the CSK of the _SCProtection_ level of the locker that is exported or imported (<<KLE-CSK-requirements>>).
+`SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of that level (<<KLE-KLF>>); at every level, they take a time independent of the CSK, the derived keys, the Locality Secrets and the plaintext.
 It is strongly recommended that their memory accesses also be independent of these values.
 
 // ///////////////////////////////////////////////////////////////////////////
@@ -3454,22 +3463,45 @@ A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and
 [[KLE-CSK-requirements]]
 == Architectural Requirements on the Context Sealing Key
 
-The KLE unit operates only with an active Context Sealing Key (CSK): with a hardwired CSK it is available from reset, otherwise once the CSK is established.
-Without an active CSK, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except writes to the `mklcsk` group and accesses to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK.
+Each _SCProtection_ level that a hart implements has its own Context Sealing Key (CSK): CSK~L~ serves level L, where L is 0, 1 and 2 for Levels A, B and C, and 3 for an implementation-defined level (<<KLE-SCProtection-field>>).
+The export or import of a locker at level L uses CSK~L~ only (<<KLE-SCC-export-import>>), and CSK~L~ is established only on harts that implement level L.
 
-Each hart holds a CSK, established in exactly one of four ways:
+The KLE unit operates only while at least one CSK is configured: from reset with hardwired CSKs, otherwise once a CSK is established.
+While no CSK is configured, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except accesses to `mklcfg`, writes to the `mklcsk` group and accesses to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK.
+An export uses the CSK only at its opening `kl.mgmt`, and an import only at its completing one.
+These instructions, and the import-opening `kl.mgmt`, raise a KLE missing-CSK exception if the CSK of the locker's level is not in use, so that no SCC is ever sealed or unsealed under the CSK of another level (<<KLE-locker-management>>); `mtval` gives the level (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
 
-. M-mode programs it through the `mklcsk` CSR group (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>); M-mode can then read it in clear, and no software can read it in any other way.
-. A secure hardware block exclusive to M-mode, such as Caliptra cite:[caliptra], or a port to one, configures it through a dedicated interface based on public-key encryption, at the request of M-mode only, by a handle or a wrapped key; addressing and key transport are platform-specific and outside the scope of this specification.
-. It is hardwired at manufacturing time and cannot be reconfigured or revoked.
-. A secure RBG (<<KLE-Prerequisites>>) generates it at boot.
-  All harts of a subsystem of an SoC that the platform defines and documents hold the same such CSK, so that processes can migrate among them, and cannot exchange SCCs with other subsystems; the CSK survives the reset or fatal condition of a single hart and is regenerated only at the power-on reset of the subsystem, so the SCCs sealed under it cannot be imported after a power loss.
+The CSKs of a hart are established in exactly one of four ways:
+
+. M-mode programs each through the `mklcsk` CSR group, after selecting its level in `mklcfg` (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcsk>>, <<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>); M-mode can then read it in clear, and no software can read it in any other way.
+. A secure hardware block exclusive to M-mode, such as Caliptra cite:[caliptra], or a port to one, configures each through a dedicated interface based on public-key encryption, at the request of M-mode only, for the level selected in `mklcfg`, by a handle or a wrapped key; addressing and key transport are platform-specific and outside the scope of this specification.
+. They are hardwired at manufacturing time and cannot be reconfigured or revoked.
+. A secure RBG (<<KLE-Prerequisites>>) generates them at boot.
+  All harts of a subsystem of an SoC that the platform defines and documents hold the same such CSKs, so that processes can migrate among them, and cannot exchange SCCs with other subsystems; the CSKs survive the reset or fatal condition of a single hart, M-mode cannot unconfigure them, and they are regenerated only at the power-on reset of the subsystem, so the SCCs sealed under them cannot be imported after a power loss.
 
 The third and fourth ways mainly suit specialized embedded deployments.
-Harts among which processes or CCs migrate must hold the same CSK: under the first and second ways, M-mode establishes it on each.
-A hart reset or a KLE fatal condition (<<KLE-error-architecture>>) resets the hart's KLE state (<<KLE-reset-and-m-mode-only>>) and, under the first and second ways only, its CSK, which must then be established again.
+Harts among which processes or CCs migrate must hold the same CSKs: under the first and second ways, M-mode establishes them on each.
+A hart reset or a KLE fatal condition (<<KLE-error-architecture>>) resets the hart's KLE state (<<KLE-reset-and-m-mode-only>>) and, under the first and second ways only, its CSKs, which must then be established again.
 
-NOTE: When the CSK is shared across devices, CCs meant to be device-bound need to name _ChipScrt_ or _DevScrt_ in their _Locality_.
+[[KLE-CSK-selection]]
+A hart selects the CSK in one of two ways:
+
+* _Trapped selection_, the default: the hart holds one CSK, tagged with its level, and that CSK is _in use_ for its level only.
+  An export or import at another level L traps, and M-mode replaces the CSK with CSK~L~.
+* _Automatic selection_, with `Smklmultcsk` (<<Zkl-ISA-priv.adoc#KLE-priv-extensions>>): the hart holds the CSKs of all its levels at once, and each configured CSK~L~ is _in use_ for level L.
+  An export or import traps only if CSK~L~ is not configured.
+
+Under the third and fourth ways, M-mode cannot replace a CSK, so a hart that implements more than one level implements `Smklmultcsk`.
+
+[NOTE]
+====
+Per-level CSKs confine a side-channel or fault-injection attack on the engine of one level to the SCCs of that level.
+With a single CSK, a user could provision Level A lockers with chosen keys, export and import them repeatedly, recover the CSK by power analysis, and unseal the SCCs of Levels B and C.
+Running every export and import at the highest level would also prevent this, but would slow them down for every Machine.
+Because CSK~L~ exists only on harts that implement level L, the attack cannot move, with the CSK, to a hart without Levels B and C.
+====
+
+NOTE: When the CSKs are shared across devices, CCs meant to be device-bound need to name _ChipScrt_ or _DevScrt_ in their _Locality_.
 
 Persistence of a configurable CSK is implementation-specific.
 Transferring a CSK to another endpoint, such as the M-mode firmware of another device, a local TPM (for instance across suspension or host hibernation), or a cloud-based HSM, requires an authenticated public-key wrapping mechanism, which this specification does not define.
@@ -3494,7 +3526,7 @@ This section and <<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>> are authoritative f
 
 A _KLE unit reset_ of a hart resets that hart's KLE architectural state (<<KLE-out-of-reset-unpriv>>, <<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>>) and no other hart's, and leaves shared Locality Secrets unchanged.
 A hart reset causes one, and so does a fatal condition (<<KLE-error-architecture>>), with the differences of <<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>>.
-It also unconfigures a CSK established under the first or second way (<<KLE-CSK-requirements>>); it neither clears nor regenerates a hardwired or boot-generated CSK.
+It also unconfigures every CSK established under the first or second way (<<KLE-CSK-requirements>>); it neither clears nor regenerates a hardwired or boot-generated CSK.
 
 A non-retentive hart suspend is not a hart reset.
 Whether it retains the KLE state of the hart (lockers, KLIOBUF, CSRs and authentication registers) is implementation-defined, and retention is strongly recommended; an implementation documents whether and how it retains that state, and software that cannot rely on retention exports its lockers before the suspend (<<Zkl-software.adoc#KLE-state-save-and-restore-order>>).

@@ -103,7 +103,9 @@ Unless it terminates the owner, software must not clear a locker under an export
 [[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export, or in the MDH that `kl.getmd*` returned when the image is the MDH alone, is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
 After a `kl.mgmt` that opens an export from a Valid State, software must continue only if the _State_ is `kl_cfg_exporting`; a Valid State means a refusal (<<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>).
 
-[[KLE-SR-csk-change,SR16]]SR16:: M-mode must not change the CSK (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>) of a hart until every export open on it, base or nested, has completed and its image has been saved.
+[[KLE-SR-csk-change,SR16]]SR16:: Software must complete every export and import open on a hart before it opens one at another _SCProtection_ level.
+M-mode must not change or erase a CSK (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>) until every export open on the hart under it, base or nested, has completed and its image has been saved; with trapped selection, replacing the CSK held counts as changing it.
+Breaking this rule never makes an export or import use the CSK of another level: each `kl.mgmt` that uses a CSK checks its level, and traps again on a mismatch.
 
 [[KLE-SR-skid-usage-policy,SR17]]SR17:: A system that intends to protect a System Key (<<Zkl-ISA-unpriv.adoc#KLE-system-keys>>) must associate at least a _UsagePolicy_ with its SKID in the SKS.
 
@@ -242,6 +244,10 @@ The probe destroys the buffer contents: save them first, or probe only while the
 A handler that can neither resolve nor forward a KLE exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, nor terminate the process, follows Rule <<KLE-SR-handler-duty>>.
 
 For KLE fatal-error, missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
+
+An M-mode handler resolves a KLE missing-CSK exception by establishing a CSK and re-executing the instruction (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
+With `mtval` = 4 + L, it establishes CSK~L~: with trapped selection, it first writes L to `mklcfg`; with `Smklmultcsk`, the exception has already selected L, and the handler only writes the `mklcsk` group.
+A handler that will need a replaced CSK again keeps a copy of it, one per level, in memory that only M-mode can access.
 
 // ///////////////////////////////////////////////////////////////////
 
