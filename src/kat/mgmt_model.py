@@ -12,7 +12,7 @@ class Trap(Exception):
 M_ENC, M_SIG, M_KEY, M_KEM, M_KEY32, M_HASH, M_VER, M_CMAC, M_XOF = 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80, 0x100
 CONTENT = {M_ENC: 16, M_SIG: 32, M_KEY: 16, M_KEM: 32, M_KEY32: 32, M_HASH: 16, M_VER: 16, M_CMAC: 16, M_XOF: 16}
 NONE = 32
-RESERVED = ('Reserved31_30', 'Reserved46', 'Reserved79_78', 'Reserved127_116')
+RESERVED = ('Reserved46', 'Reserved79_78', 'Reserved127_116')
 PI_STATES, SCC_STATES = (56, 59, 60), (57, 58)
 _LO = {n: lo for n, lo, _ in MDH_FIELDS}
 
@@ -33,7 +33,7 @@ def validate(md, ctx, zk=True):
     """ctx 'provision' or 'import'.  Returns 'ok', 'invalid' or 'unsupported' (invalid takes precedence)."""
     g = lambda n: mdh_get(md, n)
     st, se, mach = g('State'), g('StateExtension'), g('Machine')
-    bad = any(g(r) for r in RESERVED) or g('SCProtection') == 3 or g('KeyType') == 3 or (g('Locality') >> 4 & 3) == 3
+    bad = any(g(r) for r in RESERVED) or g('SCProtection') >= 4 or g('KeyType') == 3 or (g('Locality') >> 4 & 3) == 3
     ver = g('Version')
     if ver == 3:      # <<KLE-GR-sysfmt-import-only>>, <<KLE-Metadata-validity>>
         bad |= ctx != 'import' or st not in (0, 58, 57) or g('AuxDataLen') == 0 or bool(se or g('KeyType') or g('ADSDropped') or g('MachineUse'))
@@ -131,7 +131,7 @@ class KLE:
         st, se = g('State'), g('StateExtension')
         if st >= 61 or (st == 0 and se > 6): return 0
         if st == 0 and se: return 16
-        if g('Version') in (1, 2) or g('SCProtection') == 3 or g('KeyType') == 3: return 0
+        if g('Version') in (1, 2) or g('SCProtection') >= 4 or g('KeyType') == 3: return 0
         v = s.val(md, 'provision' if st == 0 and g('Version') != 3 else 'import')
         return size_of(md) if v == 'ok' else 0
     def avail(s, kd=0, r=0, form='A', md=0):
@@ -140,7 +140,7 @@ class KLE:
             if k is None or is_unconfigured(s.md(k)): return 0
             return int(mdh_get(s.md(k), 'Machine') in CONTENT)
         if form == 'B': md &= mask(64)
-        if mdh_get(md, 'Version') in (1, 2) or mdh_get(md, 'SCProtection') == 3 or mdh_get(md, 'KeyType') == 3: return 0
+        if mdh_get(md, 'Version') in (1, 2) or mdh_get(md, 'SCProtection') >= 4 or mdh_get(md, 'KeyType') == 3: return 0
         return int(mdh_get(md, 'Machine') in CONTENT and not (mdh_get(md, 'KeyType') == 1 and s.sks is None) and not (mdh_get(md, 'KeyType') == 2 and not s.has_rng))
     # ---- destructive configuration
     def clear(s, kd, r=0):

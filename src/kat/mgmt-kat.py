@@ -22,8 +22,8 @@ def FIN(e, k): e.mgmt(k, 63, form='C', md=mk(State=0))   # provisioning completi
 section('MDH layout  <<KLE-metadata-header>>')
 tot = sum(w for _, _, w in MDH_FIELDS)
 check('fields tile 128 bits', tot == 128 and all(MDH_FIELDS[i][1] + MDH_FIELDS[i][2] == MDH_FIELDS[i + 1][1] for i in range(len(MDH_FIELDS) - 1)))
-check('State [23:18], UsagePolicy [68:64], Locality [77:69], ExpirationDate [115:96]',
-      mdh_pack(State=63) == 63 << 18 and mdh_pack(UsagePolicy=31) == 31 << 64 and mdh_pack(Locality=511) == 511 << 69 and mdh_pack(ExpirationDate=mask(20)) == mask(20) << 96)
+check('State [25:20], UsagePolicy [68:64], Locality [77:69], ExpirationDate [115:96]',
+      mdh_pack(State=63) == 63 << 20 and mdh_pack(UsagePolicy=31) == 31 << 64 and mdh_pack(Locality=511) == 511 << 69 and mdh_pack(ExpirationDate=mask(20)) == mask(20) << 96)
 e = KLE(); check('Unconfigured: getmd all zero (<<KLE-GR-outcome-inert>>)', e.getmd(3) == 0 and e.getst(3) == 0 and e.getstx(3) == 0)
 section('Provisioning and States  <<KLE-State-field>>, <<KLE-MVR-open>>')
 e = KLE(); e.mgmt(3, 56, md=mk()); check('opening kl.mgmt provisioning: State 56 (Provisioning)', stx(e, 3) == (56, 0))
@@ -32,8 +32,8 @@ FIN(e,3); check('completing: Ready, StateExtension 0, MachineUse 0', stx(e, 3) =
 e = KLE(); e.mgmt(3, 56, md=mk(MachineUse=77, AuxInfo=5)); check('provisioning zeroes MachineUse', mdh_get(e.md(3), 'MachineUse') == 0)
 for nm, kw in (('State 1', dict(State=1)), ('StateExtension 1 (Error-State PI)', dict(StateExtension=1)), ('AuxDataLen 2', dict(AuxDataLen=2)),
                ('ADSDropped', dict(ADSDropped=1)), ('AuxDataLen 1', dict(AuxDataLen=1)), ('Version 1', dict(Version=1)), ('Version 2', dict(Version=2)),
-               ('Version 3 in a PI', dict(Version=3)), ('SCProtection 3', dict(SCProtection=3)), ('KeyType 3', dict(KeyType=3)),
-               ('Locality[5:4]=3', dict(Locality=0x30)), ('reserved bit 30', dict(Reserved31_30=1)), ('reserved bit 46', dict(Reserved46=1)),
+               ('Version 3 in a PI', dict(Version=3)), ('SCProtection 4', dict(SCProtection=4)), ('KeyType 3', dict(KeyType=3)),
+               ('Locality[5:4]=3', dict(Locality=0x30)), ('reserved bit 46', dict(Reserved46=1)),
                ('reserved 78', dict(Reserved79_78=1)), ('reserved 116-127', dict(Reserved127_116=1)), ('MachinePolicy zero for TOYENC', dict(MachinePolicy=0)),
                ('KeyType 1 w/o key field', dict(KeyType=1)), ('KeyType 2 w/o key field', dict(KeyType=2))):
     e = KLE(); md = mk(**kw)
@@ -180,7 +180,7 @@ e = KLE(); e.mgmt(2, 58, md=mdh_pack(State=0, StateExtension=9)); check('import 
 e2 = KLE(); r = trap(e2.mgmt, 2, 58, md=mk(mach=0x99, State=1)); check('import of unsupported Machine -> kl_exc_unsupported', r == 'unsupported' and e2.md(2) == 0)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3)); check('short import: Error-State MDH installed, no operation opened, no capacity', stx(e, 2) == (0, 3) and e.slots == 8)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, MachineUse=5)); check('short import installs a valid MDH as is', e.md(2) == mk(State=0, StateExtension=3, MachineUse=5))
-e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, SCProtection=3)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, SCProtection=4)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
 e = KLE(); e.mgmt(2, 58, md=im); c = 0xABCD; e.mvin(c, toy_tag(c)); e.mgmt(2, 63, form='C', md=im); check('import completion with valid tag: State = ml.State', stx(e, 2) == (1, 0) and e.L[2].content == c)
 e = KLE(); e.mgmt(2, 58, md=im); e.mvin(0xABCD, 1); e.mgmt(2, 63, form='C', md=im); check('import completion with bad tag: Error State Authentication Failed, no exception', stx(e, 2) == (0, SE_MGMT_AUTH))
 control('a wrong tag is detected (negative control)', e.getstx(2) == SE_MGMT_AUTH)
@@ -201,14 +201,14 @@ FIN(e,1); check('Ready TOYSIG: 32 + 32 = 64', e.size(1) == 64)
 e = KLE(); prov(e, 1); e.mgmt(1, 57, form='A'); check('size in State 57 as Valid: 32 + c1', e.size(1) == 48)
 e = KLE(); e.mgmt(2, 58, md=mk(State=56)); check('size in ppi_importing: 16 + c1', e.size(2) == 32)
 for nm, md, w in (('Form C PI', mk(), 32), ('Form B PI', mk(), 32), ('Form C Valid', mk(State=1), 48), ('State 61', mk(State=61), 0), ('State 0 SE 1 (Error)', mdh_pack(Machine=0x99, StateExtension=1), 16),
-                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('SCProtection 3', mk(SCProtection=3), 0), ('KeyType 3', mk(KeyType=3), 0),
+                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('SCProtection 4', mk(SCProtection=4), 0), ('KeyType 3', mk(KeyType=3), 0),
                   ('unsupported', mk(mach=0x99), 0), ('PI with ADS fields', mk(AuxDataLen=2), 0), ('Valid with AuxDataLen 3', mk(State=1, AuxDataLen=3), 64 + 16 + 16)):
     f = 'B' if 'Form B' in nm else 'C'
     check('kl.size %s = %d' % (nm, w), KLE().size(form=f, md=md) == w)
 check('kl.size Form B ignores bits above 63 (reserved bit 116)', KLE().size(form='B', md=mk() | 1 << 120) == 32 and KLE().size(form='C', md=mk() | 1 << 120) == 0)
 check('kl.size ignores UsagePolicy/Locality/KeyType 2 as 0', KLE().size(form='C', md=mk(KeyType=0)) == KLE().size(form='C', md=mk(mach=M_KEY, KeyType=2)))
 e = KLE(); prov(e, 1); check('kl.avail A: 1 for implemented Machine, 0 Unconfigured, 0 KLNL 32', e.avail(1) == 1 and e.avail(2) == 0 and (setattr(e, 'nl', 32), e.avail(0, r=1))[1] == 0)
-check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(SCProtection=3)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
+check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(SCProtection=4)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
 check('kl.avail examines no field but Machine/Version/reserved: State 61 still 1', KLE().avail(form='C', md=mk(State=61)) == 1)
 check('kl.avail B ignores bits above 63', KLE().avail(form='B', md=mk() | 1 << 120) == 1)
 
@@ -421,7 +421,8 @@ check('shared secret -> 32-byte key field: ok, all 32 bytes (GR28, GR31.1); the 
 e = dv(dup=0x6, sup=0x5); e.derive(2, 1, 32); check('restricted transfer narrows dest UsagePolicy by AND (GR30); State of dest stays Ready', mdh_get(e.md(2), 'UsagePolicy') == 0x4)
 e = dv(sloc=0x10, dloc=0x20); r = e.derive(2, 1, 32); check('GR30: narrowing fails (boot subfields differ) -> dest Privilege Violation, nothing transferred', r == 'pv' and stx(e, 2) == (0, SE_PRIV_VIOLATION) and e.getst(1) == 2)
 e = dv(sprot=2, dprot=1); r = e.derive(2, 1, 32); check('GR30: dest SCProtection lower than source -> dest Privilege Violation', stx(e, 2) == (0, SE_PRIV_VIOLATION))
-e = dv(sprot=1, dprot=2); check('dest SCProtection >= source: ok', e.derive(2, 1, 32) == 'ok')
+e = dv(sprot=1, dprot=3); check('dest SCProtection at least the source (bitwise): ok', e.derive(2, 1, 32) == 'ok')
+e = dv(sprot=1, dprot=2); e.derive(2, 1, 32); check('GR30: dest 2 lacks bit 0 of source 1 (bits independent) -> dest Privilege Violation', stx(e, 2) == (0, SE_PRIV_VIOLATION))
 for ln in (0, 31): e = dv(); e.derive(2, 1, ln); check('shared secret into a key field requires length >= dest_length (%d) -> dest Invalid (GR29 item 6)' % ln, stx(e, 2) == INV and e.getst(1) == 2)
 e = dv(); r = e.derive(2, 1, 33); check('shared secret, length 33 > dest_length 32: the key field receives the first 32 bytes (GR28, GR29 item 6)', r == 'ok' and e.L[2].content == SEC)
 e = dv(sst=1); r = e.derive(2, 1, 32); check('source not a source endpoint (Ready) -> source Invalid (GR29 item 2)', stx(e, 1) == INV and e.getst(2) == 1)
@@ -565,7 +566,7 @@ for n, lo, w in MDH_FIELDS:
 check('walking ones: each field bit at its position, no bleed', ok)
 check('all-ones MDH round trips through mdh_unpack/mdh_pack', mdh_pack(**mdh_unpack(mask(128))) == mask(128))
 w = mdh_pack(State=0x2A, StateExtension=0x5, Machine=7)
-e = KLE(); e.L[1].mdh = w; check('kl.getst = (getmdl >> 18) & 0x3F, kl.getstx = (getmdl >> 24) & 0xF; getmdl is MDH[63:0]', e.getst(1) == (e.getmd(1, part='l') >> 18) & 63 == 0x2A and e.getstx(1) == (e.getmd(1, part='l') >> 24) & 15 == 5 and e.getmd(1, part='l') == w & mask(64))
+e = KLE(); e.L[1].mdh = w; check('kl.getst = (getmdl >> 20) & 0x3F, kl.getstx = (getmdl >> 26) & 0xF; getmdl is MDH[63:0]', e.getst(1) == (e.getmd(1, part='l') >> 20) & 63 == 0x2A and e.getstx(1) == (e.getmd(1, part='l') >> 26) & 15 == 5 and e.getmd(1, part='l') == w & mask(64))
 e = enc(); check('GR19.2: kl.exec in Ready is not admitted: Invalid', (e.setst(1, 1), e.execw(1, form='A', data=bytes(16)))[1] == 'invalid' and stx(e, 1) == INV)
 e = enc(); e.setst(1, 2); check('GR19.2: kl.setst naming the current State (not Ready) is not admitted: Invalid', stx(e, 1) == INV)
 e = E2(); e.mgmt(0, 56, md=mk()); e.gpr_in(1); e.mgmt(0, 57, form='A')

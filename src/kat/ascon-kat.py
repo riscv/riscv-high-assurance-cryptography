@@ -294,7 +294,7 @@ for k in HASHES:
         M = Locker(k); M.setst(2, 'A'); M.setst(imm, 'A'); check('%s: setst %d -> Invalid' % (k, imm), M.se == SE_INV)
     L.setst(0, 'A'); st0 = (L.st, L.se); L.setst(1, 'A'); L.exec('B', b'a'); L.rstrl(2)
     check('%s: kl.clear -> Unconfigured; later setst/exec/rstrl change nothing' % k, st0 == (0, 0) and (L.st, L.se) == (0, 0))
-for scd, scs, want in ((1, 2, 5), (2, 1, 0), (2, 2, 0)):
+for scd, scs, want in ((1, 2, 5), (2, 1, 5), (3, 1, 0), (2, 2, 0)):
     d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = scd; s = Secret(bytes(range(32)), restricted=True, scprot=scs); derive(s, d, 32)
     check('GR30 restricted transfer, dst SCProtection %d, src %d -> %s' % (scd, scs, 'Privilege Violation' if want else 'transferred'), (d.se == 5) if want else (d.st == READY and d.se == 0 and d.key == b2v(bytes(range(16)))), (d.st, d.se))
 d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; s = Secret(bytes(range(32)), restricted=False, scprot=2); derive(s, d, 32)

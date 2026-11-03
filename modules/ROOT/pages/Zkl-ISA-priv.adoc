@@ -9,6 +9,7 @@ The KLE Privileged Architecture provides CSRs; this chapter also defines the KLE
 
 // ////////////////////////////////////////////////////////////////////
 
+[[KLE-priv-exts-overview]]
 == Extension Overview
 
 // [WARNING]
@@ -268,7 +269,7 @@ so any such state change must be explicit, and must precede the write.
 (((CSR,kleemulation field in mstatus)))
 `mstatus`[27] holds `kleemulation`, a bit M-mode sets when it emulates Machines the KLE unit does not implement natively.
 It is not visible in `sstatus` or `vsstatus`, and it resets to 0.
-M-mode that sets `kleemulation` keeps `medeleg` bit 2 zero, so the exception reaches it, as for trap-and-emulate (<<Zkl-ISA-unpriv.adoc#KLE-extensions-overview-unpriv>>), and forwards any other illegal-instruction exception in software.
+M-mode that sets `kleemulation` keeps `medeleg` bit 2 zero, so the exception reaches it, as for trap-and-emulate (<<Zkl-ISA-unpriv.adoc#KLE-unpriv-exts-overview>>), and forwards any other illegal-instruction exception in software.
 It controls the Forms B and C of `kl.avail` and `kl.size`, which take an MDH supplied in registers rather than a locker (<<Zkl-ISA-unpriv.adoc#KLE-instruction-size>>), once they reach the lookup of <<Zkl-ISA-unpriv.adoc#KLE-size-avail-lookup,item 5 of `kl.size`>>; the earlier items, among them the 16 that `kl.size` returns for an MDH in an Error State, do not depend on which Machines are implemented:
 
 * while `kleemulation` is 1, such an instruction raises an illegal-instruction exception if the KLE unit does not natively implement the combination of _Machine_, _MachinePolicy_, _MachineExtension_, _KeyType_ and _SCProtection_ that the MDH carries, so M-mode can supply the value for an emulated Machine;
@@ -439,30 +440,28 @@ It has the accessibility of the `mklcsk` group (<<KLE-CSR-mklcsk>>), and is acce
 [float="center",align="center",cols="^12%,^14%,<74%",options="header"]
 |===
 | Bits       | Field       | Description
-| [1:0]      | _CSKSel_    | WARL. The level L of the selected CSK, CSK~L~; the legal values are the levels that the hart implements (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
-| 2          | _CSKErase_  | Writing 1 erases a CSK, as described below. Reads as 0.
-| MXLEN−1:3  | —           | Reserved: writes are ignored, and reads return zero.
+=======
+| [2:0]      | _CSKSel_    | The level L of the selected CSK, CSK~L~. A value is legal only if the implementation defines that level (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+| 3          | _CSKErase_  | Writing 1 erases a CSK, as described below. Reads as 0.
+| MXLEN−1:4  | —           | Reserved: writes are ignored, and reads return zero.
 |===
 
-A write of a value `v` to bits [2:0] of `mklcfg` whose `v`[1:0] is not a level that the hart implements leaves `mklcfg` and the CSKs unchanged.
-Any other write sets _CSKSel_ to `v`[1:0], abandons a partially written `mklcsk` group, and has the effect of <<KLE-mklcfg-writes>>.
+A write of a value `v` to bits [3:0] of `mklcfg` sets _CSKSel_ to `v`[2:0], and:
 
-[[KLE-mklcfg-writes]]
-.Effect of a write to `mklcfg`
-[float="center",align="center",cols="^14%,<43%,<43%",options="header"]
-|===
-| _CSKErase_ (`v`[2]) | Trapped selection (<<Zkl-ISA-unpriv.adoc#KLE-CSK-selection>>) | `Smklmultcsk`
-| 0 | Selects level `v`[1:0] for the next full write of the `mklcsk` group; unconfigures the CSK held if its level differs, since a CSK never changes level. | Selects the CSK of level `v`[1:0], which the `mklcsk` group then writes and reads.
-| 1 | Unconfigures the CSK held, whatever its level. | Unconfigures the CSK of level `v`[1:0].
-|===
+* with _CSKErase_ = 0, with trapped selection (<<Zkl-ISA-unpriv.adoc#KLE-CSK-selection>>), sets the level that the next full write of the `mklcsk` group gives the CSK, and unconfigures the CSK held if `v` differs from its level, since a CSK never changes level; with `Smklmultcsk`, it only selects CSK~v~, which the `mklcsk` group then writes and reads;
+* with _CSKErase_ = 1, unconfigures at once the CSK held, whatever its level, with trapped selection, and CSK~L~, with L = `v` − 8, with `Smklmultcsk`.
+
+A write whose `v`[2:0] is a level that the implementation does not define leaves `mklcfg` and the CSKs unchanged.
+Every write abandons a partially written `mklcsk` group.
 
 Under the second way, M-mode writes _CSKSel_ before it asks the secure hardware block to establish a CSK, which the block establishes for that level.
 
 A KLE missing-CSK exception writes `mtval`:
+
 * 0, if no CSK is configured;
-* 4 + L, if an export or import at level L finds CSK~L~ not in use (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
-  With `Smklmultcsk`, the exception also sets _CSKSel_ to L, as a write of L to `mklcfg` does, so that M-mode establishes CSK~L~ without writing `mklcfg`.
-  With trapped selection, _CSKSel_ is unchanged, since setting it would unconfigure the CSK held: M-mode reads L from `mtval` and writes it to `mklcfg` before it establishes the CSK.
+* 8 + L, if an export or import at level L finds CSK~L~ not in use (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
+  With `Smklmultcsk`, the exception also sets _CSKSel_ to L, so that M-mode establishes CSK~L~ by writing the `mklcsk` group alone.
+  With trapped selection, _CSKSel_ is unchanged, since setting it would unconfigure the CSK held: M-mode reads L from `mtval` and writes it to `mklcfg` before writing the group.
 
 M-mode keeps the KLE missing-CSK cause undelegated in `medeleg`, since only M-mode can establish a CSK.
 

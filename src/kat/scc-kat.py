@@ -120,7 +120,7 @@ def main():
     check('AuxDataLen = 1 -> 0 (invalid)', scc_size(mk(adl=1)['mdh']) == 0)
     check('Error State -> 16', all(scc_size(mdh_pack(State=0, StateExtension=e, AuxDataLen=9)) == 16 for e in range(1, 7)))
     check('State 0 StateExtension 7-15 and State 61-63 -> 0', all(scc_size(mdh_pack(State=0, StateExtension=e)) == 0 for e in range(7, 16)) and all(scc_size(mdh_pack(State=s)) == 0 for s in (61, 62, 63)))
-    check('SCProtection 3, Version 1/2, KeyType 3 -> 0', all(scc_size(mk(**{k: v})['mdh']) == 0 for k, v in (('SCProtection', 3), ('Version', 1), ('Version', 2), ('KeyType', 3))))
+    check('SCProtection 4 to 7, Version 1/2, KeyType 3 -> 0', all(scc_size(mk(**{k: v})['mdh']) == 0 for k, v in (('SCProtection', 4), ('SCProtection', 7), ('Version', 1), ('Version', 2), ('KeyType', 3))))
 
     section('export -> import round trip')
     for js in ((), (2,), (1, 4, 6, 8, 9, 10)):
@@ -158,7 +158,7 @@ def main():
           st == 'authfail' and f['State'] == 0 and f['StateExtension'] == 4 and E['c1'] == b'' and f['AuxDataLen'] == 0 and f['Machine'] == 0x20 and f['Locality'] == mdh_get(L['mdh'], 'Locality'))
     check('unpopulated SiPScrt: substituted by ChipFamScrt on both sides', scc_import(scc_export(mk(js=(0,)), CSKV, lst2, IMPQ), CSKV, lst2, IMPQ)[0] == 'ok'
           and scc_import(scc_export(mk(js=(0,)), CSKV, lst2, IMPQ), CSKV, LSTV, IMPQ)[0] == 'authfail')
-    for name, kw in (('Locality[5:4] = 3', dict(Locality=0x30)), ('SCProtection 3', dict(SCProtection=3)), ('KeyType 2', dict(KeyType=2)),
+    for name, kw in (('Locality[5:4] = 3', dict(Locality=0x30)), ('SCProtection 4', dict(SCProtection=4)), ('KeyType 2', dict(KeyType=2)),
                      ('Version 1', dict(Version=1)), ('ExpirationDate without Zklexpire', dict(ExpirationDate=5)), ('Reserved bit', dict(Reserved46=1)),
                      ('AuxDataLen 1', dict(AuxDataLen=1))):
         m = mdh_put(L['mdh'], *list(kw.items())[0]); im = v2b(m, 16) + img[16:]
@@ -215,7 +215,7 @@ def main():
     check('short import sets AuxDataLen and ADSDropped to 0', scc_import(v2b(Em['mdh'], 16), 0, [0] * 11, 0)[1] == E)
     X6 = v2b(mdh_pack(Machine=0x20, MachinePolicy=3, State=0, StateExtension=SE_EXPIRED), 16)
     check('StateExtension 6 short-imports only with Zklexpire (m6); without it the image is invalid', scc_import(X6, 0, [0] * 11, 0, zklexpire=True)[0] == 'ok' and scc_import(X6, 0, [0] * 11, 0)[0] == 'invalid')
-    XI = v2b(mdh_put(E['mdh'], 'SCProtection', 3), 16)
+    XI = v2b(mdh_put(E['mdh'], 'SCProtection', 4), 16)
     check('short import of invalid Metadata gives Error State Invalid (M8)', scc_import(XI, 0, [0] * 11, 0)[1]['mdh'] == mdh_pack(State=0, StateExtension=SE_INVALID))
     check('same MDH in a Valid State is checked: authentication of a 16-byte image impossible (invalid)', scc_size(mdh_put(E['mdh'], 'StateExtension', 0)) == 0)
     control('negative: a corrupted SCC image (wrong CSK) is not accepted', scc_import(scc_export(mk(), CSKV, LSTV, IMPQ), CSKV ^ 2, LSTV, IMPQ)[0] != 'ok')
@@ -263,6 +263,11 @@ def main():
     info('ECC SCC_ClearLen1 (MachineExtension 1, 0) with MachinePolicy != 0: %s' % ecc)
     P1 = _blocks(L["c1"]); AD1 = scc_ad(L["mdh"], LSTV)
     control("negative: a clear block left out of the AD is not authenticated", scc_encrypt(AD1, 0, P1[1:], CSKV)[0] == scc_encrypt(AD1, 0, P1[1:], CSKV)[0] != scc_encrypt(AD1 + [P1[0] ^ 1], 0, P1[1:], CSKV)[0])
+
+    T = dict(L, mdh=mdh_put(L['mdh'], 'Transparent', 1)); timg = scc_export(T, CSKV, LSTV, IMPQ)
+    check('Transparent = 1: the whole Content in clear, authenticated, round trip; flipping the bit fails authentication',
+          timg[64:] == T['c1'] + T['c2'] and scc_import(timg, CSKV, LSTV, IMPQ) == ('ok', T)
+          and scc_import(v2b(L['mdh'], 16) + timg[16:], CSKV, LSTV, IMPQ)[0] == 'authfail')
 
     section('regression vectors (CSK 000102..1f, LST[j] = 16 x (0x40+j), key 8081..9f)')
     spec_note('vectors below are produced by the spec model and equal the independent RFC-based assembly checked above')
