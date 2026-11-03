@@ -449,6 +449,8 @@ Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> states how _MachinePolicy_ ga
 
 (((Cryptographic Context, performance-only)))A CC whose _Transparent_ bit is 1 is exported in clear: its SCCs are authenticated but not encrypted.
 The bit is set at provisioning and cannot be changed afterwards.
+A System-Key CC (_KeyType_ = 1) must have _Transparent_ = 0 (<<KLE-Metadata-validity>>).
+Clear export of its intermediate values could otherwise bypass its _MachinePolicy_.
 A restricted transfer never moves a secret into such a CC from a CC whose bit is 0 (Rule <<KLE-GR-narrowing>>), and a system-specific import never sets the bit (Rule <<KLE-GR-sysfmt-mdh>>).
 
 Export and import then encrypt nothing: the plaintext and ciphertext of the SCC algorithms are empty, and the whole Content is authenticated as associated data (Rule <<KLE-GR-scc-clear-blocks>>).
@@ -627,12 +629,6 @@ INSERT TIKZ HERE
 ////
 
 <<KLE-states-graph>> shows these States and the default transitions between them, which apply to all Machines.
-
-[[KLE-states-graph]]
-.Default State Transitions
-[float="center",align="center"]
-image::statestikz-3.svg[]
-
 The legend of the graph is:
 
 * Double-bordered ellipses: the _Unconfigured_ State, and all Configuration States.
@@ -642,6 +638,11 @@ The legend of the graph is:
 * Dashed edges: transitions induced by reaching the expiration date.
 * Dotted edges: transitions induced by configuration operations.
 
+
+[[KLE-states-graph]]
+.Default State Transitions
+[float="center",align="center"]
+image::statestikz-3.svg[]
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -863,6 +864,7 @@ A supplied MDH is _invalid_ when any of the following holds:
 
 * _Version_ is unsupported, or is 3 in a PI or in a PCCC of base type `pi`;
 * _Version_ is 3 at import and any of the following holds: _State_ is not _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`; _AuxDataLen_ is zero; or one of _StateExtension_, _KeyType_, _Transparent_, _ADSDropped_ and _MachineUse_ is non-zero (<<KLE-system-specific-import>>);
+* _Transparent_ is 1 and _KeyType_ is 1;
 * _KeyType_ is 1 or 2 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 3, or 2 outside a PI and a PCCC of base type `pi`;
 * _SCProtection_ is a custom level that the implementation defines for no Machine (<<KLE-SCProtection-field>>);
@@ -880,8 +882,9 @@ A supplied MDH is _invalid_ when any of the following holds:
 * a Reserved bit is non-zero.
 
 Invalid Metadata takes precedence over unsupported Metadata: the test for _unsupported_ applies only to valid Metadata, as only a valid _Version_ fixes the layout of the fields it reads.
+The incompatibility of _Transparent_ = 1 and _KeyType_ = 1 applies to every _Machine_ and is checked before any SKID resolution.
 The four conditions that depend on the definition of the Machine (those on _KeyType_ for a Machine without a key field, on _StateExtension_ @ _State_, on _MachinePolicy_ and on _MachineExtension_) apply only to a _Machine_ that the KLE unit implements, with some _MachinePolicy_, _MachineExtension_ and _SCProtection_.
-For any other _Machine_, the Metadata is unsupported, and an M-mode handler that emulates the Machine applies those conditions (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>).
+For any other _Machine_, otherwise-valid Metadata is unsupported, and an M-mode handler that emulates the Machine applies those conditions (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>).
 
 //
 
@@ -1656,13 +1659,13 @@ With `Xd` = `X0` the instruction writes nothing (Rule <<KLE-GR-x0-operand>>).
 On RV64, `kl.getst` expands to
 
 . `kl.getmdl Xd, Ks`
-. `srli  Xd, Xd, 18`
+. `srli  Xd, Xd, 20`
 . `andi  Xd, Xd, 0x3F`
 
-and `kl.getstx` to the same code, with the constants in Steps 2 and 3 changed to 24 and `0x0F`, respectively.
+and `kl.getstx` to the same code, with the constants in Steps 2 and 3 changed to 26 and `0x0F`, respectively.
 //
 // . `kl.getmdl Xd, Ks`
-// . `srli  Xd, Xd, 24`
+// . `srli  Xd, Xd, 26`
 // . `andi  Xd, Xd, 0x0F`
 
 On RV32 the code is the same, but `Xd` must be even (Rule <<KLE-GR-multiple-GPRs>>) and `X[d+1]` is also overwritten with MDH bits [63:32].
@@ -2243,6 +2246,7 @@ Any other exception leaves the KLE state unchanged, except for these changes, ma
 --
 * the destructive step (<<KLE-destructive-config>>) of a provisioning- or import-opening `kl.mgmt`, which zeroizes the locker and sets `klnamedlocker` (Rule <<KLE-GR-klnamedlocker-updates>>), and of a `kl.clone`, which clears its destination as `kl.clear` would, with the same effect on `klnamedlocker` (<<KLE-instruction-clone>>), and sets to Dirty every `*llockerstatus` field in effect for the destination and every `KLS` field in effect;
 * the zeroization of `SIV`, `IMPQUAL` and `SIV2` by an import-opening `kl.mgmt` (<<KLE-MVR-open>>);
+* on a KLE missing-CSK exception with `mtval` = 8 + L, with `Smklmultcsk` and `mklcfg` implemented, setting _CSKSel_ to L as a write of L to `mklcfg` with _CSKErase_ = 0 does (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>); under the first CSK establishment way, this also abandons a partially written `mklcsk` group;
 * the clearing of `klstart` by any `kl.mgmt` that passes items 1–6 of the locker-state-independent checks (<<KLE-locker-management>>); and
 * the completed prefix, and the `klstart` that records it, that a memory instruction commits when one of its component accesses raises a memory exception (Rules <<KLE-GR-memory-instructions>> and <<KLE-GR-resumability-options>>).
 --
@@ -2799,7 +2803,8 @@ This section describes when exceptions are raised and when Error States are set.
 [[KLE-exceptions-grounds]]
 === Exceptions
 
-The grounds of each KLE exception follow, in the descending priority order of <<Zkl-ISA-priv.adoc#KLE-exception-codes>>, except the memory exceptions, listed last.
+The grounds of each KLE exception follow, with the memory exceptions listed last.
+Rules <<KLE-GR-management-check-order>> and <<KLE-GR-state-dependent-checks>>, followed by each instruction's stated steps, give their check order (<<Zkl-ISA-priv.adoc#KLE-exception-codes>>).
 
 [[KLE-first-group-ILL-grounds,First Group of Illegal-Instruction Exception Grounds]]First Group of Illegal-Instruction Exception Grounds::
 +
@@ -2838,6 +2843,7 @@ These grounds depend only on the instruction encoding, the GPR numbers, the vect
 
 KLE missing-CSK:: No CSK is configured: raised by every KLE instruction and KLE CSR access, except as <<KLE-CSK-requirements>> states.
 The CSK of the level of an export or import is not in use: raised by the `kl.mgmt` instructions that <<KLE-CSK-requirements>> lists.
+This second condition is locker-state-dependent and is checked in those instructions' stated steps, after the applicable locker-Off check.
 
 KLE locker-Off:: An access to a locker marked _Off_, except the destination access of a destructive configuration instruction other than `kl.swap`, and any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker (<<KLE-destructive-config>>, <<KLE-instruction-clone>>, <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
 `kl.load`, `kl.mvin` and `kl.setste` are not exempt.
