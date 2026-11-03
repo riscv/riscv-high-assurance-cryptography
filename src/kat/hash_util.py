@@ -165,6 +165,11 @@ def sealed_checks(fn, mk, ref):
     L = sl(); L.mdh = mdh_pack(SCProtection=1); K = Key(16, mdh=mdh_pack(SCProtection=0))
     check('%s GR30: a key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output' % fn,
           not derive_out(L, K, 16) and K.st == 'PrivViolation' and L.st == 'Output' and L.outl == 8 * d)
+    L = mk(); L.mdh = mdh_pack(Transparent=1); check('%s GR30: a Transparent hash of a sealed secret that is not -> Privilege Violation, nothing absorbed' % fn,
+                                                 not L.derive(sec, sealed=True, smdh=mdh_pack()) and L.st == 'PrivViolation' and not L.sealed)
+    L = sl(); K = Key(16, mdh=mdh_pack(Transparent=1))
+    check('%s GR30: a Transparent key of a sealed hash that is not -> Privilege Violation, the source keeps its output' % fn,
+          not derive_out(L, K, 16) and K.st == 'PrivViolation' and L.st == 'Output' and L.outl == 8 * d)
     L = mk(); L.mdh = mdh_pack(Locality=0x10); check('%s GR30: failed narrowing (boot subfields differ) -> Privilege Violation' % fn,
                                                   not L.derive(sec, sealed=True, smdh=mdh_pack(Locality=0x20)) and L.st == 'PrivViolation')
     # StateExtension @ State at an SCC import or kl.clone (KLE-Metadata-validity)

@@ -360,7 +360,7 @@ class KLE2(KLE):
         # 7: source supplies the bytes: both toy sources supply any length; a sealed one moves >= 16 bytes
         if sealed and eff < 16: s.err(src, SE_INVALID); return 'invalid'
         if restricted and eff:                                # GR30
-            if sc_lower(mdh_get(md_, 'SCProtection'), mdh_get(ms, 'SCProtection')): s.err(d, SE_PRIV_VIOLATION); return 'pv'
+            if sc_lower(mdh_get(md_, 'SCProtection'), mdh_get(ms, 'SCProtection')) or transparent_leak(md_, ms): s.err(d, SE_PRIV_VIOLATION); return 'pv'
             nm = narrow(md_, ms)
             if nm is None: s.err(d, SE_PRIV_VIOLATION); return 'pv'
             md_ = nm

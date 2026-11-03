@@ -356,10 +356,14 @@ def narrow(dmd, smd):
 def sc_lower(v, w):
     """SCProtection level v is lower than w: w has a set bit that v lacks (the bits are independent)."""
     return w & ~v != 0
+def transparent_leak(dmd, smd):
+    """Rule GR30: a Transparent destination of a source that is not Transparent would export the secret in clear."""
+    return bool(mdh_get(dmd, 'Transparent') and not mdh_get(smd, 'Transparent'))
 def gr40(dmd, smd):
     """Rule GR30 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
-    SCProtection or a failed narrowing."""
-    return None if sc_lower(mdh_get(dmd, 'SCProtection'), mdh_get(smd, 'SCProtection')) else narrow(dmd, smd)
+    SCProtection, a Transparent destination of a source that is not, or a failed narrowing."""
+    if sc_lower(mdh_get(dmd, 'SCProtection'), mdh_get(smd, 'SCProtection')) or transparent_leak(dmd, smd): return None
+    return narrow(dmd, smd)
 
 ST_INERT, ST_READY, ST_SUCCESS, ST_FAILURE = 0, 1, 54, 55
 CFG_PROVISIONING, CFG_EXPORTING, CFG_IMPORTING, CFG_PPI_EXPORTING, CFG_PPI_IMPORTING = 56, 57, 58, 59, 60

@@ -297,6 +297,10 @@ for k in HASHES:
 for scd, scs, want in ((1, 2, 5), (2, 1, 5), (3, 1, 0), (2, 2, 0)):
     d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = scd; s = Secret(bytes(range(32)), restricted=True, scprot=scs); derive(s, d, 32)
     check('GR30 restricted transfer, dst SCProtection %d, src %d -> %s' % (scd, scs, 'Privilege Violation' if want else 'transferred'), (d.se == 5) if want else (d.st == READY and d.se == 0 and d.key == b2v(bytes(range(16)))), (d.st, d.se))
+d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; d.mdh = mdh_pack(Transparent=1); s = Secret(bytes(range(32)), restricted=True, scprot=1); derive(s, d, 32)
+check('GR30 restricted transfer into a Transparent key of a source that is not -> Privilege Violation', d.se == 5 and d.key == 0, (d.st, d.se))
+d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; d.mdh = mdh_pack(Transparent=1); s = Secret(bytes(range(32)), restricted=True, scprot=1, mdh=mdh_pack(Transparent=1)); derive(s, d, 32)
+check('control: ... of a Transparent source -> transferred', d.st == READY and d.se == 0 and d.key == b2v(bytes(range(16))), (d.st, d.se))
 d = Locker('ASCON-AEAD128', key=bytes(16)); d.scprot = 1; s = Secret(bytes(range(32)), restricted=False, scprot=2); derive(s, d, 32)
 check('GR31 unrestricted transfer applies no SCProtection check', d.se == 0 and d.key != 0)
 

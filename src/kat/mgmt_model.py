@@ -36,7 +36,7 @@ def validate(md, ctx, zk=True):
     bad = any(g(r) for r in RESERVED) or g('SCProtection') >= 4 or g('KeyType') == 3 or (g('Locality') >> 4 & 3) == 3
     ver = g('Version')
     if ver == 3:      # <<KLE-GR-sysfmt-import-only>>, <<KLE-Metadata-validity>>
-        bad |= ctx != 'import' or st not in (0, 58, 57) or g('AuxDataLen') == 0 or bool(se or g('KeyType') or g('ADSDropped') or g('MachineUse'))
+        bad |= ctx != 'import' or st not in (0, 58, 57) or g('AuxDataLen') == 0 or bool(se or g('KeyType') or g('Transparent') or g('ADSDropped') or g('MachineUse'))
     else:
         bad |= ver != 0 or g('AuxDataLen') == 1
     bad |= (se == 6 and not zk) or bool(g('ExpirationDate') and not zk)

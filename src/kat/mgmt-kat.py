@@ -423,6 +423,9 @@ e = dv(sloc=0x10, dloc=0x20); r = e.derive(2, 1, 32); check('GR30: narrowing fai
 e = dv(sprot=2, dprot=1); r = e.derive(2, 1, 32); check('GR30: dest SCProtection lower than source -> dest Privilege Violation', stx(e, 2) == (0, SE_PRIV_VIOLATION))
 e = dv(sprot=1, dprot=3); check('dest SCProtection at least the source (bitwise): ok', e.derive(2, 1, 32) == 'ok')
 e = dv(sprot=1, dprot=2); e.derive(2, 1, 32); check('GR30: dest 2 lacks bit 0 of source 1 (bits independent) -> dest Privilege Violation', stx(e, 2) == (0, SE_PRIV_VIOLATION))
+e = dv(Transparent=1); r = e.derive(2, 1, 32); check('GR30: Transparent dest of a source that is not -> dest Privilege Violation, nothing transferred', r == 'pv' and stx(e, 2) == (0, SE_PRIV_VIOLATION) and e.getst(1) == 2)
+e = dv(Transparent=1); e.L[1].mdh = mdh_put(e.md(1), 'Transparent', 1); check('control: Transparent dest of a Transparent source -> ok', e.derive(2, 1, 32) == 'ok' and e.L[2].content == SEC)
+e = dv(); e.L[1].mdh = mdh_put(e.md(1), 'Transparent', 1); check('control: dest that is not Transparent, of a Transparent source -> ok', e.derive(2, 1, 32) == 'ok')
 for ln in (0, 31): e = dv(); e.derive(2, 1, ln); check('shared secret into a key field requires length >= dest_length (%d) -> dest Invalid (GR29 item 6)' % ln, stx(e, 2) == INV and e.getst(1) == 2)
 e = dv(); r = e.derive(2, 1, 33); check('shared secret, length 33 > dest_length 32: the key field receives the first 32 bytes (GR28, GR29 item 6)', r == 'ok' and e.L[2].content == SEC)
 e = dv(sst=1); r = e.derive(2, 1, 32); check('source not a source endpoint (Ready) -> source Invalid (GR29 item 2)', stx(e, 1) == INV and e.getst(2) == 1)
@@ -501,7 +504,7 @@ sf = mk(Version=3, AuxDataLen=3)
 e = E2(); e.mgmt(0, 58, md=sf); check('Version 3 import opens in State 58 with Version 3 MDH; kl.size = 16 + 16*AuxDataLen (GR47)', e.getst(0) == 58 and mdh_get(e.md(0), 'Version') == 3 and e.size(0) == 64 and e.image_end(0) == 48)
 check('kl.size Forms B and C of a Version 3 MDH', e.size(form='C', md=sf) == 64 and e.size(form='B', md=sf) == 64)
 for nm, kw in (('AuxDataLen 0', dict(AuxDataLen=0)), ('StateExtension != 0 (State 0)', dict(StateExtension=1)), ('KeyType != 0', dict(KeyType=1)),
-               ('ADSDropped', dict(ADSDropped=1)), ('MachineUse', dict(MachineUse=1)), ('State 1', dict(State=1))):
+               ('ADSDropped', dict(ADSDropped=1)), ('MachineUse', dict(MachineUse=1)), ('Transparent', dict(Transparent=1)), ('State 1', dict(State=1))):
     f = dict(Version=3, AuxDataLen=3); f.update(kw); e = E2(); e.mgmt(0, 58, md=mk(**f))
     if nm.startswith('StateExtension'): check('Version 3 import with an Error-State MDH is invalid Metadata: Error State Invalid', e.md(0) == mdh_pack(State=0, StateExtension=SE_INVALID))
     elif nm == 'State 1': check('Version 3 import with State 1 -> invalid', stx(e, 0) == INV)

@@ -247,8 +247,9 @@ A handler that can neither resolve nor forward a KLE exception for which <<Zkl-I
 For KLE fatal-error, missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
 
 An M-mode handler resolves a KLE missing-CSK exception by establishing a CSK and re-executing the instruction (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
-With `mtval` = 8 + L, it establishes CSK~L~: with trapped selection, it first writes L to `mklcfg`; with `Smklmultcsk`, the exception has already selected L, and the handler only writes the `mklcsk` group.
-A handler that will need a replaced CSK again keeps a copy of it, one per level, in memory that only M-mode can access.
+With `mtval` = 0, it establishes the CSK of the level that the platform uses most or, with `Smklmultcsk`, every CSK that it holds; an export or import at another level then traps again with 8 + L.
+With `mtval` = 8 + L, it establishes CSK~L~: with trapped selection, it first writes L to `mklcfg`; with `Smklmultcsk`, the exception has already selected L, and the handler only establishes the CSK, through the `mklcsk` group under the first way or the secure hardware block under the second.
+It keeps what re-establishes each CSK, one per level, in memory that only M-mode can access: the value under the first way, a handle or wrapped key under the second.
 
 // ///////////////////////////////////////////////////////////////////
 
@@ -1649,7 +1650,7 @@ _Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid poi
 *Sealed variant.* With _MachineExtension_ = 2 in the ECC SCC, the same listing also keeps `Z` and `K` from software that controls the lockers (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>).
 The public key stays readable, but a Form C `kl.exec` of `Z` makes `K1` _Invalid_, and `Z` seals `K0` when it enters it, so a Form C `kl.exec` of the digest makes `K0` _Invalid_.
 Both `kl.derive` instructions are then restricted: each moves at least 16 bytes, and each narrows the Metadata of its destination (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-narrowing>>), so that `K2` ends with no wider a _UsagePolicy_, _Locality_ or _ExpirationDate_ than `K1`.
-`K0` and `K2` therefore need an _SCProtection_ that includes that of `K1`.
+`K0` and `K2` therefore need an _SCProtection_ that includes that of `K1` (<<Zkl-ISA-unpriv.adoc#KLE-SC-ordering>>).
 
 *Longer keys.* `Z` feeds one `kl.derive` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), sealed or not, so the counter cannot advance to `00000002`.
 A key longer than the digest, or several keys, need a longer output from one hash locker: SHA-512, or KMAC256 with `L` set to the total length, `S` = "KDF" and an agreed salt of at most 131 bytes as `K` (Option 3 of cite:[NIST-SP-800-56Cr2] {sect}4.1; the 132-byte `default_salt` spans two `key_block` blocks).
