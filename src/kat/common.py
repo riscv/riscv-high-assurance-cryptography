@@ -41,7 +41,7 @@ GF(2^128) (all operands/results 128-bit VALUES in the spec's representation)
   double(s, b=128) -> int     bswap(dbl(bswap(s))) of OCB3/CMAC; b = 128 or 64; for 128 equals bswap(update_mask(bswap(s)))
 
 MDH (Zkl-ISA-unpriv KLE-metadata-header; 128-bit value)
-  MDH_FIELDS: ordered list of (name, lo, width); reserved ones named Reserved31_30, Reserved46, Reserved79_78, Reserved127_116
+  MDH_FIELDS: ordered list of (name, lo, width); reserved ones named Reserved46, Reserved79_78, Reserved127_116
   mdh_pack(**fields) -> int   unspecified fields are 0; ValueError on unknown name or value too wide
   mdh_unpack(mdh) -> dict     all fields incl. reserved
   mdh_get(mdh, name) -> int ; mdh_put(mdh, name, value) -> new mdh (ValueError if too wide)
@@ -322,8 +322,8 @@ def double(s, b=128):
 
 # ---------------------------------------------------------------- MDH
 MDH_FIELDS = [
-    ('Machine', 0, 12), ('MachinePolicy', 12, 2), ('MachineExtension', 14, 2), ('SCProtection', 16, 2),
-    ('State', 18, 6), ('StateExtension', 24, 4), ('KeyType', 28, 2), ('Reserved31_30', 30, 2),
+    ('Machine', 0, 12), ('MachinePolicy', 12, 2), ('MachineExtension', 14, 2), ('SCProtection', 16, 3),
+    ('Transparent', 19, 1), ('State', 20, 6), ('StateExtension', 26, 4), ('KeyType', 30, 2),
     ('AuxDataLen', 32, 14), ('Reserved46', 46, 1), ('ADSDropped', 47, 1), ('MachineUse', 48, 14),
     ('Version', 62, 2), ('UsagePolicy', 64, 5), ('Locality', 69, 9), ('Reserved79_78', 78, 2),
     ('AuxInfo', 80, 16), ('ExpirationDate', 96, 20), ('Reserved127_116', 116, 12)]
@@ -353,10 +353,13 @@ def narrow(dmd, smd):
     m = mdh_put(m, 'Locality', out)
     e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
     return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
+def sc_lower(v, w):
+    """SCProtection level v is lower than w: w has a set bit that v lacks (the bits are independent)."""
+    return w & ~v != 0
 def gr40(dmd, smd):
     """Rule GR30 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
     SCProtection or a failed narrowing."""
-    return None if mdh_get(dmd, 'SCProtection') < mdh_get(smd, 'SCProtection') else narrow(dmd, smd)
+    return None if sc_lower(mdh_get(dmd, 'SCProtection'), mdh_get(smd, 'SCProtection')) else narrow(dmd, smd)
 
 ST_INERT, ST_READY, ST_SUCCESS, ST_FAILURE = 0, 1, 54, 55
 CFG_PROVISIONING, CFG_EXPORTING, CFG_IMPORTING, CFG_PPI_EXPORTING, CFG_PPI_IMPORTING = 56, 57, 58, 59, 60
@@ -489,8 +492,8 @@ def _selftest():
              ExpirationDate=0xFFFFF)
     m = mdh_pack(**f)
     check('MDH round trip', all(mdh_unpack(m)[k] == v for k, v in f.items()))
-    check('MDH positions', mdh_get(mdh_pack(State=1), 'State') == 1 and mdh_pack(State=1) == 1 << 18 and
-          mdh_pack(Version=3) == 3 << 62 and mdh_pack(ExpirationDate=1) == 1 << 96 and mdh_pack(StateExtension=1) == 1 << 24)
+    check('MDH positions', mdh_get(mdh_pack(State=1), 'State') == 1 and mdh_pack(State=1) == 1 << 20 and
+          mdh_pack(Version=3) == 3 << 62 and mdh_pack(ExpirationDate=1) == 1 << 96 and mdh_pack(StateExtension=1) == 1 << 26)
     check('mdh_put overwrites', mdh_get(mdh_put(m, 'State', 1), 'State') == 1 and mdh_get(mdh_put(m, 'State', 1), 'Machine') == 0xABC)
     control('mdh_pack rejects too-wide value', raises(mdh_pack, State=64, exc=ValueError))
     check('error states', is_error_state(mdh_pack(StateExtension=6)) and not is_error_state(mdh_pack(StateExtension=7))

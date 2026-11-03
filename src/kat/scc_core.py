@@ -108,14 +108,14 @@ def scc_size(mdh):
     f = mdh_unpack(mdh)
     if f['State'] in (61, 62, 63) or (f['State'] == 0 and f['StateExtension'] >= 7): return 0
     if f['State'] == 0 and f['StateExtension'] >= 1: return 16
-    if f['Version'] in (1, 2) or f['SCProtection'] == 3 or f['KeyType'] == 3: return 0
+    if f['Version'] in (1, 2) or f['SCProtection'] >= 4 or f['KeyType'] == 3: return 0
     if scc_invalid(mdh) or f['Machine'] not in SCC_MACHINES: return 0
     c1 = scc_content1_size(mdh)
     return 32 + c1 if f['AuxDataLen'] == 0 else 64 + c1 + scc_content2_size(mdh)
 def scc_invalid(mdh, lst=None):
     f = mdh_unpack(mdh)
-    return (f['Version'] != 0 or f['KeyType'] in (2, 3) or f['SCProtection'] == 3 or sl(f['Locality'], 5, 4) == 3
-            or f['Reserved31_30'] or f['Reserved46'] or f['Reserved79_78'] or f['Reserved127_116']
+    return (f['Version'] != 0 or f['KeyType'] in (2, 3) or f['SCProtection'] >= 4 or sl(f['Locality'], 5, 4) == 3
+            or f['Reserved46'] or f['Reserved79_78'] or f['Reserved127_116']
             or f['StateExtension'] != 0 or f['State'] in (0, 61, 62, 63) or f['ExpirationDate'] != 0
             or f['AuxDataLen'] == 1 )
 def scc_impqual(vendor, arch, imp): return cat((0, 32), (imp, 32), (arch, 32), (vendor, 32))
@@ -133,6 +133,7 @@ def scc_export(L, csk, lst, impq, clear1=None, clear2=0):
     assert f['ADSDropped'] == 0
     pad = L['c1'] + b'\0' * (-len(L['c1']) % 16)
     n1 = scc_clearlen1(L['mdh'], clear1); P1 = _blocks(pad)
+    if f['Transparent']: n1, clear2 = len(P1), len(L['c2']) // 16   # GR9: the whole Content in clear
     siv, c1 = scc_encrypt(scc_ad(L['mdh'], lst) + P1[:n1], 0, P1[n1:], csk); c1 = P1[:n1] + c1
     img = v2b(L['mdh'], 16) + v2b(siv, 16)
     if f['AuxDataLen'] >= 2:
@@ -162,6 +163,7 @@ def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None, zklexpire=False, 
     c1 = _blocks(img[o:o + c1p]); o += c1p
     c2 = _blocks(img[o:o + 16 * (f['AuxDataLen'] - 2)]) if ads and not drop else []
     n1 = scc_clearlen1(work, clear1)
+    if f['Transparent']: n1, clear2 = len(c1), len(c2)   # GR9: the whole Content in clear
     ok, P = scc_decrypt(scc_ad(work, lst) + c1[:n1], 0, siv, c1[n1:], csk, n1); P = c1[:n1] + P if ok else [0] * len(c1)
     if not ok:
         e = mdh_put(mdh_put(mdh_put(work, 'State', 0), 'StateExtension', 4), 'AuxDataLen', 0)

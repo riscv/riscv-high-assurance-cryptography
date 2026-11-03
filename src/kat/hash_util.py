@@ -157,7 +157,7 @@ def sealed_checks(fn, mk, ref):
     # GR30: each sealed hop is a restricted transfer that narrows the next MDH
     src = mdh_pack(UsagePolicy=0x5, ExpirationDate=7, SCProtection=1)
     L = mk(); L.mdh = mdh_pack(UsagePolicy=0x7, SCProtection=1); L.derive(sec, sealed=True, smdh=src); L.setst('output')
-    K = Key(16, mdh=mdh_pack(UsagePolicy=0x6, SCProtection=2)); ok = derive_out(L, K, 16)
+    K = Key(16, mdh=mdh_pack(UsagePolicy=0x6, SCProtection=3)); ok = derive_out(L, K, 16)
     check('%s GR30 across two sealed hops: the key gets UsagePolicy 0x4 and the ExpirationDate of the secret' % fn,
           ok and (mdh_get(K.mdh, 'UsagePolicy'), mdh_get(K.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(L.mdh, 'UsagePolicy') == 5)
     L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR30: a hash of lower SCProtection than the secret -> Privilege Violation, nothing absorbed' % fn,

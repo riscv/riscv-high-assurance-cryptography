@@ -178,7 +178,7 @@ This convention lets CCs migrate between harts of different endianness.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[KLE-extensions-overview-unpriv]]
+[[KLE-unpriv-exts-overview]]
 == Extensions Overview
 
 The principal KLE instructions, defined in full in <<KLE-instructions-detailed>>, are:
@@ -374,11 +374,11 @@ In the rest of the document, “metadata” refers to the first type. The implem
 |    [11:0] |  12  | _Machine_          | The Machine the key material is bound to. See <<KLE-Machine-field>>.
 |   [13:12] |   2  | _MachinePolicy_    | The allowed variants of the Machine, for instance encryption, decryption or both for a symmetric cipher. See <<KLE-Machine-field>>.
 |   [15:14] |   2  | _MachineExtension_ | Zero, or a variant of the Machine that the Machine defines. See <<KLE-Machine-field>>.
-|   [17:16] |   2  | _SCProtection_     | Side-channel protection level. See <<KLE-SCProtection-field>>.
-|   [23:18] |   6  | _State_            | Current state of the locker and its Machine. See <<KLE-State-field>>.
-|   [27:24] |   4  | _StateExtension_   | Additional state information. See <<KLE-State-field>>.
-|   [29:28] |   2  | _KeyType_          | Key given by value, by a system key, or randomly generated. See <<KLE-KeyType-field>>.
-|   [31:30] |   2  | Reserved           | Reserved.
+|   [18:16] |   3  | _SCProtection_     | Side-channel protection level. See <<KLE-SCProtection-field>>.
+|   [19:19] |   1  | _Transparent_      | Set if the SCCs of the CC carry the whole Content in clear, authenticated only. See <<KLE-Transparent-bit>>.
+|   [25:20] |   6  | _State_            | Current state of the locker and its Machine. See <<KLE-State-field>>.
+|   [29:26] |   4  | _StateExtension_   | Additional state information. See <<KLE-State-field>>.
+|   [31:30] |   2  | _KeyType_          | Key given by value, by a system key, or randomly generated. See <<KLE-KeyType-field>>.
 
 |   [45:32] |  14  | _AuxDataLen_       | Length of the ADS in 128-bit blocks, zero if none; with _ADSDropped_ = 1, the length before `Content2` was dropped; with _Version_ = 3, the length of the system-specific data after the MDH (<<KLE-system-specific-import>>).
 |   [46:46] |   1  | Reserved           | Reserved.
@@ -414,27 +414,39 @@ Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> states how _MachinePolicy_ ga
 
 // ////////////////////////////////////////////////////////////////////
 
+[[KLE-Transparent-bit]]
+=== _Transparent_ ===
+
+A CC whose _Transparent_ bit is 1 is exported in clear: its SCCs are authenticated but not encrypted.
+The bit is set at provisioning and cannot be changed afterwards.
+
+Export and import then encrypt nothing: the plaintext and ciphertext of the SCC algorithms are empty, and the whole Content is authenticated as associated data (Rule <<KLE-GR-scc-clear-blocks>>).
+This suits Machines that use the KLE interface for uniformity rather than for confidentiality, where performance matters most, and it makes export and import considerably faster.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[KLE-SCProtection-field]]
 === _SCProtection_ Field
 
-KLE defines three side-channel protection levels, Levels A, B and C, encoded in _SCProtection_ as the values 0, 1 and 2.
-Value 3 is reserved for an implementation-defined level; unless the implementation defines level 3, it makes the Metadata invalid (<<KLE-Metadata-validity>>).
+The bits of _SCProtection_ select the side-channel protection of a CC, each independently of the others; the value of the field is the _level_ of the CC.
+Every level is free of timing leakage: the same cryptographic operation on the same number of input units takes the same time in the KLE unit, whatever the values of the key, of the internal state, of the input data and of any random value drawn for the operation, except for the dependence that the cryptographic method itself requires (below).
+Levels 0 to 3 are defined. A level with bit 2 set is implementation-defined; unless the implementation defines it, it makes the Metadata invalid (<<KLE-Metadata-validity>>).
+A level V is _lower_ than a level W if W has a set bit that V lacks, and is _at least_ W otherwise; the highest of several levels is their bitwise OR.
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
 
 [[KLE-SC-protection-levels]]
-.Encoding of Side-Channel Protection levels
-[float="center",align="center",cols="^7%,^7%,<86%",options="header"]
+.Bits of _SCProtection_
+[float="center",align="center",cols="^7%,<40%,<53%",options="header"]
 |===
-| Value  | Level | Description
-|   0    | A     | No timing leakage: the same cryptographic operation on the same number of input units takes the same time in the KLE unit, whatever the values of the key, of the internal state, of the input data and of any random value drawn for the operation, except for the dependence that the cryptographic method itself requires (below).
-|   1    | B     | No timing leakage; differential side-channel protection.
-|   2    | C     | The protection of Level B;
-detection of injected faults, followed either by completion with the correct result and no other physical leakage, or by
+| Bit  | 0                                  | 1
+|   0  | Constant time only.                | Also protection against physical side-channel analysis, such as differential power analysis.
+|   1  | No fault-injection protection.     | Detection of injected faults, followed either by completion with the correct result and no other physical leakage, or by
 a transition to a fatal error condition (see <<KLE-error-architecture>>).
+|   2  | Defined levels.                    | Reserved for implementation-defined protections and levels.
 |===
 
 A level applies only to the _protected_ operations of a Machine, those that handle a secret, and only as far as the cryptographic method needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
-Every protected operation has at least the protection of Level A, and the export and import of a locker are always protected (<<KLE-KLF>>).
+Every protected operation is at least constant time, and the export and import of a locker are always protected (<<KLE-KLF>>).
 An _exempt_ operation, such as signature verification, handles no secret and needs no side-channel protection, not even against timing leakage.
 
 NOTE: Exempt operations include signature verification (ECDSA, EdDSA and ML-DSA), checks of public inputs alone, such as the ML-KEM encapsulation-key checks and the validation of a peer's point before a scalar multiplication, and every operation of a locker that holds only a public key.
@@ -443,7 +455,7 @@ These remain protected: MAC and tag verification, which compares against a secre
 (((KLE, Machine, side-channel protection variants)))
 A side-channel-protected Machine is an implementation variant of the unprotected one, distinguished architecturally only by the _SCProtection_ field of the MDH.
 
-An implementation must document, for each level it supports, the standard and edition, assessment profile, security level and test metrics it meets, such as acquisition-time limits and trace sample sizes; Level B, resp. C, must offer at least the guarantees documented for Level A, resp. B.
+An implementation must document, for each level it supports, the standard and edition, assessment profile, security level and test metrics it meets, such as acquisition-time limits and trace sample sizes; a level must offer at least the guarantees documented for each supported level lower than it.
 
 [NOTE]
 ====
@@ -788,7 +800,7 @@ In a PI, software keeps all _reserved_ bits, and all bits that the Machine does 
 
 Valid Metadata is _unsupported_ when any of the following holds:
 
-* the combination of _Machine_, _MachinePolicy_, _MachineExtension_ and an _SCProtection_ value of 0 to 2 (Levels A to C) is not implemented;
+* the combination of _Machine_, _MachinePolicy_, _MachineExtension_ and an _SCProtection_ level of 0 to 3 is not implemented;
 * _KeyType_ is 1, resp. 2, and the implementation does not support System Key Identifiers, resp. random key generation, for the Machine (<<KLE-KeyType-field>>, <<KLE-system-keys>>); or
 * it holds a value that a Machine specification declares unsupported if not implemented, such as the _AuxInfo_ of EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>).
 
@@ -798,7 +810,7 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _Version_ is 3 at import and any of the following holds: _State_ is not _Unconfigured_, `kl_cfg_importing` or `kl_cfg_exporting`; _AuxDataLen_ is zero; or one of _StateExtension_, _KeyType_, _ADSDropped_ and _MachineUse_ is non-zero (<<KLE-system-specific-import>>);
 * _KeyType_ is 1 or 2 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 3, or 2 outside a PI and a PCCC of base type `pi`;
-* _SCProtection_ is 3, unless the implementation defines level 3 (<<KLE-SCProtection-field>>);
+* _SCProtection_[2] is 1, unless the implementation defines that level (<<KLE-SCProtection-field>>);
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret without a configured substitute (<<KLE-Localities>>);
 * the MDH carries a custom _Machine_ or a system-specific _Version_, and its _Locality_ includes none of _SiPScrt_, _ChipFamScrt_, _ChipScrt_, _OEMScrt_, _ProdScrt_ and _DevScrt_, which bind the CC to its allowed consumers;
 * _State_ is not 0, or _StateExtension_ is non-zero (an Error State), at provisioning, or _State_ is 0 and _StateExtension_ is 7–15 at import;
@@ -877,7 +889,7 @@ Writing a reserved value (33 and above) to `klnamedlocker` leaves it unchanged (
 
 (((CSR, `kliobuflen`)))`kliobuflen` is an XLEN-bit URW CSR that programs the length of the KLIOBUF, in bytes, for `kl.input` and `kl.output`; its maximum is the maximum length of the KLIOBUF (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>).
 Every write, even of the current value, zeroes the buffer below the new length before it completes, and sets `kliobuftop` to that length.
-Bytes beyond the new length need not be erased, since they stay inaccessible until a later write zeroes them: a write of zero makes the contents inaccessible without erasing them, unless the implementation supports Level C (<<KLE-destructive-config>>).
+Bytes beyond the new length need not be erased, since they stay inaccessible until a later write zeroes them: a write of zero makes the contents inaccessible without erasing them, unless the implementation supports a level with _SCProtection_[1] = 1 (<<KLE-destructive-config>>).
 
 A zero `kliobuflen` leaves the KLIOBUF _unconfigured_: an operation that expects an input or an output in it raises an illegal-instruction exception, unless it falls through (Rules <<KLE-GR-iobuf-configured>>, <<KLE-GR-outcome-inert>> and <<KLE-GR-outcomes>>).
 
@@ -982,7 +994,7 @@ A non-zero locker register field that `r` or `R` replaces is a reserved encoding
 
 
 [[KLE-GR-vector-MDH-operand,GR5]]GR5:: Where a KLE instruction carries the whole 128-bit MDH in a vector register or group, such as the MDH-formatted operand of `kl.rstrv` and the destination of `kl.getmdv`, the operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is raised.
-<<KLE-extensions-overview-unpriv>> lists the vector extensions that provide such a register.
+<<KLE-unpriv-exts-overview>> lists the vector extensions that provide such a register.
 
 [[KLE-GR-vector-legality,GR6]]GR6:: A vector register operand whose register number is not a multiple of the LMUL in effect is a reserved encoding and raises an illegal-instruction exception, as in RVV 1.0.
 Every KLE instruction with a vector operand sets `vstart` to 0 when it retires, and on a precise halt sets it as Rules <<KLE-GR-precise-halt>> and <<KLE-GR-klstart-vstart>> prescribe.
@@ -1103,7 +1115,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, 16 if the locker is in an Error State, and otherwise the size of item 7;
 . Forms B and C: 0 if _State_ is 61–63, or is 0 with a _StateExtension_ of 7–15 (reserved);
 . 16 if _State_ is 0 with a _StateExtension_ of 1–5, or 6 with `Zklexpire` (an Error State) (<<KLE-error-state-transfer>>);
-. 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is 3, unless the implementation defines level 3;
+. 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_[2] is 1, unless the implementation defines that level;
 . [[KLE-size-avail-lookup,5]]if the KLE unit does not natively implement the Machine fields: an illegal-instruction exception if `mstatus.kleemulation` = 1 (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>), so that M-mode can supply the value, and 0 otherwise;
 . 0 if the MDH is unsupported or invalid Metadata (<<KLE-Metadata-validity>>), evaluated as at provisioning when _State_ is 0 and _Version_ is not 3, and as at import otherwise;
 . the size:
@@ -1115,7 +1127,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 `kl.avail` returns or raises, evaluated in order:
 
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, and otherwise 1 if the KLE unit implements the Machine fields of the MDH, and 0 if not;
-. Forms B and C: 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is 3, unless the implementation defines level 3;
+. Forms B and C: 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_[2] is 1, unless the implementation defines that level;
 . if the KLE unit does not natively implement the Machine fields: same as item <<KLE-size-avail-lookup>> of `kl.size`;
 . 1 otherwise, whatever the other fields hold: a 1 does not exclude a KLE unsupported-Metadata exception that a Machine specification attaches to another field, such as the _AuxInfo_ of EdDSA.
 
@@ -1429,7 +1441,7 @@ Item 6 of Rule <<KLE-GR-management-check-order>> gives the accesses exempt from 
 // Every other access raises it: the source access of `kl.clone` and `kl.rename`, either access of `kl.swap`, and every access by another instruction, such as `kl.load`, `kl.mvin` or `kl.setste`, even one that writes the locker without reading it.
 
 KLF capacity that `kl.mgmt` or `kl.clone` allocates to a locker reads as zero, to the locker's Machine and to every architectural access, until written.
-An implementation that supports Level C (<<KLE-SC-protection-levels>>) must also zeroize at once the Content and any ADS of every locker whose CC is discarded by `kl.clear`, `kl.clearall` or as the previous CC of the destination of `kl.rename` or `kl.clone`, or that transitions to an Error State (Rule <<KLE-GR-clear-locker-content-error-state>>), and the KLIOBUF bytes that a write of `kliobuflen` or a `kl.clearall` makes inaccessible (<<KLE-CSR-kliobuflen>>); any other implementation need only release them.
+An implementation that supports a level with _SCProtection_[1] = 1 (<<KLE-SC-protection-levels>>) must also zeroize at once the Content and any ADS of every locker whose CC is discarded by `kl.clear`, `kl.clearall` or as the previous CC of the destination of `kl.rename` or `kl.clone`, or that transitions to an Error State (Rule <<KLE-GR-clear-locker-content-error-state>>), and the KLIOBUF bytes that a write of `kliobuflen` or a `kl.clearall` makes inaccessible (<<KLE-CSR-kliobuflen>>); any other implementation need only release them.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2004,7 +2016,7 @@ It is informative: the Rules govern.
 // The following Rules protect the Content of a CC in two ways: it leaves a locker only sealed, and CCs that pertain only to certain chip families or devices cannot be disclosed to other chip families or devices.
 
 [horizontal]
-[[KLE-GR-no-extraction,GR8]]GR8:: _No extraction_ (<<KLE-ISA-Principle-hidden-keys>>, <<KLE-ISA-Principle-no-privilege-elevation>>). Once the provisioning, or the base import of a system-specific format (<<KLE-system-specific-import>>), that binds a key to its Metadata completes, no instruction returns in clear the value of the key, or of any other secret field of the Content, except as an output defined by the Machine for `kl.exec` (Rule <<KLE-GR-exec-implies-unrestricted>>); the clear blocks of an SCC hold no secret field (Rule <<KLE-GR-scc-clear-blocks>>).
+[[KLE-GR-no-extraction,GR8]]GR8:: _No extraction_ (<<KLE-ISA-Principle-hidden-keys>>, <<KLE-ISA-Principle-no-privilege-elevation>>). Once the provisioning, or the base import of a system-specific format (<<KLE-system-specific-import>>), that binds a key to its Metadata completes, no instruction returns in clear the value of the key, or of any other secret field of the Content, except as an output defined by the Machine for `kl.exec` (Rule <<KLE-GR-exec-implies-unrestricted>>); the clear blocks of an SCC hold no secret field unless its _Transparent_ bit is 1 (Rule <<KLE-GR-scc-clear-blocks>>).
 
 [[KLE-GR-scc-clear-blocks,GR9]]GR9:: _Clear blocks:_ An SCC carries the first `SCC_ClearLen1` 128-bit blocks of `Content1`, and the first `SCC_ClearLen2` blocks of `Content2`, in clear: they are authenticated with their segment, as associated data, but not encrypted (<<KLE-SCC-export>>).
 +
@@ -2013,6 +2025,7 @@ It is informative: the Rules govern.
   Which fields are public depends only on the _Machine_, _MachineExtension_ and _KeyType_ of the MDH, and their number of blocks also on the _MachinePolicy_, which determines the fields present (<<KLE-length-rule>>).
   A public field holds, in every State and at every point of an operation, only a value that the cryptographic role of the field makes public, such as a public key, a ciphertext or a signature, or zero; it never holds a key, a SKID, a value derived from a secret field other than such a public value, or an intermediate value of an operation (Rule <<KLE-GR-long-running-progress>>) other than a part of its public result, and it is never a `kl.derive` destination.
 * `SCC_ClearLen2` is implementation-defined and documented, at most _AuxDataLen_ − 2, and depends only on `IMPQUAL` and on the fields of the MDH other than _ADSDropped_; the clear blocks of `Content2` hold only values computable from the public fields and from constants of the Machine.
+* With _Transparent_ = 1 (<<KLE-Transparent-bit>>), `SCC_ClearLen1` and `SCC_ClearLen2` are instead the numbers of blocks of `Content1` and `Content2`: the whole Content is in clear, whatever its fields.
 * No value of a clear block is used before its segment is authenticated (<<KLE-SCC-import>>); a failed authentication zeroes or drops the whole segment, its clear blocks included.
 --
 
@@ -2026,9 +2039,9 @@ With `Zklio`, the KLIOBUF can replace the vector operands of `kl.exec`, so that 
 Rules GR10.1 and GR10.2 state its operands and its failures.
 
 [horizontal]
-[[KLE-GR-substitution-operands,GR10.1]]GR10.1::: _Operands._ Where a Form A or B `kl.exec` expects a vector input, its substitution takes the input from [`klstart`, `kliobuftop`-1] instead of a vector register, and where a Form A or C `kl.exec` expects a vector output, its substitution writes it to [`klstart`, `kliobuftop`-1] (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-clear-output>>), a Form A substitution writing each block's output over its input.
+[[KLE-GR-substitution-operands,GR10.1]]{eightnbsp}GR10.1:: _Operands._ Where a Form A or B `kl.exec` expects a vector input, its substitution takes the input from [`klstart`, `kliobuftop`-1] instead of a vector register, and where a Form A or C `kl.exec` expects a vector output, its substitution writes it to [`klstart`, `kliobuftop`-1] (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-clear-output>>), a Form A substitution writing each block's output over its input.
 
-[[KLE-GR-substitution-failures,GR10.2]]GR10.2::: _Failures._ For a substitution of `kl.exec` (Rule <<KLE-GR-substitution>>) that is not a wrong Form (Rule <<KLE-GR-form-mismatch>>), a non-zero `kliobuflen` with a `kliobuftop` invalid for the Machine transitions the locker to Error State _Invalid_, whether the KLIOBUF is used as input or only as output (Rule <<KLE-GR-transfer-window-checks>>).
+[[KLE-GR-substitution-failures,GR10.2]]{eightnbsp}GR10.2:: _Failures._ For a substitution of `kl.exec` (Rule <<KLE-GR-substitution>>) that is not a wrong Form (Rule <<KLE-GR-form-mismatch>>), a non-zero `kliobuflen` with a `kliobuftop` invalid for the Machine transitions the locker to Error State _Invalid_, whether the KLIOBUF is used as input or only as output (Rule <<KLE-GR-transfer-window-checks>>).
 
 [horizontal]
 [[KLE-GR-iobuf-configured,GR11]]GR11:: These instructions access the KLIOBUF and require it to be configured, with a non-zero `kliobuflen`, even for an empty transfer window:
@@ -2063,9 +2076,9 @@ An unconfigured KLIOBUF is a ground of the <<KLE-third-group-ILL-grounds>> for `
 An admitted instruction then has an outcome of Rule <<KLE-GR-outcomes>>.
 
 [horizontal]
-[[KLE-GR-admitted-every-state,GR13.1]]GR13.1::: _Every State._ The instructions that <<KLE-instruction-properties>> marks as admitted in every State are admitted whatever the State of the locker, and no Machine may restrict them; on an inert locker they act as Rule <<KLE-GR-outcome-inert>> states.
+[[KLE-GR-admitted-every-state,GR13.1]]{eightnbsp}GR13.1:: _Every State._ The instructions that <<KLE-instruction-properties>> marks as admitted in every State are admitted whatever the State of the locker, and no Machine may restrict them; on an inert locker they act as Rule <<KLE-GR-outcome-inert>> states.
 
-[[KLE-GR-outcome-inert,GR13.2]]GR13.2::: _Inert locker._ An instruction on an inert locker falls through (Rule <<KLE-GR-outcomes>>), with the results of <<KLE-insn-outcomes-inert>>, except:
+[[KLE-GR-outcome-inert,GR13.2]]{eightnbsp}GR13.2:: _Inert locker._ An instruction on an inert locker falls through (Rule <<KLE-GR-outcomes>>), with the results of <<KLE-insn-outcomes-inert>>, except:
 +
 --
 * a destructive configuration instruction or a `kl.setste` on an _Unconfigured_ or Error-State locker acts as on any locker: the first raises an exception only after its destructive step (Rule <<KLE-exception-state-change>>), the second none (Rule <<KLE-GR-error-state-can-be-reconfigured>>); on a `KLNL` that names no locker, both fall through;
@@ -2073,7 +2086,7 @@ An admitted instruction then has an outcome of Rule <<KLE-GR-outcomes>>.
 * a `kl.derive` falls through only if either operand is a `KLNL` that names no locker, if its source is inert, or if its source is in a Valid State and its destination is inert; otherwise it is checked as Rule <<KLE-GR-derive-check-order>> states.
 --
 
-[[KLE-GR-outcome-config-state,GR13.3]]GR13.3::: _Configuration State._ Besides the instructions of Rule <<KLE-GR-admitted-every-state>>, a Configuration State admits an export-opening `kl.mgmt`, which opens a nested export, and the management transfers and completing `kl.mgmt` of the operation under way (Rule <<KLE-GR-zkl-load-mv-allowed>>, <<KLE-locker-management>>).
+[[KLE-GR-outcome-config-state,GR13.3]]{eightnbsp}GR13.3:: _Configuration State._ Besides the instructions of Rule <<KLE-GR-admitted-every-state>>, a Configuration State admits an export-opening `kl.mgmt`, which opens a nested export, and the management transfers and completing `kl.mgmt` of the operation under way (Rule <<KLE-GR-zkl-load-mv-allowed>>, <<KLE-locker-management>>).
 Any other instruction traps and leaves the _State_ unchanged:
 +
 --
@@ -2081,10 +2094,10 @@ Any other instruction traps and leaves the _State_ unchanged:
 * KLE privilege-violation exception: a usage instruction, a `kl.clone` from the locker into another one, or a `kl.rstr*` on it.
 --
 
-[[KLE-GR-config-valid-state,GR13.4]]GR13.4::: _Valid State, configuration instruction._ No management operation is under way in a Valid State, so a management transfer or a completing `kl.mgmt` raises an illegal-instruction exception (Rule <<KLE-GR-zkl-load-mv-allowed>>).
+[[KLE-GR-config-valid-state,GR13.4]]{eightnbsp}GR13.4:: _Valid State, configuration instruction._ No management operation is under way in a Valid State, so a management transfer or a completing `kl.mgmt` raises an illegal-instruction exception (Rule <<KLE-GR-zkl-load-mv-allowed>>).
 Every other configuration instruction is admitted, a `kl.rstr*` with the effect of Rule <<KLE-GR-policy-narrowing-state>>.
 
-[[KLE-GR-outcome-valid-state,GR13.5]]GR13.5::: _Valid State, usage instruction._ The instruction checks these conditions in order; the first that applies decides the outcome:
+[[KLE-GR-outcome-valid-state,GR13.5]]{eightnbsp}GR13.5:: _Valid State, usage instruction._ The instruction checks these conditions in order; the first that applies decides the outcome:
 +
 --
 . a substitution (Rule <<KLE-GR-substitution>>) with an unconfigured KLIOBUF: illegal-instruction exception (Rule <<KLE-GR-iobuf-configured>>);
@@ -2185,22 +2198,22 @@ An instruction that the _UsagePolicy_ forbids raises a KLE privilege-violation e
 Rules GR19.1–GR19.5, Rule <<KLE-GR-progress-discard>> and Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> constrain that choice.
 
 [horizontal]
-[[KLE-GR-form-mismatch,GR19.1]]GR19.1::: _Wrong Form._ A _wrong Form_ of a usage instruction is a Form that is none of: a native Form of the instruction expected in the locker's State (for `kl.setst`, as determined by its immediate); a Form that <<KLE-instruction-setst>> admits in place of a native Form of `kl.setst`; with `Zklio`, the substitution of that native Form (Rule <<KLE-GR-substitution>>).
+[[KLE-GR-form-mismatch,GR19.1]]{eightnbsp}GR19.1:: _Wrong Form._ A _wrong Form_ of a usage instruction is a Form that is none of: a native Form of the instruction expected in the locker's State (for `kl.setst`, as determined by its immediate); a Form that <<KLE-instruction-setst>> admits in place of a native Form of `kl.setst`; with `Zklio`, the substitution of that native Form (Rule <<KLE-GR-substitution>>).
 
-[[KLE-GR-same-state,GR19.2]]GR19.2::: _Not admitted by default._ Unless the Machine allows it and defines what it does, a Valid State does not admit:
+[[KLE-GR-same-state,GR19.2]]{eightnbsp}GR19.2:: _Not admitted by default._ Unless the Machine allows it and defines what it does, a Valid State does not admit:
 +
 --
 . a `kl.exec` in _Ready_;
 . a `kl.setst` naming the current State, except in _Ready_ (Rule <<KLE-GR-to-ready>>) and in a State that loads a field, where it restarts the load (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
 --
 
-[[KLE-GR-to-ready,GR19.3]]GR19.3::: _Always admitted._ A `kl.setst` naming _Ready_ and `kl.clearads` (<<KLE-instruction-clearads>>) are admitted in every Valid State, whatever the _MachinePolicy_ of the locker, subject to items 1–3 of Rule <<KLE-GR-outcome-valid-state>>; a wrong Form of either is not admitted (Rule <<KLE-GR-form-mismatch>>).
+[[KLE-GR-to-ready,GR19.3]]{eightnbsp}GR19.3:: _Always admitted._ A `kl.setst` naming _Ready_ and `kl.clearads` (<<KLE-instruction-clearads>>) are admitted in every Valid State, whatever the _MachinePolicy_ of the locker, subject to items 1–3 of Rule <<KLE-GR-outcome-valid-state>>; a wrong Form of either is not admitted (Rule <<KLE-GR-form-mismatch>>).
 In States _Success_ and _Failure_, they are the only usage instructions admitted.
 Unless the Machine defines another Form for it, a `kl.setst` naming _Ready_ is of Form A.
 
-[[KLE-GR-setst-not-admitted,GR19.4]]GR19.4::: _Immediates of `kl.setst`._ A `kl.setst` whose `#immed7` neither the architecture nor the Machine admits in the current State transitions a locker in a Valid State to Error State _Invalid_.
+[[KLE-GR-setst-not-admitted,GR19.4]]{eightnbsp}GR19.4:: _Immediates of `kl.setst`._ A `kl.setst` whose `#immed7` neither the architecture nor the Machine admits in the current State transitions a locker in a Valid State to Error State _Invalid_.
 
-[[KLE-GR-success-failure-cannot-be-set-directly,GR19.5]]GR19.5::: _Success and Failure._ No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 54 or 55). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
+[[KLE-GR-success-failure-cannot-be-set-directly,GR19.5]]{eightnbsp}GR19.5:: _Success and Failure._ No State admits a `kl.setst` that names _Success_ or _Failure_ (`#immed7` 54 or 55). Only a Machine may enter these States, as the outcome of an operation that it performs, such as a verification within a `kl.setst` that names another State (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-machine-transitions>>).
 
 [horizontal]
 [[KLE-GR-policy-narrowing-state,GR20]]GR20:: A `kl.rstrl` or `kl.rstrv` (<<KLE-instruction-restrict>>) that narrows _MachinePolicy_ to a value that the Machine forbids transitions the locker to Error State _Invalid_.
@@ -2344,14 +2357,14 @@ Rules GR31.1–GR31.3 state the admitted pairs, which <<KLE-derive-pairs-table>>
 They make a transfer unrestricted only where `kl.exec` instructions could already reveal the moved data to software.
 
 [horizontal]
-[[KLE-GR-shared-secret,GR31.1]]GR31.1::: _Shared secret._ A shared secret of a key-agreement or key-encapsulation Machine moves into a key field of a symmetric Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a destination for it, or into the `kl.exec` input of a hash function, MAC or XOF that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists for it.
+[[KLE-GR-shared-secret,GR31.1]]{eightnbsp}GR31.1:: _Shared secret._ A shared secret of a key-agreement or key-encapsulation Machine moves into a key field of a symmetric Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a destination for it, or into the `kl.exec` input of a hash function, MAC or XOF that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists for it.
 If its Machine explicitly allows it to export through `kl.exec`, it moves as an unrestricted transfer of its field.
 Otherwise, as the ML-KEM `sharedkey`, it moves only as a _restricted transfer_ and only to these destinations: no other message input receives it, not even one that a Machine defines.
 A shared secret of a sealed variant is moreover a sealed source (Rule <<KLE-GR-sealed>>).
 
-[[KLE-GR-exec-implies-unrestricted,GR31.2]]GR31.2::: _`kl.exec` output._ The `kl.exec` output of a Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a source can be moved, as an _unrestricted transfer_, into a key field of a symmetric Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a destination. The output of a sealed locker is instead a sealed source (Rule <<KLE-GR-sealed>>). No other `kl.exec` output is a source.
+[[KLE-GR-exec-implies-unrestricted,GR31.2]]{eightnbsp}GR31.2:: _`kl.exec` output._ The `kl.exec` output of a Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a source can be moved, as an _unrestricted transfer_, into a key field of a symmetric Machine that <<Zkl-ISA-machines.adoc#KLE-derive-endpoints>> lists as a destination. The output of a sealed locker is instead a sealed source (Rule <<KLE-GR-sealed>>). No other `kl.exec` output is a source.
 
-[[KLE-GR-sealed,GR31.3]]GR31.3::: _Sealed source._ A _sealed source_ is the shared secret of the _sealed variant_ of an Elliptic Curve or ML-KEM Machine (<<Zkl-ISA-machines.adoc#KLE-ECC>>, <<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>), or the output in _Hash_Output_ of a _sealed_ locker: a hash function, MAC or XOF locker whose message input or key a sealed source has entered, and which therefore emits no output through `kl.exec` and verifies no tag (<<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>, <<Zkl-ISA-machines.adoc#KLE-HMAC>>).
+[[KLE-GR-sealed,GR31.3]]{eightnbsp}GR31.3:: _Sealed source._ A _sealed source_ is the shared secret of the _sealed variant_ of an Elliptic Curve or ML-KEM Machine (<<Zkl-ISA-machines.adoc#KLE-ECC>>, <<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>), or the output in _Hash_Output_ of a _sealed_ locker: a hash function, MAC or XOF locker whose message input or key a sealed source has entered, and which therefore emits no output through `kl.exec` and verifies no tag (<<Zkl-ISA-machines.adoc#KLE-hash-functions-MACs-XOFs>>, <<Zkl-ISA-machines.adoc#KLE-HMAC>>).
 A transfer from a sealed source is a restricted transfer (Rule <<KLE-GR-narrowing>>) of at least 16 bytes (Rule <<KLE-GR-checks>> item 7).
 Its admitted pairs are those that Rule <<KLE-GR-shared-secret>> admits for a shared secret, resp. Rule <<KLE-GR-exec-implies-unrestricted>> for the output of a locker that is not sealed, except those whose destination is the key of keystream generation, OFB or CMAC, or `K1 {vvert} K2` of nonce masking (<<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>).
 A message input or an HMAC `K0` that receives it makes its locker sealed, so that every source that holds sealed material is itself sealed.
@@ -2592,7 +2605,7 @@ A nested export taken during the import (<<KLE-management-formats-and-states>>) 
 . *Unwrap and convert.* It authenticates and/or decrypts the data, if the format is authenticated and/or encrypted; a failed authentication gives Error State _Authentication Failed_, and so does any other failed check that the format defines, when the format authenticates its data.
 It then makes the check of Rule <<KLE-GR-sysfmt-mdh>>, converts the data to the internal representation that KLE expects, translates the policies of the format, and takes _AuxInfo_ from the format where it supplies a value. Any other failure in this step invalidates the locker.
 . *Check.* The converted Content undergoes every check that the Machine makes on a provisioning or an import of the same fields, with the same outcomes (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>); each field that it configures is then in the same status, its flag included, as after a complete load of that field by `kl.exec` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-load-long-field>>).
-. *Narrow.* It narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>); a failed narrowing, or a format that requires a higher side-channel protection level than the declared _SCProtection_, gives Error State _Privilege Violation_.
+. *Narrow.* It narrows the declared MDH by the translated policies (<<KLE-Metadata-narrowing>>); a failed narrowing, or a declared _SCProtection_ lower than the minimum that the format requires, gives Error State _Privilege Violation_.
 . *Enter _Ready_.* It sets _Version_ and _AuxDataLen_ to 0 and zeroes the implementation-defined subfields of _AuxInfo_ (<<KLE-MachineUse>>).
 Unless a Machine check left the locker in _Failure_, it then enters _Ready_, performing the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>) or, at this completion only, the initialization operations of the format instead.
 The other provisioning actions of the Machine, such as setting a default or clearing a field or its flag, apply only to the fields that the converted Content does not configure, and to their flags; none clears a flag set in step 2.
@@ -2903,18 +2916,18 @@ NOTE: Reconstructing or re-randomizing a key is usually an inexpensive operation
 [[KLE-GR-system-keys,GR55]]GR55:: _System Keys._ A System Key is identified by a 64-bit SKID, from which a system-specific SKS retrieves the key: the images of the locker carry the SKID in place of the key (Rule GR55.1), and the SKS resolves the SKID and binds policies to it (Rules GR55.2 and GR55.3).
 
 [horizontal]
-[[KLE-GR-skid-field,GR55.1]]GR55.1::: _SKID field._ In a PI, an SCC or a PCCC, the key fields of a System Key together hold its SKID, 64 bits, instead of the key values; for a Machine with several keys, the SKS retrieves all of them from that single SKID.
+[[KLE-GR-skid-field,GR55.1]]{eightnbsp}GR55.1:: _SKID field._ In a PI, an SCC or a PCCC, the key fields of a System Key together hold its SKID, 64 bits, instead of the key values; for a Machine with several keys, the SKS retrieves all of them from that single SKID.
 A field configured by a SKID is _never_ exportable, and a key field of a locker whose _KeyType_ is 1 is _never_ importable, by `kl.derive`; no instruction outputs the key value of such a field, which a PI, an SCC or a PCCC replaces by the SKID.
 A key value that a Machine holds in another field, such as its `state` or `block`, only between two steps of one instruction is in no Serialized Content, so it needs no such replacement.
 For `SHA3-224_HMAC` to `SHA3-512_HMAC`, `KMAC128`, `KMAC256`, `KMACXOF128` and `KMACXOF256`, whose `state` is an invertible function of the key and of values that the SCC carries, the Serialized Content holds `state xor state_mask` (Rule <<KLE-GR-skid-resolution>>) in every State but _Ready_ (<<Zkl-ISA-machines.adoc#KLE-KMAC>>, <<Zkl-ISA-machines.adoc#KLE-HMAC>>).
 
-[[KLE-GR-skid-resolution,GR55.2]]GR55.2::: _SKID resolution._ The SKS resolves a SKID that is allowed for the _Machine_ and _MachinePolicy_, whatever the current privilege mode, into a key value that depends on the SKID alone and, for a Machine that Rule <<KLE-GR-skid-field>> names, a 1600-bit _state mask_ `state_mask` that depends on the SKID and the _Machine_ alone; it resolves a SKID carried in an SCC only after the SCC is authenticated.
+[[KLE-GR-skid-resolution,GR55.2]]{eightnbsp}GR55.2:: _SKID resolution._ The SKS resolves a SKID that is allowed for the _Machine_ and _MachinePolicy_, whatever the current privilege mode, into a key value that depends on the SKID alone and, for a Machine that Rule <<KLE-GR-skid-field>> names, a 1600-bit _state mask_ `state_mask` that depends on the SKID and the _Machine_ alone; it resolves a SKID carried in an SCC only after the SCC is authenticated.
 No instruction outputs `state_mask`; its bits are pseudorandom, and independent of every value that a Machine computes from a key of any SKID.
 The KLE unit keeps `state_mask` with the resolved key, so an export does not consult the SKS.
 A SKID that the SKS does not resolve transitions the locker to Error State _Invalid_ (<<KLE-Metadata-validity>>); the policies that the SKS associates with a resolved key (Rule <<KLE-GR-skid-policies>>) narrow the MDH of the locker (<<KLE-Metadata-narrowing>>), and a failed narrowing transitions the locker to Error State _Privilege Violation_.
 The SKS may also associate a minimum _SCProtection_ with a SKID; a resolution whose MDH has an _SCProtection_ lower than that minimum transitions the locker to Error State _Privilege Violation_.
 
-[[KLE-GR-skid-policies,GR55.3]]GR55.3::: _SKID policies._ The SKS associates a _Locality_ (<<KLE-Localities>>) with every SKID, and may associate further policies, such as a _UsagePolicy_, with some SKIDs only.
+[[KLE-GR-skid-policies,GR55.3]]{eightnbsp}GR55.3:: _SKID policies._ The SKS associates a _Locality_ (<<KLE-Localities>>) with every SKID, and may associate further policies, such as a _UsagePolicy_, with some SKIDs only.
 A policy that it does not associate leaves the corresponding field unchanged when the MDH is narrowed (<<KLE-Metadata-narrowing>>).
 
 NOTE: The state mask of Rule <<KLE-GR-skid-resolution>> hides the capacity part of `state`, of `c` bits (<<Zkl-ISA-machines.adoc#KLE-SHA-3-parameters>>); its rate part is known once a CC in _Hash_Output_ is exported, since that rate holds output.
@@ -3461,15 +3474,15 @@ A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-CSK-requirements]]
-== Architectural Requirements on the Context Sealing Key
+== The Context Sealing Key
 
-Each _SCProtection_ level that a hart implements has its own Context Sealing Key (CSK): CSK~L~ serves level L, where L is 0, 1 and 2 for Levels A, B and C, and 3 for an implementation-defined level (<<KLE-SCProtection-field>>).
-The export or import of a locker at level L uses CSK~L~ only (<<KLE-SCC-export-import>>), and CSK~L~ is established only on harts that implement level L.
+Each _SCProtection_ level that a hart implements has its own Context Sealing Key (CSK): CSK~L~ serves level L, where L is the _SCProtection_ level, 0 to 3, or 4 to 7 for an implementation-defined level (<<KLE-SCProtection-field>>).
+The export or import of a locker at _SCProtection_ level L uses CSK~L~ only (<<KLE-SCC-export-import>>), and CSK~L~ is established only on harts that implement level L.
 
 The KLE unit operates only while at least one CSK is configured: from reset with hardwired CSKs, otherwise once a CSK is established.
 While no CSK is configured, every KLE instruction and KLE CSR access raises a KLE missing-CSK exception, except accesses to `mklcfg`, writes to the `mklcsk` group and accesses to the Locality Secret CSR groups (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), which are configured independently of the CSK.
 An export uses the CSK only at its opening `kl.mgmt`, and an import only at its completing one.
-These instructions, and the import-opening `kl.mgmt`, raise a KLE missing-CSK exception if the CSK of the locker's level is not in use, so that no SCC is ever sealed or unsealed under the CSK of another level (<<KLE-locker-management>>); `mtval` gives the level (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
+These instructions, and the import-opening `kl.mgmt`, also raise a KLE missing-CSK exception if the CSK of the locker's level is not in use, so that no SCC is ever sealed or unsealed under the CSK of another level (<<KLE-locker-management>>); `mtval` gives the level (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
 
 The CSKs of a hart are established in exactly one of four ways:
 
@@ -3483,27 +3496,30 @@ The third and fourth ways mainly suit specialized embedded deployments.
 Harts among which processes or CCs migrate must hold the same CSKs: under the first and second ways, M-mode establishes them on each.
 A hart reset or a KLE fatal condition (<<KLE-error-architecture>>) resets the hart's KLE state (<<KLE-reset-and-m-mode-only>>) and, under the first and second ways only, its CSKs, which must then be established again.
 
-[[KLE-CSK-selection]]
+[[KLE-CSK-selection, CSK selection]]CSK selection::
++
+--
 A hart selects the CSK in one of two ways:
 
 * _Trapped selection_, the default: the hart holds one CSK, tagged with its level, and that CSK is _in use_ for its level only.
   An export or import at another level L traps, and M-mode replaces the CSK with CSK~L~.
-* _Automatic selection_, with `Smklmultcsk` (<<Zkl-ISA-priv.adoc#KLE-priv-extensions>>): the hart holds the CSKs of all its levels at once, and each configured CSK~L~ is _in use_ for level L.
+* _Automatic selection_, with `Smklmultcsk` (<<Zkl-ISA-priv.adoc#KLE-priv-exts-overview>>): the hart holds the CSKs of all its levels at once, and each configured CSK~L~ is _in use_ for level L.
   An export or import traps only if CSK~L~ is not configured.
 
 Under the third and fourth ways, M-mode cannot replace a CSK, so a hart that implements more than one level implements `Smklmultcsk`.
+--
 
 [NOTE]
 ====
 Per-level CSKs confine a side-channel or fault-injection attack on the engine of one level to the SCCs of that level.
-With a single CSK, a user could provision Level A lockers with chosen keys, export and import them repeatedly, recover the CSK by power analysis, and unseal the SCCs of Levels B and C.
+With a single CSK, a user could provision level-0 lockers with chosen keys, export and import them repeatedly, recover the CSK by power analysis, and unseal the SCCs of the protected levels.
 Running every export and import at the highest level would also prevent this, but would slow them down for every Machine.
-Because CSK~L~ exists only on harts that implement level L, the attack cannot move, with the CSK, to a hart without Levels B and C.
+Because CSK~L~ exists only on harts that implement level L, the attack cannot move, with the CSK, to a hart without those levels.
 ====
 
 NOTE: When the CSKs are shared across devices, CCs meant to be device-bound need to name _ChipScrt_ or _DevScrt_ in their _Locality_.
 
-Persistence of a configurable CSK is implementation-specific.
+Persistence of configurable CSKs is implementation-specific.
 Transferring a CSK to another endpoint, such as the M-mode firmware of another device, a local TPM (for instance across suspension or host hibernation), or a cloud-based HSM, requires an authenticated public-key wrapping mechanism, which this specification does not define.
 
 // ////////////////////////////////////////////////////////////////////
