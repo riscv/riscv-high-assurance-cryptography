@@ -18,7 +18,8 @@ def _body(m, form, data, last_st):
     if n: out += v2b(m.exec('A', b2v(data[:n]), 8 * n), n)
     return out
 
-def gcm_enc(m, iv, aad, pt, taglen=128):
+def gcm_enc(m, iv, aad, pt, taglen=None):
+    if taglen is None: taglen = m.tag_len_p
     if not m.IV:
         d = pad16(iv); m.setst(SAV, 'B', 8 * len(iv)); m.exec('B', b2v(d), 8 * len(d))
     else: m.setst(ABSORB)
@@ -106,7 +107,7 @@ def ocb_dec(m, nbits, n, aad, ct, tag, preset=False, viasetst=False):
     return out, m.st == SUCCESS
 
 def cmac_gen(m, msg, tlen=None):
-    bs = m.B // 8; tlen = tlen or m.B
+    bs = m.B // 8; tlen = m.tag_len_p if tlen is None else tlen
     m.setst(ABSORB)
     n = max(1, -(-len(msg) // bs)); full = (n - 1) * bs
     if full: m.exec('B', b2v(msg[:full]), 8 * full)

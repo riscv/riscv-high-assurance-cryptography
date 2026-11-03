@@ -115,6 +115,7 @@ def scc_size(mdh):
 def scc_invalid(mdh, lst=None):
     f = mdh_unpack(mdh)
     return (f['Version'] != 0 or f['KeyType'] in (2, 3) or f['SCProtection'] >= 4 or sl(f['Locality'], 5, 4) == 3
+            or f['Transparent'] == 1 and f['KeyType'] == 1
             or f['Reserved46'] or f['Reserved79_78'] or f['Reserved127_116']
             or f['StateExtension'] != 0 or f['State'] in (0, 61, 62, 63) or f['ExpirationDate'] != 0
             or f['AuxDataLen'] == 1 )
@@ -146,7 +147,7 @@ def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None, zklexpire=False, 
     """Returns ('ok', L) | ('invalid', None) | ('unsupported', None) | ('authfail', L_error)."""
     M = b2v(img[:16]); f = mdh_unpack(M)
     if f['State'] == 0 and 1 <= f['StateExtension'] <= (6 if zklexpire else 5):   # short import of an Error State
-        if scc_invalid(mdh_put(mdh_put(mdh_put(M, 'State', 1), 'StateExtension', 0), 'AuxDataLen', 0)):   # M8: invalid Metadata
+        if scc_invalid(mdh_put(mdh_put(M, 'State', 1), 'StateExtension', 0)):   # validate before clearing the ADS fields
             return 'ok', dict(mdh=mdh_pack(State=0, StateExtension=SE_INVALID), c1=b'', c2=b'')
         return 'ok', dict(mdh=mdh_put(mdh_put(M, 'AuxDataLen', 0), 'ADSDropped', 0), c1=b'', c2=b'')
     if f['Machine'] not in SCC_MACHINES and not scc_invalid(M): return 'unsupported', None

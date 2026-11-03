@@ -113,10 +113,10 @@ m = GCM(key); m.setst(SAV, 'B', 96); m.exec('B', b2v(iv + bytes(4)), 128); m.set
 m.exec('A', 5, 128); m.exec('A', 5, 128)
 check('second kl.exec in Dec_Last_Block: Invalid (MR10)', inv(m))
 
-section('tag truncation, Hash_Verify tag lengths, Enc_Tag_Finalize KLLEN')
+section('configured tag length, Hash_Verify tag lengths, Enc_Tag_Finalize KLLEN')
 pt = RB(40); aad = RB(9); fullc, fullt = gcm_enc(GCM(key), iv, aad, pt)
 for tl in (128, 120, 112, 104, 96, 64):
-    c, t = gcm_enc(GCM(key), iv, aad, pt, tl)
+    c, t = gcm_enc(GCM(key, tag_len_p=tl), iv, aad, pt)
     check('encrypt with %d-bit tag: prefix of full tag' % tl, c == fullc and t == fullt[:tl // 8])
     p, ok = gcm_dec(GCM(key, tag_len_p=tl), iv, aad, c, t)
     check('verify %d-bit tag with tag_len_p=%d: Success' % (tl, tl), ok and p == pt)
@@ -127,9 +127,19 @@ for tl in (128, 120, 112, 104, 96, 64):
         check('verify %d-bit tag with tag_len_p=128: Invalid (MR12)' % tl, inv(m))
         m = GCM(key, tag_len_p=tl); gcm_dec(m, iv, aad, c, fullt)
         check('verify 128-bit tag with tag_len_p=%d: Invalid (MR12)' % tl, inv(m))
+    for kl in (1, tl - 1, tl, tl + 1, 128, 192):
+        m = GCM(key, tag_len_p=tl); gcm_enc(m, iv, aad, pt)
+        q = GCM.from_sc(ETF, m.export()[0], tag_len_p=tl)
+        o = q.exec('C', 0, kl)
+        check('tag_len_p=%d, output window %d bits: configured tag or Invalid' % (tl, kl),
+              inv(q) and o == 0 if kl < tl else q.st == SUCCESS and o == b2v(fullt[:tl // 8]))
+    m = GCM(key, tag_len_p=tl); gcm_enc(m, iv, aad, pt)
+    q = GCM.from_sc(ETF, m.export()[0], tag_len_p=tl); before = q.export()
+    check('tag_len_p=%d, klstart at window end: no tag or state change' % tl,
+          q.exec('C', 0, 128, klstart=16) == 0 and q.st == ETF and q.export() == before)
 for tlp in (0, 32, 100, 136):
     check('provisioning with tag_len_p=%d: Invalid (MR12)' % tlp, inv(GCM(key, tag_len_p=tlp)) and inv(GCM_IV(key, b2v(iv), tag_len_p=tlp)))
-for kl in (32, 88, 8, 127, 1, 63, 65):
+for kl in (32, 64, 88, 96, 104, 112, 120, 8, 127, 1, 63, 65):
     m = GCM(key); m.setst(SAV, 'B', 96); m.exec('B', b2v(iv + bytes(4)), 128); m.setst(ENC); m.setst(ETF, 'C', inp=0)
     m.exec('C', 0, kl)
     check('Enc_Tag_Finalize KLLEN=%d: Invalid' % kl, inv(m))
@@ -192,7 +202,8 @@ m = ready_to(ENC); m.rstr(1); check('restrict to encrypt-only while in Encrypt: 
 m = ready_to(ABSORB); m.rstr(1); m.setst(DEC); check('after narrowing to encrypt-only, Decrypt is denied', inv(m))
 m = ready_to(ABSORB); m.rstr(0); check('narrowing to a forbidden (zero) policy: Invalid (GR20)', inv(m))
 m = ready_to(ENC); m.exec('A', 0, 128); n = ready_to(ENC); n.exec('A', 0, 128); m.rstr(3)
-check('Invalid is absorbing: later instructions keep Error State', (lambda x: (x.setst(READY), inv(x))[1])(ready_to(ENC)) is False or True)
+x = ready_to(ENC); x.exec('C', 0, 128); x.setst(READY); x.exec('A', 0, 128)
+check('Invalid is absorbing: later instructions keep Error State', inv(x))
 x = ready_to(ENC); x.exec('C', 0, 128); x.setst(READY); check('after Invalid, setst Ready does not recover', inv(x))
 
 section('Set_Aux_Value: IV load')
@@ -224,7 +235,7 @@ iv = RB(12); m.exec('B', b2v(iv + bytes(4)), 128)
 c, t = gcm_enc(m, iv, b'', b'') if False else (None, None)
 m.setst(ENC); m.setst(ETF, 'C', inp=0); tt = v2b(m.exec('C', 0, 128), 16)
 r = R.gcm_enc(ENCF('AES128', key), iv, b'', b'')[1]
-check('restarted load: partial first IV discarded, new IV in effect', m.st == SUCCESS and True)
+check('restarted load: partial first IV discarded, new IV in effect', m.st == SUCCESS and tt == r)
 m = GCM(key); m.setst(SAV, 'B', 256); m.exec('B', b2v(RB(16)), 128); m.setst(READY)
 check('setst Ready mid-IV: discards partial IV, Ready', m.st == READY and m.tag == 0 and m.len == 0 and m.J0 == 0 and m.cumul == 0 and m.block_base == 0)
 m = GCM(key); m.setst(SAV, 'B', 256); m.exec('B', b2v(RB(16)), 128); m.setst(SAV, 'B', 96)
@@ -334,7 +345,8 @@ m = ready_to(ABSORB); m.exec('B', 0, 128)
 check('no Set_Aux_Value: Ready -> Hash_Absorb -> Decrypt works on GCM_IV', gcm_dec(GCM_IV(key, b2v(iv)), iv, b'', *R.gcm_enc(ENCF('AES128', key), iv, b'', b'abc')) == (b'abc', True))
 m = GCM_IV(key, b2v(iv)); m.start_ctr = 1; m.J0 = (m.J0 & mask(96)) | bswap(2**32 - 2, 4) << 96; m.setst(ABSORB); m.setst(DEC); m.exec('A', 0, 128); m.exec('A', 0, 128)
 check('GCM_IV counter limit: wrap to 0 = start_ctr-1: Invalid', inv(m))
-check('GCM_IV tag/counter: 2^32-2 blocks budget = GCM 96-bit budget', True)
+check('GCM_IV and GCM with a 96-bit IV reserve counter 0 for the tag',
+      GCM_IV(key, b2v(iv)).start_ctr == at_ctr(1, 1).start_ctr == 1)
 
 section('Serialized Content: layout, export/import mid-flow')
 key = RB(16); iv = RB(12); aad = RB(32); pt = RB(48)

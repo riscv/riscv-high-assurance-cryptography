@@ -93,8 +93,7 @@ class Locker:
         self.st, self.mu_use = st, 0
 
     def _enter_ready(self):
-        if self.st in (S_SUCCESS, S_FAILURE):   # shortcut: spec text on what Ready clears is unverified
-            self.signature = bytes(self.size['signature']); self.mu = bytes(64); self._setflag(HAS_MU, False)
+        self.signature = bytes(self.size['signature']); self.mu = bytes(64); self._setflag(HAS_MU, False)
         self.rnd = bytes(32)
         self.st, self.mu_use, self.ads = S_READY, 0, None
 

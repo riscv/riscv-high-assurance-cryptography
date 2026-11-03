@@ -17,6 +17,11 @@ def prov(e, k, md=None, **kw):
     e.mgmt(k, 56, form='C', md=mk(**kw) if md is None else md); FIN(e, k)
 def stx(e, k): return (e.getst(k), e.getstx(k))
 INV = (0, SE_INVALID)
+def trap_detail(fn, *a, **kw):
+    try: fn(*a, **kw)
+    except Trap as t: return t.kind, t.tval
+    except IllegalInstruction: return 'illegal', None
+    return None
 def FIN(e, k): e.mgmt(k, 63, form='C', md=mk(State=0))   # provisioning completion ignores ml.State
 
 section('MDH layout  <<KLE-metadata-header>>')
@@ -172,6 +177,12 @@ section('Import  <<KLE-MVR-open>>, <<KLE-GR-completion>>')
 im = mk(State=1)
 e = KLE(); e.mgmt(2, 58, md=im); check('import opening: State 58', stx(e, 2) == (58, 0) and mdh_get(e.md(2), 'Machine') == M_ENC)
 e = KLE(); e.mgmt(2, 58, md=mk(State=56)); check('import with ml.State 56 (PI base): State 60 (ppi_importing)', e.getst(2) == 60)
+for state in PI_STATES:
+    e = KLE(); e.mgmt(2, 58, md=mk(mach=M_KEY, State=state, KeyType=2))
+    check('PI-base PCCC State %d may retain KeyType 2 until provisioning completes' % state, e.getst(2) == 60)
+    for kw in (dict(AuxDataLen=2), dict(ADSDropped=1)):
+        e = KLE(); e.mgmt(2, 58, md=mk(State=state, **kw))
+        check('PI-base PCCC State %d rejects ADS fields' % state, stx(e, 2) == INV)
 e = KLE(); e.mgmt(2, 58, md=mk(State=57)); check('import with ml.State 57: State 58', e.getst(2) == 58)
 for st in (61, 62, 63):
     e = KLE(); e.mgmt(2, 58, md=mk(State=st)); check('import with ml.State %d invalid' % st, stx(e, 2) == INV)
@@ -538,11 +549,11 @@ section('Context save and restore, reset  <<KLE-out-of-reset-unpriv>>, <<KLE-res
 e = E2(); prov(e, 1, mach=M_SIG, pol=0); e.L[1].content = 0x1234 | 0x77 << 128; m0 = e.md(1); e.nl = 1; e.mgmt(1, 57, form='A')
 sv = [e.gpr_out(), e.gpr_out(), e.gpr_out()]; sig = e.siv; e.mgmt(1, 63, md=m0)
 check('export: completion restores Ready', e.getst(1) == 1)
-e.reset(); e.csk = True
+e.reset(); e.csk = True; e.csk_levels = set(range(4))
 check('reset: lockers Unconfigured, klnamedlocker 32, klstart 0, KLIOBUF unconfigured, registers zero', all(e.md(k) == 0 for k in range(32)) and e.nl == 32 and e.start == 0 and e.kliobuflen == 0 and e.kliobuftop == 0 and (e.siv, e.impqual, e.siv2) == (0, 0, 0))
 e.mgmt(2, 58, md=m0); [e.gpr_in(v) for v in sv]; e.siv = sig; e.mgmt(2, 63, md=m0)
 check('import after reset restores the Ready locker: same MDH fields, content, authenticated', stx(e, 2) == (1, 0) and e.L[2].content == 0x1234 | 0x77 << 128 and mdh_get(e.md(2), 'Machine') == M_SIG)
-e.reset(); e.csk = True; e.mgmt(2, 58, md=m0); [e.gpr_in(v) for v in sv[:2] + [sv[2] ^ 1]]; e.siv = sig; e.mgmt(2, 63, md=m0)
+e.reset(); e.csk = True; e.csk_levels = set(range(4)); e.mgmt(2, 58, md=m0); [e.gpr_in(v) for v in sv[:2] + [sv[2] ^ 1]]; e.siv = sig; e.mgmt(2, 63, md=m0)
 check('tampered image -> Authentication Failed', stx(e, 2) == (0, SE_MGMT_AUTH))
 e.reset(); check('reset unconfigures a software-established CSK (usage needs a CSK again)', trap(e.mgmt, 0, 56, md=mk()) == 'no_csk')
 e = E2(); e.csk_hardwired = True; e.reset(); check('a hardwired CSK survives the unit reset', e.csk is True)
@@ -570,6 +581,13 @@ check('walking ones: each field bit at its position, no bleed', ok)
 check('all-ones MDH round trips through mdh_unpack/mdh_pack', mdh_pack(**mdh_unpack(mask(128))) == mask(128))
 w = mdh_pack(State=0x2A, StateExtension=0x5, Machine=7)
 e = KLE(); e.L[1].mdh = w; check('kl.getst = (getmdl >> 20) & 0x3F, kl.getstx = (getmdl >> 26) & 0xF; getmdl is MDH[63:0]', e.getst(1) == (e.getmd(1, part='l') >> 20) & 63 == 0x2A and e.getstx(1) == (e.getmd(1, part='l') >> 26) & 15 == 5 and e.getmd(1, part='l') == w & mask(64))
+ok = True
+for st in range(64):
+    for se in range(16):
+        for adjacent in range(64):
+            e.L[1].mdh = (adjacent & 15) << 16 | st << 20 | se << 26 | (adjacent >> 4) << 30
+            ok &= stx(e, 1) == (st, se) and (e.getmd(1, part='l') >> 20) & 0x3ff == se << 6 | st
+check('all State/StateExtension values with every adjacent protection, Transparent and KeyType value', ok)
 e = enc(); check('GR19.2: kl.exec in Ready is not admitted: Invalid', (e.setst(1, 1), e.execw(1, form='A', data=bytes(16)))[1] == 'invalid' and stx(e, 1) == INV)
 e = enc(); e.setst(1, 2); check('GR19.2: kl.setst naming the current State (not Ready) is not admitted: Invalid', stx(e, 1) == INV)
 e = E2(); e.mgmt(0, 56, md=mk()); e.gpr_in(1); e.mgmt(0, 57, form='A')
@@ -633,6 +651,81 @@ e = E2(); e.has_rng = False; check('kl.size of an unsupported KeyType is 0', e.s
 e = E2(); check('KeyType 1 and 2 for a Machine without a key field: invalid, so kl.size 0 and kl.avail still reflect the Machine only', e.size(form='C', md=mk(mach=M_SIG, pol=0, KeyType=1)) == 0)
 
 
+section('C1: Transparent System Keys are invalid before support or SKID resolution')
+for mach in (M_KEY, 0x99):
+    for immed, state, se in ((56, 0, 0), (58, 1, 0), (58, 56, 0), (58, 0, SE_MGMT_AUTH)):
+        e = E2(slots=0); e.sks = None; e.siv, e.impqual, e.siv2 = 1, 2, 3
+        md = mk(mach=mach, pol=2, State=state, StateExtension=se, KeyType=1, Transparent=1)
+        check('Machine %x, opening %d, State %d/%d: canonical Invalid, no allocation or trap' % (mach, immed, state, se),
+              trap(e.mgmt, 1, immed, md=md) is None and e.md(1) == mdh_pack(StateExtension=SE_INVALID) and e.slots == 0)
+        if state == 0 and se:
+            check('invalid short import leaves authentication registers unchanged', (e.siv, e.impqual, e.siv2) == (1, 2, 3))
+        check('invalid Error-State Metadata still sizes as 16', e.size(form='C', md=mdh_put(mdh_put(md, 'State', 0), 'StateExtension', SE_MGMT_AUTH)) == 16)
+for kt in (1, 2):
+    check('unknown Machine, opaque KeyType %d: defer Machine-specific validity' % kt,
+          trap(E2().mgmt, 1, 56, md=mk(mach=0x99, KeyType=kt, pol=0)) == 'unsupported')
+e = E2(); prov(e, 1, mach=M_KEY, KeyType=2, Transparent=1)
+check('caller-owned random key may be Transparent after provisioning', e.getst(1) == 1 and mdh_get(e.md(1), 'KeyType') == 0)
+e = skp(pol=2); prov_skid(e, pol=2); saved = e.md(0); e.mgmt(0, 57)
+r = skp(pol=2); r.mgmt(1, 58, md=saved); r.mvin(K64, toy_tag(K64)); r.mgmt(1, 63, md=saved)
+check('opaque verification-only System Key exports its SKID and imports through resolution',
+      bytes(e.img(0)[16:24]) == v2b(K64, 8) and r.getst(1) == 1 and r.L[1].content == 0xAAAA and mdh_get(r.md(1), 'MachinePolicy') == 2)
+
+section('M2/M3: staged per-level CSK checks and automatic selection')
+def csks(mult=True, method=1):
+    e = E2(csk_levels={0}, multcsk=mult, csk_method=method)
+    if mult and method == 1: e.csk_sel = 1; e.csk_partial = [0x1234]
+    return e
+im = mk(State=1, SCProtection=2)
+e = csks(); e.csk_levels.clear(); e.priv = 'S'; e.lstat[1] = 0
+check('global no-CSK (mtval=0) precedes Off and leaves selector/write progress unchanged',
+      trap_detail(e.mgmt, 1, 57) == ('no_csk', 0) and e.csk_sel == 1 and e.csk_partial == [0x1234])
+e = csks(); prov(e, 1, SCProtection=2); e.priv = 'S'; e.lstat[1] = 0
+check('Off precedes per-level CSK check on export; no automatic selection',
+      trap_detail(e.mgmt, 1, 57) == ('locker_off', None) and e.csk_sel == 1 and e.csk_partial == [0x1234])
+e = csks(); e.priv = 'S'; e.lstat[1] = 0
+check('destructive import opening is Off-exempt and reaches the per-level check',
+      trap_detail(e.mgmt, 1, 58, md=im) == ('no_csk', 10) and e.csk_sel == 2 and e.csk_partial == [])
+for md, expected in ((mdh_put(im, 'Machine', 0x99), ('unsupported', None)), (mdh_put(im, 'Reserved46', 1), None)):
+    e = csks(); e.siv = e.impqual = e.siv2 = 7
+    check('invalid/support checks precede per-level CSK selection at import',
+          trap_detail(e.mgmt, 1, 58, md=md) == expected and e.csk_sel == 1 and e.csk_partial == [0x1234]
+          and (e.siv, e.impqual, e.siv2) == (0, 0, 0) and not e.L[1].slot)
+e = csks(); e.slots = 0
+check('per-level CSK check precedes capacity allocation', trap_detail(e.mgmt, 1, 58, md=im) == ('no_csk', 10) and e.md(1) == 0)
+e = csks(); prov(e, 1, SCProtection=2, Locality=LOC(9)); e.lst[9] = 0; md = e.md(1); e.siv = 7
+check('export checks the level CSK before Locality refusal; locker and authentication unchanged',
+      trap_detail(e.mgmt, 1, 57) == ('no_csk', 10) and e.md(1) == md and e.siv == 7)
+for method in (1, 2, 3, 4):
+    for mult in (False, True):
+        e = csks(mult, method); sel = e.csk_sel
+        if method == 1 and not mult: e.csk_partial = [0x1234]
+        check('method %d, multcsk=%s: mtval=8+L, selector changes only with mklcfg' % (method, mult),
+              trap_detail(e.mgmt, 1, 58, md=im) == ('no_csk', 10)
+              and e.csk_sel == (2 if mult and method in (1, 2) else sel)
+              and (e.csk_partial == ([] if mult else [0x1234]) if method == 1 else not hasattr(e, 'csk_partial'))
+              and e.csk_levels == {0})
+for state in PI_STATES:
+    e = csks(); e.mgmt(1, 58, md=mdh_put(im, 'State', state)); e.mgmt(1, 63, md=mk(State=56)); FIN(e, 1)
+    check('PI-base PCCC State %d needs no level CSK to import and provision' % state,
+          e.getst(1) == 1 and e.csk_sel == 1 and e.csk_partial == [0x1234])
+e = csks(); e.siv = e.impqual = e.siv2 = 7; e.mgmt(1, 58, md=mk(StateExtension=SE_MGMT_AUTH, SCProtection=2))
+check('short import uses no level CSK; authentication registers and partial write unchanged',
+      stx(e, 1) == (0, SE_MGMT_AUTH) and (e.siv, e.impqual, e.siv2) == (7, 7, 7) and e.csk_sel == 1 and e.csk_partial == [0x1234])
+for opening in (57, 58):
+    e = csks(); e.csk_levels.add(2)
+    if opening == 57: prov(e, 1, SCProtection=2); e.mgmt(1, 57)
+    else: e.mgmt(1, 58, md=im); e.gpr_in(0); e.gpr_in(0x5678); e.siv = toy_tag(0x5678)
+    e.csk_levels.remove(2); l = e.L[1]; before = (l.mdh, l.content, bytes(e.img(1)))
+    check('completion of %d needs its level CSK; no content change on trap' % opening,
+          trap_detail(e.mgmt, 1, 63, md=im) == ('no_csk', 10) and (l.mdh, l.content, bytes(e.img(1))) == before)
+    e.csk_levels.add(2)
+    check('completion succeeds once the level CSK is available', trap(e.mgmt, 1, 63, md=im) is None and e.getst(1) == 1)
+e = csks(); e.csk_levels.add(2); e.mgmt(1, 58, md=im); e.csk_levels.remove(2); e.mgmt(1, 57); e.mgmt(1, 63, md=mk(State=58))
+check('nested SCC-base export/completion is verbatim and needs no level CSK', e.getst(1) == 58 and e.csk_sel == 1)
+e = csks(); e.mgmt(1, 58, md=mk(Version=3, AuxDataLen=3, SCProtection=2)); sysimg(e, 0x5151); e.mgmt(1, 63, form='A')
+check('system-specific import uses its own authentication, no level CSK', e.getst(1) == 1 and e.csk_sel == 1)
+
 section('KLS, stateen, locker-Off gate, kleemulation, KLIOBUF CSRs  <<KLE-KLS-field-in-mstatus>>, <<KLE-CSR-llockerstatus>>, <<KLE-kleemulation>>')
 def lowp(**kw):
     csk = kw.pop('csk', True); e = E2(**kw); prov(e, 1); prov(e, 2); e.priv = 'S'; e.csk = csk; return e
@@ -665,7 +758,6 @@ check('not exempt: export-opening and completing kl.mgmt, clone/rename out of it
 e = lowp(); e.lstat[1] = 0; check('same-locker clone, rename and swap perform no operation and are not an access', all(trap(f, 1, 1) is None for f in (e.clone, e.rename, e.swap)))
 e = lowp(); e.lstat[3] = 0; check('with klnamedlocker = 32 nothing is accessed: no locker-Off', (e.getmd(0, 1), trap(e.exec, 0, 1))[1] is None)
 e = lowp(csk=False); e.lstat[1] = 0; check('missing CSK precedes locker-Off (GR12 items 4, 6)', trap(e.exec, 1) == 'no_csk')
-e = lowp(); e.lstat[1] = 0; check('locker-Off precedes the State conditions: on a Configuration-State locker it, not the privilege violation, is raised', True)
 e = lowp(); e.mgmt(4, 56, md=mk()); e.lstat[4] = 0; check('locker-Off precedes the Configuration-State privilege violation', trap(e.exec, 4) == 'locker_off')
 e = lowp(); e.lstat[1] = 0; e.nl = 1; check('second-group illegal (short vector mv) precedes locker-Off (GR12 items 3, 6)', trap(e.vec_in, d[:8], 32) == 'illegal')
 e = E2(); e.kleemu = True; nat, non = mk(), mk(mach=0x99)

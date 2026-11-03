@@ -45,7 +45,7 @@ for nm, kl in (('AES128', 16), ('AES192', 24), ('AES256', 32), ('SM4', 16), ('TD
         want = R.cmac(nm, key, msg)[0]
         bad += cmac_gen(CMAC(key, cipher=nm), msg) != want
         for tl in (64, bs * 8):
-            bad += cmac_gen(CMAC(key, cipher=nm), msg, tl) != want[:tl // 8]
+            bad += cmac_gen(CMAC(key, cipher=nm, tag_len_p=tl), msg) != want[:tl // 8]
         bad += not cmac_ver(CMAC(key, cipher=nm), msg, want)
 check('%d messages: gen == reference, truncated tags are prefixes, verify Success (bad=%d)' % (cnt, bad), bad == 0)
 for nm, kl, bs in (('SM4', 16, 16),):
@@ -98,7 +98,8 @@ for xs in (0, 8, 120, 128):
 m = at(ABSORB, 'TDEA'); m.setst(HABL, 'B', 72); check('TDEA Hash_Absorb_Last_Block Xs=72 > b: Invalid', inv(m))
 m = at(ABSORB); m.exec('B', 0, 128); m.setst(HABL, 'B', 0); check('empty last block after absorbing a block: Invalid', inv(m))
 m = at(ABSORB); m.setst(HABL, 'B', 0); check('empty message: absorbed at once, absorbed_all', m.st == HABL and m.all and m.lbl == 0)
-check('empty message Hash_Output equals RFC 4493 len 0', (lambda m: (m.setst(HOUT, 'A'), v2b(m.exec('C', 0, 128), 16))[1])(m) == H('bb1d6929e95937287fa37d129b756746') or True)
+check('empty message Hash_Output equals the reference',
+      (lambda m: (m.setst(HOUT, 'A'), v2b(m.exec('C', 0, 128), 16))[1])(m) == R.cmac('AES128', m.key, b'')[0])
 m = CMAC(AES[0][1]); m.setst(ABSORB); m.setst(HABL, 'B', 0); m.setst(HOUT, 'A')
 check('empty message via setst only (no kl.exec) gives the RFC 4493 value', v2b(m.exec('C', 0, 128), 16) == H(AES[0][2][0]))
 m = at(ABSORB); m.setst(HABL, 'B', 0); m.exec('B', 0, 128); check('kl.exec with absorbed_all true: Invalid', inv(m))
@@ -109,11 +110,16 @@ m = CMAC(AES[0][1]); m.setst(ABSORB); m.setst(HABL, 'B', 24); m.exec('B', 0xffff
 m2 = CMAC(AES[0][1]); m2.setst(ABSORB); m2.setst(HABL, 'B', 24); m2.exec('B', 0xffffff, 128)
 check('last-block kl.exec uses only the last_block_len low bits of INPUT', m.hash == m2.hash)
 m = at(ABSORB); m.exec('B', 0, 256); check('multi-block Hash_Absorb sets absorbed_any', m.any and not m.all)
-for kl in (0, 8, 56, 63):
-    m = at(HOUT); m.exec('C', 0, kl) if kl else m.exec('D'); check('Hash_Output KLLEN=%d < 64: Invalid' % kl, inv(m))
-for kl in (64, 96, 120, 128, 192):
-    m = at(HOUT); o = m.exec('C', 0, kl); h = m.hash
-    check('Hash_Output KLLEN=%d: first min(KLLEN,128)/8 bytes, rest cleared' % kl, m.st == SUCCESS and o == h & mask(min(kl, 128)) and o >> 128 == 0)
+for tl in range(64, 129, 8):
+    for kl in (1, tl - 1, tl, tl + 1, 128, 192):
+        m = at(HOUT, key=AES[0][1], tag_len_p=tl); o = m.exec('C', 0, kl)
+        want = b2v(R.cmac('AES128', AES[0][1], b'abc')[0][:tl // 8])
+        check('tag_len_p=%d, output window %d bits: configured tag or Invalid' % (tl, kl),
+              inv(m) and o == 0 if kl < tl else m.st == SUCCESS and o == want)
+    for kl, start in ((0, 0), (128, 16)):
+        m = at(HOUT, tag_len_p=tl); before = m.export()
+        check('tag_len_p=%d, empty window: no tag or state change' % tl,
+              m.exec('C', 0, kl, klstart=start) == 0 and m.st == HOUT and m.export() == before)
 bs = 128
 for xs in (0, 8, 32, 56, 63, 65, 70):
     m = at(HABL); m.setst(HV, 'B', xs) if xs else m.setst(HV, 'A'); check('Hash_Verify Xs=%d: Invalid' % xs, inv(m))

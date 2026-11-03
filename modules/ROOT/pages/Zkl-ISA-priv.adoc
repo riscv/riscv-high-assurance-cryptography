@@ -5,8 +5,8 @@ ifdef::env-site[]
 include::partial$Zkl-symbols.adoc[]
 endif::[]
 
-The KLE Privileged Architecture provides CSRs.
-This chapter also defines the KLE exception causes, which every hart implements.
+This chapter defines the KLE privileged CSRs.
+Every hart implements the KLE exception causes defined here.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -39,7 +39,7 @@ An OS or hypervisor depends only on the `Ss` extensions.
 
 The KLE Privileged Architecture is _implemented_ on a hart whose `mstatus` implements the `KLS` field.
 It is mandatory on every hart that is not M-mode-only, and optional on an M-mode-only hart.
-The KLE exceptions of <<KLE-exceptions>> exist on every hart, whether or not it implements the KLE Privileged Architecture.
+The exceptions of <<KLE-exceptions>> also exist without the KLE Privileged Architecture.
 Where the KLE Privileged Architecture is not implemented:
 
 * `KLS` is not present and is treated as Initial;
@@ -85,10 +85,7 @@ The last two columns give the CSR groups implemented with each extension and the
 [[KLE-exceptions]]
 == Exceptions Raised by KLE
 
-This section describes the error conditions that raise exceptions, not those that set an Error State (<<Zkl-ISA-unpriv.adoc#KLE-State-field>>).
-
-When an exception is raised, `*cause` holds the cause, as <<KLE-exception-codes>> describes.
-The table lists exception causes and conditions.
+<<KLE-exception-codes>> lists exception causes, held in `*cause`, and their conditions; <<Zkl-ISA-unpriv.adoc#KLE-error-states>> covers Error States.
 Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> orders the locker-state-independent checks.
 Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-state-dependent-checks>> and each instruction's stated steps order the subsequent checks.
 
@@ -244,10 +241,10 @@ A locker that was configured and is now _Unconfigured_ also makes `KLS` Dirty, s
 |===
 
 
-The following holds for every `KLS` field, in the privilege modes in which it is in effect:
+For every `KLS` field in effect:
 
-* If a field in effect is Off, every KLE instruction and every access to a KLE CSR raises an illegal-instruction exception.
-* Where no field in effect is Off, an instruction that modifies KLE state sets every field in effect to Dirty.
+* Off makes every KLE instruction and KLE CSR access raise an illegal-instruction exception, as the table states.
+* If none is Off, an instruction that modifies KLE state sets them all to Dirty.
   So does a software write to a `*llockerstatus` CSR or to a Locality CSR; context-restoring software must write `KLS` after those CSRs.
 * An implementation may set a `KLS` field, or a `*llockerstatus` field, to Dirty from Initial or Clean at any time, even without a state change.
   Setting a field to Dirty is not a change of KLE state for Rule <<Zkl-ISA-unpriv.adoc#KLE-exception-state-change>>.
@@ -259,8 +256,8 @@ The field is present and writable while `misa.L` is clear, like `FS` and `VS`; a
 
 NOTE: Precise management of `mstatus.KLS` is an optimization that software may use to reduce context-switch overhead.
 
-A write to a `KLS` field modifies no KLE state.
-Setting the field to Off, Initial or Clean does not clear the lockers, the KLIOBUF or the KLE CSRs, so any such state change must be explicit and must precede the write.
+A write to `KLS` modifies no KLE state.
+Before writing Off, Initial or Clean, software must explicitly make any changes to lockers, the KLIOBUF or KLE CSRs that the value is meant to describe.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -320,8 +317,7 @@ For each of these three CSRs::
 |===
 --
 +
-`*llockerstatus` is evaluated after the illegal-instruction grounds that do not require KLE unit state (the <<Zkl-ISA-unpriv.adoc#KLE-second-group-ILL-grounds>>), the KLE fatal-error exception, and the KLE missing-CSK exception for no configured CSK (`mtval` = 0), but before all other conditions, including the <<Zkl-ISA-unpriv.adoc#KLE-third-group-ILL-grounds>>, the <<Zkl-ISA-unpriv.adoc#KLE-fourth-group-ILL-grounds>> and the conditions of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>.
-A KLE missing-CSK exception for the level of an export or import (`mtval` = 8 + L) is a locker-state-dependent condition, evaluated after `*llockerstatus`.
+Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, item 6, orders the `*llockerstatus` check: after fatal-error and global missing-CSK (`mtval` = 0), before locker-state-dependent checks, including per-level missing-CSK (`mtval` = 8 + L).
 The hardware state of a locker with an _Off_ field in effect is never consulted (but see `kl.getmd*` below): conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
 A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`.
@@ -337,48 +333,24 @@ An implementation may return the MDH without trapping only if the result matches
 A mode marks a locker _Off_ only while it holds the authoritative image or emulates the locker; the hardware contents of an _Off_ locker are never the sole copy of a CC.
 A handler that has not yet saved a locker leaves its field _Clean_ or _Dirty_.
 
-For `mllockerstatus`::
-+
---
-When the privilege mode is (H)S, VS or U/VU:
+The fields in effect are those owned by modes above the executing mode:
 
-* an access to ``K(``__i__``)`` while `mllockerstatus`(__i__) is _Off_ raises a KLE locker-Off exception; and
-* an instruction that modifies ``K(``__i__``)`` sets `mllockerstatus`(__i__) to _Dirty_.
+[cols="<2,<5",options="header"]
+|===
+| Executing mode | `*llockerstatus` fields in effect, where implemented
+| M | None
+| (H)S | `mllockerstatus`
+| VS or U | `mllockerstatus`, `sllockerstatus`
+| VU | `mllockerstatus`, `sllockerstatus`, `vsllockerstatus`
+|===
 
-A direct write to `mllockerstatus`(__i__) changes neither `sllockerstatus`(__i__) nor `vsllockerstatus`(__i__), where these are distinct registers (<<KLE-priv-config-requirements>>).
-`mstatus.KLS` is also in effect.
---
+An access to ``K(``__i__``)`` raises KLE locker-Off if any field in effect for it is _Off_, subject to the exemptions above.
+An instruction that modifies the locker sets every field in effect for it to _Dirty_; it never writes its own mode's field.
+A direct write to a `*llockerstatus` CSR changes no other distinct register in that group (<<KLE-priv-config-requirements>>).
+`mstatus.KLS`, and `vsstatus.KLS` when V=1, are also in effect (<<KLE-KLS-field-in-mstatus>>).
 
-
-For `sllockerstatus`::
-+
---
-When the privilege mode is VS, U or VU:
-
-* an access to ``K(``__i__``)`` while `mllockerstatus`(__i__) or `sllockerstatus`(__i__) is _Off_ raises a KLE locker-Off exception; and
-* an instruction that modifies ``K(``__i__``)`` sets `sllockerstatus`(__i__) and `mllockerstatus`(__i__) to _Dirty_.
-
-A direct write to `sllockerstatus`(__i__) changes neither `mllockerstatus`(__i__) nor `vsllockerstatus`(__i__) (if defined).
-`mstatus.KLS`, `vsstatus.KLS` when V=1, and `mllockerstatus` are also in effect.
---
-
-
-For `vsllockerstatus`::
-+
---
 `vsllockerstatus` exists only with the H extension.
-When V=1, it substitutes for `sllockerstatus`: CSR accesses that would target `sllockerstatus` instead access `vsllockerstatus`, as for `vsstatus` and `sstatus`.
-
-When the privilege mode is VU:
-
-* an access to ``K(``__i__``)`` while any of `mllockerstatus`(__i__), `vsllockerstatus`(__i__) or `sllockerstatus`(__i__) is _Off_ raises a KLE locker-Off exception; and
-* an instruction that modifies ``K(``__i__``)`` sets `vsllockerstatus`(__i__), `sllockerstatus`(__i__) and `mllockerstatus`(__i__) to _Dirty_.
-
-A direct write to `vsllockerstatus`(__i__) changes neither `mllockerstatus`(__i__) nor `sllockerstatus`(__i__) (if defined).
-`mstatus.KLS`, `vsstatus.KLS`, `sllockerstatus` and `mllockerstatus` are also in effect.
---
-
-The `*llockerstatus` fields that an instruction sets to _Dirty_ are those in effect, that is, those owned by the privilege modes above the one in which it executes; an instruction never writes the field owned by its own mode.
+When V=1, CSR accesses to `sllockerstatus` instead access `vsllockerstatus`, as for `sstatus` and `vsstatus`.
 
 The KLE locker-Off exception is a single exception cause, whichever `*llockerstatus` field is _Off_; `medeleg` and `hedeleg` delegate it like any other cause.
 While any of its own fields is _Off_, a mode keeps the cause undelegated, in `medeleg` if it is M-mode or in `hedeleg` if it is HS-mode.
@@ -389,11 +361,10 @@ The instructions that it issues to resolve the condition remain subject to the f
 
 [NOTE]
 ====
-The _Off_ value and the KLE locker-Off exception let software load lockers on demand.
-At context restore, a handler may leave a locker unrestored, set its `*llockerstatus` field to _Off_, and keep the authoritative SCC in memory.
-A later access from a lower-privileged mode traps with a KLE locker-Off exception to the mode that owns the _Off_ field, directly by delegation or forwarded by a more privileged handler.
-That handler imports the SCC before resuming execution.
-The architecture defines no separate "`lazy`" state: software that marks a locker _Off_ must ensure that the authoritative SCC is restored.
+For on-demand loading, a handler may defer a locker restore, mark its field _Off_, and keep the authoritative SCC in memory.
+A later access from a lower mode traps to the owner of the _Off_ field, by delegation or forwarding as above.
+That handler must restore the authoritative SCC before resuming execution.
+There is no separate "`lazy`" state.
 ====
 
 [[KLE-unsupported-handling]]

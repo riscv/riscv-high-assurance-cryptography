@@ -22,7 +22,7 @@ class KLE2(KLE):
     def __init__(s, *a, **kw):
         KLE.__init__(s, *a, **kw)
         s.zklio = False; s.kliobuflen = 0; s.kliobuftop = 0; s.iobuf = bytearray(256)
-        s.siv = s.impqual = s.siv2 = 0; s.fmt_min_prot = 0; s.vext = True; s.csk_hardwired = False; s.debug = False; s.debug_auth = False; s.rbg_dead = False
+        s.siv = s.impqual = s.siv2 = 0; s.fmt_min_prot = 0; s.vext = True; s.csk_hardwired = s.csk_method in (3, 4); s.debug = False; s.debug_auth = False; s.rbg_dead = False
         s.kls = 1; s.priv = 'M'; s.stateen = True; s.fatal = False; s.lstat = [1] * 32; s.kleemu = False; s._exm = False
         s.maxiobuf_reset = s.maxiobuf = 256
     # ---- privileged gates (<<KLE-KLS-field-in-mstatus>>, <<KLE-CSR-llockerstatus>>, <<KLE-exception-codes>>)
@@ -53,7 +53,10 @@ class KLE2(KLE):
     def getbt(s): s._iob(); return s.kliobuftop
     def setbl(s, v): s._iob(); s.w_kliobuflen(v)
     def setbt(s, v): s._iob(); s.w_kliobuftop(v)
-    def clear(s, kd, r=0): s._exm = True; r_ = KLE.clear(s, kd, r) if True else None; s._exm = False; return r_
+    def clear(s, kd, r=0):
+        s._exm = True
+        try: return KLE.clear(s, kd, r)
+        finally: s._exm = False
     def mgmt(s, kd, immed, r=0, form='C', md=0):
         s._exm = immed in (56, 58)
         try: return KLE2._mgmt(s, kd, immed, r, form, md)
@@ -110,7 +113,8 @@ class KLE2(KLE):
             if mdh_get(md, 'Version') != 3: im[o:o + c1] = v2b(getattr(l, 'skid', None) if mdh_get(md, 'KeyType') == 1 else l.content, c1)
             l.img = im; s.siv = toy_tag(l.content)
     def _mgmt(s, kd, immed, r=0, form='C', md=0):
-        if immed == 58 and form != 'B':
+        short = form != 'A' and mdh_get(md, 'State') == 0 and 1 <= mdh_get(md, 'StateExtension') <= 6
+        if immed == 58 and form != 'B' and not short:
             s.common(); k = s.tgt(kd, r)
             if k is not None: s.siv = s.impqual = s.siv2 = 0       # <<KLE-GR-exception-state-change>> zeroization
         return KLE.mgmt(s, kd, immed, r, form, md)
@@ -304,7 +308,6 @@ class KLE2(KLE):
         if l.steps >= LR_STEPS: l.steps = 0; l.mdh = mdh_put(l.mdh, 'MachineUse', 0); return 'done'
         l.mdh = mdh_put(l.mdh, 'MachineUse', l.steps); return 'halted'
     def usage(s, kd, r, target):
-        before = None if (s.tgt(kd, r) is None) else s.md(s.tgt(kd, r))
         res = KLE.usage(s, kd, r, target)
         if res == 'ok' and target is not None:
             l = s.L[s.tgt(kd, r)]; l.steps = 0
@@ -379,7 +382,9 @@ class KLE2(KLE):
         for k in range(32): s.free(k)
         s.pool = []; s.nl = NONE; s.start = 0; s.slots = s.slots + 0
         s.kliobuflen = s.kliobuftop = 0; s.iobuf = bytearray(len(s.iobuf)); s.siv = s.impqual = s.siv2 = 0
-        if not s.csk_hardwired: s.csk = False
+        if not s.csk_hardwired: s.csk = False; s.csk_levels.clear()
+        if s.csk_method in (1, 2): s.csk_sel = 0
+        if s.csk_method == 1: s.csk_partial.clear()
 
 # ---- encodings (<<KLE-instruction-exec>>, <<KLE-instruction-mv>>, <<KLE-instruction-derive>>, <<KLE-instruction-clone>>)
 def enc_rtype(rd, rs1, rs2, b25=0, r=0, b27=0, form=0, f2=0):

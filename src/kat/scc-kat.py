@@ -165,6 +165,12 @@ def main():
         check('invalid Metadata (%s) is rejected before authentication' % name, scc_import(im, CSKV, LSTV, IMPQ)[0] == 'invalid')
     m = mdh_put(L['mdh'], 'Machine', 0x77)
     check('valid but unsupported Machine -> unsupported', scc_import(v2b(m, 16) + img[16:], CSKV, LSTV, IMPQ)[0] == 'unsupported')
+    opaque = mk(KeyType=1, key=KEY[:16]); sealed = scc_export(opaque, CSKV, LSTV, IMPQ)
+    check('opaque System-Key SCC round trip', scc_import(sealed, CSKV, LSTV, IMPQ) == ('ok', opaque))
+    for machine in (0x20, 0x77):
+        md = mdh_put(mdh_put(opaque['mdh'], 'Transparent', 1), 'Machine', machine)
+        check('Transparent System-Key Machine %x: invalid before support or authentication' % machine,
+              scc_size(md) == 0 and scc_import(v2b(md, 16) + sealed[16:], CSKV, LSTV, IMPQ)[0] == 'invalid')
 
     section('the Auxiliary Data Section')
     c2 = bytes(range(0x30, 0x50)); L = mk(adl=4, c2=c2, js=(8,)); img = scc_export(L, CSKV, LSTV, IMPQ)
@@ -213,6 +219,11 @@ def main():
     check('kl.size of that MDH is 16', scc_size(E['mdh']) == 16 == len(img))
     Em = dict(E, mdh=mdh_put(mdh_put(E['mdh'], 'AuxDataLen', 9), 'ADSDropped', 1))
     check('short import sets AuxDataLen and ADSDropped to 0', scc_import(v2b(Em['mdh'], 16), 0, [0] * 11, 0)[1] == E)
+    for md in (mdh_put(E['mdh'], 'AuxDataLen', 1),
+               mdh_put(mdh_put(E['mdh'], 'Transparent', 1), 'KeyType', 1),
+               mdh_put(mdh_put(mdh_put(E['mdh'], 'Transparent', 1), 'KeyType', 1), 'Machine', 0x77)):
+        check('invalid Error-State MDH still sizes as 16, short import gives canonical Invalid',
+              scc_size(md) == 16 and scc_import(v2b(md, 16), 0, [0] * 11, 0)[1]['mdh'] == mdh_pack(StateExtension=SE_INVALID))
     X6 = v2b(mdh_pack(Machine=0x20, MachinePolicy=3, State=0, StateExtension=SE_EXPIRED), 16)
     check('StateExtension 6 short-imports only with Zklexpire (m6); without it the image is invalid', scc_import(X6, 0, [0] * 11, 0, zklexpire=True)[0] == 'ok' and scc_import(X6, 0, [0] * 11, 0)[0] == 'invalid')
     XI = v2b(mdh_put(E['mdh'], 'SCProtection', 4), 16)
@@ -429,7 +440,8 @@ def locker_level():
         check('kl.mgmt export-opening on it is permitted: unchanged, nothing opened, klnamedlocker = 3, klstart = 0', K.md(3) == E and K.nl == 3 and K.start == 0)
         Ed = mdh_put(mdh_put(E, 'AuxDataLen', 9), 'ADSDropped', 1)
         K.mgmt(4, 58, md=Ed)
-        check('import-opening of an Error-State MDH: Error State with AuxDataLen 0 / ADSDropped 0, nothing to load, SIV/IMPQUAL/SIV2 zeroized', K.md(4) == E and K.size(4) == 16 and K.siv == K.impqual == K.siv2 == 0)
+        check('short import clears ADS fields and leaves SIV/IMPQUAL/SIV2 unchanged',
+              K.md(4) == E and K.size(4) == 16 and K.siv == K.impqual == K.siv2 == 5)
         control('negative: a Valid-State locker is not reported with kl.size 16', SCCKLE().size(0) == 0 and not is_error_state(mk()['mdh']))
 
         section('locker level: checks on opening and completion (Rule check-on-write, Machine ECB)')

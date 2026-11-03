@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 
 class Trap(Exception):
-    def __init__(self, kind): Exception.__init__(self, kind); self.kind = kind
+    def __init__(self, kind, tval=None): Exception.__init__(self, kind); self.kind, self.tval = kind, tval
 
 M_ENC, M_SIG, M_KEY, M_KEM, M_KEY32, M_HASH, M_VER, M_CMAC, M_XOF = 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80, 0x100
 CONTENT = {M_ENC: 16, M_SIG: 32, M_KEY: 16, M_KEM: 32, M_KEY32: 32, M_HASH: 16, M_VER: 16, M_CMAC: 16, M_XOF: 16}
@@ -34,6 +34,7 @@ def validate(md, ctx, zk=True):
     g = lambda n: mdh_get(md, n)
     st, se, mach = g('State'), g('StateExtension'), g('Machine')
     bad = any(g(r) for r in RESERVED) or g('SCProtection') >= 4 or g('KeyType') == 3 or (g('Locality') >> 4 & 3) == 3
+    bad |= g('Transparent') == 1 and g('KeyType') == 1
     ver = g('Version')
     if ver == 3:      # <<KLE-GR-sysfmt-import-only>>, <<KLE-Metadata-validity>>
         bad |= ctx != 'import' or st not in (0, 58, 57) or g('AuxDataLen') == 0 or bool(se or g('KeyType') or g('Transparent') or g('ADSDropped') or g('MachineUse'))
@@ -41,11 +42,12 @@ def validate(md, ctx, zk=True):
         bad |= ver != 0 or g('AuxDataLen') == 1
     bad |= (se == 6 and not zk) or bool(g('ExpirationDate') and not zk)
     if mach in (M_ENC, M_KEY) and g('MachinePolicy') == 0: bad = True
-    if g('KeyType') in (1, 2) and mach != M_KEY: bad = True
+    if mach in CONTENT and g('KeyType') in (1, 2) and mach != M_KEY: bad = True
     if ctx == 'provision':
         bad |= st != 0 or se != 0 or g('AuxDataLen') != 0 or g('ADSDropped') != 0
     else:
-        bad |= st in (61, 62, 63) or (st == 0 and (se == 0 and ver != 3 or se > 6)) or g('KeyType') == 2
+        bad |= st in (61, 62, 63) or (st == 0 and (se == 0 and ver != 3 or se > 6)) or (g('KeyType') == 2 and st not in PI_STATES)
+        bad |= st in PI_STATES and bool(g('AuxDataLen') or g('ADSDropped'))
     if bad: return 'invalid'
     return 'ok' if mach in CONTENT else 'unsupported'
 
@@ -61,9 +63,14 @@ class Locker:
     def __init__(s): s.mdh = 0; s.content = 0; s.tag = 0; s.slot = False
 
 class KLE:
-    def __init__(s, slots=8, zk=True, mode=2, clock=0, csk=True, zero_alloc=True):
+    def __init__(s, slots=8, zk=True, mode=2, clock=0, csk=True, zero_alloc=True,
+                 csk_levels=None, multcsk=True, csk_method=1):
         s.L = [Locker() for _ in range(32)]; s.nl = NONE; s.start = 0; s.slots = slots; s.pool = []
         s.zk, s.mode, s.clock, s.csk, s.zero_alloc = zk, mode, clock, csk, zero_alloc
+        # ponytail: model CSK presence and write progress; key bits and CSR establishment are outside this KAT.
+        s.csk_levels = set(range(4) if csk else ()) if csk_levels is None else set(csk_levels)
+        s.multcsk, s.csk_method, s.csk_sel = multcsk, csk_method, 0
+        if csk_method == 1: s.csk_partial = []
         s.rng = 0x1000; s.max_ads = 4
         s.lst = [1 + j for j in range(11)]; s.sks = {}; s.has_rng = True      # sks: None (no SKID support) or {skid: dict}
     # ---- helpers
@@ -106,7 +113,14 @@ class KLE:
             return None if s.nl == NONE else s.nl
         return kd
     def common(s):                 # locker-state-independent checks (GR12), reduced
-        if not s.csk: raise Trap('no_csk')
+        if not s.csk or not s.csk_levels: raise Trap('no_csk', 0)
+    def require_csk(s, md):        # only the SCC opening/completion steps that use this level (not GR12)
+        level = mdh_get(md, 'SCProtection')
+        if level in s.csk_levels and (s.multcsk or level == s.csk_sel): return
+        if s.multcsk and s.csk_method in (1, 2):
+            s.csk_sel = level
+            if s.csk_method == 1: s.csk_partial.clear()
+        raise Trap('no_csk', 8 + level)
     def config(s, m): return 56 <= mdh_get(m, 'State') <= 60
     # ---- reads
     def getmd(s, kd, r=0, part='md'):
@@ -283,7 +297,11 @@ class KLE:
         s.common(); k = s.tgt(kd, r)
         if k is None: s.start = 0; return            # KLNL & 32: common steps only
         s.nl = k
-        if immed == 63: return s._complete(k, md)
+        if immed == 63:
+            s.start = 0; m = s.md(k)
+            if mdh_get(m, 'State') in SCC_STATES and mdh_get(m, 'Version') != 3 and 1 <= mdh_get(md, 'State') <= 55:
+                s.require_csk(m)
+            return s._complete(k, md)
         if immed == 57: return s._export_open(k)
         s.start = 0; s.free(k)
         if immed == 58 and mdh_get(md, 'State') == 0 and 1 <= mdh_get(md, 'StateExtension') <= 6:
@@ -293,6 +311,8 @@ class KLE:
         v = s.val(md, 'provision' if immed == 56 else 'import')
         if v == 'invalid': s.L[k].mdh = mdh_pack(State=0, StateExtension=SE_INVALID); return
         if v == 'unsupported': raise Trap('unsupported')
+        if immed == 58 and mdh_get(md, 'Version') != 3 and mdh_get(md, 'State') not in PI_STATES:
+            s.require_csk(md)
         s.alloc(k); m = md
         if immed == 56: m = mdh_put(mdh_put(mdh_put(m, 'MachineUse', 0), 'AuxInfo', 0), 'State', 56)
         else:
@@ -304,6 +324,7 @@ class KLE:
     def _export_open(s, k):
         s.start = 0; m = s.md(k); st = mdh_get(m, 'State')
         if st == 0: return
+        if not s.config(m): s.require_csk(m)
         if not s.config(m) and not all(s.conf(j) for j in loc_entries(mdh_get(m, 'Locality'))): return   # refused (<<KLE-SCC-export>>)
         s.L[k].mdh = mdh_put(m, 'State', (59 if st in PI_STATES else 57) if s.config(m) else 57)
     def mvin(s, content, tag=0):

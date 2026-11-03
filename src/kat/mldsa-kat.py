@@ -18,7 +18,7 @@ def put(lk, st, data, chunk=None):
     for i in range(0, len(data), chunk): lk.exec('B', data[i:i + chunk])
 def load_priv(lk, sk, chunk=None): put(lk, S_PRIVIN, sk, chunk); lk.setst(S_READY)
 def load_pub(lk, pk): put(lk, S_PKIN, pk); lk.setst(S_READY)
-def load_mu(lk, mu): put(lk, S_MUIN, mu); lk.setst(S_READY)
+def load_mu(lk, mu): put(lk, S_MUIN, mu)
 def take(lk, n, chunk=None):
     out, chunk = b'', chunk or n
     while len(out) < n: out += lk.exec('C', n=min(chunk, n - len(out)))
@@ -127,7 +127,8 @@ lk = mk(); lk.setst(S_PRIVIN); lk.exec('B', sk44[:500]); lk.setst(S_READY)
 check('incomplete privkey load zeroed on leaving', lk.privkey == bytes(P44['sk']) and not lk.flag(HAS_PRIV))
 lk = mk(); lk.setst(S_MUIN); lk.exec('B', mu44[:10]); lk.setst(S_READY)
 check('incomplete mu load zeroed, no HasMu', lk.mu == bytes(64) and not lk.flag(HAS_MU))
-lk = mk(); put(lk, S_MUIN, mu44 + b'x'); lk.setst(S_READY); check('excess data for mu ignored', lk.flag(HAS_MU) and lk.mu == mu44)
+lk = mk(); put(lk, S_MUIN, mu44 + b'x'); check('excess data for mu ignored', lk.flag(HAS_MU) and lk.mu == mu44)
+lk.setst(S_READY); check('Ready after a completed mu load clears mu and HasMu', lk.mu == bytes(64) and not lk.flag(HAS_MU))
 # malformed privkey: flip a byte of s1 so a 3-bit coefficient decodes to 7 (> 2*eta=4)
 bad = bytearray(sk44); bad[128] = 0xFF
 check('model: malformed s1 rejected by sk_ok', not M.sk_ok(P44, bytes(bad)) and M.sk_ok(P44, sk44))
@@ -166,12 +167,14 @@ sg = a.signature
 x = take(a, P44['sig'], 77)
 check('Sign_Output chunked, Success, then Ready clears signature/mu', x == a.signature and a.st == S_SUCCESS)
 a.setst(S_READY); check('Ready after sign: signature & mu zero, keys kept', a.signature == bytes(P44['sig']) and a.mu == bytes(64) and not a.flag(HAS_MU) and a.flag(HAS_PRIV))
+b.setst(S_READY); check('Ready before signature emission clears signature/mu and keeps the key',
+                       b.signature == bytes(P44['sig']) and b.mu == bytes(64) and not b.flag(HAS_MU) and b.privkey == sk44)
 lk = Locker(P44, rbg=Rbg('fail')); load_priv(lk, sk44); load_mu(lk, mu44); sign(lk, 0)
 check('RBG failure -> Invalid, content cleared', lk.error and lk.privkey == bytes(P44['sk']) and lk.rnd == bytes(32))
 lk = mk(); load_priv(lk, sk44); load_mu(lk, mu44); lk.setst(S_SOUT); check('Sign_Output not enterable by setst -> Invalid', lk.error)
 lk = mk(); load_priv(lk, sk44); load_mu(lk, mu44); sign(lk); lk.exec('D'); check('Form D in Sign_Output -> Invalid', lk.error)
 def ver(pk, mu, sig):
-    v = mk(); load_pub(v, pk); load_mu(v, mu); put(v, S_SIN, sig); v.setst(S_READY); v.setst(S_SVER); v.exec('D'); return v
+    v = mk(); load_pub(v, pk); load_mu(v, mu); put(v, S_SIN, sig); v.setst(S_SVER); v.exec('D'); return v
 check('verify good -> Success', ver(pk44, mu44, sg).st == S_SUCCESS)
 for nm, off in (('z', 100), ('commitment hash', 3), ('hint', P44['sig'] - 20)):
     t = bytearray(sg); t[off] ^= 0x10
@@ -181,7 +184,7 @@ control('good signature is not Failure', ver(pk44, mu44, sg).st != S_FAILURE)
 v = mk(); load_pub(v, pk44); put(v, S_SIN, sg); v.setst(S_SVER); check('Sign_Verify without HasMu -> Invalid', v.error)
 v = mk(); load_pub(v, pk44); load_mu(v, mu44); v.setst(S_SIN); v.exec('B', sg + b'x'); check('excess in signature -> Failure, signature zeroed', v.st == S_FAILURE and v.signature == bytes(P44['sig']))
 v = mk(); v.setst(S_PKIN); v.exec('B', pk44 + b'x'); check('excess in pubkey -> Failure, pubkey zeroed', v.st == S_FAILURE and v.pubkey == bytes(P44['pk']))
-v.setst(S_READY); load_pub(v, pk44); load_mu(v, mu44); put(v, S_SIN, sg); v.setst(S_READY); v.setst(S_SVER); v.exec('D')
+v.setst(S_READY); load_pub(v, pk44); load_mu(v, mu44); put(v, S_SIN, sg); v.setst(S_SVER); v.exec('D')
 check('Failure -> Ready -> reload works', v.st == S_SUCCESS)
 v = mk(); v.setst(S_PKIN); v.exec('B', pk44 + b'x'); v.setst(S_SIN); check('Failure -> Sign_Input -> Invalid (GR19.3)', v.error)
 
@@ -241,7 +244,7 @@ for key, nm in (('bounded', 'RejBoundedPoly in GenerateKeyPair'), ('ntt', 'RejNT
     lk = Locker(P44, rbg=Rbg(XI), lim={key: 40}); lk.setst(S_GEN); lk.exec('D')
     check(nm + ' limit -> Failure, no output', lk.st == S_FAILURE and lk.pubkey == bytes(P44['pk']) and not lk.flag(HAS_PRIV))
 lk = Locker(P44, lim={'ntt': 40}); load_priv(lk, sk44); lk.setst(S_CPK); lk.exec('D'); check('compute_pubKey ntt limit -> Failure', lk.st == S_FAILURE and not lk.flag(HAS_PUB))
-lk = Locker(P44, lim={'ball': 3}); load_pub(lk, pk44); load_mu(lk, mu44); put(lk, S_SIN, sg); lk.setst(S_READY); lk.setst(S_SVER); lk.exec('D')
+lk = Locker(P44, lim={'ball': 3}); load_pub(lk, pk44); load_mu(lk, mu44); put(lk, S_SIN, sg); lk.setst(S_SVER); lk.exec('D')
 check('Sign_Verify SampleInBall limit -> Failure', lk.st == S_FAILURE)
 lk = Locker(P44, lim={'ball': 3}); load_priv(lk, sk44); load_mu(lk, mu44); sign(lk)
 check('SampleInBall limit in sign -> Failure', lk.st == S_FAILURE and lk.signature == bytes(P44['sig']))

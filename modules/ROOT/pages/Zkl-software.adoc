@@ -13,11 +13,13 @@ The examples follow <<Zkl-notation.adoc#KLE-Notation>>, under which a vector reg
 [[KLE-software-requirements]]
 == Software Requirements
 
-The architecture does not enforce these Rules: software, privileged or not, that breaks them may corrupt cryptographic state, make it unavailable, or reveal a CC to peer or less privileged software.
+These Rules bind privileged and unprivileged software; the architecture does not enforce them.
+Violations may corrupt cryptographic state, make it unavailable, or reveal a CC to peer or less privileged software.
 
 [[KLE-interposed-software,interposed software]]Definition: _Interposed software_.::
 (((interposed software)))
-_Interposed software_ is code that runs while the live KLE state of the hart may hold, for other software, a halted instruction or an open management operation: every exception and interrupt handler, in any mode, including those of the interrupted code, and any other code sharing that KLE state, such as another thread of the same process.
+_Interposed software_ runs while the hart's live KLE state may hold a halted instruction or open management operation for other software.
+It includes every exception and interrupt handler in any mode, even those of the interrupted code, and other code sharing that state, such as another thread of the same process.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -35,8 +37,8 @@ Before giving control to a less privileged mode, it must clear every locker that
 [[KLE-klstart-software-check]]
 === Requirements on `klstart`
 
-`klstart` is one per hart, and nothing resets it between programs: an instruction that honors it starts at the value it finds.
-Without these Rules, interposed software would skip a prefix of its own operand and the interrupted instruction would resume elsewhere, and a KLIOBUF transfer would use the wrong offset, with no exception.
+Each hart has one `klstart`, which persists between programs; an instruction that honors it starts at its current value.
+Without these Rules, interposed software could skip its operand prefix or use the wrong KLIOBUF offset, and the interrupted instruction could resume at the wrong position, without an exception.
 
 [horizontal]
 [[KLE-SR-klstart-save,SR3]]SR3:: <<KLE-interposed-software,Interposed software>> must save `klstart` (`kl.getks` or a CSR read) before any other KLE instruction, write 0 to it before its first instruction that honors it, and restore it before returning to the interrupted software.
@@ -51,21 +53,23 @@ A handler that skips the trapping instruction applies the retirement effects to 
 [[KLE-SR-management]]
 === Requirements on Management Operations
 
-The hardware enforces neither Rule <<KLE-SR-klnamedlocker-write>> nor <<KLE-SR-nested-export-first>>: an instruction acts on whatever locker `klnamedlocker` names, and a `kl.mgmt` that names its locker explicitly acts on it and overwrites `klnamedlocker`, whatever operation is open (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
+The hardware does not enforce Rules <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>>: instructions use the current `klnamedlocker`, and a `kl.mgmt` naming its locker explicitly overwrites it regardless of an open operation (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
 
 [horizontal]
-[[KLE-SR-klnamedlocker-write,SR6]]SR6:: Before `kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`, an instruction naming `KLNL` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>), or a `kl.mgmt` that names its locker explicitly, interposed software must, if `klnamedlocker` does not hold the intended value, save it, write that value, and restore the saved one before returning to the code that set it.
-The intended value is the number of the target locker, 32 for a transfer through the KLIOBUF, and either for a `kl.mgmt` that names its locker explicitly.
-Any software that completes or abandons a management operation must then write 32 to `klnamedlocker`, or restore the value it saved.
+[[KLE-SR-klnamedlocker-write,SR6]]SR6:: Before `kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`, an instruction naming `KLNL` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>), or a `kl.mgmt` naming its locker explicitly, interposed software must, if `klnamedlocker` differs from the intended value, save it, write that value, and restore the saved value before returning to the code that set it.
+The intended value is the target locker number, or 32 for a KLIOBUF transfer; a `kl.mgmt` naming its locker explicitly permits either.
+On completing or abandoning a management operation, any software must write 32 to `klnamedlocker` or restore its saved value.
 
-[[KLE-SR-nested-export-first,SR7]]SR7:: While a locker is in State `kl_cfg_exporting` or `kl_cfg_importing`, whether or not `klnamedlocker` names it, software, interposed or not, must save it by a nested export before it issues a `kl.mgmt` on another locker, and restore it before returning to the code that opened its operation, or terminate that code; it may instead clear a locker in `kl_cfg_importing`, whose import then restarts (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>).
-Until then, software must write to `klnamedlocker` only that locker's number or 32: context-switch code finds through it the locker that owns the authentication registers, of which the hart has one set (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>).
+[[KLE-SR-nested-export-first,SR7]]SR7:: Before a `kl.mgmt` on another locker, all software must save any locker in `kl_cfg_exporting` or `kl_cfg_importing` by nested export, whether or not `klnamedlocker` names it.
+It must restore the locker before returning to the code that opened the operation, or terminate that code; it may instead clear a locker in `kl_cfg_importing`, whose import then restarts (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>).
+Until then, software must write only that locker number or 32 to `klnamedlocker`, through which context-switch code identifies the owner of the hart's single set of authentication registers (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>).
 
 [[KLE-SR-no-interleaving,SR8]]SR8:: Software should complete or discard a management operation before it performs cryptographic operations or manages other lockers; code that must interleave them, such as threads of one process, needs coordination, such as a mutex or lightweight threads with KLE context-switching support.
 Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance for a transfer through the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), must have no other locker in State `kl_cfg_importing` or `kl_cfg_exporting`, even one that a nested export has saved: context-switch code then finds the open operation by its State (<<KLE-save-order>>).
 
-[[KLE-SR-no-unconditional-clear,SR9]]SR9:: At a context switch, system software may clear a locker under a provisioning or an import instead of saving it, which restarts the operation; it must, however, be able to save such a locker, and must not clear it unconditionally at every context switch, which may keep the operation from ever completing.
-Unless it terminates the owner, software must not clear a locker under an export, base or nested, before completing that export: the clear destroys the CC.
+[[KLE-SR-no-unconditional-clear,SR9]]SR9:: At a context switch, system software may clear a locker being provisioned or imported instead of saving it; the operation then restarts.
+It must also support saving such a locker and must not clear it unconditionally at every context switch, which may prevent completion.
+Unless it terminates the owner, software must complete a base or nested export before clearing its locker: clearing destroys the CC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -73,7 +77,7 @@ Unless it terminates the owner, software must not clear a locker under an export
 === Requirements on Exception Handlers
 
 [horizontal]
-[[KLE-SR-handler-duty,SR10]]SR10:: A handler that neither resolves nor forwards, even to an in-process handler, an exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, and does not terminate the process, must:
+[[KLE-SR-handler-duty,SR10]]SR10:: A handler that neither resolves nor forwards an exception, even to an in-process handler, and does not terminate the process must do the following if <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State:
 +
 --
 . set the locker on which the exception was raised, for `KLNL` the one that `klnamedlocker` names (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>), to the _State_ that the same table gives, with a `kl.setste` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>), even if the locker is _Unconfigured_; and
@@ -98,7 +102,8 @@ Unless it terminates the owner, software must not clear a locker under an export
 === Requirements on Transfers, Keys and Outputs
 
 [horizontal]
-[[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a sequence of `kl.mvin` or `kl.mvout` by the image size that `kl.size` reads before it, not by `klstart` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and check the _State_ after it (<<Zkl-software.adoc#KLE-pseudocode-examples>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>).
+[[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a `kl.mvin` or `kl.mvout` sequence by the image size read with `kl.size` beforehand and check the _State_ afterward.
+`klstart` is not a loop bound (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>).
 
 [[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export, or in the MDH that `kl.getmd*` returned when the image is the MDH alone, is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
 After a `kl.mgmt` that opens an export from a Valid State, software must continue only if the _State_ is `kl_cfg_exporting`; a Valid State means a refusal (<<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>).
@@ -123,8 +128,8 @@ The guidelines of this section are for privileged software.
 
 // Here we collect the duties that the KLE state places on privileged software and exception handlers, in the order software meets them.
 
-Software that performs a context switch or otherwise uses the KLE state while that of a less privileged context is live, saves and restores that state by following <<KLE-save-order>> and <<KLE-restore-order>>, so that the less privileged context sees its own values and no data of the more privileged mode; it meets Rule <<KLE-SR-clear-before-lower-mode>> the same way.
-Where an item cites a Rule SR__n__ (<<KLE-software-requirements>>), that Rule takes precedence.
+For context switches or other use while a less privileged context's KLE state is live, follow <<KLE-save-order>> and <<KLE-restore-order>> to preserve its values and isolate more privileged data (Rule <<KLE-SR-clear-before-lower-mode>>).
+The normative Rules of <<KLE-software-requirements>> take precedence over these guidelines.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -133,12 +138,12 @@ Where an item cites a Rule SR__n__ (<<KLE-software-requirements>>), that Rule ta
 
 <<KLE-interposed-software,Interposed software>> is bound by Rules <<KLE-SR-klstart-save>>, <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>>.
 
-On entry, before its first KLE instruction, the handler (which reads and writes `klstart` and `klnamedlocker` with the getter and setter instructions, <<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>):
+On entry, the handler performs these steps, using the getter and setter instructions for `klstart` and `klnamedlocker` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>):
 
-. saves `klstart` (`kl.getks`, Rule <<KLE-SR-klstart-save>>);
-. saves `klnamedlocker` (`kl.getnl`, Rule <<KLE-SR-klnamedlocker-write>>);
-. writes 0 to `klstart` (`kl.setksi 0`) before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
-. saves the vector state, and writes 0 to `vstart`, before its first vector KLE instruction (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-vector-legality>>).
+. save `klstart` before any other KLE instruction (`kl.getks`, Rule <<KLE-SR-klstart-save>>);
+. save `klnamedlocker` (`kl.getnl`, Rule <<KLE-SR-klnamedlocker-write>>);
+. write 0 to `klstart` (`kl.setksi 0`) before its first instruction that honors it (Rule <<KLE-SR-klstart-save>>); and
+. save the vector state, and write 0 to `vstart`, before its first vector KLE instruction (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-vector-legality>>).
 
 Before each instruction that Rule <<KLE-SR-klnamedlocker-write>> lists, it sets `klnamedlocker` as that Rule requires.
 
@@ -160,7 +165,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 * `kl.getst` reads the _State_, `kl.getstx` the _StateExtension_, and `kl.getmd` the whole MDH.
 * On RV32, `kl.getst` and `kl.getstx` write the GPR pair `X[d+1] @ X[d]`, and `kl.getmd` a quartet (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getst>>, <<Zkl-ISA-unpriv.adoc#KLE-instruction-getmd>>).
 * A locker with _State_ 0 is _Unconfigured_ if its _StateExtension_ is 0, and in an Error State otherwise (<<Zkl-ISA-unpriv.adoc#KLE-State-field>>).
-* Before using the output of a usage instruction, software checks, immediately after the instruction, that the locker is in a Valid State.
+* Immediately after a usage instruction, check for a Valid State before using its output; for AEAD plaintext, also follow Rule <<KLE-SR-unverified-plaintext>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -171,7 +176,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 //  A handler can thus call it, also for a nested export or import of the locker that the interrupted operation manages.
 * After each management instruction, the routine reads the _State_ of the locker: _Unconfigured_ means it has been cleared, so a provisioning or an import restarts and an export has lost its CC (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); an Error State means the operation has failed. After an export-opening `kl.mgmt`, a Valid State means that the export was refused: the routine reports an error and leaves the locker in place. One code path handles resumption and restart.
 * An export sizes its buffer with `kl.size`, and reads the size again after its opening `kl.mgmt`.
-* Software does not interleave cryptographic operations, or the management of other lockers, with the steps of a management operation (Rule <<KLE-SR-no-interleaving>>).
+* Follow Rule <<KLE-SR-no-interleaving>> when coordinating management and cryptographic operations.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -191,7 +196,7 @@ If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<
 .. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
 . For every locker other than the managed locker, act by its `*llockerstatus` field that the saving mode owns (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), a locker without such a field counting as Dirty: keep the saved image of a Clean or _Off_ locker; otherwise, save the locker by the paths of step 3 if it is not _Unconfigured_, and erase its saved image if it is. Keep `klnamedlocker` = 32 between exports.
 
-Each export completes, with its completing `kl.mgmt` and outcome check, before its locker is cleared (Rule <<KLE-SR-no-unconditional-clear>>).
+Complete each export with `kl.mgmt` and an outcome check before clearing its locker (Rules <<KLE-SR-no-unconditional-clear>> and <<KLE-SR-export-final-check>>).
 
 An export-opening `kl.mgmt` that leaves a Valid locker in its Valid State was refused (Rule <<KLE-SR-export-final-check>>): the handler saves no image for that locker and reports the error to the code that owns it, and the restore order clears the locker, whose CC is lost.
 Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures the Locality Secret CSRs before it exports (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) encounters no refused export.
@@ -199,7 +204,7 @@ Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures 
 Software does not read or compare `IMPQUAL`: the unit does, on import.
 An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted long-running operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
 
-The handler may clear a locker being provisioned or imported instead of saving it (Rule <<KLE-SR-no-unconditional-clear>>); the interrupted software then restarts the operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), and the handler restores 32 in place of a saved `klnamedlocker` that named that locker (<<KLE-restore-order>>).
+If the handler clears a locker being provisioned or imported under Rule <<KLE-SR-no-unconditional-clear>>, the interrupted operation restarts (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); restore 32 instead of a saved `klnamedlocker` that named it (<<KLE-restore-order>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -256,19 +261,19 @@ It keeps what re-establishes each CSK, one per level, in memory that only M-mode
 [[KLE-management-code-snippets]]
 == Code for Locker Configuration and Export Operations
 
-This section gives the instruction sequences for provisioning, import and export.
-They show the operation and its error detection, not application-specific error handling, and can be used as a starting point for
-developing libraries or OS APIs.
+These provisioning, import and export sequences provide a starting point for libraries or OS APIs, showing operations and error detection; application-specific error handling is omitted.
 
 Registers::
 GPR `t0` holds the number of the locker to be provisioned, imported or exported, or 32 for the locker that `klnamedlocker` names, and GPR `t6` points to the 16-byte aligned memory location of the PI or SCC (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>).
 The MDH is loaded and stored with `ld` and `sd`, and passed in the GPR pair `s5:s4`; on RV32 it takes a GPR quartet (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-multiple-GPRs>>).
 
 Selecting the locker::
-The routines encode no locker number: they save `klnamedlocker` on entry, select the locker with the preamble `select_locker` below on entry and at every `restart`, and every KLE instruction then acts on that locker (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>): `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand, and `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name `KLNL`.
+The routines save `klnamedlocker` on entry and use `select_locker` below on entry and every `restart`.
+Their KLE instructions encode no locker number: `kl.load`, `kl.store`, `kl.mvin` and `kl.mvout` have no locker operand; `kl.mgmt`, `kl.getst`, `kl.getmd` and `kl.size` name `KLNL` (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>).
 A clear resets `klnamedlocker` to 32, after which a `KLNL` opening performs no operation (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>), whereas an opening on a named locker opens it, even a Valid one.
 The next _State_ check then reads 0, and the preamble at `restart` names locker `t0` again or, if `t0` = 32, branches to `no_locker`, since the clear destroyed the locker.
-On exit the routines restore the saved value (Rule <<KLE-SR-klnamedlocker-write>>), or write 32 if it names a locker that a clear destroyed (Error handling below), so a handler that has saved the interrupted operation (<<KLE-state-save-and-restore-order>>) can call them, also for a nested export or import of the locker that operation manages.
+On exit, restore the saved value or 32 if it names a cleared locker (Rule <<KLE-SR-klnamedlocker-write>>, Error handling below).
+A handler that has saved the interrupted operation may call these routines, including for nested export or import of that operation's locker (<<KLE-state-save-and-restore-order>>).
 +
 ----
 .macro select_locker              # t0 = p: 0-31, or 32 for the named locker
@@ -552,16 +557,13 @@ A data error found by a Machine check on a field of the PI or SCC leaves the loc
 [[KLE-routines-after-clear]]
 === Behavior of Routines Whose Locker is Cleared by a Handler
 
-This section follows the provisioning, export and import routines above (<<KLE-provisioning-code>>, <<KLE-export-code>> and <<KLE-import-code>>, both the `Zklmv` and the `Zklmem` variants) when an exception handler clears their locker in mid-operation instead of saving it.
-
-A handler may do this to a locker under provisioning or import; it may clear a locker under export only if it terminates the owner of the CC (Rule <<KLE-SR-no-unconditional-clear>>), but an export routine that resumes after such a clear would still behave as described here: it would detect the loss, because its first check reads _State_ 0.
-An export routine resumes after such a clear only if the more privileged software has a defect.
-The routine must then assume it has irrecoverably lost state, and terminate.
+This section traces a handler clearing the locker of <<KLE-provisioning-code>>, <<KLE-export-code>> or <<KLE-import-code>>, for both `Zklmv` and `Zklmem`.
+Rule <<KLE-SR-no-unconditional-clear>> permits this during provisioning or import, and during export only if the owner is terminated.
+If defective privileged software nevertheless resumes an export, its first _State_ check detects the loss; the routine must terminate because the CC is irrecoverable.
 
 The handler::
-The handler saves `klnamedlocker` on entry.
-Its clear sets `klnamedlocker` to 32 (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>), and on exit it writes 32 back instead of the saved value, since that value names the locker it has cleared (<<KLE-handler-duties>>, <<KLE-save-order>> and <<KLE-restore-order>>).
-The routine resumes with `klnamedlocker` = 32.
+The handler saves `klnamedlocker` on entry; clearing its named locker sets it to 32 (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>).
+On exit, it writes 32 to `klnamedlocker` instead of restoring the cleared locker's saved number, so the routine resumes with `klnamedlocker` = 32 (<<KLE-handler-duties>>, <<KLE-save-order>> and <<KLE-restore-order>>).
 
 The instructions of the routine::
 +
@@ -587,10 +589,10 @@ Why a clear resets `klnamedlocker`::
 --
 Suppose a clear left `klnamedlocker` unchanged. `KLNL` would then still name the cleared locker:
 
-* While that locker stays _Unconfigured_, the instructions of the routine fall through on it, and the next check reads _State_ 0. An export branches to `handle_errors`, and a provisioning or an import with `t0` in 0–31 restarts, as above. With `t0` = 32, however, a provisioning or an import would miss the loss: at `restart`, `select_locker` would find the number of the cleared locker in `klnamedlocker`, and the routine would reopen that locker and provision it, or import into it, although the handler meant to free it.
-* Once the locker has been given to another context, the instructions of any of the routines, including an export, would act through `KLNL` on that context's locker instead of falling through, and its checks would read that locker's _State_.
+* While the locker stays _Unconfigured_, instructions fall through and the next check reads _State_ 0. Export takes `handle_errors`; provisioning or import with `t0` in 0–31 restarts. With `t0` = 32, `select_locker` would instead recover the cleared locker's number at `restart` and reopen it, missing the loss and defeating the handler's intent to free it.
+* Once another context receives the locker, any routine, including export, would act on that context's CC through `KLNL` and read its _State_.
 
-Resetting `klnamedlocker` to 32 lets a routine that knows its locker only as the named locker notice a clear. For the same reason, a clear of the named locker is treated as a reconfiguration of it.
+Resetting `klnamedlocker` to 32 lets a routine using only the named locker detect a clear, which therefore counts as reconfiguration.
 --
 
 // ////////////////////////////////////////////////////////////////////////////

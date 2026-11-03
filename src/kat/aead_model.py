@@ -204,9 +204,9 @@ class GCM(Base):
             self.lbl = 0
             return t
         if st == ETF:
-            need(kllen is not None and (kllen >= 128 or kllen in (120, 112, 104, 96, 64)))
+            need(kllen is not None and kllen >= self.tag_len_p)
             self.st = SUCCESS
-            return self.tag & mask(min(kllen, 128))
+            return self.tag & mask(self.tag_len_p)
         if st == HV:
             need(kllen is not None and kllen >= self.tag_len)
             ok = sl(inp, self.tag_len - 1, 0) == sl(self.tag, self.tag_len - 1, 0)
@@ -538,8 +538,8 @@ class CMAC(Base):
             else: t = self.hash ^ cat((0, b - 8 - n), (0x80, 8), (sl(inp, n - 1, 0), n)) ^ K2
             self.hash = self.E(t); self.all = True; return 0
         if st == HOUT:
-            need(kllen is not None and kllen >= 64); self.st = SUCCESS
-            return self.hash & mask(min(kllen, b))
+            need(kllen is not None and kllen >= self.tag_len_p); self.st = SUCCESS
+            return self.hash & mask(self.tag_len_p)
         if st == HV:
             need(kllen is not None and kllen >= self.tag_len)
             ok = sl(inp, self.tag_len - 1, 0) == sl(self.hash, self.tag_len - 1, 0)
