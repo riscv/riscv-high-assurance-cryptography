@@ -353,16 +353,16 @@ def narrow(dmd, smd):
     m = mdh_put(m, 'Locality', out)
     e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
     return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
-def sc_lower(v, w):
-    """SCProtection level v is lower than w: w has a set bit that v lacks (the bits are independent)."""
-    return w & ~v != 0
+def sc_includes(v, w):
+    """SCProtection level v includes w: v has every set bit of w (the bits are independent)."""
+    return w & ~v == 0
 def transparent_leak(dmd, smd):
     """Rule GR30: a Transparent destination of a source that is not Transparent would export the secret in clear."""
     return bool(mdh_get(dmd, 'Transparent') and not mdh_get(smd, 'Transparent'))
 def gr40(dmd, smd):
-    """Rule GR30 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for a lower
-    SCProtection, a Transparent destination of a source that is not, or a failed narrowing."""
-    if sc_lower(mdh_get(dmd, 'SCProtection'), mdh_get(smd, 'SCProtection')) or transparent_leak(dmd, smd): return None
+    """Rule GR30 for a restricted transfer: dmd narrowed by smd, or None (destination Privilege Violation) for an SCProtection that does not include that of the
+    source, a Transparent destination of a source that is not, or a failed narrowing."""
+    if not sc_includes(mdh_get(dmd, 'SCProtection'), mdh_get(smd, 'SCProtection')) or transparent_leak(dmd, smd): return None
     return narrow(dmd, smd)
 
 ST_INERT, ST_READY, ST_SUCCESS, ST_FAILURE = 0, 1, 54, 55

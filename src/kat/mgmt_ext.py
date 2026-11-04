@@ -145,14 +145,14 @@ class KLE2(KLE):
             s.err(k, SE_INVALID); return
         req = mdh_put(mdh_put(0, 'Locality', ent['loc']), 'UsagePolicy', ent.get('up', 0x1F))
         nm = narrow(m, req)
-        if nm is None or sc_lower(mdh_get(m, 'SCProtection'), ent.get('minprot', 0)): s.err(k, SE_PRIV_VIOLATION); return
+        if nm is None or not sc_includes(mdh_get(m, 'SCProtection'), ent.get('minprot', 0)): s.err(k, SE_PRIV_VIOLATION); return
         l.mdh = nm; l.skid = skid; l.content = ent['key']
     def _sysfmt_complete(s, k):
         """Toy GR51: S = tag(8) || payload; payload[:c1] is the key."""
         l = s.L[k]; im = bytes(s.img(k)); m = l.mdh; c1 = CONTENT[mdh_get(m, 'Machine')]
         pay = int.from_bytes(im[8:], 'little')
         if int.from_bytes(im[:8], 'little') != toy_tag(pay): s.err(k, SE_MGMT_AUTH); return
-        if sc_lower(mdh_get(m, 'SCProtection'), s.fmt_min_prot): s.err(k, SE_PRIV_VIOLATION); return
+        if not sc_includes(mdh_get(m, 'SCProtection'), s.fmt_min_prot): s.err(k, SE_PRIV_VIOLATION); return
         l.content = int.from_bytes(im[8:8 + c1], 'little')
         for n in ('Version', 'AuxDataLen'): m = mdh_put(m, n, 0)
         m = mdh_put(mdh_put(m, 'State', 1), 'AuxInfo', 0)
@@ -363,7 +363,7 @@ class KLE2(KLE):
         # 7: source supplies the bytes: both toy sources supply any length; a sealed one moves >= 16 bytes
         if sealed and eff < 16: s.err(src, SE_INVALID); return 'invalid'
         if restricted and eff:                                # GR30
-            if sc_lower(mdh_get(md_, 'SCProtection'), mdh_get(ms, 'SCProtection')) or transparent_leak(md_, ms): s.err(d, SE_PRIV_VIOLATION); return 'pv'
+            if not sc_includes(mdh_get(md_, 'SCProtection'), mdh_get(ms, 'SCProtection')) or transparent_leak(md_, ms): s.err(d, SE_PRIV_VIOLATION); return 'pv'
             nm = narrow(md_, ms)
             if nm is None: s.err(d, SE_PRIV_VIOLATION); return 'pv'
             md_ = nm

@@ -103,7 +103,7 @@ Definition: _Sealed Cryptographic Context_.::
 For context switching, a CC can be *exported* from a locker as a *Sealed Cryptographic Context* (SCC), an authenticated representation, encrypted except for its public values, that can later be *imported* into a locker.
 Export and import use a _Context Sealing Key_ (CSK), which M-mode may be able to program.
 An SCC sealed under one CSK cannot be imported under another, which separates spatial and temporal domains cryptographically.
-An SCC leaves in clear only its MDH and its clear blocks (Rule <<KLE-GR-scc-clear-blocks>>), all authenticated except the _ADSDropped_ bit of the MDH.
+An SCC leaves in clear only its MDH and its clear Content blocks (Rule <<KLE-GR-scc-clear-blocks>>), all authenticated except the _ADSDropped_ bit of the MDH.
 The image of a locker in an Error State is an unauthenticated MDH and carries no Content (<<KLE-error-state-transfer>>).
 
 [horizontal]
@@ -111,8 +111,8 @@ The image of a locker in an Error State is an unauthenticated MDH and carries no
 
 <<KLE-ISA-Principle-no-privilege-elevation>> also underlies NIST's key-management recommendations on the associations of a key with its usage and related information (NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §§6.2.1.4 and 6.2.1.6) and on the cryptographic strength, separation and context binding of derived keys (NIST SP 800-108 Rev. 1, Update 1 cite:[nist-SP-800-108-r1], “Security Considerations”).
 
-KLE classifies instructions by their permitted contexts and applies usage policies to those using CC secrets.
-Principles <<KLE-ISA-Principle-availability>> and <<KLE-ISA-Principle-persistence>> keep management available to prevent resource denial of service.
+KLE instructions are grouped into classes, each usable only in certain contexts.
+Usage policies bind the instructions that use the secrets in CCs, whereas the instruction sequences to save and restore SCCs can be used at any time, to prevent denial of service on the resources of the KLE implementation (this follows from Principles <<KLE-ISA-Principle-availability>> and <<KLE-ISA-Principle-persistence>>).
 
 Definition: _Instruction Classes and Usage Control_.::
 +
@@ -140,18 +140,18 @@ These Principles and Definitions determine the architecture.
 [[KLE-architectural-model]]
 === Architectural Model
 
-KLE instructions act as messages to an _attached_ unit, which executes them independently of the issuing hart and returns results over a tightly coupled coprocessor interface.
-Software handles locker configuration and the unit handles cryptography, keeping the hart side simple and allowing several cores to share a unit.
-The specification defines architectural behavior and leaves the physical implementation open.
-The unit may be integrated into a core or distinct; each client hart has separate architectural state, and the same code runs on either implementation.
+KLE is architected as an interface to an _attached_ unit: its instructions behave like messages over a tightly coupled coprocessor interface, and the KLE unit executes them independently of the issuing hart and returns the results.
+This keeps the hart side simple: software implements the locker-configuration logic, the KLE unit the cryptography, and several cores may share one KLE unit.
+The specification defines only architectural behavior, not implementation: KLE may be integrated into a CPU core or be a distinct hardware unit.
+Either way, each client hart has separate KLE architectural state, and the same code runs on both.
 
 KLE may be emulated, partly or completely, in M-mode firmware.
 For example, an implementation may perform symmetric operations (<<Zkl-ISA-machines.adoc#KLE-states-symmetric>>) in the KLE unit and emulate public-key cryptography (<<Zkl-ISA-machines.adoc#KLE-ECC>>, <<Zkl-ISA-machines.adoc#KLE-PQC>>), whose very large states then reside in secure memory that meets the requirements of <<KLE-KLF>>, such as on-chip SRAM reserved for M-mode.
 
-No instruction may make key material or other locker state that the KLE holds accessible in the clear to any mode other than M-mode and _authenticated Debug mode_, unless the CC is explicitly configured so.
-Authenticated Debug mode is Debug mode while the External Debug Security extension (<<KLE-Prerequisites>>) authorizes external debugging of M-mode.
-KLE thus also provides "performance-only" CCs, provisioned with _Transparent_ = 1, which use the KLE interface for uniformity and speed rather than for confidentiality: their SCCs carry the whole Content in clear (<<KLE-Transparent-bit>>).
-Besides the clear blocks of an SCC (Rule <<KLE-GR-scc-clear-blocks>>), the only locker state exported in the clear is what the software that opened the operation supplied: the `Content` of a partial provisioning (<<KLE-management-formats-and-states>>), and the data loaded by an unfinished system-specific import (Rule <<KLE-GR-sysfmt-as-received>>).
+A CC can be explicitly configured so that its SCC carries the whole Content in clear (<<KLE-Transparent-bit>>), to provide "performance-only" CCs, which use the KLE interface for uniformity and speed rather than for confidentiality.
+Except in this case, key material or other locker state that the KLE holds accessible cannot be made accessible in the clear by any instruction in any mode other than M-mode and _Authenticated Debug mode_ (i.e., Debug mode while the External Debug Security extension (<<KLE-Prerequisites>>) authorizes external debugging of M-mode).
+
+Besides any clear block of an SCC (Rule <<KLE-GR-scc-clear-blocks>>), the only locker state exported in the clear is what the software that opened the operation supplied: the `Content` of a partial provisioning (<<KLE-management-formats-and-states>>), and the data loaded by an unfinished system-specific import (Rule <<KLE-GR-sysfmt-as-received>>).
 Since any mode can export this state, that software clears or completes the operation before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>).
 A misuse that a Machine leaves to the caller (cf. Rule <<Zkl-ISA-machines.adoc#KLE-MGR-caller-limits>>), such as IV reuse, can still reveal state derived from the key, such as the GHASH key of GCM (<<Zkl-ISA-machines.adoc#KLE-accepted-risks>>).
 KLE implementations in S/VS-mode or HS-mode are forbidden: instructions and Machines may be emulated only in M-mode.
@@ -235,7 +235,7 @@ For each instruction, and for each CSR that software below M-mode accesses throu
 
 [[KLE-instruction-extension-matrix]]
 .Instruction/CSR–extension matrix
-[width="100%",cols="<30%,^16%,<27%,<27%",options="header"]
+[width="100%",cols="<32%,^16%,<16%,<36%",options="header"]
 |===
 | Instruction / CSR        | Defined by         | With `Zklv` | With `Zklio`
 | ``kl.size`` / ``kl.avail``   | `Zkl` common       | Forms A–C   | Forms A and B
@@ -297,10 +297,10 @@ NOTE: The KLE unit computes the functions `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC
 The requirement above therefore gives these functions, in the import and export of a locker, at least the side-channel and fault-injection protection of its _SCProtection_ level.
 Each level has its own CSK (<<KLE-CSK-requirements>>), so an attack on the engine of one level exposes only the SCCs of that level.
 
-NOTE: Unlike the KLF, an SCC does not resist rollback: while it exists, any party that holds it, such as the software that stores it or any mode that could export the locker, can import it again under the same CSK and Localities and so replay an earlier CC state.
-This may enable multi-time-pad or nonce-reuse attacks on the Machines that rely on a fresh IV, nonce or counter: CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
-A CC owner must trust the party that stores its SCCs for freshness, clear its lockers before another software context runs (Rule <<Zkl-software.adoc#KLE-SR-clear-before-lower-mode>>), use a Machine whose security survives replay, or accept the risk.
-Policies cannot readily tell misuse from legitimate re-import, such as a retry after payload corruption.
+NOTE: Unlike the KLF, an SCC does not resist rollback: any exported locker can be imported again to restore an earlier CC state.
+This may enable multi-time-pad or nonce-reuse attacks on the Machines that rely on a fresh IV, nonce or counter:
+CBC, CFB, OFB, CTR, XCTR, GCM, OCB, Ascon-AEAD128 and, for message equality only, GCM-SIV.
+A CC owner must thus trust the parties that store its SCCs to use and handle them correctly, use a Machine whose security survives replay, or accept the risk. The architecture cannot tell misuse from legitimate re-import, such as a retry after payload corruption.
 
 Architecturally, whatever the implementation, the KLF has two parts:
 
@@ -415,27 +415,27 @@ The implementation qualifier is always called `IMPQUAL`.
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Machine-field]]
-=== _Machine_ and _MachinePolicy_ Fields
+=== _Machine_ and _MachinePolicy_
 
 _Machine_ is a 12-bit field.
 Values 0–3071 are architecture-defined, with encodings maintained by RVI (<<Zkl-ISA-machines.adoc#KLE-Machines>>); the remaining values are for custom Machines.
 
 The meaning of _MachinePolicy_ depends on the Machine:
 
-* For encryption/decryption primitives and modes, bit 0 of _MachinePolicy_ permits encryption and bit 1 decryption.
+* For encryption primitives and modes, bit 0 of _MachinePolicy_ permits encryption and bit 1 decryption.
 * For asymmetric primitives that support signatures, bit 0 permits their generation and bit 1 verification.
 * For MACs that generate and verify tags, bit 0 permits generation and bit 1 verification.
 
 _MachineExtension_ is zero unless the Machine defines a non-zero value.
-The Elliptic Curve Machines define 1 and 2, which select their public-points and sealed variants (<<Zkl-ISA-machines.adoc#KLE-ECC>>), and ML-KEM defines 1, which selects its sealed variant (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>).
-Other values are reserved, and may in the future encode more Machines.
+The Elliptic Curve Machines define 1 and 2, which select their public-points and sealed variants (<<Zkl-ISA-machines.adoc#KLE-ECC>>), and ML-KEM defines 1 to selects its sealed variant (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>).
+Other values are reserved.
 
 Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy-gate>> states how _MachinePolicy_ gates the States of a Machine, and which values are valid.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Transparent-bit]]
-=== _Transparent_ ===
+=== _Transparent_
 
 (((Cryptographic Context, performance-only)))A CC whose _Transparent_ bit is 1 is exported in clear: its SCCs are authenticated but not encrypted.
 The bit is set at provisioning and cannot be changed afterwards.
@@ -449,7 +449,7 @@ This suits Machines that use the KLE interface for uniformity rather than for co
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-SCProtection-field]]
-=== _SCProtection_ Field
+=== _SCProtection_
 
 The bits of _SCProtection_ select the side-channel protection of a CC, each independently of the others: bit 0 adds differential side-channel protection, and bit 1 adds the detection of injected faults.
 The value of the field is the _level_ of the CC.
@@ -460,7 +460,7 @@ A custom level that the implementation defines for no Machine makes the Metadata
 
 [[KLE-SC-protection-levels]]
 .Architecture-defined levels of _SCProtection_
-[float="center",align="center",cols="^10%,^12%,<78%",options="header"]
+[float="center",align="center",cols="^8%,^8%,<84%",options="header"]
 |===
 | Level  | Bits [1:0] | Description
 |   0    | 00 | No timing leakage.
@@ -471,18 +471,18 @@ a transition to a fatal error condition (see <<KLE-error-architecture>>).
 |   3    | 11 | The protection of levels 1 and 2.
 |===
 
-[[KLE-SC-ordering,Ordering of Side Channel Protection Levels]]*Ordering of Side Channel Protection Levels.* An architecture-defined level _includes_ another if it has every bit set that the other has.
-Level 0 has neither bit and level 3 has both, so level 3 includes every architecture-defined level and each includes level 0; levels 1 and 2 have one bit each, so neither includes the other.
-Of two architecture-defined levels V and W, V is _lower_ than W if W has a set bit that V lacks, and is _at least_ W otherwise; the highest of several, the least level that includes each of them, is their bitwise OR.
-Custom levels are compared with each other, or with architecture-defined ones, only as the implementation defines and documents: it decides which of these levels includes which, and so which is lower than or at least another, and which is the highest of several.
-Its choice may depend on the Machines involved, such as the source and destination of a restricted transfer (Rule <<KLE-GR-narrowing>>).
+[[KLE-SC-ordering,Ordering of _SCProtection_ Levels]]*Ordering of _SCProtection_ Levels.*::
+An architecture-defined level _includes_ another if it has every set bit of the other: level 3 includes every architecture-defined level, each includes level 0, and levels 1 and 2 do not include each other.
+The least level that includes each of several architecture-defined levels is their bitwise OR.
+The implementation defines and documents how custom levels compare with each other and with architecture-defined ones: which includes which, and the least level that includes each of several.
+The comparison may depend on the Machines involved, such as the source and destination of a restricted transfer (Rule <<KLE-GR-narrowing>>).
 Wherever this specification compares levels, it uses this ordering, not the numeric value of _SCProtection_.
 
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
 
 A level applies only to the _protected_ operations of a Machine, those that handle a secret, and only as far as the cryptographic method needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
 Every protected operation is at least constant time, and the export and import of a locker are always protected (<<KLE-KLF>>).
-An _exempt_ operation, such as signature verification, handles no secret and needs no side-channel protection, not even against timing leakage.
+An _exempt_ operation, such as signature verification, handles no secret and needs no side-channel or timing leakage protection.
 
 NOTE: Exempt operations include signature verification (ECDSA, EdDSA and ML-DSA), checks of public inputs alone, such as the ML-KEM encapsulation-key checks and the validation of a peer's point before a scalar multiplication, and every operation of a locker that holds only a public key.
 These remain protected: MAC and tag verification, which compares against a secret value; ML-KEM encapsulation, which draws a secret; key generation; public-key derivation; and unkeyed hashing, whose input may be secret.
@@ -505,7 +505,7 @@ Relevant references are ISO/IEC 19790:2025 cite:[ISOIEC-19790-2025] for the secu
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-State-field]]
-=== _State_ and _StateExtension_ Fields
+=== _State_ and _StateExtension_
 
 _State_ tracks the state of a locker and its Machine, for instance _Unconfigured_, encrypting or decrypting, initializing, absorbing into or finalizing a hash, computing point multiples, signing or verifying, or in an Error State.
 _StateExtension_ holds further state information, usually orthogonal or additional to _State_.
@@ -513,7 +513,7 @@ The tables in this section give the values of _State_ and _StateExtension_ commo
 
 [[KLE-state-off]]
 .Global CC State Numbers: Inert State
-[float="center",align="center",width="100%",cols="^7%,<30%,<15%,<48%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<30%,<13%,<50%",options="header"]
 |===
 | Value | Mnemonic                 | State Name     | Description
 |   0   | `kl_state_inert`         | _Inert_        | The locker holds no Content: it is _Unconfigured_ or in an Error State (<<KLE-stateexts-error>>; see <<KLE-def-inert>>).
@@ -521,7 +521,7 @@ The tables in this section give the values of _State_ and _StateExtension_ commo
 
 [[KLE-states-valid]]
 .Global CC State Numbers: Valid States
-[float="center",align="center",width="100%",cols="^7%,<30%,<15%,<48%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<30%,<13%,<50%",options="header"]
 |===
 | Value | Mnemonic                 | State Name     | Description
 |   1   | `kl_state_ready`         | _Ready_        | Ready for operation; also the state of a newly provisioned CC.
@@ -539,7 +539,7 @@ At _State_ 0, _StateExtension_ encodes the _Error State_, or the _Unconfigured_ 
 
 [[KLE-stateexts-error]]
 .Global _StateExtension_ Codes at _State_ 0: Unconfigured and Error States
-[float="center",align="center",width="100%",cols="^7%,<30%,<15%,<48%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<30%,<13%,<50%",options="header"]
 |===
 | Value | Mnemonic                | State Name              | Description
 |  0     | `kl_stateext_unconfigured`        | _Unconfigured_          | Not an Error State: the locker holds no valid CC.
@@ -637,7 +637,7 @@ The legend of the graph is:
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-KeyType-field]]
-=== _KeyType_ Field
+=== _KeyType_
 
 _KeyType_ states how the keys of a CC are supplied:
 
@@ -653,7 +653,7 @@ NOTE: A SKID may refer to keys with unrelated purposes on different devices; the
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Auxiliary-Data-Section]]
-=== _AuxDataLen_ and _ADSDropped_ Fields
+=== _AuxDataLen_ and _ADSDropped_
 
 _AuxDataLen_ gives the length, in 128-bit blocks, of the _Auxiliary Data Section_ (ADS), the variable-size, implementation-specific part of the content: 0 means no ADS, and the maximum, 2^14^ − 1, is 262,128 bytes.
 With _ADSDropped_ = 1, it keeps the length from before `Content2` was dropped.
@@ -687,7 +687,7 @@ An export uses the _AuxDataLen_ of the MDH, which the implementation keeps up to
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-UsagePolicy]]
-=== _UsagePolicy_ Field
+=== _UsagePolicy_
 
 _UsagePolicy_ determines which modes may use the locker.
 Usage Control applies only to the _usage instructions_ that <<KLE-instruction-properties>> lists, which use the Machine in a locker to operate on the locker's internal state, or to expose it, as a `kl.exec` that produces output does.
@@ -706,7 +706,7 @@ It must be revisited when that extension is ratified.
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Localities]]
-=== _Locality_ Field
+=== _Locality_
 
 _Locality_ names 128-bit Locality Secrets (LSs), listed in <<KLE-locality-indexes>> and stored in a possibly virtual Locality Secrets Table (LST).
 Some entries are fixed, or configurable only by an implementation-specific, authenticated hardware process, and shared by all KLE units of an SoC; the others are software-programmable, per-hart architectural state.
@@ -757,7 +757,7 @@ The SCC generation and import algorithms (<<KLE-CC-management>>) enforce their p
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Metadata-expiration-date]]
-=== _ExpirationDate_ Field
+=== _ExpirationDate_
 
 _ExpirationDate_ is in effect only with `Zklexpire`, which requires the KLE implementation to access a secure clock.
 Without `Zklexpire`, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metadata (<<KLE-Metadata-validity>>).
@@ -797,7 +797,7 @@ The evaluation proceeds as follows:
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-MachineUse]]
-=== _MachineUse_ and _AuxInfo_ Fields
+=== _MachineUse_ and _AuxInfo_
 
 A Machine may use _MachineUse_ and _AuxInfo_, or subfields of them, to store additional information, in every State or only in some.
 Each Machine specification identifies the bits it defines and the States in which it defines them.
@@ -825,7 +825,7 @@ _AuxInfo_ holds, for instance, the modes that an EdDSA CC may use (<<Zkl-ISA-mac
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-Machine-version]]
-=== _Version_ Field
+=== _Version_
 
 _Version_ gives the version of the MDH format:
 
@@ -2076,15 +2076,14 @@ _Configuration_ instructions further divide into _inspection_, _destructive_, _t
 Other Rules govern individual instructions; GRn.m details the principle of its group GRn.
 
 <<KLE-rule-invariants>> names the properties that the Rules establish together.
-It is informative: the Rules govern.
 
 [[KLE-rule-invariants]]
 .Invariants that the Rules establish (informative)
-[cols="^1,<10,<6",options="header"]
+[cols="^2,<20,<8",options="header"]
 |===
 | | Invariant | Rules
 | I1 | _Secrets flow downhill_ (<<KLE-ISA-Principle-hidden-keys>>, <<KLE-ISA-Principle-no-privilege-elevation>>): a secret leaves a locker only inside an SCC, as a `kl.exec` output that its Machine defines, or by a `kl.derive` into a locker whose policies are at least as strict. | <<KLE-GR-no-extraction>>–<<KLE-GR-scc-clear-blocks>>, <<KLE-GR-derive-check-order>>–<<KLE-GR-sealed>>, <<KLE-GR-sysfmt-import-only>>–<<KLE-GR-sysfmt-completion>>, <<KLE-GR-single-share>>–<<KLE-GR-skid-policies>>
-| I2 | _Exceptions are precise_: an exception has no effect beyond those that Rule <<KLE-exception-state-change>> lists. | <<KLE-exception-state-change>>, <<KLE-GR-derive-rule-both-fixed-size>>, <<KLE-GR-interruptibility-classes>>, <<KLE-GR-rbg-failure>>
+| I2 | _Exceptions are precise_: they have no effect beyond those that Rule <<KLE-exception-state-change>> lists. | <<KLE-exception-state-change>>, <<KLE-GR-derive-rule-both-fixed-size>>, <<KLE-GR-interruptibility-classes>>, <<KLE-GR-rbg-failure>>
 | I3 | _Errors live in the locker_: an instruction that enters an Error State retires, keeps the committed prefix, zeroes the unwritten output and clears the Content. | <<KLE-GR-outcomes>>, <<KLE-GR-clear-locker-content-error-state>>
 | I4 | _Inert lockers are no-ops_: an instruction on an inert locker falls through, except in the cases that Rule <<KLE-GR-outcome-inert>> lists. | <<KLE-GR-outcomes>>, <<KLE-GR-outcome-inert>>
 | I5 | _Progress is prefix-complete_ (<<KLE-ISA-Principle-prefix-complete>>): an interrupted instruction commits a prefix of its transfer, which `klstart` records, and resumes from it. | <<KLE-GR-klstart-vstart>>, <<KLE-GR-transfer-window-checks>>, <<KLE-GR-interruptibility-classes>>–<<KLE-GR-resumability-options>>
@@ -3252,8 +3251,8 @@ The operation makes the provisioned locker available to software by:
 ... performing any check required by the Machine on the fields of the PI (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>); a failed check transitions the locker as Rule <<Zkl-ISA-machines.adoc#KLE-MGR-config-data-error>> classifies it, to Error State _Invalid_ for a configuration error or to _Failure_ for a data error, in place of the step below; and
 ... setting _State_ to _Ready_, with the operations of entering it (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-management-no-state-operations>>), and _StateExtension_, _MachineUse_ and the implementation-defined subfields of _AuxInfo_ to 0.
 
-If a process is preempted during provisioning, `kl.store` or `kl.mvout` exports only the original PI information, unencrypted.
-Within a provisioning, only its completing `kl.mgmt` may generate secret random material needed to configure the locker, retrieve key material from the SKS, or derive, expand or re-share that material, so that no such material is exposed in an unencrypted export of a partially provisioned locker.
+A `kl.store` or `kl.mvout` of a locker whose provisioning is preempted exports only the original PI, unencrypted.
+Only the completing `kl.mgmt` of a provisioning may generate random secrets, retrieve key material from the SKS, or derive, expand or re-share that material, so such an export never reveals it.
 
 ==== Import-Completing kl.mgmt
 
@@ -3279,7 +3278,7 @@ Then:
 
 . The _State_ of the locker is set to `ml`._State_.
 . If `ml`._State_ is a Valid State, the instruction restores the locker to the clear format it had when the export began, and makes it accessible to software:
-.. it decrypts and authenticates the contents as when completing an import, with the MDH held in the locker as `AD[0]`, and _ADSDropped_ cleared in the copy that first-segment authentication consumes;
+.. it decrypts and authenticates the contents as an import-completing `kl.mgmt` does, taking as `AD[0]` a copy of the MDH held in the locker with _ADSDropped_ cleared, because the first segment is always authenticated with _ADSDropped_ = 0;
 .. if the `SIV` check fails, the locker transitions to Error State _Authentication Failed_, and the instruction terminates without an exception; otherwise it performs Steps 15–16 of <<KLE-SCC-import>>, and then the steps that follow authentication in the import-completing `kl.mgmt` (<<KLE-locker-management>>): SKID resolution and narrowing for _KeyType_ = 1, conversion into the internal format, and the checks of Rule <<Zkl-ISA-machines.adoc#KLE-MGR-check-on-write>>, with the same outcomes.
 . If `ml`._State_ is not a Valid State, the locker's contents are not changed further.
 
@@ -3288,7 +3287,7 @@ Step 2.b then follows as after a successful `SIV` check.
 The copy is valid only if, since the export was opened:
 
 * no instruction has written the locker's MDH or contents, moved its CC, or opened or completed a management operation on it other than this export, so that a nested export or import, a destructive configuration instruction, `kl.setste`, `kl.rename` or `kl.swap` on the locker invalidates the copy;
-* `SIV` and, if the image carries them, `IMPQUAL` and `SIV2` still hold the values that the opening generated; and
+* `SIV` and, if the image carries them, `IMPQUAL` and `SIV2` hold the values generated by the opening; and
 * the CSK of the locker's _SCProtection_ level and the `LST_eff` entry of every Locality that the MDH names (<<KLE-Localities>>), which the decryption and authentication use, are unchanged.
 
 With a valid copy, Step 2.b still performs SKID resolution and narrowing for _KeyType_ = 1 against the current SKS state, so a revoked SKID or a changed SKS policy has the same outcome as on the full path.
@@ -3681,8 +3680,8 @@ Neither direction produces an SCC or a PCCC, opens a management operation, uses 
 A `kl.mgmt` with `#immed7` = `kl_cfg_exporting` on such a locker is permitted but useless: it leaves the locker unchanged and opens no management operation.
 Only its common steps take effect: `klnamedlocker` names the locker and `klstart` becomes 0 (<<KLE-locker-management>>).
 
-*Importing* the image takes one uninterruptible `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand, carried whole by Form C or D.
-It zeroizes the locker that it names.
+*Importing* the image starts with one Form C or D `kl.mgmt` with `#immed7` = `kl_cfg_importing` and the 16-byte MDH as the auxiliary operand.
+It zeroizes the target locker.
 If the MDH is invalid Metadata (<<KLE-Metadata-validity>>), it transitions the locker to Error State _Invalid_, as any import does; otherwise, it installs the MDH as is, with only _AuxDataLen_ and _ADSDropped_ set to 0 (Rule <<KLE-GR-clear-locker-content-error-state>>), and transfers nothing else.
 A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and performs no operation (Rule <<KLE-GR-outcome-inert>>).
 
@@ -3717,7 +3716,7 @@ The CSKs of a hart are established in exactly one of four ways:
 
 The third and fourth ways mainly suit specialized embedded deployments.
 Harts among which processes or CCs migrate must hold the same CSK~L~ for each level L that they implement: under the first and second ways, M-mode establishes them on each.
-A hart reset or a KLE fatal condition (<<KLE-error-architecture>>) resets the hart's KLE state (<<KLE-reset-and-m-mode-only>>) and, under the first and second ways only, its CSKs, which must then be established again.
+After a reset of the hart's KLE state (<<KLE-reset-and-m-mode-only>>) and under the first and second ways only, the CSKs must then be established again.
 
 [[KLE-CSK-selection, CSK selection]]CSK selection::
 +
@@ -3731,9 +3730,9 @@ A hart selects the CSK in one of two ways:
 
 NOTE: With trapped selection, the latency of an export or import reveals whether software on the hart last used another level.
 A platform that must hide this from other software on the hart implements `Smklmultcsk`.
+--
 
 Under the third and fourth ways, M-mode cannot replace a CSK, so a hart that implements more than one level implements `Smklmultcsk`.
---
 
 Under the first way, unprivileged code can make M-mode re-establish a CSK as often as it likes: with trapped selection at each switch of level, and with either selection after each KLE fatal condition.
 Each time, the CSK passes through M-mode software and the `mklcsk` group, outside the protection of the KLE unit.
