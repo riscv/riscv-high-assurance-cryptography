@@ -3381,16 +3381,23 @@ The Key Derivation (<<KLE-SCC-key-derivation>>) and POLYVAL (<<KLE-SCC-POLYVAL>>
 
 The listings below use Sail with descending bit indices: bit 0 is the least significant, and `V[j .. i]` is the slice `V[j:i]` of this specification.
 They omit the standard-library includes and the implementations of the imported operations.
-The listings use the following operations:
+The listings use the following notation:
 
-* `AESE256(K, B)` encrypts the 128-bit block `B` under the 256-bit key `K` with AES-256 (FIPS 197 cite:[nist-fips-197]).
+* `AESE256(K, B)` encrypts the 128-bit block `B` under the 256-bit key `K` with AES-256.
   Keys and blocks use the byte mapping of <<Zkl-notation.adoc#KLE-Notation-values>>.
-* `Montmul` is defined below.
+* `Montmul(a, b)` is the Montgomery multiplication in the field F = GF(2)[`x`] modulo `x^128^ + x^127^ + x^126^ + x^121^ + 1`.
+  A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`;
+  byte order and bit order both run forward, as in
+  cite:[RFC8452] {sect}3, under which `x^0^` is the byte string `0x01` followed by
+  fifteen zero bytes, i.e., the value `1`. Then:
++
+`{fournbsp}{fournbsp}` `Montmul(a, b)` = `a` {interpunct} `b` {interpunct} `x^-128^` `{nbsp}{nbsp}` in the field F.
+
 * `blocks('n)` is the type of `n` 128-bit blocks, indexed from 0 in input order.
 * `concat_blocks(A, B)` places the blocks of `A` before those of `B`, and keeps their order.
 * `sail_zeros(n)`, `xor_vec(A, B)` and `get_slice_int(n, i, 0)` are the Sail names of `zeros(n)`, `A xor B` and `bin(i, n)`.
 * `vector_init(n, x)` creates `n` copies of `x`.
-* Addition to a bit vector wraps around within its width.
+* Addition to an n-bit vector is modulo 2^n^.
 
 .Sail Types and Imported Operations
 [source,sail]
@@ -3431,14 +3438,6 @@ function POLYVAL(auth_key, blocks, n) = {
   s
 }
 ----
-
-POLYVAL uses Montgomery multiplication, `Montmul(a, b)`, in the field F = GF(2)[`x`] modulo `x^128^ + x^127^ + x^126^ + x^121^ + 1`.
-A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`;
-byte order and bit order both run forward, as in
-cite:[RFC8452] {sect}3, under which `x^0^` is the byte string `0x01` followed by
-fifteen zero bytes, i.e., the value `1`. Then: +
- +
-`{fournbsp}{fournbsp}` `Montmul(a, b)` = `a` {interpunct} `b` {interpunct} `x^-128^` `{nbsp}{nbsp}` in the field F.
 
 The SCC encryption and decryption functions, <<KLE-SCC-GCM-SIV-enc>> and <<KLE-SCC-GCM-SIV-dec>>, use this notation:
 
@@ -3509,10 +3508,12 @@ function SCC_Decrypt(AD, sep, SIV, C, K, len_AD, len_PC) = {
 ----
 
 The comparison `tmp {ne} SIV` is performed in constant time.
+
 In the algorithms below, `CSK` is the CSK of the _SCProtection_ level of the locker that is exported or imported (<<KLE-CSK-requirements>>).
 `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of that level (<<KLE-KLF>>).
 At every level, they run in time independent of the CSK, the derived keys, the Locality Secrets and the plaintext.
 It is strongly recommended that their memory accesses also be independent of these values.
+Hence, any data-dependent speculation and load value prediction should be disabled.
 
 // ///////////////////////////////////////////////////////////////////////////
 
