@@ -20,12 +20,12 @@ def out_all(L, n, halts=True, export=False):
 
 def feed(L, msg, nbits, plan, rng):
     """absorb the bit string (msg, nbits) into a locker in Ready according to `plan`; leaves it before the setst Output."""
-    b = L.f.b
+    block_len = L.f.block_len
     L.setst('absorb')
     if plan == 'multi' and nbits % 8 == 0:
         run(L, [msg]); return L
     if plan in ('last', 'last0') or nbits % 8:
-        Lb = 0 if plan == 'last0' else (nbits - 1) % b + 1 if nbits else 0
+        Lb = 0 if plan == 'last0' else (nbits - 1) % block_len + 1 if nbits else 0
         if nbits % 8 and plan == 'last0': raise ValueError
         k = (nbits - Lb) // 8
         run(L, [msg[:k]], halts=True)
@@ -57,12 +57,12 @@ def machine_checks(fn, ref):
     """State machine, Serialized Content and kl.derive checks of the generic hash Machine (KLE-hash-functions-MACs-XOFs)
     on function `fn`; ref(msg_bytes) -> digest."""
     mk = lambda: Locker(fn)
-    L0 = mk(); f = L0.f; b = f.b; d = f.d // 8; ab = b'abc'
+    L0 = mk(); f = L0.f; block_len = f.block_len; d = f.d // 8; ab = b'abc'
     def at(st, msg=b''):
         L = mk(); L.setst('absorb'); run(L, [msg]) if msg else None; return L
     section('%s: state machine' % fn)
     L = mk(); check('%s Ready: S = IV, fields zero' % fn, L.st == 'Ready' and (L.lbl, L.bb, L.cum, L.outl, L.blk) == (0,) * 5)
-    L.setst('absorb'); check('%s Absorb entry sets last_block_len = b' % fn, L.st == 'Absorb' and L.lbl == b)
+    L.setst('absorb'); check('%s Absorb entry sets last_block_len = block_len' % fn, L.st == 'Absorb' and L.lbl == block_len)
     check('%s Form B kl.setst naming Ready -> Invalid' % fn, inv(_do(at('A'), 'ready', 'B', 8)))
     check('%s Form B kl.setst naming Hash_Absorb -> Invalid' % fn, inv(_do(mk(), 'absorb', 'B', 8)))
     L = at('A'); L.exec('B', b'ab', halt=False); L.exec('B', b''); L.exec('B', b'c')
@@ -76,7 +76,7 @@ def machine_checks(fn, ref):
     L = at('A', ab); L.setst('last'); check('%s Form A last = empty final piece (Xs=0)' % fn, L.st == 'Last' and L.lbl == 0)
     L.exec('B', b'x'); check('%s non-empty exec after Xs=0 -> Invalid' % fn, inv(L))
     L = at('A', ab); L.setst('last'); L.setst('output'); check('%s Last(len 0) -> Output ends message' % fn, out_all(L, d) == ref(ab))
-    check('%s Xs > b -> Invalid' % fn, inv(_do(at('A'), 'last', 'B', b + 8)))
+    check('%s Xs > block_len -> Invalid' % fn, inv(_do(at('A'), 'last', 'B', block_len + 8)))
     L = at('A', ab); L.setst('last', 'B', 16); L.setst('output'); check('%s Last with last_block_len != 0 -> Output Invalid' % fn, inv(L))
     L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'\x01\x02', 0); check('%s final piece with KLLEN < last_block_len -> Invalid' % fn, inv(L))
     L = at('A', ab); L.setst('last', 'B', 24); L.exec('B', b'', 0); check('%s KLLEN = 0 with last_block_len != 0: empty window, State kept (GR18 item 1)' % fn, L.st == 'Last' and L.lbl == 24)
@@ -114,11 +114,11 @@ def machine_checks(fn, ref):
     section('%s: Serialized Content and export/import' % fn)
     w = [x[2] for x in mk().fields()]
     names = [x[0] for x in mk().fields()]
-    check('%s fields in order' % fn, (w[0], w[-1]) == (f.n, b) and w[1:-1] == [16, 16, 32, 64] and names[1:3] == ['last_block_len', 'block_base'], names)
+    check('%s fields in order' % fn, (w[0], w[-1]) == (f.state_len, block_len) and w[1:-1] == [16, 16, 32, 64] and names[1:3] == ['last_block_len', 'block_base'], names)
     pad = -sum(w) % 128; check('%s Serialized Content: %d bits + %d padding = multiple of 128' % (fn, sum(w), pad), (sum(w) + pad) % 128 == 0)
-    L = at('A', msg_of(b // 8 + 5)); fl = {n: v for n, v, _ in L.fields()}
-    check('%s fields after b/8+5 bytes: block_base = 40, cumul_len = b+40, last_block_len = b' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, b + 40, b))
-    for cut in (0, 1, b // 8 - 1, b // 8, b // 8 + 3):
+    L = at('A', msg_of(block_len // 8 + 5)); fl = {n: v for n, v, _ in L.fields()}
+    check('%s fields after block_len/8+5 bytes: block_base = 40, cumul_len = block_len+40, last_block_len = block_len' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, block_len + 40, block_len))
+    for cut in (0, 1, block_len // 8 - 1, block_len // 8, block_len // 8 + 3):
         m = msg_of(cut + 77); L = at('A', m[:cut]); L2 = copy.deepcopy(L); run(L2, [m[cut:]]); L2.setst('output')
         check('%s export/import after %d bytes continues to the same digest' % (fn, cut), out_all(L2, d) == ref(m))
     L = _out(ab, mk); check('%s Hash_Output fields: out_len = d, last_block_len = block_base = 0' % fn, (L.outl, L.lbl, L.bb) == (8 * d, 0, 0))

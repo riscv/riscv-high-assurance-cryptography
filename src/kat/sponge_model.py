@@ -24,7 +24,7 @@ BITS = 16                                           # Hash_Output_Bits: read_len
 SE_INV = 2
 _BI = lambda v, n: R.bits_of(v, n)
 
-SHA3P = {  # b, t, d, xof, suffix
+SHA3P = {  # block_len, t, d, xof, suffix
     'SHA3-224': (1152, 224, 224, False, [0, 1]), 'SHA3-256': (1088, 256, 256, False, [0, 1]),
     'SHA3-384': (832, 384, 384, False, [0, 1]), 'SHA3-512': (576, 512, 512, False, [0, 1]),
     'SHAKE128': (1344, 1344, 0, True, [1, 1, 1, 1]), 'SHAKE256': (1088, 1088, 0, True, [1, 1, 1, 1])}
@@ -44,23 +44,23 @@ class Locker:
             elif kind == 'ASCON-AEAD128_NONCE_MASK': key, K2 = ent
             elif kind in KMACP: K = ent
             else: key = ent
-        if kind in SHA3P: self.fam = 'sha3'; self.b, self.t, self.d, self.xof, self.suf = SHA3P[kind]; self.n = 1600
+        if kind in SHA3P: self.fam = 'sha3'; self.block_len, self.t, self.d, self.xof, self.suf = SHA3P[kind]; self.state_len = 1600
         elif kind in KMACP:
-            self.fam = 'kmac'; self.b, self.xof = KMACP[kind]; self.t = self.b; self.d = 0; self.n = 1600
-            rb = self.b // 8
+            self.fam = 'kmac'; self.block_len, self.xof = KMACP[kind]; self.t = self.block_len; self.d = 0; self.state_len = 1600
+            rb = self.block_len // 8
             self.cs = b2v(R.bytepad(R.encode_string(b'KMAC') + R.encode_string(S), rb))
             self.kb = b2v(R.bytepad(R.encode_string(K), rb))
         elif kind in ASCONP:
-            self.fam = 'ahash'; self.iv, self.d = ASCONP[kind]; self.b = self.t = 64; self.n = 320; self.xof = self.d == 0
+            self.fam = 'ahash'; self.iv, self.d = ASCONP[kind]; self.block_len = self.t = 64; self.state_len = 320; self.xof = self.d == 0
         elif kind in AEADV:
-            self.fam = 'aead'; self.var = AEADV[kind]; self.key = b2v(key); self.b = 128; self.n = 320; self.xof = False
+            self.fam = 'aead'; self.var = AEADV[kind]; self.key = b2v(key); self.block_len = 128; self.state_len = 320; self.xof = False
             self.nonce = b2v(nonce); self.k2 = b2v(K2)
             self.tag_len_p = 128 if tag_len_p is None else tag_len_p
             if self.var == 'wsn' and policy in (0, 2): self.policy = 2
             elif self.var == 'wsn': bad = True                  # MR1: a preset nonce admits only MachinePolicy 0b10
             if not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
         else: raise ValueError(kind)
-        self.P = R.keccak_f if self.n == 1600 else R.ascon12
+        self.P = R.keccak_f if self.state_len == 1600 else R.ascon12
         self.st, self.se, self.mdh = READY, 0, 0
         self._ready()
         if bad: self.invalid()
@@ -99,14 +99,14 @@ class Locker:
         """accumulate nbits of v into the rate at bb; process on completed block."""
         pos = 0
         while pos < nbits:
-            a = min(nbits - pos, self.b - self.bb)
+            a = min(nbits - pos, self.block_len - self.bb)
             self.s ^= ((v >> pos) & mask(a)) << self.bb
             pos += a; self.bb += a
-            if self.bb == self.b: self.s = self.P(self.s); self.bb = 0
+            if self.bb == self.block_len: self.s = self.P(self.s); self.bb = 0
 
     def _pad101(self, suffix):
         self._emit(b2v(b'') + sum(x << i for i, x in enumerate(suffix + [1])), len(suffix) + 1)
-        while self.bb != self.b - 1: self._emit(0, min(self.b - 1 - self.bb, 64))
+        while self.bb != self.block_len - 1: self._emit(0, min(self.block_len - 1 - self.bb, 64))
         self._emit(1, 1)
 
     # ---- finalize
@@ -145,10 +145,10 @@ class Locker:
                 else: self.xw(0, 1 << self.bb); self.perm(12)
                 self.zlen = self.cum = 0
             elif st == AUX: return False
-            self.st = ABSORB; self.lbl = self.b; self.bb = 0; return True
+            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return True
         if imm == LAST and st == ABSORB and form in 'AB':
             if form == 'A': xs = 0
-            if xs > self.b or (xs % 8 and not self.bits_ok): return self.invalid() or True
+            if xs > self.block_len or (xs % 8 and not self.bits_ok): return self.invalid() or True
             self.st = LAST; self.lbl = xs; return True
         if imm == OUTPUT_ and st in (ABSORB, LAST) and form in 'AB':
             if st == LAST and self.lbl != 0: return self.invalid() or True
@@ -179,7 +179,7 @@ class Locker:
         st = self.st
         if imm == ABSORB and st == READY and form == 'A':
             self.s ^= self.cs; self.s = self.P(self.s); self.s ^= self.kb; self.s = self.P(self.s)
-            self.st = ABSORB; self.lbl = self.b; self.bb = 0; return
+            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return
         if imm == LAST and st == ABSORB and form in 'AB':
             return self._gen_setst(imm, form, xs) or self.invalid()
         if imm in (OUTPUT_, VERIFY) and st in (ABSORB, LAST) and form in 'AB':
@@ -190,7 +190,7 @@ class Locker:
                     if form != 'B' or not (32 <= xs < 1 << 32) or not self.policy & 1 and self.policy: return self.invalid()
                 elif xs and (xs % 8 or xs >= 1 << 32): return self.invalid()
             else:
-                if self.xof or form != 'B' or xs % 8 or not 32 <= xs <= self.b or (self.policy and not self.policy & 2): return self.invalid()
+                if self.xof or form != 'B' or xs % 8 or not 32 <= xs <= self.block_len or (self.policy and not self.policy & 2): return self.invalid()
             self.L = xs; self._finalize(); self.bb = self.lbl = 0
             if imm == OUTPUT_: self.ol = xs; self.st = OUTPUT_
             else: self.ol = xs; self.st = VERIFY
@@ -256,9 +256,9 @@ class Locker:
             if K < self.lbl or klstart: self.invalid(); return 0   # length (item 2), interruption point (item 3)
             ib = 0
             while ib < self.lbl:
-                a = min(self.lbl - ib, self.b - self.bb)
+                a = min(self.lbl - ib, self.block_len - self.bb)
                 self.s ^= ((v >> ib) & mask(a)) << self.bb; ib += a; self.bb += a
-                if self.bb == self.b: self.s = self.P(self.s); self.bb = 0
+                if self.bb == self.block_len: self.s = self.P(self.s); self.bb = 0
             self.lbl = 0; return 0
         ib = 8 * klstart
         if st == AUX and self.zlen == 0: self.invalid(); return 0   # Z_len = 0: any kl.exec, even an empty window
@@ -267,12 +267,12 @@ class Locker:
         mx = self.zlen if st == AUX else 0
         if st == AUX and self.cum >= mx: self.invalid(); return 0
         while ib < K:
-            a = min(K - ib, self.b - self.bb)
+            a = min(K - ib, self.block_len - self.bb)
             if st == AUX: a = min(a, mx - self.cum)
             self.s ^= ((v >> ib) & mask(a)) << self.bb
             ib += a; self.bb += a
             if st == AUX: self.cum += a
-            if self.bb == self.b: self.s = self.P(self.s); self.bb = 0
+            if self.bb == self.block_len: self.s = self.P(self.s); self.bb = 0
             if st == AUX and self.cum == mx: return 0
             if ib < K and halt is not None and ib // 8 >= halt: return ib // 8
         return 0
@@ -400,10 +400,10 @@ class Locker:
             r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2)
             if self.var == 'wsn': r += v2b(self.nonce, 16)
             return r + bytes(-len(r) % 16)
-        n = 200 if self.n == 1600 else 40
+        n = 200 if self.state_len == 1600 else 40
         head = v2b(self.s, n) + v2b(self.bb, 2) + v2b(self.lbl, 2) + v2b(self._viii(), 4)
         if self.fam == 'kmac':
-            head += v2b(self.cs, self.b // 8) + (v2b(self.skid, 8) if self.skid is not None else v2b(self.kb, self.b // 8))
+            head += v2b(self.cs, self.block_len // 8) + (v2b(self.skid, 8) if self.skid is not None else v2b(self.kb, self.block_len // 8))
         return head
 
     def import_(self, sc, st, se=0, tag_len_p=None):
@@ -422,12 +422,12 @@ class Locker:
             if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
             if not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
-            n = 200 if self.n == 1600 else 40
+            n = 200 if self.state_len == 1600 else 40
             self.s = b2v(sc[:n]); self.bb = b2v(sc[n:n + 2]); self.lbl = b2v(sc[n + 2:n + 4]); v = b2v(sc[n + 4:n + 8])
             if self.fam == 'ahash' and st == AUX: self.zlen, self.cum = v & 0xffff, v >> 16
             else: self.ol = v
             if self.fam == 'kmac':
-                rb = self.b // 8; self.cs = b2v(sc[n + 8:n + 8 + rb])
+                rb = self.block_len // 8; self.cs = b2v(sc[n + 8:n + 8 + rb])
                 if self.skid is None: self.kb = b2v(sc[n + 8 + rb:n + 8 + 2 * rb])
                 self.L = self.ol if st in (OUTPUT_, BITS, VERIFY) else 0
         if se & 2 and (self.fam == 'aead' or st not in (ABSORB, LAST, OUTPUT_, SUCCESS)): return self.invalid()   # Sealed @ State unsupported
@@ -536,7 +536,7 @@ def bits_checks(name, mk, ref, bounded=True, nbits=None):
     L = mk(); read_bits(L, 3); L.setst(BITS, 'B', 40); o = bytearray(8); k = L.exec('C', out=o, halt=1)
     check('%s halt inside the output block at byte offset 1, read_len kept' % name, (k, L.lbl) == (1, 32))
     L.exec('C', out=o, klstart=k); check('%s ... the resume gives the same 40 bits' % name, b2v(o) == (R >> 3) & mask(40))
-    L = mk(); L.setst(BITS, 'B', 100); L.exec('C', out=bytearray(3)); sc = L.export(); n0 = 200 if L.n == 1600 else 40
+    L = mk(); L.setst(BITS, 'B', 100); L.exec('C', out=bytearray(3)); sc = L.export(); n0 = 200 if L.state_len == 1600 else 40
     L2 = copy.deepcopy(mk()); L2.import_(sc, BITS); o = bytearray(10); L2.exec('C', out=o)
     check('%s export mid-read: last_block_len holds read_len = 76, block_base = 24; the import continues the read' % name,
           (b2v(sc[n0:n0 + 2]), b2v(sc[n0 + 2:n0 + 4]), b2v(o)) == (24, 76, (R >> 24) & mask(76)))

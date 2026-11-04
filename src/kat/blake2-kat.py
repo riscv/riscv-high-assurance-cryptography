@@ -78,24 +78,24 @@ for fn in FN:
     L = cfg(fn, 8, 0); L.setst('absorb'); run(L, [b'abc']); L.setst('output'); o = L.exec('C', kllen=8 * 11); check('%s nn=8: Output of t bits, excess cleared, Success' % fn, o == HLIB[fn](b'abc', digest_size=8).digest() + bytes(3) and L.st == 'Success')
 section('Serialized Content and interruption points of Hash_Absorb')
 for fn in FN:
-    f = Locker(fn).f; bs = f.b // 8
+    f = Locker(fn).f; bs = f.block_len // 8
     L = cfg(fn, 24, 2); L.setst('absorb'); run(L, [msg_of(bs)]); fl = {n: v for n, v, _ in L.fields()}
-    check('%s full block is held: block_base = b, cumul_len = b, nn/kk in Positions v, vi' % fn, (fl['block_base'], fl['cumul_len'], fl['nn'], fl['kk']) == (f.b, f.b, 24, 2))
+    check('%s full block is held: block_base = block_len, cumul_len = block_len, nn/kk in Positions v, vi' % fn, (fl['block_base'], fl['cumul_len'], fl['nn'], fl['kk']) == (f.block_len, f.block_len, 24, 2))
     names = [n for n, _, _ in L.fields()]; check('%s Serialized Content: nn, kk (16 bits each) in Positions v, vi, then cumul_len, block' % fn, names == ['state', 'last_block_len', 'block_base', 'nn', 'kk', 'cumul_len', 'block'], names)
     L.setst('output', 'B', 8 * 20); L.exec('C', kllen=8 * 3); L.setst('bits', 'B', 9); fl = L.fields()
     check('%s Hash_Output_Bits: read_len in Position iii, out_len in Position vii (64 bits)' % fn, [(n, v) for n, v, _ in fl][1:3] == [('last_block_len', 9), ('block_base', 24)] and fl[5] == ('out_len', 8 * 17, 64))
     L = cfg(fn, None, 0, b'sec'); check('%s system key: SKID leads the Serialized Content, no key bytes' % fn, L.fields()[0][0] == 'SKID' and L.fields()[0][2] == 64)
     L.setst('absorb'); check('%s system key pending: cumul_len = 0 before the first byte' % fn, L.cum == 0)
-    run(L, [b'x']); check('%s ... compressed by the instruction absorbing the first byte: cumul_len = b + 8' % fn, L.cum == f.b + 8)
+    run(L, [b'x']); check('%s ... compressed by the instruction absorbing the first byte: cumul_len = block_len + 8' % fn, L.cum == f.block_len + 8)
     m = msg_of(3 * bs + 5)
     for cut in (0, 1, bs - 1, bs, bs + 1, 2 * bs):
         for sk in (None, b'secret'):
             L = cfg(fn, None, 0, sk); L.setst('absorb'); run(L, [m[:cut]]); L2 = copy.deepcopy(L); run(L2, [m[cut:]]); L2.setst('output')
             check('%s export/import after %d bytes%s' % (fn, cut, ', system key' if sk else ''), out_all(L2, f.nnmax) == (HLIB[fn](m, key=sk) if sk else HLIB[fn](m)).digest())
-    L = cfg(fn); L.setst('absorb'); run(L, [msg_of(bs)]); L.exec('B', msg_of(2 * bs), 3 * 0 + 1); check('%s resumption klstart=1 with block_base = b (held) is an interruption point' % fn, L.st == 'Absorb')
-    L = cfg(fn); L.setst('absorb'); run(L, [msg_of(7)]); L.exec('B', msg_of(40), 1); check('%s klstart != 0 with 0 < block_base < b -> Invalid' % fn, inv(L))
+    L = cfg(fn); L.setst('absorb'); run(L, [msg_of(bs)]); L.exec('B', msg_of(2 * bs), 3 * 0 + 1); check('%s resumption klstart=1 with block_base = block_len (held) is an interruption point' % fn, L.st == 'Absorb')
+    L = cfg(fn); L.setst('absorb'); run(L, [msg_of(7)]); L.exec('B', msg_of(40), 1); check('%s klstart != 0 with 0 < block_base < block_len -> Invalid' % fn, inv(L))
     L = cfg(fn); L.setst('absorb'); r = L.exec('B', msg_of(3 * bs), 0, halt=True)
-    check('%s a halt leaves the full block held (block_base = b), klstart = %d' % (fn, bs), r == bs and L.bb == f.b)
+    check('%s a halt leaves the full block held (block_base = block_len), klstart = %d' % (fn, bs), r == bs and L.bb == f.block_len)
     L.exec('B', msg_of(3 * bs), r); L.setst('output'); check('%s ... and resumes to the right digest' % fn, out_all(L, f.nnmax) == HLIB[fn](msg_of(3 * bs)).digest())
 section('Final piece (Hash_Absorb_Last_Block), kl.derive, kl.clear')
 for fn in FN:

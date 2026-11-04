@@ -43,7 +43,7 @@ for (k, m), want in PUB.items():
     check('Machine %s(%r) = published' % (k, m), got == H(want), got, H(want))
 
 section('Machine vs reference: lengths around the rate, chunked transfers')
-RATE = {k: Locker(k).b // 8 for k in ALL}
+RATE = {k: Locker(k).block_len // 8 for k in ALL}
 for k in ALL:
     r = RATE[k]; bad = []
     for n in (0, 1, r - 1, r, r + 1, 2 * r - 1, 2 * r, 2 * r + 5, 200):

@@ -9,9 +9,9 @@ import hash_ref as R
 import common
 t0 = time.time()
 FNS = ['SHA-224', 'SHA-256', 'SHA-384', 'SHA-512', 'SHA-512/224', 'SHA-512/256', 'SM3', 'SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512']
-def bsz(fn): return Locker(fn).f.b // 8
+def bsz(fn): return Locker(fn).f.block_len // 8
 def K0of(fn, key):
-    b = bsz(fn); return (oracle(fn, key) if len(key) > b else key).ljust(b, b'\0')
+    block_bytes = bsz(fn); return (oracle(fn, key) if len(key) > block_bytes else key).ljust(block_bytes, b'\0')
 def Hf(fn): return (lambda x: R.sm3(x)) if fn == 'SM3' else (lambda x: R.sha3(fn, x)) if fn.startswith('SHA3') else (lambda x: R.sha2(fn, x))
 def fips(fn, k, m): return R.hmac(Hf(fn), bsz(fn), k, m)
 def ref(fn, key, msg): return pyhmac.new(key, msg, HL[fn]).digest()
@@ -54,8 +54,8 @@ for k, m in ((bytes(range(32)), b'abc'), (b'\x0b' * 20, b'Hi There'), (b'k' * 80
         check('SM3_HMAC %s key %d bytes msg %d' % (nm, len(k), len(m)), tag(mk(), m) == w)
 section('Message lengths, truncated tags, bit-length final pieces')
 for fn in FNS:
-    b = bsz(fn); k = msg_of(21)
-    for n in (0, 1, b - 1, b, b + 1, 2 * b + 3):
+    block_bytes = bsz(fn); k = msg_of(21)
+    for n in (0, 1, block_bytes - 1, block_bytes, block_bytes + 1, 2 * block_bytes + 3):
         m = msg_of(n); w = ref(fn, k, m)
         check('%s %d bytes: chunks/halts' % (fn, n), tag(mkkip(fn, k), m) == w)
         L = mknik(fn, k); L.setst('absorb'); L.exec('B', m[:n // 2]); L = copy.deepcopy(L); L.exec('B', m[n // 2:], 0); L.setst('output')
@@ -68,8 +68,8 @@ for fn in FNS:
     L = mkkip(fn, k); L.setst('absorb'); L.setst('output', 'B', 8 * Locker(fn).f.t // 8 * 0 + Locker(fn).f.t + 8); check('%s Output Xs > t -> Invalid' % fn, inv(L))
 section('SHA-3: a message of any bit length (Hash_Absorb_Last_Block)')
 for fn in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
-    b = bsz(fn) * 8; k = msg_of(33); K0 = K0of(fn, k)
-    for N, M in ((0, 5), (0, 0), (0, b - 1), (5, 3), (3, b), (bsz(fn), 7), (bsz(fn), b), (bsz(fn) + 2, b - 3), (2 * bsz(fn), 1)):
+    block_len = bsz(fn) * 8; k = msg_of(33); K0 = K0of(fn, k)
+    for N, M in ((0, 5), (0, 0), (0, block_len - 1), (5, 3), (3, block_len), (bsz(fn), 7), (bsz(fn), block_len), (bsz(fn) + 2, block_len - 3), (2 * bsz(fn), 1)):
         m = msg_of(N + (M + 7) // 8)
         L = mkkip(fn, k); L.setst('absorb'); run(L, [m[:N]]); L.setst('last', 'B' if M else 'A', M)
         if M: L.exec('B', m[N:])
@@ -81,30 +81,30 @@ for fn in ('SHA3-224', 'SHA3-256', 'SHA3-384', 'SHA3-512'):
         ob = b2v(bytes(x ^ 0x5c for x in K0)) | (iv if isinstance(iv, int) else b2v(iv)) << (8 * len(K0))
         wo = R.sha3_bits(fn, ob, 8 * len(K0) + Locker(fn).f.t, Locker(fn).f.t)
         wo = wo if isinstance(wo, bytes) else v2b(wo, Locker(fn).f.t // 8)
-        check('%s %d bytes then %d-bit piece (block_base %% b = %d)' % (fn, N, M, (8 * N) % b), got == wo, got, wo)
+        check('%s %d bytes then %d-bit piece (block_base %% block_len = %d)' % (fn, N, M, (8 * N) % block_len), got == wo, got, wo)
 for fn in FNS:
     L = mkkip(fn, b'key'); L.setst('absorb'); L.exec('B', b'abc'); L.setst('last'); L.exec('B', b''); check('%s Xs=0 then an empty-window kl.exec -> Invalid (MR10, GR13.5)' % fn, inv(L))
 section('Set_Key (NIK), HasKey, kl.derive')
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
-    b = bsz(fn); k = msg_of(40)
+    block_bytes = bsz(fn); k = msg_of(40)
     L = Locker(fn, 'NIK'); check('%s NIK: Ready -> Hash_Absorb without key -> Invalid' % fn, inv(_do(L, 'absorb')))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s Ready -> Set_Key: K0 zero, HasKey clear' % fn, L.st == 'SetKey' and L.K0 == 0 and not L.haskey)
     L.exec('B', k[:10]); L.exec('B', k[10:], 0); check('%s incomplete load: HasKey clear' % fn, not L.haskey and L.cum == 50 - 0 if False else not L.haskey)
     L.setst('absorb'); check('%s incomplete load, leaving Set_Key -> K0 zeroed, Hash_Absorb refused (Invalid)' % fn, inv(L) or (L.K0 == 0 and not L.haskey))
     L = Locker(fn, 'NIK'); L.setst('setkey'); L.exec('B', msg_of(10)); L.setst('setkey'); check('%s same-State kl.setst Set_Key restarts the load' % fn, L.st == 'SetKey' and L.K0 == 0 and L.cum == 0)
-    L.exec('B', K0of(fn, k)); check('%s load of b bytes complete: HasKey set' % fn, L.haskey)
+    L.exec('B', K0of(fn, k)); check('%s load of block_bytes bytes complete: HasKey set' % fn, L.haskey)
     L.exec('B', b'extra'); check('%s excess bytes after a complete load are not loaded' % fn, L.K0 == b2v(K0of(fn, k)) or inv(L))
     L = mknik(fn, k); L.setst('absorb'); L.setst('ready'); check('%s K0 kept across Ready' % fn, L.haskey and L.K0 == b2v(K0of(fn, k)))
     check('%s ... one load serves two messages' % fn, tag(L, b'one') == ref(fn, k, b'one') and (L.setst('ready') or True) and tag(L, b'two') == ref(fn, k, b'two'))
     L = mknik(fn, k); L.setst('absorb'); check('%s Hash_Absorb -> Set_Key -> Invalid' % fn, inv(_do(L, 'setkey')))
     L = mkkip(fn, k); check('%s KIP: Ready -> Set_Key -> Invalid (no re-key)' % fn, inv(_do(L, 'setkey')))
-    L = mknik(fn, k); L.setst('setkey'); L.exec('B', K0of(fn, k)[:b - 1] + b'Z'); L.setst('setkey'); L.exec('B', K0of(fn, k))
+    L = mknik(fn, k); L.setst('setkey'); L.exec('B', K0of(fn, k)[:block_bytes - 1] + b'Z'); L.setst('setkey'); L.exec('B', K0of(fn, k))
     check('%s reload after a Set_Key restart gives the new key' % fn, tag(L, b'm') == ref(fn, k, b'm'))
-    for n in (1, 7, b // 2, b - 1, b):
+    for n in (1, 7, block_bytes // 2, block_bytes - 1, block_bytes):
         sec = msg_of(n); L = Locker(fn, 'NIK'); L.setst('setkey'); ok = L.derive(sec)
         check('%s derive of %d-byte secret into K0 (zero-filled), HasKey set' % (fn, n), ok and L.haskey and tag(L if L.setst('absorb') is None else L, b'msg') == ref(fn, sec, b'msg') if False else ok and L.haskey and L.K0 == b2v(sec))
         check('%s ... and HMAC with that K0' % fn, tag(L, b'msg') == ref(fn, sec, b'msg'))
-    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s derive of b+1 bytes into K0 -> dest Invalid' % fn, not L.derive(msg_of(b + 1)) and inv(L))
+    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s derive of block_bytes+1 bytes into K0 -> dest Invalid' % fn, not L.derive(msg_of(block_bytes + 1)) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s keystream (no length of its own) into K0 -> dest Invalid' % fn, not L.derive(msg_of(16), stream=True) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s derive klstart != 0 into K0 -> dest Invalid' % fn, not L.derive(msg_of(16), klstart=1) and inv(L))
     L = Locker(fn, 'NIK'); L.setst('setkey'); L.exec('B', msg_of(5)); L.derive(msg_of(9))
@@ -156,16 +156,16 @@ for fn in FNS:
 section('Serialized Content')
 for fn in FNS:
     f = Locker(fn).f; L = mknik(fn, msg_of(9)); names = [n for n, _, _ in L.fields()]
-    check('%s HMAC Content: hash content, K0 (b), tag_len (16)' % fn, names[-2:] == ['K0', 'tag_len'] and [w for _, _, w in L.fields()[-2:]] == [f.b, 16], names)
-    L.setst('absorb'); run(L, [msg_of(f.b // 8 + 9)]); fl = {n: v for n, v, _ in L.fields()}
-    check('%s cumul_len counts the message only (K0^ipad not counted)' % fn, fl['cumul_len'] == f.b + 72 if f.kind == 'sha3' and False else fl['cumul_len'] == 8 * (f.b // 8 + 9))
+    check('%s HMAC Content: hash content, K0 (block_len), tag_len (16)' % fn, names[-2:] == ['K0', 'tag_len'] and [w for _, _, w in L.fields()[-2:]] == [f.block_len, 16], names)
+    L.setst('absorb'); run(L, [msg_of(f.block_len // 8 + 9)]); fl = {n: v for n, v, _ in L.fields()}
+    check('%s cumul_len counts the message only (K0^ipad not counted)' % fn, fl['cumul_len'] == f.block_len + 72 if f.kind == 'sha3' and False else fl['cumul_len'] == 8 * (f.block_len // 8 + 9))
     if f.kind == 'sha3': check('%s SHA-3 order: block_base, last_block_len, out_len, cumul_len (HMAC only)' % fn, [n for n, _, _ in L.fields()][1:5] == ['block_base', 'last_block_len', 'out_len', 'cumul_len'])
     L.setst('output'); check('%s Hash_Output: tag_len 0 and out_len = t' % fn, (L.tag_len, L.outl) == (0, f.t))
     L.setst('ready'); check('%s Ready: tag_len <- 0, K0 kept' % fn, L.tag_len == 0 and L.haskey)
 section('Generic sequence on HMAC')
 for fn in FNS:
-    k = msg_of(23); b = bsz(fn)
-    for n in (0, 3, b, 2 * b + 1):
+    k = msg_of(23); block_bytes = bsz(fn)
+    for n in (0, 3, block_bytes, 2 * block_bytes + 1):
         vector(fn, lambda fn=fn: mkkip(fn, k), msg_of(n), 8 * n, lambda m, nb, fn=fn: ref(fn, k, m), nlabel='HMAC KIP', plans=('chunks', 'export', 'last', 'last0', 'odd'))
 for fn in FNS: pass
 section('HKDF-SHA-256 (RFC 5869 A.1): IKM as a shared secret into HMAC(salt)')
@@ -216,7 +216,7 @@ check('hash output -> a message input: pair not admitted, both Invalid (GR29 ite
 X = Locker('SHA-256'); X.setst('absorb'); E = Locker('SHA-256', 'NIK'); E.setst('setkey')
 check('hash in Hash_Absorb is not a source: source Invalid, destination unchanged (GR29 item 2)', not derive_out(X, E, 32) and inv(X) and E.st == 'SetKey' and not E.haskey)
 for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
-    b = bsz(fn); k = msg_of(40)
+    block_bytes = bsz(fn); k = msg_of(40)
     L = mknik(fn, k); L.setst('absorb'); ok = L.derive(msg_of(32), src='hmac_tag')
     check('%s an HMAC tag into Hash_Absorb: pair not admitted (GR29 item 4), both Invalid' % fn, not ok and L.srcinv and inv(L))
     L = mknik(fn, k); L.setst('absorb'); ok = L.derive(msg_of(16), src='cmac')
@@ -231,8 +231,8 @@ for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     for st_ in ('Ready',):
         for v in ('NIK', 'KIP'):
             L = Locker(fn, 'NIK') if v == 'NIK' else mkkip(fn, k); check('%s %s: K0 is not a destination in Ready (GR29 item 3) -> Invalid' % (fn, v), not L.derive(msg_of(16)) and inv(L))
-    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte field, length %d < field -> K0 dest Invalid (source must be exactly eff_length)' % (fn, b, b // 2), not L.derive(msg_of(b), length=b // 2) and inv(L))
-    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte secret, length %d > secret -> K0 dest Invalid' % (fn, b // 2, b), not L.derive(msg_of(b // 2), length=b) and inv(L))
+    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte field, length %d < field -> K0 dest Invalid (source must be exactly eff_length)' % (fn, block_bytes, block_bytes // 2), not L.derive(msg_of(block_bytes), length=block_bytes // 2) and inv(L))
+    L = Locker(fn, 'NIK'); L.setst('setkey'); check('%s %d-byte secret, length %d > secret -> K0 dest Invalid' % (fn, block_bytes // 2, block_bytes), not L.derive(msg_of(block_bytes // 2), length=block_bytes) and inv(L))
     for ln in (0, 29, 31, 2**60):
         L = mknik(fn, k); L.setst('absorb'); check('%s shared secret (30 B) into Hash_Absorb with length %d != 30 -> dest Invalid (GR29 item 6)' % (fn, ln), not L.derive(msg_of(30), length=ln) and inv(L))
     L = mknik(fn, k); L.setst('absorb'); L.exec('B', b'prefix'); L.derive(msg_of(30)); L.exec('B', b'suffix'); L.setst('output')
@@ -293,7 +293,7 @@ def hm(ipad, opad, ell_in, ell_out):
 control('cumul_len not zeroed entering Hash_Absorb (counts leftover): length field differs', len(set([oracle(fn, b'\x00' * 64 + m), oracle(fn, m)])) == 2)
 inner = pyhmac.new(k, m, 'sha256').digest()
 L = mkkip(fn, k); L.setst('absorb'); run(L, [m]); cum_in = L.cum; L.setst('output')
-control('inner hash counts the message only: cumul_len = 8*|m| (ell = b + cumul_len in padding)', cum_in == 24)
+control('inner hash counts the message only: cumul_len = 8*|m| (ell = block_len + cumul_len in padding)', cum_in == 24)
 wrong = R.sha2(fn, bytes(x ^ 0x36 for x in K0) + m)
 control('without the outer hash (inner hash as tag) the tag differs', wrong != good)
 control('outer hash without the K0^opad block differs', oracle(fn, inner) != good)
