@@ -1041,132 +1041,100 @@ Setting the tweak is an operation, not a State (Rule <<KLE-operation-immediates>
 [[KLE-process-VLI]]
 === Macro: Processing Variable Length Inputs into a Fixed Length Output
 
-Many Machines process variable-length inputs into fixed-length outputs, for instance to hash, or to derive an internal fixed-length IV from a variable-length external one. They do so in specific States, such as _Hash_Absorb_.
-This section describes the semantics of such a State, called _Current_State_ here.
-`PROCESS_VLI` is a macro, not a subroutine: an invocation splices the behavior below into the State Machine of the
-calling Machine, with each parameter replaced by the variable or function that it names, and with any change to its steps
-that the invoking Machine states, such as the final piece of <<KLE-SHA-2>> and the postponed step 3.g of <<KLE-BLAKE2>>.
-The macro defines how the `kl.exec` instructions of _Current_State_ and `last_block_state` consume their `INPUT`.
-A `kl.setst` passes the macro no data. A `kl.exec` that a State of the macro admits, with an empty transfer window (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>), does not reach the macro; the macro behaves as if the caller had made extra `kl.exec` calls that transfer nothing: it changes none of the variables, and the State is kept. The `kl.setst` that enters _Current_State_ may set `max_len` (Form B), and the one that enters `last_block_state` may set `last_block_len`. Any other operand of a `kl.setst` is defined by the invoking Machine.
+`PROCESS_VLI` specifies how `kl.exec` absorbs variable-length input for hashing, IV derivation or field loading.
+_Current_State_ denotes the invoking State; `last_block_state` is an optional State for the final piece.
+An invocation splices the steps below into the calling Machine, substituting its variables and functions and applying any changes it states, such as SHA-2's final-piece processing or BLAKE2's postponed full-block processing.
 
-A Machine invokes it as:
+==== Interface
 
 ```
-PROCESS_VLI(max_len,
-            block,           b,               state,           n,
-            input_base,      block_base,      state_offset,    cumul_len,
-            process_block(), finalize(),      mode,            granularity,
-            last_block_state, process_last_block(),            last_block_len)
+PROCESS_VLI(mode,
+            max_len, block, block_len, state, state_len,
+            input_base, block_base, state_offset, cumul_len,
+            granularity, process_block(),
+            last_block_state, process_last_block(), last_block_len,
+            finalize())
 ```
-where each parameter is a _reference_ to a variable or function of the calling Machine, or `None` where the calling Machine does not define it:
 
-. `max_len` is the total length of the data to be absorbed, in bits. If neither software nor the Machine sets it (see *State Machine Behavior* below), `max_len` is zero.
-. `block` contains the current block being filled internally before processing. Its size is `b` bits.
-. `state` is the output buffer. It may be the same as `block`. Its size is `n` bits.
-. `input_base` is the offset, within the `INPUT` of the `kl.exec`, of the next data to absorb.
-. `block_base` is the offset, within the current block, of the next data to absorb: within `block` if `mode` is
-   `assign`, and within `state` from `state_offset` if `mode` is `xor_accumulate` (steps 3.b and 3.c).
-   Each time it reaches `b`, the block is processed (step 3.g).
-. `state_offset` is the offset within `state` at which the input is XORed, for instance in sponge constructions.
-. `cumul_len` is the cumulative length of the data absorbed so far by the macro, or `None` if not tracked.
-. `mode` is either `assign` or `xor_accumulate`, and selects how incoming data is combined with
-   the destination, as specified in steps 3.b and 3.c below. It is not inferred from whether `block` and
-   `state` denote the same variable.
-. `last_block_state` is the State in which a final piece of the input is absorbed, or `None`.
-. `last_block_len` is the variable of the calling Machine that contains the bit length of the final
-   piece still to be absorbed, or `None` if `last_block_state` is `None`.
+Arguments bind the calling Machine's variables or functions by reference, or supply permitted values such as `None`.
+
+[cols="<2,<6",options="header"]
+|===
+| Parameter | Meaning
+| `mode` | `assign` fills `block`; `xor_accumulate` XORs input into `state` from `state_offset` (steps 3.b–3.c). The choice is explicit, regardless of whether `block` and `state` denote the same variable.
+| `max_len` | Total input length; 0 if neither software nor the Machine sets it.
+| `block`, `block_len` | Current block buffer and its size.
+| `state`, `state_len` | Output buffer and its size. `state` may be the same as `block`.
+| `input_base` | Offset of the next bit to absorb within the current instruction's `INPUT`.
+| `block_base` | Offset of the next bit to absorb within `block` for `assign`, or within the portion of `state` starting at `state_offset` for `xor_accumulate`. Reaching `block_len` processes the block (step 3.g).
+| `state_offset` | Offset within `state` where input is XORed, as in a sponge.
+| `cumul_len` | Total length absorbed so far, or `None` if not tracked.
+| `granularity` | Transfer unit and interruption-point constraint, as specified below; optional.
+| `process_block()` | `process_block(block, state)` processes a full block into `state`; `None` skips the call.
+| `last_block_state` | State that absorbs a final piece, or `None`.
+| `process_last_block()` | `process_last_block(block, state)` processes the block containing the final bit in `last_block_state`, in place of `process_block()`; `None` processes it as usual.
+| `last_block_len` | Remaining length of the final piece; `None` when `last_block_state` is `None`.
+| `finalize()` | Finishes input processing, completing the current block where the Machine requires it; `None` skips the call.
+|===
+
+The three final-piece parameters default to `None`; when `last_block_state` is `None`, its steps below do not apply.
+With `process_block()` and `finalize()` both `None`, the macro can fill a long field and track partial progress without per-block processing.
+
+All lengths, offsets and `amount` are in bits.
+`block_len` and `state_len` must be multiples of 8, and `kl.exec` transfers whole bytes.
+`input_base` and `block_base` are therefore multiples of 8 except after the final transfer of a `max_len` that is not a multiple of 8, which ends the instruction (step 3.h), or after a final piece in `last_block_state`.
+
+==== Caller Obligations
 
 [IMPORTANT]
 ====
-`input_base`, `block_base`, `cumul_len` and `last_block_len`, the last two whenever they are
-given, must denote distinct storage locations.
-They are updated independently: `input_base` is set to 8 {times} `klstart` at the start of every `kl.exec` (step 2), whereas
-`block_base` and `cumul_len` persist across instructions.
-An invocation that binds two of them to the same location is malformed: the macro would update
-that location several times per iteration.
-
-When `max_len` is not 0 or `last_block_state` is not `None`, `cumul_len` must not be `None`: the macro evaluates it unconditionally in those cases.
-
-When `mode` is `xor_accumulate`, the caller must satisfy `state_offset` + `b` {le} `n`. The
-destination of step 3.c ends at bit `block_base` + `amount` + `state_offset` − 1, and
-`block_base` + `amount` can reach `b`, so a larger `state_offset` would write past the end of `state`.
-
-`mode` is an explicit parameter because the two combining rules are not interchangeable.
-Sponge constructions require `xor_accumulate`: they XOR the input directly into the rate portion
-of the state. A field loaded rather than absorbed, in particular key and key-like
-material, requires `assign`. Selecting `xor_accumulate` where `assign` is meant combines the
-incoming value with whatever the field already held. For a key field, this silently yields a key
-that neither party chose.
+* `input_base`, `block_base`, `cumul_len` and `last_block_len`, the last two when provided, must bind distinct storage locations. Aliasing them is malformed: an iteration would update the same location several times. Each instruction resets `input_base` (step 2); `block_base` and `cumul_len` persist.
+* `cumul_len` must be provided when `max_len` != 0 or `last_block_state` is not `None`, since the macro evaluates it unconditionally in those cases.
+* For `xor_accumulate`, `state_offset` + `block_len` {le} `state_len` must hold. Otherwise step 3.c can write past `state`, since `block_base` + `amount` can reach `block_len`.
+* Sponges require `xor_accumulate`; fields loaded rather than absorbed, including keys and key-like material, require `assign`. Using XOR to load a field combines the incoming value with its prior contents and can silently produce a key neither party chose.
 ====
 
-The macro does not initialize the persistent state variables `block_base` and `cumul_len`.
-The invoking Machine zeroes them where needed.
-A Machine that enters a State with `mode` = `assign`, and whose destination field must hold a
-defined value once loading completes, must zero that field on entry to the State.
+The macro does not initialize `block_base` or `cumul_len`: the Machine zeroes them where needed.
+An `assign` destination that must hold a defined value after loading must be zeroed on State entry.
+Keeping the persistent counters allows successive invocations to concatenate input.
+`max_len` stays constant throughout the computation; the Machine may define further variables for its processing functions.
 
-NOTE: The macro leaves `block_base` and `cumul_len` alone so that several invocations of it can concatenate their results.
+==== Transfer Limits
 
-*Units.* `max_len`, `b`, `n`, `input_base`, `block_base`, `state_offset`, `cumul_len`, `last_block_len`, and `amount` are
-all counted in bits, to support values of `max_len` that are not multiples of 8 bits.
-However, the macro only supports values of `b` and `n` that are multiples of 8 bits,
-and all `kl.exec` instructions transfer whole bytes and never a fraction of a byte.
-As a consequence, `input_base` and `block_base` are multiples of 8, with two exceptions: after the final transfer of an
-input whose `max_len` is not a multiple of 8, which ends the instruction (step 3.h), and after a final piece absorbed in
-`last_block_state`.
+A `kl.setst` supplies no input data.
+An admitted `kl.exec` with an empty transfer window does not reach the macro and changes none of its variables or the State, even when `cumul_len` {ge} `max_len`.
+A State that does not admit the instruction transitions to Error State _Invalid_ before the macro (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>).
 
-Finally, three parameters are functions of the calling Machine:
+When given, `granularity` has these effects:
 
-* `process_block()=process_block(block, state)` processes the current block into `state`.
-  It may be given as `None`, in which case no such call is made, and the macro uses `state` only in step 3.c.
-* `finalize()` finalizes the processing of the input data, completing the current block where the Machine's rules require it. It may also be given as `None`, in which case no such call is made.
-* `process_last_block()=process_last_block(block, state)` processes the block that holds the final bit of
-  a piece absorbed in `last_block_state`, in place of `process_block()`. It may be given as `None`, in
-  which case that block is processed as any other.
+* With `max_len` = 0, every `KLLEN` that is a multiple of 8 meets the granularity constraint; `granularity` restricts only interruption points (step 3.i).
+* With `max_len` != 0, a transfer violates the State's granularity (Rule <<KLE-MGR-granularity>>) if `KLLEN` is not a multiple of `granularity` and `cumul_len` + `KLLEN` < `max_len`. Use `cumul_len` at instruction issue, whether starting or resuming.
+* Every other `KLLEN` meets the constraint; `max_len` need not be a multiple of `granularity`.
 
-The last three parameters may be omitted, and are passed as `None`:
-the steps for `last_block_state` below do not apply.
+When `max_len` != 0, input beyond it is ignored if `last_block_state` is `None` (step 3.h); otherwise each transfer in _Current_State_ must end before that limit (step 1).
+For example, with `granularity` = 128, a 96-bit IV fits either a 96-bit transfer or a 128-bit transfer with excess bits truncated.
+Because `KLLEN` includes the prefix skipped by `klstart`, an admitted resumption with a non-multiple of `granularity` can end before `max_len` with a partial block.
 
-Passing `None` for both `process_block()` and `finalize()` reduces the macro to its accounting of partial progress across
-`kl.exec` instructions; a Machine needs this when it only has to fill a long
-field from memory and has no per-block processing to perform.
+==== Processing Input in _Current_State_
 
-A Machine whose final piece needs a State of its own passes `last_block_state`.
-It also passes `process_last_block()` if the block that holds the final bit needs processing of its own.
+On entry to _Current_State_:
 
-The optional parameter `granularity` specifies the transfer unit for inputs.
+. If software sets `max_len`, a Form B `kl.setst` writes its auxiliary operand `Xs` to `max_len`.
+. Otherwise, the Machine sets `max_len`. Entry uses Form A, or Form B where the Machine defines `Xs`; that Form B does not set `max_len`.
 
-* Where `max_len` = 0, `granularity` constrains no `KLLEN`: every `KLLEN` that is a multiple of 8 is absorbed, and `granularity` only restricts the interruption points (step 3.i).
-* Where `max_len` != 0, a transfer violates the granularity of the State (Rule <<KLE-MGR-granularity>>) if its `KLLEN` is not a whole multiple of `granularity` and `cumul_len` + `KLLEN` < `max_len`. In this test, `cumul_len` is its value when the instruction is issued, whether the instruction starts or resumes.
-* Every other `KLLEN` meets the granularity of the State, so `max_len` need not be a multiple of `granularity`.
-* Where `last_block_state` is `None`, the data beyond `max_len` is ignored (step 3.h, <<KLE-truncation-vs-length>>); otherwise step 1 requires each transfer to end before `max_len`. For example, with `granularity` = 128, a 96-bit IV is supplied in a single transfer, either as a 96-bit vector or as a 128-bit vector with excess bits truncated.
-* Since `KLLEN` counts the bytes that a non-zero `klstart` skips, a resumed transfer with a `KLLEN` that is not a whole multiple of `granularity` is also admitted and ends before `max_len` with a partial block.
+The invoking Machine defines any other operand of a `kl.setst`.
 
-//
+_Current_State_ expects only Form B `kl.exec`; each executes these steps:
 
-*Internal State Variables*::
-Besides the variables that the parameters name, the Machine may define variables for `process_block()`, `process_last_block()` and `finalize()`.
-`max_len` keeps its value for the duration of the computation.
-
-*State Machine Behavior*::
-
-** When entering State _Current_State_:
- . If software sets `max_len`, it passes it to a Form B `kl.setst`, which sets `max_len` to its auxiliary operand `Xs`.
- . Otherwise, `max_len` is set by the Machine, and the `kl.setst` that enters the State is of Form A, or of Form B where
-   the invoking Machine defines its `Xs`; such a `kl.setst` does not set `max_len`.
-
-** While in State _Current_State_, only ``kl.exec`` instructions of Form B are expected, each of which processes its `INPUT`.
-+
 --
 . If `max_len` != 0, the locker transitions to Error State _Invalid_ if either:
 .. `cumul_len` {ge} `max_len`; or
 .. `last_block_state` is not `None` and `cumul_len` + `KLLEN` − 8 {times} `klstart` {ge} `max_len`.
-+
-An empty transfer window never reaches the macro (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>), so a `kl.exec` that transfers nothing is not _Invalid_ here, even once `cumul_len` {ge} `max_len`: a State that still admits the `kl.exec` keeps its State, and one that admits none (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-valid-state>>) is _Invalid_ before the macro.
 . `input_base <- 8` {times} `klstart`: 0 when the instruction starts, the point of progress when it resumes.
   Nothing else distinguishes a start from a resumption.
 . while (`input_base` < `KLLEN`) do:
-.. If `max_len` != 0 then `amount <- min(KLLEN - input_base, b - block_base, max_len - cumul_len)`,
-   else `amount <- min(KLLEN - input_base, b - block_base)`.
+.. If `max_len` != 0 then `amount <- min(KLLEN - input_base, block_len - block_base, max_len - cumul_len)`,
+   else `amount <- min(KLLEN - input_base, block_len - block_base)`.
    `amount` is always strictly positive, so the loop terminates.
 .. if `mode` = `assign` then:
  ... ``block[block_base + amount - 1 : block_base] <- INPUT[input_base + amount - 1 : input_base]``.
@@ -1175,7 +1143,7 @@ An empty transfer window never reaches the macro (Rule <<Zkl-ISA-unpriv.adoc#KLE
 .. `input_base <- input_base + amount`.
 .. `block_base <- block_base + amount`.
 .. If `cumul_len` is not `None`, then `cumul_len <- cumul_len + amount`.
-.. If (`block_base` = `b`) then:
+.. If (`block_base` = `block_len`) then:
  ... `process_block(block, state)`, if `process_block()` is not `None`.
  ... `block_base <- 0`.
 .. If `max_len` != 0 and `cumul_len = max_len` then:
@@ -1183,38 +1151,49 @@ An empty transfer window never reaches the macro (Rule <<Zkl-ISA-unpriv.adoc#KLE
  ... The instruction is terminated, even if `input_base < KLLEN`.
 .. Here, and only here, the instruction may be interrupted while `input_base < KLLEN`, if the invocation gives no `granularity` or `input_base` is a whole multiple of it, with `klstart <- input_base / 8`.
 --
-+
+
 Architected state alone determines the interruption points of `kl.exec` in _Current_State_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>).
 They are the byte offsets `k` for which 8 {times} `k` is a multiple of `granularity`, or every byte offset if the invocation gives no `granularity`.
 An instruction issued while the locker holds `block_base` {ne} 0 admits only `klstart` = 0: any other `klstart` transitions the locker to Error State _Invalid_, as in Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-transfer-window-checks>>.
-+
-NOTE: Every pass but the last ends with a full block, so a halt leaves `block_base` = 0; the last pass may leave a partial block.
-A halted instruction is resumed with `block_base` = 0, whatever `block_base` it started with, and the `klstart` that its halt recorded is an interruption point of the resumed instruction.
-An instruction issued with a non-zero `block_base` can still halt where step 3.i allows it, once its first iteration has completed the block.
-At a halt, `input_base` is a whole number of bytes, so `klstart` never describes a position inside a byte, as is also the case on the output side of _Hash_Output_ (<<KLE-hash-functions-MACs-XOFs>>).
 
-** Where `last_block_state` is not `None`:
- . If `max_len` = 0, the invoking Machine sets `last_block_len` {leftarrow} `b` on entering _Current_State_.
+[NOTE]
+====
+Every iteration except the last fills a block, so a halt leaves `block_base` = 0; the last iteration may leave a partial block.
+
+The recorded `klstart` is therefore an interruption point of the resumption, regardless of the original `block_base`.
+An instruction that starts with a partial block may still halt at step 3.i after its first iteration completes that block.
+
+At a halt, `input_base` is a whole number of bytes, so `klstart` never describes a position inside a byte.
+====
+
+==== Processing a Final Piece
+
+Where `last_block_state` is not `None`:
+
+ . If `max_len` = 0, the invoking Machine sets `last_block_len` {leftarrow} `block_len` on entering _Current_State_.
    Software then issues a `kl.setst` naming either `last_block_state` or another State that the invoking Machine admits from
-   _Current_State_, such as _Hash_Output_ in <<KLE-hash-functions-MACs-XOFs>>.
+   _Current_State_, such as _Hash_Output_.
  . If `max_len` != 0, _Current_State_ absorbs fewer than `max_len` bits (step 1), and software enters
    `last_block_state`, which absorbs the rest.
 
-** When entering `last_block_state` from _Current_State_:
- . If `max_len` = 0, a Form B `kl.setst` invokes `FINAL_BLOCK_ENTRY(0, b, unit)` (<<KLE-op-final-block-entry>>), with the `unit` that Rule <<KLE-MGR-last-blk-len>> admits; with `Xs` = 0, a `kl.exec` in `last_block_state` transitions the locker to Error State _Invalid_ (step 1 below).
+On entry to `last_block_state` from _Current_State_:
+
+ . If `max_len` = 0, a Form B `kl.setst` invokes `FINAL_BLOCK_ENTRY(0, block_len, unit)` (<<KLE-op-final-block-entry>>), with the `unit` that Rule <<KLE-MGR-last-blk-len>> admits; with `Xs` = 0, a `kl.exec` in `last_block_state` transitions the locker to Error State _Invalid_ (step 1 below).
  . If `max_len` != 0, the `kl.setst` is of Form A and sets `last_block_len` {leftarrow} `max_len` − `cumul_len`.
- ..  If this new `last_block_len` > `b`, the locker transitions to Error State _Invalid_.
+ ..  If this new `last_block_len` > `block_len`, the locker transitions to Error State _Invalid_.
  . `finalize()` is not performed.
 
-** In `last_block_state`, a single Form B `kl.exec` absorbs `INPUT[last_block_len-1:0]` (Rule <<KLE-MGR-single-last-block>>, item 3), with the only interruption point 0 (Rule <<KLE-MGR-one-klexec-per-block>>), and performs:
-+
+In `last_block_state`, a single Form B `kl.exec` absorbs `INPUT[last_block_len-1:0]` (Rule <<KLE-MGR-single-last-block>>, item 3).
+Its only interruption point is 0 (Rule <<KLE-MGR-one-klexec-per-block>>).
+It executes these steps:
+
 --
 . If `last_block_len` = 0, the locker transitions to Error State _Invalid_ (Rule <<KLE-MGR-single-last-block>>).
 . `input_base` {leftarrow} 0.
 . while (`input_base` < `last_block_len`) do:
-.. `amount` {leftarrow} `min(last_block_len - input_base, b - block_base)`.
+.. `amount` {leftarrow} `min(last_block_len - input_base, block_len - block_base)`.
 .. Steps 3.b to 3.f of the `kl.exec` in _Current_State_.
-.. If `block_base` = `b` and either `input_base` < `last_block_len` or `process_last_block()` is `None`, then:
+.. If `block_base` = `block_len` and either `input_base` < `last_block_len` or `process_last_block()` is `None`, then:
 ... `process_block(block, state)`, if `process_block()` is not `None`.
 ... `block_base` {leftarrow} 0.
 . If `process_last_block()` is not `None`, then:
@@ -1223,16 +1202,19 @@ At a halt, `input_base` is a whole number of bytes, so `klstart` never describes
 . `last_block_len` {leftarrow} 0.
 --
 
-** A `kl.setst` that transitions the locker from _Current_State_ or `last_block_state` to another State performs
-   `finalize()` before the transition, if `finalize()` is not `None` and step 3.h has not performed it.
-   This does not apply where the destination is:
- . _Ready_ or an Error State; or
- . `last_block_state`, from _Current_State_.
+==== Finalization and Invalid Transitions
 
-** The locker transitions to Error State _Invalid_ on:
- . leaving `last_block_state`, with `last_block_len` != 0, for a Valid State other than _Ready_;
- . where `max_len` != 0 and `last_block_state` is not `None`, leaving _Current_State_ for a Valid State other than
-   _Ready_ or `last_block_state`.
+A `kl.setst` that transitions the locker from _Current_State_ or `last_block_state` to another State performs
+`finalize()` before the transition, if `finalize()` is not `None` and step 3.h has not performed it.
+This does not apply where the destination is:
+
+* _Ready_ or an Error State; or
+* `last_block_state`, from _Current_State_.
+
+The locker transitions to Error State _Invalid_ on:
+
+* leaving `last_block_state`, with `last_block_len` != 0, for a Valid State other than _Ready_;
+* where `max_len` != 0 and `last_block_state` is not `None`, leaving _Current_State_ for a Valid State other than _Ready_ or `last_block_state`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1260,8 +1242,9 @@ Defines a State _X_ that loads a field of `len` bits over several Form B `kl.exe
 . Entering _X_ zeroes `input_base`, `block_base` and `cumul_len`, zeroes the field where `mode` = `assign`, and clears its flag, if any.
   The Machine admits a same-State `kl.setst`, which repeats these entry operations to restart the load (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-same-state>>).
 . Each `kl.exec` in _X_ invokes +
-  `{fournbsp}PROCESS_VLI(len, block, b, state, n, input_base, block_base, 0, cumul_len,` +
-  `{fournbsp}{fournbsp}process_block(), finalize(), mode, g)`, +
+  `{fournbsp}PROCESS_VLI(mode, len, block, b, state, n,` +
+  `{fournbsp}{fournbsp}input_base, block_base, 0, cumul_len, g, process_block(),` +
+  `{fournbsp}{fournbsp}None, None, None, finalize())`, +
   with `last_block_state` = `None` (<<KLE-process-VLI>>).
 . The load is complete once `cumul_len` = `len`; a field stored as loaded then sets its flag, if any (Rule <<KLE-MGR-load-long-field>>).
 . Leaving _X_ before the load is complete leaves the field unconfigured (Rule <<KLE-MGR-load-long-field>>, item 5).
@@ -2438,9 +2421,9 @@ State Machine::
 
  ** State _Hash_Absorb_ invokes macro `PROCESS_VLI` (<<KLE-process-VLI>>) as:
 +
-`{fournbsp}PROCESS_VLI(0, block, b, state, n, input_base, block_base,` +
-`{fournbsp}{fournbsp} state_offset, cumul_len, process_block(), None, mode, 8,` +
-`{fournbsp}{fournbsp} Hash_Absorb_Last_Block, None, last_block_len)`,
+`{fournbsp}PROCESS_VLI(mode, 0, block, b, state, n,` +
+`{fournbsp}{fournbsp} input_base, block_base, state_offset, cumul_len, 8, process_block(),` +
+`{fournbsp}{fournbsp} Hash_Absorb_Last_Block, None, last_block_len, None)`,
 +
 where:
 +
@@ -4446,7 +4429,7 @@ At pass finalization, the `finalize()` of <<KLE-SHA-2>> encodes for SHA-512 the 
 +
 --
 . Each `kl.exec` invokes macro `PROCESS_VLI` (<<KLE-process-VLI>>) as +
-  `{fournbsp}` `PROCESS_VLI(max_len=0, H.block, H.b, H.state, H.n, input_base, H.block_base, 0, H.cumul_len, H.process_block(), None, mode, granularity=8)`.
+  `{fournbsp}` `PROCESS_VLI(mode, 0, H.block, H.b, H.state, H.n, input_base, H.block_base, 0, H.cumul_len, 8, H.process_block(), None, None, None, None)`.
 . In signing pass 2, it also invokes it with `H'` in place of `H`; the two invocations share `input_base` and run in lock step:
 .. each byte is absorbed into `H` and into `H'` before the next one;
 .. step 3.i of <<KLE-process-VLI>>, the interruption point, applies only to the invocation for `H`.
