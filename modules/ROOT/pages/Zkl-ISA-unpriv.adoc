@@ -12,7 +12,7 @@ endif::[]
 [[KLE-unpriv-intro]]
 == Introduction
 
-KLE lets software perform high-performance cryptography without direct access to keys or critical derived values, through the concepts below.
+KLE lets software perform high-performance cryptography with the options to prevent direct access to keys or critical derived values, and to select side-channel protected versions of the algorithms if available.
 
 [[KLE-concepts]]
 === Foundational Principles and Definitions
@@ -20,7 +20,7 @@ KLE lets software perform high-performance cryptography without direct access to
 Principles are numbered P__n__. The first four define KLE's purpose:
 
 [horizontal]
-[[KLE-ISA-Principle-hidden-keys,P1]]P1:: _KLE allows software to use keys that are not exposed to software. It hides the confidential parts of the internal state of the cryptographic algorithms it performs._
+[[KLE-ISA-Principle-hidden-keys,P1]]P1:: _KLE allows software to use keys that are not exposed to software. It can completely hide the confidential parts of the internal state of the cryptographic algorithms it performs._
 [[KLE-ISA-Principle-key-binding,P2]]P2:: _KLE associates each key with an algorithm, and with policies that limit its use to certain privilege modes and bind it to software and hardware environments_.
 [[KLE-ISA-Principle-prefix-complete,P3]]P3:: _Every cryptographic operation is atomic. When an instruction performs a well-defined sequence of similar cryptographic operations, it reports prefix-complete progress of that sequence._
 [[KLE-ISA-Principle-multiple-algorithms,P4]]P4:: _Multiple keys can be in use at the same time, and their algorithms composed_.
@@ -140,10 +140,10 @@ These Principles and Definitions determine the architecture.
 [[KLE-architectural-model]]
 === Architectural Model
 
-KLE is architected as an interface to an _attached_ unit: its instructions behave like messages over a tightly coupled coprocessor interface, and the KLE unit executes them independently of the issuing hart and returns the results.
+KLE abstracts an interface to an _attached_ unit: its instructions behave like messages over a tightly coupled coprocessor interface, and the KLE unit executes them independently of the issuing hart and returns the results.
 This keeps the hart side simple: software implements the locker-configuration logic, the KLE unit the cryptography, and several cores may share one KLE unit.
-The specification defines only architectural behavior, not implementation: KLE may be integrated into a CPU core or be a distinct hardware unit.
-Either way, each client hart has separate KLE architectural state, and the same code runs on both.
+The specification defines only architectural behavior, not implementation: KLE may be a distinct hardware unit or be integrated into a CPU core.
+Either way, each client hart has separate KLE architectural state, and the same code runs on both types of implementations.
 
 KLE may be emulated, partly or completely, in M-mode firmware.
 For example, an implementation may perform symmetric operations (<<Zkl-ISA-machines.adoc#KLE-states-symmetric>>) in the KLE unit and emulate public-key cryptography (<<Zkl-ISA-machines.adoc#KLE-ECC>>, <<Zkl-ISA-machines.adoc#KLE-PQC>>), whose very large states then reside in secure memory that meets the requirements of <<KLE-KLF>>, such as on-chip SRAM reserved for M-mode.
@@ -3397,23 +3397,36 @@ The clear blocks of a segment (Rule <<KLE-GR-scc-clear-blocks>>) are appended to
 
 The Key Derivation (<<KLE-SCC-key-derivation>>) and POLYVAL (<<KLE-SCC-POLYVAL>>) functions are defined first, then SCC generation from a locker (<<KLE-SCC-export>>) and SCC import into a locker (<<KLE-SCC-import>>).
 
-In the pseudocode, `AESE256(K, B)` denotes the AES-256 encryption of the 128-bit block `B` under the 256-bit key `K` (FIPS 197 cite:[nist-fips-197]).
+The listings below use Sail with descending bit indices: bit 0 is least significant, and `V[j .. i]` is the slice `V[j:i]` of this specification.
+Standard-library includes and the implementations of the imported operations are omitted.
+`AESE256(K, B)` encrypts the 128-bit block `B` under the 256-bit key `K` using AES-256 (FIPS 197 cite:[nist-fips-197]); keys and blocks use the byte mapping of <<Zkl-notation.adoc#KLE-Notation-values>>.
+`Montmul` is defined below.
+`blocks('n)` holds `n` 128-bit blocks, indexed from 0 in input order; `concat_blocks(A, B)` places all blocks of `A` before all blocks of `B`, preserving that order.
+Sail's `sail_zeros(n)`, `xor_vec(A, B)` and `get_slice_int(n, i, 0)` mean `zeros(n)`, `A xor B` and `bin(i, n)`, respectively.
+`vector_init(n, x)` creates `n` copies of `x`; addition to a bit vector wraps within its width.
+
+.Sail Types and Imported Operations
+[source,sail]
+----
+default Order dec
+type blocks('n) = vector('n, bits(128))
+val AESE256 : (bits(256), bits(128)) -> bits(128)
+val Montmul : (bits(128), bits(128)) -> bits(128)
+val concat_blocks : forall 'a 'b, 'a >= 0 & 'b >= 0.
+  (blocks('a), blocks('b)) -> blocks('a + 'b)
+----
 
 [[KLE-SCC-key-derivation]]
 .RFC 8452 Key Derivation
-[]
+[source,sail]
 ----
-function SCC_KeyDeriv(key : bits(256))
-    → struct{enc_key : bits(256), auth_key : bits(128)} =
-{
-  local A : array [0..5] of bits(128);
-  local i : int;
-
-  foreach(i from 0 to 5) do:
-    A[i] ← AESE256(key, bin(i,128));
-
-  return struct { enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0],
-                  auth_key = A[1][63:0] @ A[0][63:0] }
+function SCC_KeyDeriv(key : bits(256)) -> (bits(256), bits(128)) = {
+  var A = vector_init(6, sail_zeros(128));
+  foreach (i from 0 to 5) {
+    A[i] = AESE256(key, get_slice_int(128, i, 0))
+  };
+  (A[5][63 .. 0] @ A[4][63 .. 0] @ A[3][63 .. 0] @ A[2][63 .. 0],
+   A[1][63 .. 0] @ A[0][63 .. 0])
 }
 ----
 
@@ -3421,19 +3434,14 @@ function SCC_KeyDeriv(key : bits(256))
 
 [[KLE-SCC-POLYVAL]]
 .POLYVAL Hashing Function
-[]
+[source,sail]
 ----
-function POLYVAL(auth_key : bits(128), blocks[] : array of bits(128), n : int)
-    → bits(128) =
-{
-  local tmp : bits(128) ← zeros(128);
-  local i : int;
-
-  foreach(i from 0 to n-1) do:
-    tmp ← tmp xor blocks[i];
-    tmp ← Montmul(tmp, auth_key);
-
-  return tmp;
+val POLYVAL : forall 'n, 'n >= 0.
+  (bits(128), blocks('n), int('n)) -> bits(128)
+function POLYVAL(auth_key, blocks, n) = {
+  var s = sail_zeros(128);
+  foreach (i from 0 to n - 1) { s = Montmul(xor_vec(s, blocks[i]), auth_key) };
+  s
 }
 ----
 
@@ -3455,32 +3463,38 @@ The SCC encryption and decryption functions, <<KLE-SCC-GCM-SIV-enc>> and <<KLE-S
 * `K` is a 256-bit Key; and
 * `SIV` is a 128-bit SIV/tag.
 
-//
+`SCC_CTR` is shared by encryption and decryption.
+Its counter sets bit 127 to 1 and bit 126 to `sep`, preserves `SIV[125:32]`, and adds the block index to `SIV[31:0]` modulo 2^32^.
+
+.SCC Counter Mode
+[source,sail]
+----
+val SCC_CTR : forall 'n, 'n >= 0.
+  (bits(256), bits(1), bits(128), blocks('n), int('n)) -> blocks('n)
+function SCC_CTR(enc_key, sep, SIV, input, n) = {
+  var output = input;
+  foreach (i from 0 to n - 1) {
+    let counter = 0b1 @ sep @ SIV[125 .. 32] @ (SIV[31 .. 0] + i);
+    output[i] = xor_vec(input[i], AESE256(enc_key, counter))
+  };
+  output
+}
+----
 
 [[KLE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
-[]
+[source,sail]
 ----
-function SCC_Encrypt(AD[] : array of bits(128), sep: bits(1),
-    P[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
-  → {SIV : bits(128), C[] : array of bits(128)} =
-{
-  local AD_auth : array [0..len_AD-1] of bits(128) ← AD[];
-  local keys : struct{enc_key : bits(256), auth_key : bits(128)};
-  local i : int;
-
-  keys ← SCC_KeyDeriv(K);
-  if (sep = 0) then:
-    AD_auth[0][47] ← 0;
-  SIV ← POLYVAL(keys.auth_key, AD_auth[] ‖ P[], len_AD + len_PC);
-  SIV ← AESE256(keys.enc_key, zeros(1) @ sep @ SIV[125:0]);
-
-  foreach(i from 0 to len_PC - 1) do:
-    C[i] ← P[i] xor AESE256(keys.enc_key,
-             ones(1) @ sep @ SIV[125:32]
-               @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
-
-  return ( SIV, C[] );
+val SCC_Encrypt : forall 'a 'p, 'a >= 1 & 'p >= 0.
+  (blocks('a), bits(1), blocks('p), bits(256), int('a), int('p))
+    -> (bits(128), blocks('p))
+function SCC_Encrypt(AD, sep, P, K, len_AD, len_PC) = {
+  let (enc_key, auth_key) = SCC_KeyDeriv(K);
+  var AD_auth = AD;
+  if sep == 0b0 then { AD_auth[0][47] = bitzero };
+  let s = POLYVAL(auth_key, concat_blocks(AD_auth, P), len_AD + len_PC);
+  let SIV = AESE256(enc_key, 0b0 @ sep @ s[125 .. 0]);
+  (SIV, SCC_CTR(enc_key, sep, SIV, P, len_PC))
 }
 ----
 
@@ -3488,36 +3502,22 @@ function SCC_Encrypt(AD[] : array of bits(128), sep: bits(1),
 
 [[KLE-SCC-GCM-SIV-dec]]
 .AES-GCM-SIV Decryption for SCC Import
-[]
+[source,sail]
 ----
-function SCC_Decrypt(AD[] : array of bits(128), sep: bits(1),
-    SIV : bits(128), C[] : array of bits(128), K : bits(256),
-    len_AD : int, len_PC : int)
-  → {correct : bool, P[] : array of bits(128)} =
-{
-  local AD_auth : array [0..len_AD-1] of bits(128) ← AD[];
-  local keys : struct{enc_key : bits(256), auth_key : bits(128)};
-  local s, tmp : bits(128);
-  local i : int;
-
-  keys ← SCC_KeyDeriv(K);
-  if (sep = 0) then:
-    AD_auth[0][47] ← 0;
-
-  foreach(i from 0 to len_PC - 1) do:
-    P[i] ← C[i] xor AESE256(keys.enc_key,
-             ones(1) @ sep @ SIV[125:32]
-               @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
-
-  s ← POLYVAL(keys.auth_key, AD_auth[] ‖ P[], len_AD + len_PC);
-  tmp ← AESE256(keys.enc_key, zeros(1) @ sep @ s[125:0]);
-
-  if (tmp ≠ SIV) then:
-    foreach(i from 0 to len_PC - 1) do:
-      P[i] ← zeros(128);
-    return ( false, P[] );
-
-  return ( true, P[] );
+val SCC_Decrypt : forall 'a 'p, 'a >= 1 & 'p >= 0.
+  (blocks('a), bits(1), bits(128), blocks('p), bits(256), int('a), int('p))
+    -> (bool, blocks('p))
+function SCC_Decrypt(AD, sep, SIV, C, K, len_AD, len_PC) = {
+  let (enc_key, auth_key) = SCC_KeyDeriv(K);
+  var AD_auth = AD;
+  if sep == 0b0 then { AD_auth[0][47] = bitzero };
+  var P = SCC_CTR(enc_key, sep, SIV, C, len_PC);
+  let s = POLYVAL(auth_key, concat_blocks(AD_auth, P), len_AD + len_PC);
+  let tmp = AESE256(enc_key, 0b0 @ sep @ s[125 .. 0]);
+  if tmp != SIV then {
+    P = vector_init(len_PC, sail_zeros(128));
+    (false, P)
+  } else (true, P)
 }
 ----
 
