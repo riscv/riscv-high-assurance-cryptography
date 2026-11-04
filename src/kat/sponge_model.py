@@ -467,7 +467,7 @@ def derive(src, dst, length, klstart=0):
     elif length != len(src.data) or length == 0: return dst.invalid()                     # 6 (hash input = whole secret)
     if src.sealed and min(length, key_n or length) < 16: return (lk or src).invalid()     # 7: a sealed source moves >= 16 bytes
     nm = narrow(dst.mdh, src.mdh) if src.restricted else dst.mdh                          # GR30: narrowing of a restricted transfer
-    if nm is None or src.restricted and (sc_lower(getattr(dst, 'scprot', 1), src.scprot) or transparent_leak(dst.mdh, src.mdh)):   # ... SCProtection, Transparent
+    if nm is None or src.restricted and (not sc_includes(getattr(dst, 'scprot', 1), src.scprot) or transparent_leak(dst.mdh, src.mdh)):   # ... SCProtection, Transparent
         dst.invalid(); dst.se = 5; return
     dst.mdh = nm
     if key_n:

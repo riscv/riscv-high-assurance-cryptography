@@ -277,7 +277,7 @@ d.setst(6, 'A'); k = Locker('ASCON-AEAD128'); k.mdh = mdh_pack(UsagePolicy=0x6);
 check('GR30 across two sealed hops: the AEAD key gets UsagePolicy 0x4 and the ExpirationDate of the secret',
       k.se == 0 and (mdh_get(k.mdh, 'UsagePolicy'), mdh_get(k.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(d.mdh, 'UsagePolicy') == 5)
 d = sl(); d.scprot = 2; k = Locker('ASCON-AEAD128'); k.scprot = 1; derive(d, k, 16)
-check('GR30: an AEAD key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output', k.se == 5 and d.st == OUTPUT_)
+check('GR30: an AEAD key whose SCProtection does not include that of the sealed hash -> Privilege Violation, the source keeps its output', k.se == 5 and d.st == OUTPUT_)
 d = Locker('SHA3-256'); d.mdh = mdh_pack(Locality=0x10); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True, mdh=mdh_pack(Locality=0x20)), d, 32)
 check('GR30: failed narrowing (boot subfields differ) -> Privilege Violation, nothing absorbed', d.se == 5 and not d.sealed)
 d = Locker('SHA3-256'); d.mdh = mdh_pack(UsagePolicy=1); d.setst(2, 'A'); d.exec('B', b'abc'); d.setst(6, 'A'); k = Locker('ASCON-AEAD128'); k.mdh = mdh_pack(UsagePolicy=6); derive(d, k, 16)

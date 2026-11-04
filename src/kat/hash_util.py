@@ -160,10 +160,10 @@ def sealed_checks(fn, mk, ref):
     K = Key(16, mdh=mdh_pack(UsagePolicy=0x6, SCProtection=3)); ok = derive_out(L, K, 16)
     check('%s GR30 across two sealed hops: the key gets UsagePolicy 0x4 and the ExpirationDate of the secret' % fn,
           ok and (mdh_get(K.mdh, 'UsagePolicy'), mdh_get(K.mdh, 'ExpirationDate')) == (4, 7) and mdh_get(L.mdh, 'UsagePolicy') == 5)
-    L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR30: a hash of lower SCProtection than the secret -> Privilege Violation, nothing absorbed' % fn,
+    L = mk(); L.mdh = mdh_pack(SCProtection=0); check('%s GR30: a hash whose SCProtection does not include that of the secret -> Privilege Violation, nothing absorbed' % fn,
                                                     not L.derive(sec, sealed=True, smdh=src) and L.st == 'PrivViolation' and not L.sealed)
     L = sl(); L.mdh = mdh_pack(SCProtection=1); K = Key(16, mdh=mdh_pack(SCProtection=0))
-    check('%s GR30: a key of lower SCProtection than the sealed hash -> Privilege Violation, the source keeps its output' % fn,
+    check('%s GR30: a key whose SCProtection does not include that of the sealed hash -> Privilege Violation, the source keeps its output' % fn,
           not derive_out(L, K, 16) and K.st == 'PrivViolation' and L.st == 'Output' and L.outl == 8 * d)
     L = mk(); L.mdh = mdh_pack(Transparent=1); check('%s GR30: a Transparent hash of a sealed secret that is not -> Privilege Violation, nothing absorbed' % fn,
                                                  not L.derive(sec, sealed=True, smdh=mdh_pack()) and L.st == 'PrivViolation' and not L.sealed)
