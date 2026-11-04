@@ -38,7 +38,7 @@ class Locker:
         self.kind, self.policy = kind, policy
         self.skid, self.sks = skid, sks or {}
         bad = False
-        if skid is not None:                        # GR55.1/GR55.2: the SKS resolves the SKID
+        if skid is not None:                        # GR55.1/GR55.3: the SKS resolves the SKID
             ent = self.sks.get(skid)
             if ent is None: bad = True
             elif kind == 'ASCON-AEAD128_NONCE_MASK': key, K2 = ent
@@ -412,7 +412,7 @@ class Locker:
             o = 8 if self.skid is not None else 16
             if self.skid is not None:
                 ent = self.sks.get(b2v(sc[:8]))
-                if ent is None: return self.invalid()             # GR55.2
+                if ent is None: return self.invalid()             # GR55.3
                 self.key, self.k2 = ent if self.var == 'mask' else (ent, 0)
             else:
                 self.key = b2v(sc[:16])

@@ -632,8 +632,8 @@ def skp(**ov):
 def prov_skid(e, k=0, skid=K64, **kw):
     e.mgmt(k, 56, md=mk(mach=M_KEY, KeyType=1, **kw)); e.L[k].content = skid; FIN(e, k)
 e = skp(); prov_skid(e)
-check('KeyType 1 provisioning: the SKS resolves the SKID at completion (GR55.2); Ready; KeyType stays 1; key field holds the key', stx(e, 0) == (1, 0) and mdh_get(e.md(0), 'KeyType') == 1 and e.L[0].content == 0xAAAA)
-check('SKS Locality (GR55.3) narrows the MDH Locality: ChipFamScrt added', mdh_get(e.md(0), 'Locality') == LOC(1))
+check('KeyType 1 provisioning: the SKS resolves the SKID at completion (GR55.3); Ready; KeyType stays 1; key field holds the key', stx(e, 0) == (1, 0) and mdh_get(e.md(0), 'KeyType') == 1 and e.L[0].content == 0xAAAA)
+check('SKS Locality (GR55.2) narrows the MDH Locality: ChipFamScrt added', mdh_get(e.md(0), 'Locality') == LOC(1))
 e = skp(up=0b00110); prov_skid(e, up=0b01110); check('an associated UsagePolicy narrows by AND; an unassociated one leaves it unchanged', mdh_get(e.md(0), 'UsagePolicy') == 0b00110 and mdh_get(skp().md(0), 'UsagePolicy') == 0)
 e = skp(); prov_skid(e, skid=K64 + 1); check('unknown SKID -> Error State Invalid', stx(e, 0) == INV)
 e = skp(machines={M_ENC}); prov_skid(e); check('Machine not allowed for the SKID -> Invalid', stx(e, 0) == INV)
