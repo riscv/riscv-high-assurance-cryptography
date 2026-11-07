@@ -148,3 +148,25 @@ Group B: open design questions owned by this task group.::
 //  material is for, the instruction address, or quick hashes of the inputs, to hinder attempts to
 //  bring the Machine off course. Principle: an implementor may take an optional optimization path,
 //  but is then responsible for its security.
+
+////
+Now we explore another major change in Machine semantics.
+I would like to explore unified interface for all AEAD algorithms. For brevity, define PT and CT as plaintext and ciphertext
+
+They differ in various ways:
+
+1. whether the IV for encryption is given or synthetic, or there is a Nonce in addition to what is then the SIV
+2. whether the encryption pass has to read the entire AD+PT to compute a SIV, while it is processing the AD, and then it must read the PT again to produce the CT or it just takes a value and then processes. In other words, encryption requires one or two PT passes.
+3. whether the decryption pass has to read the entire AD+CT to verify a SIV, while it is processing the AD, and then it must read the CT again to process it and produce the PT, or it can just read the value and processes everything. In other words, decryption requires one or two CT passes.
+4. Further, the algorithm, may in this case have to keep track of the lengths of AD and PT/CT, and then use them. This is a change wrt the cuyrent algorithm when they require the caller to keep track of this information. BTW, the lengths can be kept in the public area of the Content.
+
+I envision that software may use a new instruction like kl.getinfo, which returns a value in a single register, with following fields:
+. a 4 bit value `glog` that is the bas 2 logarithm of the granularity of the inputs of the algorithm: 0 for bit granularity, 3 for byte, 5 for 32-bit word, 7 for 128-bit blocks, 8 for 128-bit blocks, etc.
+. one bit that if set means that two passes on the PT are necessary, one to just read it and one to encrypt
+. another bit that, if set, means that two passes on the CT are necessary, one to just read it and one to decrypt
+. a further bit that, if set, meand that encryption/decryption use ciphertext stealing
+
+The algorithms then would call kl.exec to absorb, then encrypt/decrypt and when finalizing or verifying the tag/mac, everything, including if necessary internally forming and adding a block with AD and PT/CT length, is done by the Machine
+. when giving any AD/PT/CT last block, the length is necessary, and the Machine reads only those bits, replacing the rest with zeros (if the value is not a multiple of the granularity, the block is zero padded to the granularity beforehand), any padding is applied, and then the completed/padded block is absorbed. If the algorithm requires to add a full padding block when the last one of the input is full, the machine may have to generate a full new block and absorb it itself.
+
+////
