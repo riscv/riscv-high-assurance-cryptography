@@ -453,7 +453,7 @@ This suits Machines that use the KLE interface for uniformity rather than for co
 
 The bits of _SCProtection_ select the side-channel protection of a CC, each independently of the others: bit 0 adds differential side-channel protection, and bit 1 adds the detection of injected faults.
 The value of the field is the _level_ of the CC.
-Every level is free of timing leakage: the same cryptographic operation on the same number of input units takes the same time in the KLE unit, whatever the values of the key, of the internal state, of the input data and of any random value drawn for the operation, except for the dependence that the cryptographic method itself requires (below).
+Every level is free of timing leakage: every operation on a CC, an exempt one included (below), and the export and import of the CC (<<KLE-KLF>>) must have data-independent execution latency (<<KLE-def-DIEL>>).
 Levels 0 to 3 are _architecture-defined_.
 A level with bit 2 set is a _custom level_, which an implementation may define for some of its Machines, and then documents like every level it supports (below).
 A custom level that the implementation defines for no Machine makes the Metadata invalid, and one that it does not define for the Machine of the MDH makes the Metadata unsupported (<<KLE-Metadata-validity>>).
@@ -480,9 +480,52 @@ Wherever this specification compares levels, it uses this ordering, not the nume
 
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
 
-A level applies only to the _protected_ operations of a Machine, those that handle a secret, and only as far as the cryptographic method needs it: the execution time of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
-Every protected operation is at least constant time, and the export and import of a locker are always protected (<<KLE-KLF>>).
-An _exempt_ operation, such as signature verification, handles no secret and needs no side-channel or timing leakage protection.
+[[KLE-def-DIEL,DIEL]]Definition: _Data-Independent Execution Latency (DIEL)_.::
++
+--
+An operation has DIEL if its execution latency is independent of the values of its secrets and of the data that it does not use.
+DIEL is modeled on the property that the `Zkt` and `Zvkt` extensions attest for their instructions, with the secrets in place of the data operands that an instruction uses.
+KLE DIEL is stricter: it also covers the state that a secret may influence, such as that of caches and predictors (below), which `Zkt` leaves out of scope, so a datapath whose instructions have the property of `Zkt` or `Zvkt` does not by itself give an operation DIEL.
+
+[[KLE-def-secrets,secrets of an operation]]The _secrets_ of an operation are all the values that it uses except its _public values_, which are exactly:
+
+* the MDH, and with it the Machine, the State and the policies;
+* the operands that control the instruction: its register numbers, immediate and address, `KLLEN`, `klstart`, `vl`, `vtype`, `kliobuftop` and a GPR operand that selects what it does or gives a length, but no other GPR operand, such as a CTR counter; and with them the number of input units;
+* the lengths, counts and flags that the Machine sets only from these operands and from the State transitions, such as `tag_len`, `ctxlen`, `last_block_len`, `cumul_len`, `block_base`, `out_len` and `absorbed_all`, also where it holds them in the Content, and once an SCC import has authenticated and restored them;
+* the public fields of the Content (Rule <<KLE-GR-scc-clear-blocks>>), such as `encapsk`, `pubkey` or `Signature`;
+* a _public_ `Generator` of the Elliptic Curve Machines: any with _MachineExtension_ {ne} 0, which fixes it to the default generator of the curve, and otherwise one that provisioning or a `kl.setst` set to the default, not one that software loaded or copied from `SecondPt` or that an import restored, even where it equals the default (<<Zkl-ISA-machines.adoc#KLE-ECC>>);
+* an input operand that the Machine takes as a tag to verify, also where the method uses that tag as an IV, such as the SIV of a GCM-SIV decryption (<<Zkl-ISA-machines.adoc#KLE-GCM-SIV-mode>>), and one that it loads into a public field, such as a public key or the ciphertext of a key encapsulation; but, except as the next item allows, not one that it holds in another field, such as a digest to sign in `Hash`;
+* in a signature verification, the message and the signature, a digest, such as `Hash` of the Elliptic Curve Machines or `mu` of ML-DSA, a public key or the context string `ctx` of EdDSA that software loaded by an input operand, or a public key that a scalar multiplication derived from the private key of the locker with a public `Generator` (above), wherever the Machine holds them, unless an operation has taken that value as a secret since;
+* a value that the Machine computes only from public values, such as precomputed multiples of a public `Generator` or the `k'` of an EdDSA verification pass (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), also where it holds it, but not one that an import restored;
+* a value that the operation outputs as a signature or as the ciphertext of a key encapsulation, a public key that it derives from its own private key with a public `Generator` (above), and what the State that it enters reveals; and
+* the number of iterations of a rejection loop, which the method repeats on fresh candidates until it accepts one, also where a secret determines the candidates, as for `SampleNTT` of ML-KEM (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>), the rejection loops of ML-DSA, deterministic signing included (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>), and the signature retries of ECDSA and SM2 (<<Zkl-ISA-machines.adoc#KLE-ECC>>).
+
+Only the number of iterations of a rejection loop is public: the latency of each iteration, and which check rejects it, are secrets.
+
+[NOTE]
+====
+The secrets of an operation include:
+
+* every field of the Content outside the public fields (Rule <<KLE-GR-scc-clear-blocks>>), other than the public values above, such as a key, a private key, a preset IV or nonce, a shared secret or the internal state of a hash, also while an operation loads it or `kl.derive` moves it into another locker (Rule <<KLE-GR-shared-secret>>), whatever produced it, and even where _Transparent_ = 1 exports it in clear (<<KLE-Transparent-bit>>);
+* the plaintext of an encryption or a decryption, the ciphertext of a symmetric decryption, associated data, an IV, nonce or tweak that software supplies, unless it is a tag to verify, the message that a hash, XOF or MAC Machine absorbs, to generate a tag or to verify one, and the message and context string of a signature generation, such as those of the signing passes of EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>);
+* every other output, such as the ciphertext or tag of a symmetric Machine, also where an encryption uses the tag that it computes as an IV, such as the SIV of GCM-SIV, a keystream, or the output of a hash, MAC or XOF, which software or `kl.derive` may use as a key (<<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>);
+* every random value drawn for the operation;
+* for the export and import of a locker, the CSK of its _SCProtection_ level (<<KLE-CSK-requirements>>), the keys derived from it and the Locality Secrets (<<KLE-SCC-AEAD>>);
+* every other value computed from a secret, that is, every one that the public values above do not include, such as the internal state, the value that a verification compares to a tag (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>), or which key an ML-KEM decapsulation places in `sharedkey`; and
+* the number of iterations of any other loop that depends on a secret, as for a variable-time inversion or a scalar multiplication that skips the leading zero bits of the scalar.
+====
+
+The data that an operation does not use includes:
+
+* the parts of its operands that it ignores, such as the tail elements of a vector register or the unused bits of an input;
+* the Content of every other locker; and
+* every CSK, the keys derived from it and the Locality Secrets, except those that the export or import of a locker uses.
+
+The latency may also vary with contention for a shared resource and with interrupts, but not with state that a secret may influence, such as that of caches and predictors.
+--
+
+The protections that a level adds to DIEL apply to the export and import of a locker, which are always protected (<<KLE-KLF>>), and otherwise only to the _protected_ operations of a Machine, those that handle a secret, and only as far as the cryptographic method needs them.
+An _exempt_ operation, such as signature verification, handles no secret and needs only DIEL.
 
 NOTE: Exempt operations include signature verification (ECDSA, EdDSA and ML-DSA), checks of public inputs alone, such as the ML-KEM encapsulation-key checks and the validation of a peer's point before a scalar multiplication, and every operation of a locker that holds only a public key.
 These remain protected: MAC and tag verification, which compares against a secret value; ML-KEM encapsulation, which draws a secret; key generation; public-key derivation; and unkeyed hashing, whose input may be secret.
@@ -492,6 +535,12 @@ A side-channel-protected Machine is an implementation variant of the unprotected
 
 An implementation must document, for each level it supports, the standard and edition, assessment profile, security level and test metrics it meets, such as acquisition-time limits and trace sample sizes.
 Each level must offer at least the guarantees documented for every level that it includes (<<KLE-SC-ordering>>).
+
+NOTE: DIEL is not constant time: the latency may depend on any public value.
+`Zkt` and `Zvkt` cover every data operand only because an instruction cannot tell a secret from a public value; for the same reason DIEL, like `Zvkt`, covers the parts of an operand that an operation does not use, where software may hold a secret.
+The <<KLE-def-DIEL>> of KLE thus covers fewer values than `Zvkt`, though more of the microarchitecture.
+Unlike that of a `Zvkt` instruction, the latency of a `kl.exec` may depend on an input that the Machine takes as public, such as a tag to verify or the message of a signature verification.
+KLE requires neither `Zkt` nor `Zvkt`: software that handles a secret outside the KLE unit, such as plaintext, relies on them for the instructions it uses.
 
 [NOTE]
 ====
@@ -3507,13 +3556,9 @@ function SCC_Decrypt(AD, sep, SIV, C, K, len_AD, len_PC) = {
 }
 ----
 
-The comparison `tmp {ne} SIV` is performed in constant time.
-
 In the algorithms below, `CSK` is the CSK of the _SCProtection_ level of the locker that is exported or imported (<<KLE-CSK-requirements>>).
 `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of that level (<<KLE-KLF>>).
-At every level, they run in time independent of the CSK, the derived keys, the Locality Secrets and the plaintext.
-It is strongly recommended that their memory accesses also be independent of these values.
-Hence, any data-dependent speculation and load value prediction should be disabled.
+At every level, they have <<KLE-def-DIEL>>, so the comparison `tmp {ne} SIV` reveals only its outcome.
 
 // ///////////////////////////////////////////////////////////////////////////
 
