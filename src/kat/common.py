@@ -322,7 +322,7 @@ def double(s, b=128):
 
 # ---------------------------------------------------------------- MDH
 MDH_FIELDS = [
-    ('Machine', 0, 12), ('MachinePolicy', 12, 2), ('MachineExtension', 14, 2), ('SCProtection', 16, 3),
+    ('Machine', 0, 12), ('MachinePolicy', 12, 2), ('MachineExtension', 14, 2), ('SCProtection', 16, 2), ('Reserved18', 18, 1),
     ('Transparent', 19, 1), ('State', 20, 6), ('StateExtension', 26, 4), ('KeyType', 30, 2),
     ('AuxDataLen', 32, 14), ('Reserved46', 46, 1), ('ADSDropped', 47, 1), ('MachineUse', 48, 14),
     ('Version', 62, 2), ('UsagePolicy', 64, 5), ('Locality', 69, 9), ('Reserved79_78', 78, 2),
@@ -354,8 +354,8 @@ def narrow(dmd, smd):
     e1, e2 = mdh_get(dmd, 'ExpirationDate'), mdh_get(smd, 'ExpirationDate')
     return mdh_put(m, 'ExpirationDate', min(x for x in (e1, e2) if x) if (e1 or e2) else 0)
 def sc_includes(v, w):
-    """SCProtection level v includes w: v has every set bit of w (the bits are independent)."""
-    return w & ~v == 0
+    """Two-bit SCProtection level v includes w when v has every set bit of w."""
+    return 0 <= v < 4 and 0 <= w < 4 and w & ~v == 0
 def transparent_leak(dmd, smd):
     """Rule GR30: a Transparent destination of a source that is not Transparent would export the secret in clear."""
     return bool(mdh_get(dmd, 'Transparent') and not mdh_get(smd, 'Transparent'))
@@ -498,6 +498,15 @@ def _selftest():
     check('MDH round trip', all(mdh_unpack(m)[k] == v for k, v in f.items()))
     check('MDH positions', mdh_get(mdh_pack(State=1), 'State') == 1 and mdh_pack(State=1) == 1 << 20 and
           mdh_pack(Version=3) == 3 << 62 and mdh_pack(ExpirationDate=1) == 1 << 96 and mdh_pack(StateExtension=1) == 1 << 26)
+    check('SCProtection has two bits and bit 18 is reserved', mdh_pack(SCProtection=3) == 3 << 16 and mdh_pack(Reserved18=1) == 1 << 18
+          and raises(mdh_pack, SCProtection=4, exc=ValueError))
+    check('SCProtection inclusion is bitwise over bits 0 and 1',
+          {(v, w): sc_includes(v, w) for v in range(4) for w in range(4)} == {
+              (0, 0): True,  (0, 1): False, (0, 2): False, (0, 3): False,
+              (1, 0): True,  (1, 1): True,  (1, 2): False, (1, 3): False,
+              (2, 0): True,  (2, 1): False, (2, 2): True,  (2, 3): False,
+              (3, 0): True,  (3, 1): True,  (3, 2): True,  (3, 3): True}
+          and not sc_includes(4, 0) and not sc_includes(0, 4))
     check('mdh_put overwrites', mdh_get(mdh_put(m, 'State', 1), 'State') == 1 and mdh_get(mdh_put(m, 'State', 1), 'Machine') == 0xABC)
     control('mdh_pack rejects too-wide value', raises(mdh_pack, State=64, exc=ValueError))
     check('error states', is_error_state(mdh_pack(StateExtension=6)) and not is_error_state(mdh_pack(StateExtension=7))

@@ -109,16 +109,17 @@ def ref_ascon_cxof(msg, Z, outbits):
     while len(out) < outbits:
         out += bits_of(s & mask(64), 64); s = ascon12(s) if len(out) < outbits else s
     return val_of(out[:outbits])
-def ref_ascon_aead(key, nonce, ad, pt, ptbits=None):
-    """key, nonce: 16 bytes; ad, pt: bytes (pt may be cut to ptbits bits: last byte keeps its low bits).
+def ref_ascon_aead(key, nonce, ad, pt, ptbits=None, adbits=None):
+    """key, nonce: 16 bytes; ad, pt: bytes, optionally cut to adbits/ptbits (low bits of the last byte).
     Returns (ct, ctbits, tag16).  Follows SP 800-232 Algorithm 3."""
     K0, K1 = b2v(key[:8]), b2v(key[8:]); N0, N1 = b2v(nonce[:8]), b2v(nonce[8:])
     s = [IV_AEAD, K0, K1, N0, N1]
     P = lambda s: [(ascon_p(sum(v << (64 * i) for i, v in enumerate(s)), 12) >> (64 * i)) & mask(64) for i in range(5)]
     P8 = lambda s: [(ascon_p(sum(v << (64 * i) for i, v in enumerate(s)), 8) >> (64 * i)) & mask(64) for i in range(5)]
     s = P(s); s[3] ^= K0; s[4] ^= K1
-    if ad:
-        a = ad + b'\x01' + bytes((-len(ad) - 1) % 16)
+    an = len(ad) * 8 if adbits is None else adbits
+    if an:
+        a = v2b((b2v(ad) & mask(an)) | (1 << an), ((an + 128) // 128) * 16)
         for i in range(0, len(a), 16):
             s[0] ^= b2v(a[i:i + 8]); s[1] ^= b2v(a[i + 8:i + 16]); s = P8(s)
     s[4] ^= 1 << 63

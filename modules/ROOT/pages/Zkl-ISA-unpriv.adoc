@@ -199,7 +199,7 @@ performs the management operations (<<KLE-management-operations>>), each in seve
 * `<<KLE-instruction-clear,kl.clear>>` unconfigures and clears a locker.
 It is a pseudo-instruction of `kl.setst`, and never part of a management operation.
 * `<<KLE-instruction-exec,kl.exec>>` performs the cryptographic operations that the Machine configured in a locker defines for the locker's current state.
-* `<<KLE-instruction-getmd,kl.getmd*>>` reads the metadata of a locker.
+* `<<KLE-instruction-getmd,kl.getmd*>>` reads the metadata of a locker; `<<KLE-instruction-getinfo,kl.getinfo>>` reads its AEAD descriptor.
 The pseudo-instruction `<<KLE-instruction-getst,kl.getst>>`, built on `kl.getmdl`, extracts the state of a locker from its MDH and reports errors.
 
 KLE comprises several sub-extensions.
@@ -247,6 +247,7 @@ For each instruction, and for each CSR that software below M-mode accesses throu
 | `kl.getmdl`, `kl.getmd` (and the pseudo-instructions `kl.getst`,
 `kl.getstx`)               | `Zkl` common    2+<| Available
 | `kl.getmdv`              | `Zklv`             | Available    | —
+| `kl.getinfo`             | `Zkl` common        | Available    | Available
 | `kl.getnl`, `kl.setnl`, `kl.setnli`, `kl.getks`, `kl.setks`, `kl.setksi` | `Zkl` common    2+<| Available
 | `kl.getbl`, `kl.getbt`, `kl.setbl`, `kl.setbt`, `kl.setbli`, `kl.setbti` | `Zklio`   | —           | Available
 | `kl.rstrl`,
@@ -391,7 +392,8 @@ The implementation qualifier is always called `IMPQUAL`.
 |    [11:0] |  12  | _Machine_          | The Machine the key material is bound to. See <<KLE-Machine-field>>.
 |   [13:12] |   2  | _MachinePolicy_    | The allowed variants of the Machine, for instance encryption, decryption or both for a symmetric cipher. See <<KLE-Machine-field>>.
 |   [15:14] |   2  | _MachineExtension_ | Zero, or a variant of the Machine that the Machine defines. See <<KLE-Machine-field>>.
-|   [18:16] |   3  | _SCProtection_     | Side-channel protection level. See <<KLE-SCProtection-field>>.
+|   [17:16] |   2  | _SCProtection_     | Side-channel protection level. See <<KLE-SCProtection-field>>.
+|   [18:18] |   1  | Reserved           | Reserved.
 |   [19:19] |   1  | _Transparent_      | Set if the SCCs of the CC carry the whole Content in clear, authenticated only. See <<KLE-Transparent-bit>>.
 |   [25:20] |   6  | _State_            | Current state of the locker and its Machine. See <<KLE-State-field>>.
 |   [29:26] |   4  | _StateExtension_   | Additional state information. See <<KLE-State-field>>.
@@ -451,15 +453,12 @@ This suits Machines that use the KLE interface for uniformity rather than for co
 [[KLE-SCProtection-field]]
 === _SCProtection_
 
-The bits of _SCProtection_ select the side-channel protection of a CC, each independently of the others: bit 0 adds differential side-channel protection, and bit 1 adds the detection of injected faults.
+The two bits of _SCProtection_ select the side-channel protection of a CC independently: bit 0 adds differential side-channel protection, and bit 1 adds the detection of injected faults.
 The value of the field is the _level_ of the CC.
 Every level is free of timing leakage: the same cryptographic operation on the same number of input units takes the same time in the KLE unit, whatever the values of the key, of the internal state, of the input data and of any random value drawn for the operation, except for the dependence that the cryptographic method itself requires (below).
-Levels 0 to 3 are _architecture-defined_.
-A level with bit 2 set is a _custom level_, which an implementation may define for some of its Machines, and then documents like every level it supports (below).
-A custom level that the implementation defines for no Machine makes the Metadata invalid, and one that it does not define for the Machine of the MDH makes the Metadata unsupported (<<KLE-Metadata-validity>>).
 
 [[KLE-SC-protection-levels]]
-.Architecture-defined levels of _SCProtection_
+.Levels of _SCProtection_
 [float="center",align="center",cols="^8%,^8%,<84%",options="header"]
 |===
 | Level  | Bits [1:0] | Description
@@ -472,10 +471,8 @@ a transition to a fatal error condition (see <<KLE-error-architecture>>).
 |===
 
 [[KLE-SC-ordering,Ordering of _SCProtection_ Levels]]*Ordering of _SCProtection_ Levels.*::
-An architecture-defined level _includes_ another if it has every set bit of the other: level 3 includes every architecture-defined level, each includes level 0, and levels 1 and 2 do not include each other.
-The least level that includes each of several architecture-defined levels is their bitwise OR.
-The implementation defines and documents how custom levels compare with each other and with architecture-defined ones: which includes which, and the least level that includes each of several.
-The comparison may depend on the Machines involved, such as the source and destination of a restricted transfer (Rule <<KLE-GR-narrowing>>).
+Level A _includes_ level B if every bit set in B is also set in A. Thus, levels 1 and 2 each include level 0; level 3 includes levels 1 and 2; and levels 1 and 2 do not include one another.
+The least level that includes each of several levels is their bitwise OR.
 Wherever this specification compares levels, it uses this ordering, not the numeric value of _SCProtection_.
 
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
@@ -857,7 +854,6 @@ A supplied MDH is _invalid_ when any of the following holds:
 * _Transparent_ is 1 and _KeyType_ is 1;
 * _KeyType_ is 1 or 2 for a Machine whose Provisioning Input has no key field, for instance the unkeyed hash functions and XOFs, the ECC, ML-KEM and ML-DSA Machines, and the NIK variants of HMAC;
 * _KeyType_ is 3, or 2 outside a PI and a PCCC of base type `pi`;
-* _SCProtection_ is a custom level that the implementation defines for no Machine (<<KLE-SCProtection-field>>);
 * _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret without a configured substitute (<<KLE-Localities>>);
 * the MDH carries a custom _Machine_ or a system-specific _Version_, and its _Locality_ includes none of _SiPScrt_, _ChipFamScrt_, _ChipScrt_, _OEMScrt_, _ProdScrt_ and _DevScrt_, which bind the CC to its allowed consumers;
 * _State_ is not 0, or _StateExtension_ is non-zero (an Error State), at provisioning, or _State_ is 0 and _StateExtension_ is 7–15 at import;
@@ -1080,7 +1076,7 @@ Setting aside the handling of lockers in an Error State, a *management* operatio
 [[KLE-instruction-size]]
 === kl.avail and kl.size
 
-`kl.avail` and `kl.size`, together with `kl.getmd`, `kl.getmdl`, and `kl.getmdv` (<<KLE-instruction-getmd>>), are the _inspection_ instructions, which examine the MDH without changing any state.
+`kl.avail` and `kl.size`, together with `kl.getmd`, `kl.getmdl`, `kl.getmdv` and `kl.getinfo` (<<KLE-instruction-getmd>>, <<KLE-instruction-getinfo>>), are the _inspection_ instructions, which examine a locker without changing any state.
 
 Synopsis::
 `kl.avail` returns 1 if the Machine encoded in the MDH is available in the requested variant, and 0 otherwise.
@@ -1152,7 +1148,7 @@ The instruction then writes to `Xd` the value of the first item of its list that
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, 16 if the locker is in an Error State, and otherwise the size of item 7;
 . Forms B and C: 0 if _State_ is 61–63, or is 0 with a _StateExtension_ of 7–15 (reserved);
 . 16 if _State_ is 0 with a _StateExtension_ of 1–5, or 6 with `Zklexpire` (an Error State) (<<KLE-error-state-transfer>>);
-. 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is a custom level that the implementation defines for no Machine (<<KLE-SCProtection-field>>);
+. 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if bit 18 is set;
 . [[KLE-size-avail-lookup,5]]if the KLE unit does not natively implement the Machine fields: an illegal-instruction exception if `mstatus.kleemulation` = 1 (<<Zkl-ISA-priv.adoc#KLE-kleemulation>>), so that M-mode can supply the value, and 0 otherwise;
 . 0 if the MDH is unsupported or invalid Metadata (<<KLE-Metadata-validity>>), evaluated as at provisioning when _State_ is 0 and _Version_ is not 3, and as at import otherwise;
 . the size:
@@ -1164,11 +1160,11 @@ The instruction then writes to `Xd` the value of the first item of its list that
 `kl.avail` returns or raises, evaluated in order:
 
 . Form A: 0 if `Ks` is `KLNL` while `klnamedlocker` = 32 or the locker is _Unconfigured_, and otherwise 1 if the KLE unit implements the Machine fields of the MDH, and 0 if not;
-. Forms B and C: 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if _SCProtection_ is a custom level that the implementation defines for no Machine (<<KLE-SCProtection-field>>);
+. Forms B and C: 0 if _Version_ is 1 or 2, if _KeyType_ holds a reserved value, or if bit 18 is set;
 . if the KLE unit does not natively implement the Machine fields: same as item <<KLE-size-avail-lookup>> of `kl.size`;
 . 1 otherwise, whatever the other fields hold: a 1 does not exclude a KLE unsupported-Metadata exception that a Machine specification attaches to another field, such as the _AuxInfo_ of EdDSA.
 
-Every item before the lookup is independent of which Machines are implemented, and the KLE unit knows each custom level that the implementation defines, for an emulated Machine too.
+Every item before the lookup is independent of which Machines are implemented.
 The lookup therefore traps only when the KLE unit does not natively implement the Machine fields, and M-mode then supplies the value of the remaining items.
 --
 
@@ -1592,7 +1588,7 @@ Encoding::
 
 With bit `v` (bit 29) = 0, bit `h` (bit 28) selects `kl.getmdl` (`h` = 0) or `kl.getmd` (`h` = 1), and the result goes to GPRs (Rule <<KLE-GR-multiple-GPRs>>).
 With `v` = 1, the instruction is `kl.getmdv`, which writes the entire MDH to the lowest 128 bits of a vector register; `h` must then be 0.
-`v` = `h` = 1 encodes `kl.getnl` (<<KLE-instruction-getter-setter>>).
+`v` = `h` = 1, `rs2` = 0 and `rs1` = 1, 2, 3 or 4 encode `kl.getnl`, `kl.getbl`, `kl.getbt` or `kl.getks` (<<KLE-instruction-getter-setter>>).
 --
 
 Description::
@@ -1608,6 +1604,31 @@ Bits [`VL` {times} `SEW` − 1 : 128] are written with zeros, and the tail follo
 They do not check MDH validity (<<KLE-Metadata-validity>>).
 `Ks` may be `KLNL` (Rule <<KLE-GR-klnamedlocker-override>>).
 --
+
+//
+
+[[KLE-instruction-getinfo]]
+=== kl.getinfo
+
+Synopsis::
+Read the public AEAD descriptor of a locker.
+
+Mnemonic::
+`kl.getinfo Xd, Ks`(((KLE, instruction, kl.getinfo)))
+
+Encoding::
+
+`kl.getinfo` is an R-type instruction sharing the opcode and `funct3` of `kl.exec`, with `funct2` = `0b11`, `v` = `h` = 1, `rs1` = 0 and `rs2` = `Ks`.
+Bit `r` selects `KLNL` as Rule <<KLE-GR-klnamedlocker-override>> specifies.
+The other encoding fields are zero.
+This encoding is distinct from the CSR getters, which have `rs2` = 0 and `rs1` in 1 through 4 (<<KLE-instruction-getter-setter>>).
+
+Description::
+
+`kl.getinfo` writes the descriptor of <<Zkl-ISA-machines.adoc#KLE-unified-AEAD-info>> to `Xd`, zero-extended on RV32 and RV64.
+It is admitted only for a locker whose Machine defines the AEAD interface.
+For every other locker, and for an _Unconfigured_ or Error-State locker, it writes zero.
+It does not validate other metadata fields, alter the locker, set `klstart`, or make a `KLS` or `*llockerstatus` field Dirty.
 
 //
 
@@ -1671,7 +1692,7 @@ the `kl.setst` encoding with `G` = `0b10`, `r` = 0, `F` = `0b00`, `#immed7` = 0,
 * `kl.setnli #uimm7`, `kl.setbli #uimm7`, `kl.setbti #uimm7`, `kl.setksi #uimm7`:
 the `kl.setst` encoding with `G` = `0b10`, `r` = 0, `F` = `0b01`, `rs1` = 0, and `rd` = 1, 2, 3, and 4, respectively; `#immed7` holds `#uimm7`.
 
-Every other encoding with `v` = `h` = 1 in the `kl.getmd*` encoding, or with `G` = `0b10` in the `kl.setst` encoding, is reserved.
+Every other encoding with `v` = `h` = 1 in the `kl.getmd*` encoding, except `kl.getinfo`, or with `G` = `0b10` in the `kl.setst` encoding, is reserved.
 --
 
 Description::
@@ -2242,7 +2263,7 @@ Usage instructions are subject to _UsagePolicy_ (<<KLE-UsagePolicy>>), checked w
 | `kl.clearads`               | Yes | No  | Yes | No  | Encoding of `kl.setst`; see its row.
 | `kl.mgmt`                   | Yes | Yes +
 (see note) | No | Provisioning and import opening | Vector Forms reset `vstart` on retirement. A provisioning- or import-opening `kl.mgmt` is admitted in every State, an export-opening one in every Valid, Error or Configuration State; no Machine may restrict an export-opening one either.
-| `kl.getmd`, `kl.getmdl`, `kl.getmdv`, `kl.getst`, `kl.getstx` | No | Yes | No | Yes | {empty}
+| `kl.getmd`, `kl.getmdl`, `kl.getmdv`, `kl.getst`, `kl.getstx`, `kl.getinfo` | No | Yes | No | Yes | {empty}
 | `kl.getnl`, `kl.getbl`, `kl.getbt`, `kl.getks` | No | Yes | No | N/A | Read the CSR they name.
 | `kl.setnl`, `kl.setnli`, `kl.setbl`, `kl.setbli`, `kl.setbt`, `kl.setbti`, `kl.setks`, `kl.setksi` | Yes | No | No | N/A | Write only the CSR they name, with the effect of a CSR write.
 | `kl.rstrl`, `kl.rstrh`, `kl.rstrv` | Yes | Yes +
@@ -3679,7 +3700,7 @@ A `kl.mgmt` with `#immed7` = `kl_cfg_management_end` is not needed after it, and
 == The Context Sealing Key
 
 A hart has one Context Sealing Key (CSK) for each _SCProtection_ level it implements (<<KLE-SCProtection-field>>).
-CSK~L~ serves as the CSK for level L: 0 to 3 for the architecture-defined levels, or 4 to 7 for a custom level.
+CSK~L~ serves as the CSK for level L, from 0 to 3.
 A hart implements level L if its KLE unit implements a Machine at level L, or if its emulation primitives (<<Zkl-ISA-priv.adoc#KLE-unsupported-handling>>) provide a protection of level L.
 The export or import of a locker at level L only uses CSK~L~ (<<KLE-SCC-export-import>>).
 The CSKs of distinct levels must be pairwise distinct.

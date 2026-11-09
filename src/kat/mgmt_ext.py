@@ -161,14 +161,14 @@ class KLE2(KLE):
         s._pre1()
         if form != 'A' and s.kleemu:
             m = md & (mask(64) if form == 'B' else mask(128)); st, se = mdh_get(m, 'State'), mdh_get(m, 'StateExtension')
-            early = st >= 61 or (st == 0 and se) or mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'SCProtection') >= 4 or mdh_get(m, 'KeyType') == 3
+            early = st >= 61 or (st == 0 and se) or mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'Reserved18') or mdh_get(m, 'KeyType') == 3
             if not early and mdh_get(m, 'Machine') not in CONTENT: raise IllegalInstruction('kleemulation')
         return KLE.size(s, kd, r, form, md)
     def avail(s, kd=0, r=0, form='A', md=0):
         s._pre1()
         if form != 'A' and s.kleemu:
             m = md & (mask(64) if form == 'B' else mask(128))
-            early = mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'SCProtection') >= 4 or mdh_get(m, 'KeyType') == 3
+            early = mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'Reserved18') or mdh_get(m, 'KeyType') == 3
             if not early and mdh_get(m, 'Machine') not in CONTENT: raise IllegalInstruction('kleemulation')
         return KLE.avail(s, kd, r, form, md)
     # ---- Locker checks of mv / load / store (<<KLE-mv-locker-checks>>)

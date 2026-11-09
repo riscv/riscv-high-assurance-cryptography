@@ -37,7 +37,7 @@ FIN(e,3); check('completing: Ready, StateExtension 0, MachineUse 0', stx(e, 3) =
 e = KLE(); e.mgmt(3, 56, md=mk(MachineUse=77, AuxInfo=5)); check('provisioning zeroes MachineUse', mdh_get(e.md(3), 'MachineUse') == 0)
 for nm, kw in (('State 1', dict(State=1)), ('StateExtension 1 (Error-State PI)', dict(StateExtension=1)), ('AuxDataLen 2', dict(AuxDataLen=2)),
                ('ADSDropped', dict(ADSDropped=1)), ('AuxDataLen 1', dict(AuxDataLen=1)), ('Version 1', dict(Version=1)), ('Version 2', dict(Version=2)),
-               ('Version 3 in a PI', dict(Version=3)), ('SCProtection 4', dict(SCProtection=4)), ('KeyType 3', dict(KeyType=3)),
+               ('Version 3 in a PI', dict(Version=3)), ('reserved bit 18', dict(Reserved18=1)), ('KeyType 3', dict(KeyType=3)),
                ('Locality[5:4]=3', dict(Locality=0x30)), ('reserved bit 46', dict(Reserved46=1)),
                ('reserved 78', dict(Reserved79_78=1)), ('reserved 116-127', dict(Reserved127_116=1)), ('MachinePolicy zero for TOYENC', dict(MachinePolicy=0)),
                ('KeyType 1 w/o key field', dict(KeyType=1)), ('KeyType 2 w/o key field', dict(KeyType=2))):
@@ -191,7 +191,7 @@ e = KLE(); e.mgmt(2, 58, md=mdh_pack(State=0, StateExtension=9)); check('import 
 e2 = KLE(); r = trap(e2.mgmt, 2, 58, md=mk(mach=0x99, State=1)); check('import of unsupported Machine -> kl_exc_unsupported', r == 'unsupported' and e2.md(2) == 0)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3)); check('short import: Error-State MDH installed, no operation opened, no capacity', stx(e, 2) == (0, 3) and e.slots == 8)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, MachineUse=5)); check('short import installs a valid MDH as is', e.md(2) == mk(State=0, StateExtension=3, MachineUse=5))
-e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, SCProtection=4)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, Reserved18=1)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
 e = KLE(); e.mgmt(2, 58, md=im); c = 0xABCD; e.mvin(c, toy_tag(c)); e.mgmt(2, 63, form='C', md=im); check('import completion with valid tag: State = ml.State', stx(e, 2) == (1, 0) and e.L[2].content == c)
 e = KLE(); e.mgmt(2, 58, md=im); e.mvin(0xABCD, 1); e.mgmt(2, 63, form='C', md=im); check('import completion with bad tag: Error State Authentication Failed, no exception', stx(e, 2) == (0, SE_MGMT_AUTH))
 control('a wrong tag is detected (negative control)', e.getstx(2) == SE_MGMT_AUTH)
@@ -212,14 +212,14 @@ FIN(e,1); check('Ready TOYSIG: 32 + 32 = 64', e.size(1) == 64)
 e = KLE(); prov(e, 1); e.mgmt(1, 57, form='A'); check('size in State 57 as Valid: 32 + c1', e.size(1) == 48)
 e = KLE(); e.mgmt(2, 58, md=mk(State=56)); check('size in ppi_importing: 16 + c1', e.size(2) == 32)
 for nm, md, w in (('Form C PI', mk(), 32), ('Form B PI', mk(), 32), ('Form C Valid', mk(State=1), 48), ('State 61', mk(State=61), 0), ('State 0 SE 1 (Error)', mdh_pack(Machine=0x99, StateExtension=1), 16),
-                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('SCProtection 4', mk(SCProtection=4), 0), ('KeyType 3', mk(KeyType=3), 0),
+                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('reserved bit 18', mk(Reserved18=1), 0), ('KeyType 3', mk(KeyType=3), 0),
                   ('unsupported', mk(mach=0x99), 0), ('PI with ADS fields', mk(AuxDataLen=2), 0), ('Valid with AuxDataLen 3', mk(State=1, AuxDataLen=3), 64 + 16 + 16)):
     f = 'B' if 'Form B' in nm else 'C'
     check('kl.size %s = %d' % (nm, w), KLE().size(form=f, md=md) == w)
 check('kl.size Form B ignores bits above 63 (reserved bit 116)', KLE().size(form='B', md=mk() | 1 << 120) == 32 and KLE().size(form='C', md=mk() | 1 << 120) == 0)
 check('kl.size ignores UsagePolicy/Locality/KeyType 2 as 0', KLE().size(form='C', md=mk(KeyType=0)) == KLE().size(form='C', md=mk(mach=M_KEY, KeyType=2)))
 e = KLE(); prov(e, 1); check('kl.avail A: 1 for implemented Machine, 0 Unconfigured, 0 KLNL 32', e.avail(1) == 1 and e.avail(2) == 0 and (setattr(e, 'nl', 32), e.avail(0, r=1))[1] == 0)
-check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(SCProtection=4)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
+check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved bit 18/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(Reserved18=1)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
 check('kl.avail examines no field but Machine/Version/reserved: State 61 still 1', KLE().avail(form='C', md=mk(State=61)) == 1)
 check('kl.avail B ignores bits above 63', KLE().avail(form='B', md=mk() | 1 << 120) == 1)
 

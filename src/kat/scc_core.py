@@ -108,13 +108,13 @@ def scc_size(mdh):
     f = mdh_unpack(mdh)
     if f['State'] in (61, 62, 63) or (f['State'] == 0 and f['StateExtension'] >= 7): return 0
     if f['State'] == 0 and f['StateExtension'] >= 1: return 16
-    if f['Version'] in (1, 2) or f['SCProtection'] >= 4 or f['KeyType'] == 3: return 0
+    if f['Version'] in (1, 2) or f['Reserved18'] or f['KeyType'] == 3: return 0
     if scc_invalid(mdh) or f['Machine'] not in SCC_MACHINES: return 0
     c1 = scc_content1_size(mdh)
     return 32 + c1 if f['AuxDataLen'] == 0 else 64 + c1 + scc_content2_size(mdh)
 def scc_invalid(mdh, lst=None):
     f = mdh_unpack(mdh)
-    return (f['Version'] != 0 or f['KeyType'] in (2, 3) or f['SCProtection'] >= 4 or sl(f['Locality'], 5, 4) == 3
+    return (f['Version'] != 0 or f['KeyType'] in (2, 3) or f['Reserved18'] or sl(f['Locality'], 5, 4) == 3
             or f['Transparent'] == 1 and f['KeyType'] == 1
             or f['Reserved46'] or f['Reserved79_78'] or f['Reserved127_116']
             or f['StateExtension'] != 0 or f['State'] in (0, 61, 62, 63) or f['ExpirationDate'] != 0

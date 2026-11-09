@@ -928,6 +928,70 @@ With stealing, the locker ends in _Success_, and a `kl.setst` into _Ready_ prece
 
 //
 
+[[KLE-unified-AEAD-examples]]
+=== Unified AEAD Interface
+
+The following pseudocode drives every AEAD Machine.
+It reads `glog` and the pass flags with `kl.getinfo`; the MDH supplies `tag_len_p` as usual.
+`AD_FINAL`, `DATA_FINAL` and `PREPASS_FINAL` set the corresponding final-block State with the meaningful bit length of the remaining piece, then issue its one `kl.exec` if the length is nonzero.
+They pass the final transport byte with unused high bits cleared.
+When `CiphertextStealing` is set, `crypt_full_blocks` holds back the final full block and `DATA_FINAL` supplies that block followed by the final partial block, as <<Zkl-ISA-machines.adoc#KLE-unified-AEAD>> specifies.
+
+[[KLE-pseudocode-unified-AEAD]]
+.Unified AEAD Processing
+----
+# K is a configured unified AEAD locker.  setup_nonce(K, N) enters
+# Hash_Absorb.  A preset-nonce Machine needs only "kl.setst K,
+# #kl_state_hash_absorb".  tag_len_p comes from the MDH.
+
+  kl.getinfo t0, K
+  andi       t1, t0, 0xf          # glog
+  srli       t2, t0, 4
+  andi       t2, t2, 1            # TwoPTPasses
+  srli       t3, t0, 5
+  andi       t3, t3, 1            # TwoCTPasses
+  srli       t4, t0, 6
+  andi       t4, t4, 1            # CiphertextStealing
+
+  setup_nonce(K, N)
+  if decrypt:
+      kl.setst K, #kl_state_set_aux_value_2, tag_len_p
+      kl.exec   tag, K, tag        # received tag retained by the Machine
+
+  absorb_full_blocks(K, AD)
+  AD_FINAL(K, AD_tail, AD_bits - full_bits(AD))
+
+  if encrypt and t2:
+      kl.setst K, #kl_state_aead_prepass
+      absorb_full_blocks(K, PT)
+      PREPASS_FINAL(K, PT_tail, PT_bits - full_bits(PT))
+      kl.exec   siv, K, zero       # produces the SIV and enters Encrypt
+
+  if decrypt and t3:
+      kl.setst K, #kl_state_aead_ct_prepass
+      absorb_full_blocks(K, CT)
+      CT_PREPASS_FINAL(K, CT_tail, CT_bits - full_bits(CT))
+
+  kl.setst K, decrypt ? #kl_state_decrypt : #kl_state_encrypt
+  crypt_full_blocks(K, decrypt ? CT : PT, decrypt ? PT : CT, t4)
+  DATA_FINAL(K, decrypt ? CT_tail : PT_tail,
+             decrypt ? CT_bits - full_bits(CT) : PT_bits - full_bits(PT), t4)
+
+  if decrypt:
+      kl.exec   zero, K, zero      # verifies the retained tag
+      require(kl.getst(K) == kl_success)
+  else:
+      kl.exec   tag, K, zero       # produces tag and enters Success
+----
+
+The caller does not pad AD, PT or CT, compute their length block, or maintain their per-message lengths.
+It must retain the PT buffer through the GCM-SIV prepass and obey Rule <<KLE-SR-unverified-plaintext>> on decryption.
+
+The Machine-specific AEAD listings that follow explain the cryptographic constructions inside the Machines.
+Their explicit state sequences, padding and length-block operations are superseded by this interface.
+
+//
+
 [[KLE-GCM-mode-examples]]
 === GCM Mode
 
