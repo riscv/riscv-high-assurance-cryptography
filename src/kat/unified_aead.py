@@ -10,12 +10,11 @@ import hmac
 from common import b2v, v2b, mask, cat, bswap, montmul
 from aead_model import (Base, GCM, GCM_IV, GCMSIV, OCB, OCB_NONCE, Inv, need,
                         ntz, pad10, READY, ABSORB, LAST, ENC, DEC, ELB, DLB,
-                        ETF, DTF, SAV, SAV2, SUCCESS, FAILURE, INV)
+                        ETF, DTF, SAV, SAV2, SUCCESS, FAILURE, INV, MAX_BLOCKS)
 from sponge_model import Locker
 
 PRE, PRELAST = 17, 18
-HAS_NONCE, HAS_TAG, AD_CLOSED, PRE_CLOSED, SIV_ISSUED = 1, 2, 4, 8, 16
-HEADER_WIDTHS = (64, 64, 64, 16, 16, 8, 24)
+TAG_RECEIVED, AD_ABSORBED, SIV_GENERATED = 1, 2, 4
 
 
 class UnifiedAEAD(Base):
@@ -71,15 +70,25 @@ class UnifiedAEAD(Base):
 
     @property
     def flags(self):
-        return self.machine_use & 0x1f
+        return self.machine_use & 7
 
     @flags.setter
     def flags(self, value):
-        self.machine_use = (self.machine_use & ~0x1f) | value
+        self.machine_use = (self.machine_use & ~7) | value
+
+    def header_widths(self):
+        """Public prefix of the Content: only the fields this Machine uses."""
+        if self.family == 'GCM': return (64, 64, 8, 120) if self.DEC_ONLY else (64, 64, 16, 8, 104)
+        if self.family == 'GCM-SIV': return (64, 64, 8, 120)
+        return (8, 120)
+
+    def header(self):
+        if self.family == 'GCM' and not self.DEC_ONLY: return (self.ad_len, self.payload_len, self.nonce_len, self.lbl, 0)
+        if self.family in ('GCM', 'GCM-SIV'): return (self.ad_len, self.payload_len, self.lbl, 0)
+        return (self.lbl, 0)
 
     def _ready(self):
-        self.ad_len = self.payload_len = self.replay_len = 0
-        self.nonce_len = self.nonce_progress = self.lbl = 0
+        self.ad_len = self.payload_len = self.nonce_len = self.lbl = 0
         self.machine_use = 0
         self.received_tag = self.ad_hash = 0
         self.klstart = 0
@@ -97,8 +106,8 @@ class UnifiedAEAD(Base):
     def _fail(self):
         super()._fail()
         self.core = self.mask_key = self.preset = None
-        self.ad_len = self.payload_len = self.replay_len = self.received_tag = self.ad_hash = 0
-        self.nonce_len = self.nonce_progress = self.lbl = 0
+        self.ad_len = self.payload_len = self.received_tag = self.ad_hash = 0
+        self.nonce_len = self.lbl = 0
         self.machine_use = 0
 
     def _noexec(self, st): return st in (LAST, PRELAST, ELB, DLB) and self.lbl == 0
@@ -109,13 +118,11 @@ class UnifiedAEAD(Base):
             if self.DEC_ONLY: c.setst(ABSORB)
         elif self.family == 'GCM-SIV': c.setst(SAV, 'C', inp=value)
         elif self.family == 'OCB':
-            if not self.DEC_ONLY:
-                c.setst(SAV, 'B', self.nonce_len); c.exec('B', value, (self.nonce_len + 7) // 8 * 8)
+            if not self.DEC_ONLY: c.exec('B', value, (c.N_len + 7) // 8 * 8)
             c.setst(ABSORB, 'B', self.tag_len_p)
         else:
             c.setst(ABSORB, 'A' if self.DEC_ONLY else 'C', inp=v2b(value, 16))
         need(c.st != INV and not (self.family == 'Ascon' and c.is_error()))
-        self.flags |= HAS_NONCE
 
     def setst(self, st, form='A', xs=0, inp=0):
         if self.st == INV: return
@@ -129,12 +136,12 @@ class UnifiedAEAD(Base):
                 need(not self.DEC_ONLY and cur in (READY, SAV) and self._formok('B', form, xs, inp))
                 need(8 <= xs <= 8192 and xs % 8 == 0 if self.family == 'GCM' else
                      xs == 96 if self.family == 'GCM-SIV' else 6 <= xs <= 120 if self.family == 'OCB' else xs == 128)
-                self.nonce_len, self.nonce_progress, self.flags = xs, 0, 0
-                if self.family == 'GCM': self.core.setst(SAV, 'B', xs)
+                self.nonce_len, self.flags = xs, 0
+                if self.family in ('GCM', 'OCB'): self.core.setst(SAV, 'B', xs)
             elif st == ABSORB:
                 need(self.DEC_ONLY and cur == READY and form == 'A'); self._setup()
             elif st == SAV2:
-                need(cur == ABSORB and self.ad_len == 0 and not self.flags & HAS_TAG
+                need(cur == ABSORB and not self.flags & (AD_ABSORBED | TAG_RECEIVED)
                      and form == 'B' and xs == self.tag_len_p)
             elif st in (LAST, PRELAST, ELB, DLB):
                 need(cur == {LAST: ABSORB, PRELAST: PRE, ELB: ENC, DLB: DEC}[st])
@@ -143,8 +150,8 @@ class UnifiedAEAD(Base):
                 if xs == 0: self._final_piece(0)
                 return
             elif st in (PRE, ENC, DEC):
-                need(cur == LAST and self.lbl == 0 and form == 'A' and self.flags & AD_CLOSED)
-                need(st == DEC if self.flags & HAS_TAG else st == PRE if self.two_pt else st == ENC)
+                need(cur == LAST and self.lbl == 0 and form == 'A')
+                need(st == DEC if self.flags & TAG_RECEIVED else st == PRE if self.two_pt else st == ENC)
                 if self.family == 'OCB': self.core._enter(DEC if st == DEC else ENC, 0, 0)
                 if self.family == 'Ascon': self.core.xw(4, 1 << 63)
             elif st in (ETF, DTF):
@@ -157,13 +164,13 @@ class UnifiedAEAD(Base):
         except Inv: self._fail()
 
     def _add(self, field, n):
+        if self.family == 'OCB': need(self.core.index <= MAX_BLOCKS)    # OCB bounds lengths by index alone
+        if self.family not in ('GCM', 'GCM-SIV'): return              # OCB and Ascon keep no length counters
         limit = mask(64)
         if self.family == 'GCM' and field != 'ad_len': limit = (1 << 39) - 256
         elif self.family == 'GCM-SIV': limit = 1 << 39
-        elif self.family == 'OCB': limit = 1 << 55
         v = getattr(self, field) + n
         need(v <= limit)
-        if field == 'replay_len': need(v <= self.payload_len)
         setattr(self, field, v)
 
     def _ad(self, x, n):
@@ -200,23 +207,20 @@ class UnifiedAEAD(Base):
 
     def _consume(self, x, n):
         if self.st in (ABSORB, LAST):
-            self._add('ad_len', n); self._ad(x, n); return 0
-        self._add('replay_len' if self.two_pt and self.st in (ENC, ELB) else 'payload_len', n)
+            self._add('ad_len', n); self._ad(x, n); self.flags |= AD_ABSORBED; return 0
+        self._add('payload_len', n)
         return self._payload(x, n)
 
     def _final_piece(self, x):
         st, n, c = self.st, self.lbl, self.core
         out = self._consume(x & mask(n), n) if n else 0
         if st == LAST:
-            if self.family == 'Ascon' and self.ad_len:
+            if self.family == 'Ascon' and self.flags & AD_ABSORBED:
                 c.xw(0, 1 << (n % 128)); c.xw(1, (1 << (n % 128)) >> 64); c.perm(8)
             if self.two_pt: self.ad_hash = c.tmp
-            self.flags |= AD_CLOSED
         else:
             if self.family == 'Ascon':
                 c.xw(0, 1 << (n % 128)); c.xw(1, (1 << (n % 128)) >> 64)
-            if st == PRELAST: self.flags |= PRE_CLOSED
-            if st == ELB and self.two_pt: need(self.replay_len == self.payload_len)
             self.st = DTF if st == DLB else ETF
         self.lbl = 0
         return out
@@ -236,25 +240,25 @@ class UnifiedAEAD(Base):
 
     def _equal_tag(self, tag):
         q = (self.tag_len_p + 7) // 8
-        return hmac.compare_digest(v2b(tag & mask(self.tag_len_p), q), v2b(self.received_tag, q))
+        rx = self.core.siv if self.two_pt else self.received_tag     # GCM-SIV holds the received tag in SIV
+        return hmac.compare_digest(v2b(tag & mask(self.tag_len_p), q), v2b(rx, q))
 
     def _exec(self, st, inp, kllen, klstart, halt_at):
         if st == SAV:
             if self.family == 'GCM':
                 self.core.exec('B', inp, kllen, klstart, halt_at)
                 need(self.core.st != INV)
-                self.nonce_progress = self.nonce_len if self.core.st == ABSORB else self.core.cumul
                 self.klstart = self.core.klstart
-                if self.nonce_progress != self.nonce_len: return 0
-                self.flags |= HAS_NONCE
+                if self.core.st != ABSORB: return 0
             else:
                 need(kllen is not None and kllen >= (self.nonce_len + 7) // 8 * 8 and klstart == 0)
-                self._setup(inp); self.nonce_progress = self.nonce_len
+                self._setup(inp)
             self.st = ABSORB; return 0
         if st == SAV2:
             need(kllen is not None and kllen >= self.tag_len_p and klstart == 0)
-            self.received_tag = inp & mask(self.tag_len_p); self.flags |= HAS_TAG
-            if self.two_pt: self.core.siv = self.received_tag
+            if self.two_pt: self.core.siv = inp & mask(self.tag_len_p)
+            else: self.received_tag = inp & mask(self.tag_len_p)
+            self.flags |= TAG_RECEIVED
             self.st = ABSORB; return 0
         if st in (ABSORB, PRE, ENC, DEC):
             return self._multi(inp, kllen, klstart, halt_at, lambda x: self._consume(x, 128))
@@ -264,10 +268,10 @@ class UnifiedAEAD(Base):
         if st == ETF:
             need(kllen is not None and kllen >= self.tag_len_p and klstart == 0)
             tag = self._tag() & mask(self.tag_len_p)
-            if self.two_pt and not self.flags & SIV_ISSUED:
-                self.received_tag = self.core.siv = tag
-                self.core.tmp = self.ad_hash; self.flags |= SIV_ISSUED
-                self.st = ENC
+            if self.two_pt and not self.flags & SIV_GENERATED:
+                self.core.siv = tag; self.core.tmp = self.ad_hash
+                self.payload_len = 0                                    # the second pass recounts the PT
+                self.flags |= SIV_GENERATED; self.st = ENC
             else:
                 ok = not self.two_pt or self._equal_tag(tag)
                 self.st = SUCCESS if ok else FAILURE
@@ -280,38 +284,44 @@ class UnifiedAEAD(Base):
 
     def export(self):
         need(self.st != INV)
-        header = self.pack((self.ad_len, 64), (self.payload_len, 64), (self.replay_len, 64),
-                           (self.nonce_len, 16), (self.nonce_progress, 16), (self.lbl, 8), (0, 24))[0]
-        if self.family == 'Ascon': sc = self.core.export()
+        widths = self.header_widths()
+        header = v2b(self.pack(*zip(self.header(), widths))[0], sum(widths) // 8)
+        if self.family == 'Ascon': sc = self.core.export()[32:]   # the core's own header and rx_tag are this one's
         else:
             v, w = self.core.export(); sc = v2b(v, (w + 127) // 128 * 16)
-        return v2b(header, 32) + v2b(self.received_tag, 16) + v2b(self.ad_hash, 16) + sc
+        return header + v2b(self.ad_hash if self.two_pt else self.received_tag, 16) + sc
 
     def import_(self, sc, st, machine_use=0):
         """Restore authenticated Content and MachineUse into a locker."""
         if self.st == INV: return
         try:
             need(len(sc) == len(self.export()))
-            fields = self.unpack(b2v(sc[:32]), HEADER_WIDTHS)
-            self.ad_len, self.payload_len, self.replay_len, self.nonce_len, self.nonce_progress, self.lbl, reserved = fields
+            widths = self.header_widths(); h = sum(widths) // 8
+            fields = self.unpack(b2v(sc[:h]), widths)
+            if self.family == 'GCM' and not self.DEC_ONLY: self.ad_len, self.payload_len, self.nonce_len, self.lbl, reserved = fields
+            elif self.family in ('GCM', 'GCM-SIV'): self.ad_len, self.payload_len, self.lbl, reserved = fields
+            else: self.lbl, reserved = fields
             self.machine_use = machine_use
-            need(reserved == 0 and machine_use >> 14 == 0 and self.nonce_progress <= self.nonce_len
-                 and self.lbl <= 128 and self.lbl % (1 << self.glog) == 0 and self.replay_len <= self.payload_len)
+            need(reserved == 0 and machine_use >> 14 == 0
+                 and self.lbl <= 128 and self.lbl % (1 << self.glog) == 0)
             need(st in (READY, SAV, SAV2, ABSORB, LAST, PRE, PRELAST, ENC, DEC, ELB, DLB, ETF, DTF, SUCCESS, FAILURE))
-            need(self.two_pt or st not in (PRE, PRELAST) and not self.flags & (PRE_CLOSED | SIV_ISSUED))
-            need(st == READY or st == SAV or self.flags & HAS_NONCE)
-            self.received_tag, self.ad_hash = b2v(sc[32:48]), b2v(sc[48:64])
-            core_st = READY if not self.flags & HAS_NONCE else ABSORB
-            if self.family == 'GCM' and st == SAV: core_st = SAV
+            need(self.two_pt or st not in (PRE, PRELAST) and not self.flags & SIV_GENERATED)
+            need(st not in (READY, SAV) or self.flags == 0)
+            if self.two_pt: self.ad_hash = b2v(sc[h:h + 16])
+            else: self.received_tag = b2v(sc[h:h + 16])
+            core_st = ABSORB if st not in (READY, SAV) else SAV if st == SAV and self.family in ('GCM', 'OCB') else READY
             c = self.core
             if self.family == 'Ascon':
-                c.import_(sc[64:], core_st, tag_len_p=self.tag_len_p); need(not c.is_error())
+                c.import_(sc, core_st, tag_len_p=self.tag_len_p); need(not c.is_error())
             else:
                 args = dict(keybytes=len(self.key), policy=self.policy)
                 if self.family in ('GCM', 'GCM-SIV'): args['cipher'] = self.CIPHER
                 if self.family == 'GCM': args['tag_len_p'] = self.tag_len_p
-                self.core = type(c).from_sc(core_st, b2v(sc[64:]), **args)
+                self.core = type(c).from_sc(core_st, b2v(sc[h + 16:]), **args)
                 need(self.core.st != INV)
+                if self.family == 'GCM' and core_st == SAV: self.core.len = self.nonce_len
+                if self.family == 'OCB': self.core.tag_len = self.tag_len_p
+            self.nonce_len = {'GCM': self.nonce_len, 'GCM-SIV': 96, 'OCB': getattr(self.core, 'N_len', 0), 'Ascon': 128}[self.family]
             self.key = v2b(self.core.key, 16) if self.family == 'Ascon' else self.core.key
             if self.DEC_ONLY:
                 self.preset = (self.core.J0 & mask(96) if self.family == 'GCM' else

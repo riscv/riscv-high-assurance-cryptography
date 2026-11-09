@@ -62,7 +62,7 @@ def machine_checks(fn, ref):
         L = mk(); L.setst('absorb'); run(L, [msg]) if msg else None; return L
     section('%s: state machine' % fn)
     L = mk(); check('%s Ready: S = IV, fields zero' % fn, L.st == 'Ready' and (L.lbl, L.bb, L.cum, L.outl, L.blk) == (0,) * 5)
-    L.setst('absorb'); check('%s Absorb entry sets last_block_len = block_len' % fn, L.st == 'Absorb' and L.lbl == block_len)
+    L.setst('absorb'); check('%s Absorb entry keeps last_block_len = 0' % fn, L.st == 'Absorb' and L.lbl == 0)
     check('%s Form B kl.setst naming Ready -> Invalid' % fn, inv(_do(at('A'), 'ready', 'B', 8)))
     check('%s Form B kl.setst naming Hash_Absorb -> Invalid' % fn, inv(_do(mk(), 'absorb', 'B', 8)))
     L = at('A'); L.exec('B', b'ab', halt=False); L.exec('B', b''); L.exec('B', b'c')
@@ -117,7 +117,7 @@ def machine_checks(fn, ref):
     check('%s fields in order' % fn, (w[0], w[-1]) == (f.state_len, block_len) and w[1:-1] == [16, 16, 32, 64] and names[1:3] == ['last_block_len', 'block_base'], names)
     pad = -sum(w) % 128; check('%s Serialized Content: %d bits + %d padding = multiple of 128' % (fn, sum(w), pad), (sum(w) + pad) % 128 == 0)
     L = at('A', msg_of(block_len // 8 + 5)); fl = {n: v for n, v, _ in L.fields()}
-    check('%s fields after block_len/8+5 bytes: block_base = 40, cumul_len = block_len+40, last_block_len = block_len' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, block_len + 40, block_len))
+    check('%s fields after block_len/8+5 bytes: block_base = 40, cumul_len = block_len+40, last_block_len = 0' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, block_len + 40, 0))
     for cut in (0, 1, block_len // 8 - 1, block_len // 8, block_len // 8 + 3):
         m = msg_of(cut + 77); L = at('A', m[:cut]); L2 = copy.deepcopy(L); run(L2, [m[cut:]]); L2.setst('output')
         check('%s export/import after %d bytes continues to the same digest' % (fn, cut), out_all(L2, d) == ref(m))

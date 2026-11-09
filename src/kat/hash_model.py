@@ -53,7 +53,7 @@ class Locker:
         s.K0 = b2v(key) if key else 0; s.haskey = hmac == 'KIP'
         s.nn = f.t // 8 if f.kind == 'blake2' else 0
         s.kk = len(syskey) if syskey else 0
-        s.tag_len = 0; s.input_key = None; s.ksealed = False; s.mdh = 0
+        s.input_key = None; s.ksealed = False; s.mdh = 0
         s.tag_len_p = (f.t if tag_len_p is None else tag_len_p) if hmac else None
         s.ready()
         if hmac and not s.tlp_ok(): s.inv()                               # MR12: provisioning completes into Invalid
@@ -69,7 +69,7 @@ class Locker:
             return sum(x << (f.w * i) for i, x in enumerate(h))
         return b2v(b''.join(h.to_bytes(f.w // 8, 'big') for h in R.sha2_iv(f.name)))
     def ready(s):
-        s.st = 'Ready'; s.lbl = s.bb = s.cum = s.outl = 0; s.blk = 0; s.tag_len = 0; s.S = s.iv(); s.sealed = False
+        s.st = 'Ready'; s.lbl = s.bb = s.cum = s.outl = 0; s.blk = 0; s.S = s.iv(); s.sealed = False
         if s.hmac == 'KIP': s.haskey = True
     def _P(s): s.S = R.keccak_f(s.S)
     def _comp(s, final=False):
@@ -96,7 +96,7 @@ class Locker:
             if mode == 'xor_accumulate': s.S ^= c << s.bb
             else: s.blk = (s.blk & ~(M(a) << s.bb)) | (c << s.bb)
             ib += a; s.bb += a
-            if count: s.cum += a
+            if count and f.kind != 'sha3': s.cum += a     # SHA-3 pads without the length; cumul_len serves only Set_Key
             if s.bb == f.block_len and not f.hold: s._comp(); s.bb = 0
             if halt and ib < kllen: return ib // 8
         return None
@@ -160,7 +160,7 @@ class Locker:
             if form != 'A' or st not in ('Ready', 'SetKey') or (s.hmac == 'NIK' and not s.haskey): return s.inv()
             s.cum = s.bb = 0; s.blk = 0; s.S = s.iv()
             if s.hmac: s._enter_hmac_absorb()
-            s.lbl = f.block_len; s.st = 'Absorb'; return
+            s.st = 'Absorb'; return
         if imm == 'last':
             if st != 'Absorb' or form not in 'AB': return s.inv()
             if Xs > f.block_len or (Xs % 8 and not f.bit_ok): return s.inv()
@@ -179,7 +179,7 @@ class Locker:
             s.bb = s.lbl = 0
             if imm == 'output':
                 s.outl = Xs or (0 if f.xof else (8 * s.nn if f.kind == 'blake2' else f.d)); s.st = 'Output'
-            else: s.tag_len = min(Xs, f.t); s.st = 'Verify'
+            else: s.st = 'Verify'
             return
         return s.inv()
     def _enter_setkey(s): s.st = 'SetKey'; s.K0 = 0; s.haskey = s.ksealed = False; s.bb = s.cum = 0
@@ -207,8 +207,8 @@ class Locker:
         if form != 'B' or st not in ('Absorb', 'Last', 'SetKey', 'Verify'): s.inv(); return zero
         if st == 'Verify':
             if klstart * 8 >= kl: return None                          # GR18 item 1
-            if kl < s.tag_len: return s.inv()
-            ok = (b2v(data) & M(s.tag_len)) == (s.S & M(s.tag_len))
+            if kl < s.tag_len_p: return s.inv()
+            ok = (b2v(data) & M(s.tag_len_p)) == (s.S & M(s.tag_len_p))
             s.st = 'Success' if ok else 'Failure'; return None
         if st == 'Last':
             L = s.lbl
@@ -296,12 +296,12 @@ class Locker:
     def fields(s):
         """(name, value, width_bits) of the Serialized Content in position order (unpadded)."""
         f = s.f; k = [] if not s.hmac and s.syskey is None else None
-        if f.kind == 'sha3': L = [('state', s.S, 1600), ('block_base', s.bb, 16), ('last_block_len', s.lbl, 16), ('out_len', s.outl, 32)] + ([('cumul_len', s.cum, 64)] if s.hmac else [])
+        if f.kind == 'sha3': L = [('state', s.S, 1600), ('block_base', s.bb, 16), ('last_block_len', s.lbl, 16), ('out_len', s.outl, 32)] + ([('cumul_len', s.cum, 64)] if s.hmac == 'NIK' else [])
         else: L = [('state', s.S, f.state_len), ('last_block_len', s.lbl, 16), ('block_base', s.bb, 16), ('out_len', s.outl, 32), ('cumul_len', s.cum, 64), ('block', s.blk, f.block_len)]
         if f.kind == 'blake2':                                 # nn, kk in Positions v, vi; out_len in vii in the output States
             vii = ('out_len', s.outl, 64) if s.st in ('Output', 'Bits') else ('cumul_len', s.cum, 64)
             L = ([('SKID', 0, 64)] if s.syskey is not None else []) + L[:3] + [('nn', s.nn, 16), ('kk', s.kk, 16), vii, L[5]]
-        if s.hmac: L += [('K0', s.K0, f.block_len), ('tag_len', s.tag_len, 16)]
+        if s.hmac: L += [('K0', s.K0, f.block_len)]
         return L
 
 def derive_out(S, D, n):

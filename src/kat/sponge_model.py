@@ -145,7 +145,7 @@ class Locker:
                 else: self.xw(0, 1 << self.bb); self.perm(12)
                 self.zlen = self.cum = 0
             elif st == AUX: return False
-            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return True
+            self.st = ABSORB; self.bb = 0; return True
         if imm == LAST and st == ABSORB and form in 'AB':
             if form == 'A': xs = 0
             if xs > self.block_len or (xs % 8 and not self.bits_ok): return self.invalid() or True
@@ -179,7 +179,7 @@ class Locker:
         st = self.st
         if imm == ABSORB and st == READY and form == 'A':
             self.s ^= self.cs; self.s = self.P(self.s); self.s ^= self.kb; self.s = self.P(self.s)
-            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return
+            self.st = ABSORB; self.bb = 0; return
         if imm == LAST and st == ABSORB and form in 'AB':
             return self._gen_setst(imm, form, xs) or self.invalid()
         if imm in (OUTPUT_, VERIFY) and st in (ABSORB, LAST) and form in 'AB':
@@ -395,9 +395,10 @@ class Locker:
 
     def export(self):
         if self.fam == 'aead':
+            # last_block_len, padding, rx_tag (this model verifies in Hash_Verify: zero), key, state; tag_len is tag_len_p
             kf = v2b(self.skid, 8) if self.skid is not None else v2b(self.key, 16)
             if self.var == 'mask' and self.skid is None: kf += v2b(self.k2, 16)
-            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2)
+            r = v2b(self.lbl, 1) + bytes(31) + kf + v2b(self.s, 40)
             if self.var == 'wsn': r += v2b(self.nonce, 16)
             return r + bytes(-len(r) % 16)
         n = 200 if self.state_len == 1600 else 40
@@ -409,17 +410,17 @@ class Locker:
     def import_(self, sc, st, se=0, tag_len_p=None):
         """st, se: State and StateExtension to restore; tag_len_p: AuxInfo of the MDH (None: 128)."""
         if self.fam == 'aead':
-            o = 8 if self.skid is not None else 16
+            o = 40 if self.skid is not None else 48
             if self.skid is not None:
-                ent = self.sks.get(b2v(sc[:8]))
+                ent = self.sks.get(b2v(sc[32:40]))
                 if ent is None: return self.invalid()             # GR55.3
                 self.key, self.k2 = ent if self.var == 'mask' else (ent, 0)
             else:
-                self.key = b2v(sc[:16])
-                if self.var == 'mask': self.k2 = b2v(sc[16:32]); o = 32
-            self.s = b2v(sc[o:o + 40]); self.lbl = b2v(sc[o + 40:o + 42]); self.tag_len = b2v(sc[o + 42:o + 44])
-            self.tag_len_p = 128 if tag_len_p is None else tag_len_p
-            if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
+                self.key = b2v(sc[32:48])
+                if self.var == 'mask': self.k2 = b2v(sc[48:64]); o = 64
+            self.lbl = sc[0]; self.s = b2v(sc[o:o + 40])
+            self.tag_len = self.tag_len_p = 128 if tag_len_p is None else tag_len_p
+            if self.var == 'wsn': self.nonce = b2v(sc[o + 40:o + 56])
             if self.tag_len_p % 8 or not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
             n = 200 if self.state_len == 1600 else 40

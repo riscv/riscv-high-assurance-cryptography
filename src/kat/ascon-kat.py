@@ -115,7 +115,7 @@ section('Serialized Content of the hashes')
 for k in HASHES:
     L = Locker(k); check(k + ' SC = 48 bytes', len(L.export()) == 48)
 L = Locker('ASCON-HASH256'); L.setst(2, 'A'); L.exec('B', msg(11)); sc = L.export()
-check('SC layout: state 40 | block_base 24 | last_block_len 64 | viii 0', sc[40:42] == v2b(24, 2) and sc[42:44] == v2b(64, 2) and sc[44:48] == bytes(4))
+check('SC layout: state 40 | block_base 24 | last_block_len 0 | viii 0', sc[40:42] == v2b(24, 2) and sc[42:44] == v2b(0, 2) and sc[44:48] == bytes(4))
 L.setst(6, 'B', 96); check('SC in Hash_Output: out_len = 96', L.export()[44:48] == v2b(96, 4))
 for k in HASHES:
     for stage in ('absorb', 'output'):
@@ -226,7 +226,7 @@ for pol, okenc, okdec in ((1, True, False), (2, False, True), (3, True, True)):
 
 section('Ascon-AEAD128 Serialized Content')
 L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=96); sc = L.export()
-check('SC length 64 B, key | state | last_block_len | tag_len, padded; tag_len_p is the AuxInfo', len(sc) == 64 and sc[:16] == KEY and sc[58:60] == v2b(96, 2) and sc[60:] == bytes(4) and L.tag_len_p == 96)
+check('SC length 96 B: last_block_len, padding, rx_tag, key, state, padding; no tag_len (tag_len_p is the AuxInfo)', len(sc) == 96 and sc[:32] == bytes(32) and sc[32:48] == KEY and sc[88:] == bytes(8) and L.tag_len_p == 96)
 for tlp, ok in ((64, True), (128, True), (0, False), (63, False), (129, False)):
     L2 = Locker('ASCON-AEAD128', key=b''); L2.import_(sc, READY, tag_len_p=tlp)
     check('import with tag_len_p=%d -> %s' % (tlp, 'Ready' if ok else 'Invalid (MR12)'), (L2.st == READY and L2.tag_len_p == tlp) if ok else L2.se == SE_INV)
@@ -363,8 +363,8 @@ L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); L.setst(2, 'A'); check('
 L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN, tag_len_p=80); L.setst(13, 'B', 80); full_ok = L.se == 0 and L.st == READY
 check('_Nonce: tag_len Set_Aux_Value as in the base Machine', full_ok)
 L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); L.setst(13, 'B', 80); check('_Nonce: Set_Aux_Value Xs != tag_len_p -> Invalid', L.se == SE_INV)
-L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (60 B) then nonce, padded to 80 B', len(n1) == 80 and n1[60:76] == NN and n1[76:] == bytes(4), len(n1))
-L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: K1 | K2 | state | lbl | tag_len, padded (80 B)', len(m1) == 80 and m1[:16] == KEY and m1[16:32] == K2 and m1[74:76] == v2b(128, 2) and m1[76:] == bytes(4), len(m1))
+L = Locker('ASCON-AEAD128_NONCE', key=KEY, nonce=NN); n1 = L.export(); check('SC _Nonce: base SC (88 B) then nonce, padded to 112 B', len(n1) == 112 and n1[88:104] == NN and n1[104:] == bytes(8), len(n1))
+L = Locker('ASCON-AEAD128_NONCE_MASK', key=KEY, K2=K2); m1 = L.export(); check('SC _Nonce_Mask: header, rx_tag, K1, K2, state, padded (112 B)', len(m1) == 112 and m1[32:48] == KEY and m1[48:64] == K2 and m1[104:] == bytes(8), len(m1))
 for kind, kw, setup, op in (('ASCON-AEAD128_NONCE', dict(nonce=NN), (2, 'A'), 8), ('ASCON-AEAD128_NONCE_MASK', dict(K2=K2), (2, 'C', 0, NN), 7)):
     L = Locker(kind, key=KEY, **kw); L.setst(*setup); L.exec('B', pad128(b'hdr')); L.setst(op, 'A'); L.exec('A', msg(16), out=bytearray(16))
     L2 = Locker(kind, key=b'', **kw); L2.import_(L.export(), L.st); a = bytearray(16); b = bytearray(16)
@@ -431,7 +431,7 @@ L = Locker('ASCON-HASH256'); L.rstrl(0); check('rstrl on an ungated Machine: no 
 SK = {0x0101010101010101: KEY}; c, nb, tg = R.ref_ascon_aead(KEY, NONCE, b'a', b'abc')
 check('SKID-keyed AEAD128 = AEAD with the resolved key', full(Locker('ASCON-AEAD128', skid=0x0101010101010101, sks=SK), (2, 'C', 0, NONCE), b'a', b'abc') == (v2b(c, 3), v2b(tg, 16)))
 check('SKID unresolved -> Invalid', Locker('ASCON-AEAD128', skid=5, sks=SK).se == SE_INV)
-check('SC with SKID: key field holds the 8-byte SKID (64 B)', Locker('ASCON-AEAD128', skid=0x0101010101010101, sks=SK).export()[:8] == v2b(0x0101010101010101, 8))
+sk = Locker('ASCON-AEAD128', skid=0x0101010101010101, sks=SK).export(); check('SC with SKID: Position iv holds the 8-byte SKID (80 B)', len(sk) == 80 and sk[32:40] == v2b(0x0101010101010101, 8))
 k2m = Locker('ASCON-AEAD128_NONCE_MASK', skid=0x0101010101010101, sks={0x0101010101010101: (KEY, K2)})
 c2, nb2, tg2 = R.ref_ascon_aead(KEY, bytes(a ^ b for a, b in zip(NONCE, K2)), b'', b'abc')
 check('SKID _Nonce_Mask: one SKID retrieves K1 and K2', full(k2m, (2, 'C', 0, NONCE), b'', b'abc') == (v2b(c2, 3), v2b(tg2, 16)))

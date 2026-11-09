@@ -181,7 +181,7 @@ section('Provisioning Input and Serialized Content')
 for k in ALL:
     L = Locker(k); sc0 = L.export(); check(k + ' SC length 208 B (1664 bits), Ready all zero', len(sc0) == 208 and sc0 == bytes(208))
 L = Locker('SHA3-256'); L.setst(2, 'A'); L.exec('B', msg(5)); sc = L.export()
-check('SC layout: state | block_base 40 | last_block_len = b | out_len 0', sc[200:202] == v2b(40, 2) and sc[202:204] == v2b(1088, 2) and sc[204:208] == bytes(4))
+check('SC layout: state | block_base 40 | last_block_len 0 | out_len 0', sc[200:202] == v2b(40, 2) and sc[202:204] == v2b(0, 2) and sc[204:208] == bytes(4))
 L.setst(6, 'B', 96); sc = L.export(); check('SC in Hash_Output: out_len = 96, last_block_len = 0', sc[204:208] == v2b(96, 4) and sc[202:204] == bytes(2))
 for k in ('SHA3-384', 'SHAKE256'):
     m = msg(50)

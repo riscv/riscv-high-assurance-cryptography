@@ -2,7 +2,7 @@
 """KAT for the Elliptic Curve Machines (machine type 10): Weierstrass ECDSA/ECDH/SM2, X25519/X448, Ed25519/Ed448.
 Expected values: RFC 6979, RFC 8032 (via OpenSSL), RFC 7748, GM/T 0003.5, CAVP CDH, OpenSSL-generated vectors (ecc_vectors.py).
 Run: cd src && pypy3.12 kat/ecc-kat.py"""
-import sys, os, hashlib, time
+import sys, os, copy, hashlib, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 import ecc_model as M, ecc_vectors as V
@@ -312,10 +312,10 @@ for nm, d, Qb, Z in V.ECDH[:1] + [x for x in V.ECDH if x[0] == 'secp384r1'][:1]:
     check('%s Ready bit 5 (SecondPt -> Generator) with HasSecondPt set -> Invalid' % nm, L.setst(RDY, 'B', 1 << 5) == 'invalid')
     L = EccLocker(nm, ext=1)
     check('%s Ready bit 5 without HasSecondPt has no effect' % nm, L.setst(RDY, 'B', 1 << 5) == 'ok' and not L.invalid)
-    L = EccLocker(nm, ext=1)
-    check('%s provisioning/import with a non-default Generator -> Invalid' % nm, L.import_generator(xy(Qb, W)) == 'invalid')
-    L = EccLocker(nm, ext=1)
-    check('%s provisioning/import with the default Generator admitted' % nm, L.import_generator(L._default_gen()) == 'ok' and not L.invalid)
+    L = EccLocker(nm, ext=1); load(L, S2ND, xy(Qb, W)); m, c = L.export(); I = EccLocker.imported(nm, m, c)
+    check('%s SCC: no Generator (Position ii), SecondPt public right after Signature; import sets the default Generator' % nm,
+          c[L.vb // 8:L.vb // 8 + L.ub // 8] == xy(Qb, W) and L.scc_clear_len1 == -(-L.vb // 128) + -(-L.ub // 128)
+          and bytes(I.Generator) == I._default_gen() and not I.invalid and I.has('second'))
     L = EccLocker(nm); load(L, SSCAL, le(d, W)); load(L, SGEN, xy(Qb, W), 'B'); L.setst(PMUL); r = L.exec_D()
     control('negative (MachineExtension = 0): a peer key in Generator makes Point_Mul write dQ to SecondPt, the gap the variant closes',
             r == 'output' and bytes(L.SecondPt[:W]) == le(int.from_bytes(Z, 'big'), W))
@@ -337,7 +337,10 @@ for nm, d, Qb, Z in V.ECDH[:1]:
     check('%s Form B kl.setst to Set_Generator, non-zero operand -> Invalid' % nm, EccLocker(nm, ext=2).setst(SGEN, 'B', 1) == 'invalid')
     L = EccLocker(nm, ext=2); load(L, S2ND, xy(Qb, W)); L.setst(RDY)
     check('%s Ready bit 5 (SecondPt -> Generator) with HasSecondPt set -> Invalid' % nm, L.setst(RDY, 'B', 1 << 5) == 'invalid')
-    check('%s provisioning/import with a non-default Generator -> Invalid' % nm, EccLocker(nm, ext=2).import_generator(xy(Qb, W)) == 'invalid')
+    L = EccLocker(nm, ext=2); load(L, S2ND, xy(Qb, W)); m, c = L.export(); I = EccLocker.imported(nm, m, c)
+    check('%s SCC: no Generator (Position ii), SecondPt private; import sets the default Generator' % nm,
+          c[L.vb // 8:L.vb // 8 + L.ub // 8] == xy(Qb, W) and L.scc_clear_len1 == -(-L.vb // 128)
+          and bytes(I.Generator) == I._default_gen() and bytes(I.SecondPt) == xy(Qb, W) and not I.invalid)
 L = EccLocker('x25519', policy=0, ext=2); load(L, SSCAL, H('a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4'))
 load(L, S2ND, H('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c')); L.setst(PMUL); L.exec_D()
 check('x25519 sealed: RFC 7748 5.2 vector 1 as a sealed derive source; Form C -> Invalid',
@@ -509,6 +512,126 @@ L = EccLocker('ed25519'); L.setst(S2ND); L.exec_in(pb1); L.setst(SIN); L.exec_in
 check('Ed25519 S + L (non-canonical) -> Failure', L.exec_D() == 'failure')
 # Ed448 RFC 8032 7.4 blank message
 check('Ed448 B(y=...) encoding length 57 bytes, public key length 57', len(ed_pub('ed448', bytes(range(57)))) == 57)
+
+# ------------------------------------------------------------------ 11
+section('SCC export and import: Serialized Content of KLE-ECC and KLE-EdDSA, Metadata validity')
+def rt(L):
+    """export, import into a new locker, re-export: the new locker and its SCC"""
+    m, c = L.export(); I = EccLocker.imported(L.name, m, c, L.rbg); return I, I.export() == (m, c)
+def remeta(L, **kw):
+    m, c = L.export(); f = mdh_unpack(m); f.update(kw); return EccLocker.imported(L.name, mdh_pack(**f), c)
+def spec_len(L):
+    """Content1 size in bytes from the spec formulas (p1, p3, p6, varlen, Positions vii-xiii)"""
+    P, X, me0 = L.policy != 0, L.policy & 1, L.ext == 0
+    p1, p3, p6 = -L.vb % 128, -(1 + me0) * L.ub % 128, -(L.b + P * L.h + X * L.j) % 128
+    varlen = (L.ub + p3) // 8 + P * (L.vb + p1 + L.h) // 8 + X * L.j // 8
+    n = varlen + me0 * L.ub // 8 + L.b // 8 + p6 // 8
+    if L.kind == 'ed': n += (8 + 2040 + 2 * L.b + (1 + X) * 1664 + (0 if L.name == 'ed25519' else 112)) // 8
+    return n
+for nm in WEI + ['x25519', 'x448', 'ed25519', 'ed448']:
+    kind = 'ed' if nm.startswith('ed') else 'mont' if nm.startswith('x') else 'wei'
+    for pol in ((0,) if kind == 'mont' else (1, 2, 3) if kind == 'ed' else (0, 1, 2, 3)):
+        for ext in ((0, 1) if kind == 'ed' else (0, 1, 2)):
+            L = EccLocker(nm, pol, ext=ext); m, c = L.export(); cl = 16 * L.scc_clear_len1
+            pub = (bytes(L.Signature) + bytes(-L.vb % 128 // 8) if pol else b'') + (bytes(L.SecondPt) + bytes(-L.ub % 128 // 8) if ext == 1 else b'')
+            I, same = rt(L)
+            check('%s MachinePolicy %d MachineExtension %d: Content1 = %d bytes, a multiple of 16; SCC_ClearLen1 covers the public fields; round trip'
+                          % (nm, pol, ext, len(c)), len(c) == spec_len(L) and len(c) % 16 == 0 and cl == len(pub) and same and not I.invalid
+                          and bytes(I.Generator) == I._default_gen())
+# field placement: Position order with distinct values (secp256r1, MachineExtension 0, MachinePolicy 3)
+L = EccLocker('secp256r1'); W = L.W; Q = xy(L.C.mul(3, L.C.G), W); G2 = xy(L.C.mul(2, L.C.G), W); sg = le(11, W) + le(12, W)
+load(L, SGEN, G2, 'B'); load(L, S2ND, Q); load(L, SSCAL, le(0x1234, W)); load(L, SHASH, le(0x777, W)); load(L, SIN, sg)
+m, c = L.export()
+check('secp256r1 Content1 = Signature | Generator | SecondPt | Scalar | Hash | RndNum (Positions i-vi, no padding at 256 bits)',
+      c == sg + G2 + Q + le(0x1234, W) + le(0x777, W) + bytes(W))
+I, same = rt(L)
+check('import keeps Generator, SecondPt, Scalar, Hash, Signature and the Has flags', same and bytes(I.Generator) == G2 and I.has('second') and I.has('hash') and I.has('sig'))
+L = EccLocker('ed448'); m, c = L.export(); o = L.vb // 8 + 14
+check('ed448 Position i.a = 112 bits, ii Generator, iii SecondPt, iii.a = 112 bits, iv Scalar at byte %d' % (o + 2 * L.W + 14 - L.W),
+      c[o:o + L.W] == L._default_gen() and len(c) == spec_len(L))
+# Set states: a partial load travels with block_base in AuxInfo[15:8] and resumes
+L = EccLocker('secp384r1'); W = L.W; L.setst(SHASH); L.exec_in(le(0x5a5a, W)[:20])
+m, c = L.export()
+check('Set_Hash partial load: AuxInfo[15:8] = block_base = 20', mdh_get(m, 'AuxInfo') >> 8 == 20 and L.block_base == 20)
+I, same = rt(L); I.exec_in(le(0x5a5a, W)[20:])
+check('imported partial load resumes: Hash complete, HasHash set', same and I.has('hash') and b2v(I.Hash) == 0x5a5a and I.complete)
+L = EccLocker('secp256r1', rbg=rbg_k(5)); load(L, SSCAL, le(0x1234, 32)); load(L, SHASH, le(0x777, 32)); L.setst(SGN); L.exec_D(halt=True)
+I, same = rt(L); I.rbg = rbg_k(9); r = I.exec_D()
+check('halted Sign_Generate (HasRndNum set) exported and imported: resumes with the held RndNum',
+      same and r == 'output' and b2v(drain(I)[:32]) == M.ecdsa_sign(M.Wei('secp256r1'), 0x1234, 0x777, 5)[0])
+L = EccLocker('secp256r1'); load(L, SSCAL, le(7, 32)); L.setst(PMUL); L.exec_D(); L.exec_out(5)
+I, same = rt(L); rest = drain(I)
+check('Output with 5 bytes read: OutputType and block_base travel in the MDH, the rest of the point follows',
+      same and I.outtype == 0 and len(rest) == 59 and rest == xy(L.C.mul(7, L.C.G), 32)[5:])
+L = EccLocker('ed25519'); L.setst(SCTX, 'B', 3); L.exec_in(b'fo'); I, same = rt(L); I.exec_in(b'o')
+check('ed25519 Set_Ctx partial load: ctxlen, ctx and block_base travel; the load completes', same and I.ctxlen == 3 and bytes(I.ctx[:3]) == b'foo' and I.complete)
+# EdDSA: export and import inside each pass, then resume
+def ed_sign_rt(nm, seed, ctx, msg):
+    L = EccLocker(nm); load(L, SSCAL, seed)
+    if ctx: L.setst(SCTX, 'B', len(ctx)); L.exec_in(ctx)
+    for xsel in (0, 1):
+        L.setst(MABS, 'B', xsel); h = len(msg) // 2; L.exec_in(msg[:h])
+        L, ok = rt(L)
+        if not ok: return None
+        L.exec_in(msg[h:])
+    L.setst(SGN); L.exec_D(); return drain(L)
+def ed_verify_rt(nm, ctx, msg, pub, sig):
+    L = EccLocker(nm); L.setst(S2ND); L.exec_in(pub); L.setst(SIN); L.exec_in(sig)
+    if ctx: L.setst(SCTX, 'B', len(ctx)); L.exec_in(ctx)
+    L.setst(MABS, 'B', 2); h = len(msg) // 2; L.exec_in(msg[:h]); L, ok = rt(L); L.exec_in(msg[h:]); L.setst(SVER)
+    return ok and L.exec_D()
+for nm, mode, seed, ctx, msg, pub, sig in V.ED:
+    if mode.endswith('ph'): continue
+    check('%s ctx=%r msg=%r: export/import inside pass 1 and pass 2, resumed signature = vector' % (mode, ctx, msg[:8]), ed_sign_rt(nm, seed, ctx, msg) == sig)
+    check('%s msg=%r: export/import inside the verification pass -> Success' % (mode, msg[:8]), ed_verify_rt(nm, ctx, msg, pub, sig) == 'success')
+nm, mode, seed, ctx, msg, pub, sig = [e for e in V.ED if not e[1].endswith('ph')][0]
+L = EccLocker(nm); load(L, SSCAL, seed); L.setst(MABS, 'B', 0); L.exec_in(msg[:1]); m, c = L.export(); c = bytearray(c); c[-L.HS * 2] ^= 1
+L = EccLocker.imported(nm, m, bytes(c)); L.exec_in(msg[1:]); L.setst(MABS, 'B', 1); L.exec_in(msg); r = L.setst(SGN)
+control('one bit flipped in the imported H state of pass 1: the resumed signing does not give the vector', r == 'invalid' or drain(L) != sig)
+def hpos(L, c, which):
+    """Position xi (H) or xii (H') of an EdDSA Content1"""
+    o = len(c) - (0 if L.name == 'ed25519' else 14) - (1 + (L.policy & 1)) * L.HS + (L.HS if which else 0); return c[o:o + L.HS]
+for nm in ('ed25519', 'ed448'):
+    L = EccLocker(nm); sd = bytes(range(L.W)); load(L, SSCAL, sd); m, c = L.export()
+    check('%s outside Msg_Absorb: Positions xi and xii zero' % nm, not any(hpos(L, c, 0) + hpos(L, c, 1)))
+    L.setst(MABS, 'B', 0); L.exec_in(b'abc'); m, c = L.export(); xi = hpos(L, c, 0)
+    dp = L._dom(0) + L._prefix_s()[1]
+    if nm == 'ed25519':
+        cum = b2v(xi[64 + 2:64 + 2 + 8]); bb = b2v(xi[64:66])
+        check('ed25519 pass 1: Position xi = SHA-512 state | block_base | cumul_len | block, cumul_len counts dom | prefix | M in bits',
+              cum == 8 * len(dp + b'abc') == bb and xi[74:74 + bb // 8] == dp + b'abc' and not any(xi[74 + 128:]))
+    else:
+        bb = b2v(xi[200:202])
+        check('ed448 pass 1: Position xi = SHAKE256 state | block_base, no cumul_len', bb == 8 * len(dp + b'abc') and not any(xi[202:]))
+    check('%s pass 1: HasHashState set, H\' (Position xii) zero, AuxInfo msg_pass = 0' % nm,
+          L.has('rnd') and not any(hpos(L, c, 1)) and mdh_get(m, 'AuxInfo') >> 1 & 3 == 0)
+    L.setst(MABS, 'B', 1); L.exec_in(b'ab'); m, c = L.export()
+    check('%s pass 2: Position xii holds H\' (dom | prefix | M so far), AuxInfo msg_pass = 1' % nm,
+          any(hpos(L, c, 1)) and mdh_get(m, 'AuxInfo') >> 1 & 3 == 1)
+    L2 = copy.deepcopy(L); L2.rstrl(2); m2, c2 = L2.export()
+    check('%s kl.rstrl clearing MachinePolicy[0] in pass 2: no Position xii, HasHashState kept' % nm,
+          len(c2) == len(c) - L.HS and L2.has('rnd') and L2.Hp is None)
+    L.exec_in(b'c'); L.setst(SGN)
+    check('%s after pass 2: Positions xi and xii zero again' % nm, not any(hpos(L, L.export()[1], 0) + hpos(L, L.export()[1], 1)))
+# import Metadata validity
+L = EccLocker('secp256r1')
+check('import: HasRndNum set in Ready -> Invalid', remeta(L, StateExtension=8).invalid)
+L = EccLocker('secp256r1'); load(L, SSCAL, le(3, 32)); load(L, SHASH, le(5, 32)); L.setst(SGN)
+check('import: HasRndNum set in Sign_Generate admitted', not remeta(L, StateExtension=L.flags | 8).invalid)
+L = EccLocker('ed25519')
+check('ed25519 import: HasHashState set outside Msg_Absorb -> Invalid', remeta(L, StateExtension=8).invalid)
+L = EccLocker('ed25519'); load(L, SSCAL, bytes(range(32))); L.setst(MABS, 'B', 0)
+check('ed25519 import: HasHashState clear in Msg_Absorb -> Invalid', remeta(L, StateExtension=L.flags & ~8).invalid)
+check('ed25519 import: Msg_Absorb with msg_pass = 2 (no open pass) -> Invalid', remeta(L, AuxInfo=(L.aux | 2 << 1)).invalid)
+check('ed25519 import: a reserved AuxInfo bit [7:3] set -> Unsupported', remeta(L, AuxInfo=L.aux | 1 << 3).err == SE_UNSUPPORTED)
+check('ed25519 import: MachinePolicy = 0 -> Invalid', remeta(EccLocker('ed25519'), MachinePolicy=0).invalid)
+L = EccLocker('ed25519', ext=1)
+check('ed25519 import: MachineExtension = 2 (no sealed EdDSA) -> Unsupported', remeta(L, MachineExtension=2).err == SE_UNSUPPORTED)
+check('x25519 import: MachinePolicy != 0 -> Invalid', remeta(EccLocker('x25519', 0), MachinePolicy=1).invalid)
+check('secp256r1 import: State Msg_Absorb (an EdDSA State) -> Invalid', remeta(EccLocker('secp256r1'), State=MABS).invalid)
+m, c = EccLocker('secp256r1').export()
+check('secp256r1 import: Content1 one block short -> Invalid', EccLocker.imported('secp256r1', m, c[:-16]).invalid)
+check('secp256r1 import: MachinePolicy 2 -> 3 adds RndNum, so the length no longer matches -> Invalid', remeta(EccLocker('secp256r1', 2), MachinePolicy=3).invalid)
 
 # ------------------------------------------------------------------ done
 info('runtime %.1f s' % (time.time() - T0))
