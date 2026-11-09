@@ -2,7 +2,7 @@
 written from Zkl-ISA-machines.adoc (KLE-hash-functions-MACs-XOFs, KLE-process-VLI, KLE-SHA-3, KLE-KMAC, KLE-Ascon-*).
 
 L = Locker(kind, policy=0, K=b'', S=b'', key=b'', tag_len_p=None);  L.setst(imm, form, xs=0, inp=b'');
-  AEAD: tag_len_p defaults to 128; a value outside 64..128 gives Invalid (MR12).  policy 0 means 3, and 2 for
+  AEAD: tag_len_p defaults to 128; a value other than a multiple of 8 in 64..128 gives Invalid (MR12).  policy 0 means 3, and 2 for
   _NONCE, which admits no other value (MR1): any other policy gives Invalid.
 L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 when the instruction completed)
   Form B: inp = INPUT bytes;  Form C/A output: out = bytearray (window, KLLEN = len(out)); Form A input: inp.
@@ -58,7 +58,7 @@ class Locker:
             self.tag_len_p = 128 if tag_len_p is None else tag_len_p
             if self.var == 'wsn' and policy in (0, 2): self.policy = 2
             elif self.var == 'wsn': bad = True                  # MR1: a preset nonce admits only MachinePolicy 0b10
-            if not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
+            if self.tag_len_p % 8 or not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
         else: raise ValueError(kind)
         self.P = R.keccak_f if self.state_len == 1600 else R.ascon12
         self.st, self.se, self.mdh = READY, 0, 0
@@ -420,7 +420,7 @@ class Locker:
             self.s = b2v(sc[o:o + 40]); self.lbl = b2v(sc[o + 40:o + 42]); self.tag_len = b2v(sc[o + 42:o + 44])
             self.tag_len_p = 128 if tag_len_p is None else tag_len_p
             if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
-            if not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
+            if self.tag_len_p % 8 or not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
             n = 200 if self.state_len == 1600 else 40
             self.s = b2v(sc[:n]); self.bb = b2v(sc[n:n + 2]); self.lbl = b2v(sc[n + 2:n + 4]); v = b2v(sc[n + 4:n + 8])

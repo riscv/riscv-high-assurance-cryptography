@@ -182,7 +182,7 @@ L = Locker('ASCON-AEAD128', key=KEY); L.setst(2, 'C', inp=NONCE); L.setst(8, 'A'
 check('empty message verify of a wrong tag -> Failure', L.st == FAILURE)
 
 section('Ascon-AEAD128 tag length and rules')
-for tl in (64, 72, 100, 128):
+for tl in (64, 72, 104, 128):
     pt = msg(20); c, nb, tg = R.ref_ascon_aead(KEY, NONCE, b'', pt)
     L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=tl); L.setst(13, 'B', tl); ct, t = enc(L, b'', pt)
     check('tag_len_p=%d: tag = low bits of the 128-bit tag, rest cleared' % tl, b2v(t) == tg & mask(tl) and ct == v2b(c, 20))
@@ -194,7 +194,7 @@ for tl in (63, 129, 1):
 for tlp, xs in ((128, 96), (128, 64), (96, 128), (96, 64), (64, 72)):
     L = Locker('ASCON-AEAD128', key=KEY, tag_len_p=tlp); L.setst(13, 'B', xs); check('tag_len_p=%d: Set_Aux_Value Xs=%d -> Invalid (MR12)' % (tlp, xs), L.se == SE_INV)
 for kind, kw in (('ASCON-AEAD128', {}), ('ASCON-AEAD128_NONCE', dict(nonce=bytes(range(50, 66)))), ('ASCON-AEAD128_NONCE_MASK', dict(K2=bytes(16)))):
-    for tlp in (0, 63, 129, 256):
+    for tlp in (0, 63, 100, 129, 256):
         check('%s tag_len_p=%d: provisioning completes into Invalid (MR12)' % (kind, tlp), Locker(kind, key=KEY, tag_len_p=tlp, **kw).se == SE_INV)
 pt = msg(20); L = Locker('ASCON-AEAD128', key=KEY); ct, t = enc(L, b'', pt)
 L = Locker('ASCON-AEAD128', key=KEY); dec(L, b'', ct, 160, t[:8]); check('tag_len_p=128: a 64-bit tag -> Invalid (KLLEN < tag_len)', L.se == SE_INV)

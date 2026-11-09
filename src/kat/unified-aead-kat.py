@@ -137,6 +137,43 @@ for f in FAMILIES:
         check(f + ' counts meaningful bits only', m.ad_len == 424 and m.payload_len == 552 and m.replay_len == (552 if m.two_pt else 0))
         m = restore(m); m.setst(READY); check(f + ' Ready resets lengths and flags', not (m.ad_len | m.payload_len | m.replay_len | m.flags))
 
+section('Routines of KLE-pseudocode-unified-AEAD-final: eight blocks per kl.exec, final piece = length mod 128')
+def listing_drive(m, n, ad, data, tag=None):
+    """Instruction sequence of the software chapter's unified AEAD routines (byte-length inputs)."""
+    def full_blocks(form, buf):              # absorb_full_blocks / crypt_full_blocks
+        out, full = b'', len(buf) // 16 * 16
+        for i in range(0, full, 128):
+            chunk = buf[i:min(i + 128, full)]
+            y = m.exec(form, b2v(chunk), len(chunk) * 8)
+            if form == 'A': out += v2b(y, len(chunk))
+        return out, buf[full:]
+    def final(st, form, tail):               # AD_FINAL / PREPASS_FINAL / DATA_FINAL
+        m.setst(st, 'B', len(tail) * 8)
+        return v2b(m.exec(form, b2v(tail), len(tail) * 8), len(tail)) if tail else b''
+    m.setst(SAV, 'B', len(n) * 8)            # setup_nonce
+    for i in range(0, len(n), 128): m.exec('B', b2v(n[i:i + 128]), len(n[i:i + 128]) * 8)
+    if tag is not None: m.setst(SAV2, 'B', m.tag_len_p); m.exec('B', b2v(tag), m.tag_len_p)
+    final(LAST, 'B', full_blocks('B', ad)[1])
+    if tag is None and m.two_pt:
+        m.setst(PRE); final(PRELAST, 'B', full_blocks('B', data)[1]); m.exec('C', kllen=m.tag_len_p)
+    else: m.setst(ENC if tag is None else DEC)
+    out, tail = full_blocks('A', data)
+    out += final(ELB if tag is None else DLB, 'A', tail)
+    if tag is not None: m.exec('D'); return out, m.st == SUCCESS
+    return out, v2b(m.exec('C', kllen=m.tag_len_p), 16)
+for f in FAMILIES:
+    good = []
+    for al in (0, 15, 16, 128, 130, 144):
+        for pl in (0, 15, 16, 32, 128, 129, 144, 300):
+            ad, pt, n = msg(al), msg(pl, 2), nonce(f)
+            c, t = listing_drive(model(f), n, ad, pt)
+            p, ok = listing_drive(model(f), n, ad, c, t)
+            good.append((c, t) == reference(f, n, ad, pt) and p == pt and ok)
+    check(f + ': 48 AD/PT length pairs through the listing routines', all(good))
+n, ad, pt = msg(200, 5), msg(40), msg(50, 2)     # GCM IV of 1600 bits: two Set_Aux_Value kl.exec
+c, t = listing_drive(model('GCM'), n, ad, pt); p, ok = listing_drive(model('GCM'), n, ad, c, t)
+check('GCM long IV through setup_nonce in 128-byte pieces', (c, t) == reference('GCM', n, ad, pt) and p == pt and ok)
+
 section('Nonce variants and nonce-length handling')
 for f in ('GCM', 'OCB', 'Ascon'):
     n, ad, pt = nonce(f), msg(17), msg(33, 2)
@@ -186,12 +223,14 @@ for f, cipher in (('GCM', 'AES128'), ('GCM', 'AES192'), ('GCM', 'AES256'), ('GCM
         m = UnifiedAEAD(f, key, cipher=cipher, preset=preset, tag_len_p=tag_len)
         p, ok = run_aead(m, None, ad, c, t)
         check(f + '/' + cipher + ' preset nonce tag length ' + str(tag_len), ok and p == pt and m.st == SUCCESS)
-for tag_len in range(64, 129):
+for tag_len in range(64, 129, 8):
     n, ad, pt = nonce('Ascon'), msg(17), msg(33, 2)
     c, t = reference('Ascon', n, ad, pt, tag_len)
     m = UnifiedAEAD('Ascon', KEY, preset=n, tag_len_p=tag_len)
     p, ok = run_aead(m, None, ad, c, t)
     check('Ascon preset nonce tag length ' + str(tag_len), ok and p == pt)
+for tag_len in (65, 100, 127):
+    check('Ascon tag length %d is not admitted' % tag_len, UnifiedAEAD('Ascon', KEY, tag_len_p=tag_len).st == INV)
 
 section('Invalid sequencing, forms, lengths and direction policies')
 for f in FAMILIES:
@@ -217,6 +256,36 @@ for f in FAMILIES:
     check(f + ' disabled decryption invalidates tag load', m.st == INV)
     m = setup(f); m.setst(LAST, 'B', 129)
     check(f + ' oversized final piece invalidates', m.st == INV)
+    # Interface path: Set_Tag_Value only from Hash_Absorb, before any AD, once, with Xs = tag_len_p
+    m = model(f); m.setst(SAV2, 'B', m.tag_len_p)
+    check(f + ' tag load from Ready invalidates', m.st == INV)
+    m = model(f); m.setst(SAV, 'B', len(nonce(f)) * 8); m.setst(SAV2, 'B', m.tag_len_p)
+    check(f + ' tag load before nonce setup completes invalidates', m.st == INV)
+    m = setup(f); m.exec('B', 0, 128); m.setst(SAV2, 'B', m.tag_len_p)
+    check(f + ' tag load after AD invalidates', m.st == INV)
+    m = setup(f, bytes(16)); m.setst(SAV2, 'B', m.tag_len_p)
+    check(f + ' second tag load invalidates', m.st == INV)
+    m = setup(f); m.setst(SAV2, 'B', m.tag_len_p); m.setst(SAV2, 'B', m.tag_len_p)
+    check(f + ' same-State tag load invalidates', m.st == INV)
+    n = nonce(f); m = model(f); m.setst(SAV, 'B', len(n) * 8); m.setst(SAV, 'B', len(n) * 8)
+    m.exec('B', b2v(n), len(n) * 8); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC)
+    check(f + ' same-State nonce kl.setst restarts the load', m.st in (PRE, ENC))
+    m = setup(f); m.setst(SAV2, 'B', m.tag_len_p - 8 if m.tag_len_p > 64 else 72)
+    check(f + ' tag load with Xs != tag_len_p invalidates', m.st == INV)
+    # Empty final piece: Form A bypass of the last-block State
+    n, ad, pt = nonce(f), msg(16, 3), msg(32, 4)
+    c, t = reference(f, n, ad, pt)
+    m = setup(f); m.exec('B', b2v(ad), 128); m.setst(LAST, 'B', 0)
+    if m.two_pt:
+        m.setst(PRE); m.exec('B', b2v(pt), 256); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
+    else: m.setst(ENC)
+    out = m.exec('A', b2v(pt), 256); m.setst(ETF); tag = m.exec('C', kllen=128)
+    check(f + ' Form A bypass into Enc_Tag_Finalize', m.st == SUCCESS and (v2b(out, 32), v2b(tag, 16)) == (c, t))
+    m = setup(f, t); m.exec('B', b2v(ad), 128); m.setst(LAST, 'B', 0); m.setst(DEC)
+    out = m.exec('A', b2v(c), 256); m.setst(DTF); m.exec('D', 0)
+    check(f + ' Form A bypass into Dec_Tag_Finalize', m.st == SUCCESS and v2b(out, 32) == pt)
+    m = setup(f, t); m.setst(LAST, 'B', 0); m.setst(DEC); m.setst(DTF, 'B', 0)
+    check(f + ' Form B bypass into Dec_Tag_Finalize invalidates', m.st == INV)
     if f != 'Ascon':
         m = setup(f); m.setst(LAST, 'B', 7)
         check(f + ' non-byte message length rejected, not rounded', m.st == INV)

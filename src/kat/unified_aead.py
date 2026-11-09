@@ -62,7 +62,7 @@ class UnifiedAEAD(Base):
     def tlps(self):
         if self.family == 'GCM': return (64, 96, 104, 112, 120, 128)
         if self.family == 'OCB': return (64, 96, 128)
-        if self.family == 'Ascon': return tuple(range(64, 129))
+        if self.family == 'Ascon': return tuple(range(64, 129, 8))
         return (128,)
 
     def getinfo(self):
