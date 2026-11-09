@@ -64,11 +64,12 @@ def setup(f, tag=None, **kw):
 
 
 def restore(m):
-    sc, st = m.export(), m.st
+    sc, st, machine_use = m.export(), m.st, m.machine_use
     other = UnifiedAEAD(m.family, KEY, policy=m.policy, tag_len_p=m.tag_len_p,
                         cipher=m.CIPHER, preset=m.preset, mask_key=m.mask_key)
-    other.import_(sc, st)
-    check(m.family + ' raw Content round trip, State ' + str(st), other.st == st and other.export() == sc)
+    other.import_(sc, st, machine_use)
+    check(m.family + ' raw Content and MachineUse round trip, State ' + str(st),
+          other.st == st and other.machine_use == machine_use and other.export() == sc)
     return other
 
 
@@ -159,7 +160,7 @@ m = model('GCM'); n = msg(33); m.setst(SAV, 'B', 264)
 m.exec('B', b2v(n), 256, halt_at=16); m = restore(m)
 m.exec('B', b2v(n), 256, klstart=16); m = restore(m)
 m.exec('B', b2v(n[32:]), 8)
-check('GCM IV load resumes across instructions and Content import', m.st == ABSORB and m.nonce_done == 264)
+check('GCM IV load resumes across instructions and Content import', m.st == ABSORB and m.nonce_progress == 264)
 for nb in (6, 7, 8, 95, 119, 120):
     bits = (1 << nb) - 3; nv = b2v(U.nonce_bytes(bits, nb)); m = model('OCB')
     c, t = run_aead(m, (nv, nb), msg(17), msg(33, 2))
@@ -252,11 +253,12 @@ for f, limit in (('GCM', (1 << 39) - 256), ('GCM-SIV', 1 << 39), ('OCB', 1 << 55
     m.payload_len = limit; m.exec('B' if m.two_pt else 'A', 0, 128)
     check(f + ' message-length limit enforced', m.st == INV)
 
-section('SCC authenticates public lengths; raw Content checks reject malformed headers')
+section('SCC authenticates public lengths and MachineUse flags; raw Content checks reject malformed headers')
 for f in FAMILIES:
     m = setup(f); m.exec('B', b2v(msg(32)), 256); sc = m.export()
     blocks = [b2v(sc[i:i + 16]) for i in range(0, len(sc), 16)]
-    mdh = mdh_pack(Machine=7, MachineExtension=0, MachinePolicy=3, State=m.st, SCProtection=1)
+    mdh = mdh_pack(Machine=7, MachineExtension=0, MachinePolicy=3, State=m.st, SCProtection=1,
+                   MachineUse=m.machine_use)
     siv, encrypted = scc_encrypt([mdh] + blocks[:2], 0, blocks[2:], b2v(msg(32, 9)))
     ok, decoded = scc_decrypt([mdh] + blocks[:2], 0, siv, encrypted, b2v(msg(32, 9)), nclear=2)
     check(f + ' SCC public prefix and private suffix round trip', ok and decoded == blocks[2:])
@@ -264,6 +266,9 @@ for f in FAMILIES:
         dirty = blocks[:2]; dirty[index] ^= 1
         ok, _ = scc_decrypt([mdh] + dirty, 0, siv, encrypted, b2v(msg(32, 9)), nclear=2)
         check(f + ' SCC authenticates public block ' + str(index), not ok)
+    changed_mdh = mdh ^ (1 << 48)
+    ok, _ = scc_decrypt([changed_mdh] + blocks[:2], 0, siv, encrypted, b2v(msg(32, 9)), nclear=2)
+    check(f + ' SCC authenticates MachineUse flags', not ok)
     changed = bytearray(sc); changed[30] = 1
     m.import_(changed, m.st); check(f + ' nonzero reserved header rejected', m.st == INV)
 

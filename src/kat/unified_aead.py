@@ -1,8 +1,9 @@
 """Unified AEAD protocol; reuse the existing cryptographic cores.
 
 The instruction interface uses aead_model's bit-valued operands.  The common
-driver below uses no algorithm IDs.  Raw Content import assumes SCC authentication;
-the KAT separately checks authentication of the public counter prefix.
+driver below uses no algorithm IDs. Raw Content import assumes SCC authentication;
+the KAT separately checks authentication of the public counter prefix and MDH
+`MachineUse` flags.
 """
 import hmac
 
@@ -14,7 +15,7 @@ from sponge_model import Locker
 
 PRE, PRELAST = 17, 18
 HAS_NONCE, HAS_TAG, AD_CLOSED, PRE_CLOSED, SIV_ISSUED = 1, 2, 4, 8, 16
-HEADER_WIDTHS = (64, 64, 64, 16, 16, 8, 8, 16)
+HEADER_WIDTHS = (64, 64, 64, 16, 16, 8, 24)
 
 
 class UnifiedAEAD(Base):
@@ -52,6 +53,7 @@ class UnifiedAEAD(Base):
         if preset is not None and family == 'OCB' and not 6 <= preset[1] <= 120:
             raise ValueError('preset OCB nonce length outside [6,120]')
         self.family, self.CIPHER, self.preset, self.mask_key = family, cipher, preset, mask_key
+        self.machine_use = 0
         self.DEC_ONLY = preset is not None
         self.NOKEYDER = self.DEC_ONLY or mask_key is not None
         self.glog, self.two_pt = (0 if family == 'Ascon' else 3), family == 'GCM-SIV'
@@ -67,9 +69,18 @@ class UnifiedAEAD(Base):
         if self.st == INV: return 0
         return self.glog | int(self.two_pt) << 4
 
+    @property
+    def flags(self):
+        return self.machine_use & 0x1f
+
+    @flags.setter
+    def flags(self, value):
+        self.machine_use = (self.machine_use & ~0x1f) | value
+
     def _ready(self):
         self.ad_len = self.payload_len = self.replay_len = 0
-        self.nonce_len = self.nonce_done = self.lbl = self.flags = 0
+        self.nonce_len = self.nonce_progress = self.lbl = 0
+        self.machine_use = 0
         self.received_tag = self.ad_hash = 0
         self.klstart = 0
         if self.family == 'GCM':
@@ -87,7 +98,8 @@ class UnifiedAEAD(Base):
         super()._fail()
         self.core = self.mask_key = self.preset = None
         self.ad_len = self.payload_len = self.replay_len = self.received_tag = self.ad_hash = 0
-        self.nonce_len = self.nonce_done = self.lbl = self.flags = 0
+        self.nonce_len = self.nonce_progress = self.lbl = 0
+        self.machine_use = 0
 
     def _noexec(self, st): return st in (LAST, PRELAST, ELB, DLB) and self.lbl == 0
 
@@ -117,7 +129,7 @@ class UnifiedAEAD(Base):
                 need(not self.DEC_ONLY and cur in (READY, SAV) and self._formok('B', form, xs, inp))
                 need(8 <= xs <= 8192 and xs % 8 == 0 if self.family == 'GCM' else
                      xs == 96 if self.family == 'GCM-SIV' else 6 <= xs <= 120 if self.family == 'OCB' else xs == 128)
-                self.nonce_len, self.nonce_done, self.flags = xs, 0, 0
+                self.nonce_len, self.nonce_progress, self.flags = xs, 0, 0
                 if self.family == 'GCM': self.core.setst(SAV, 'B', xs)
             elif st == ABSORB:
                 need(self.DEC_ONLY and cur == READY and form == 'A'); self._setup()
@@ -231,13 +243,13 @@ class UnifiedAEAD(Base):
             if self.family == 'GCM':
                 self.core.exec('B', inp, kllen, klstart, halt_at)
                 need(self.core.st != INV)
-                self.nonce_done = self.nonce_len if self.core.st == ABSORB else self.core.cumul
+                self.nonce_progress = self.nonce_len if self.core.st == ABSORB else self.core.cumul
                 self.klstart = self.core.klstart
-                if self.nonce_done != self.nonce_len: return 0
+                if self.nonce_progress != self.nonce_len: return 0
                 self.flags |= HAS_NONCE
             else:
                 need(kllen is not None and kllen >= (self.nonce_len + 7) // 8 * 8 and klstart == 0)
-                self._setup(inp); self.nonce_done = self.nonce_len
+                self._setup(inp); self.nonce_progress = self.nonce_len
             self.st = ABSORB; return 0
         if st == SAV2:
             need(kllen is not None and kllen >= self.tag_len_p and klstart == 0)
@@ -269,20 +281,21 @@ class UnifiedAEAD(Base):
     def export(self):
         need(self.st != INV)
         header = self.pack((self.ad_len, 64), (self.payload_len, 64), (self.replay_len, 64),
-                           (self.nonce_len, 16), (self.nonce_done, 16), (self.lbl, 8), (self.flags, 8), (0, 16))[0]
+                           (self.nonce_len, 16), (self.nonce_progress, 16), (self.lbl, 8), (0, 24))[0]
         if self.family == 'Ascon': sc = self.core.export()
         else:
             v, w = self.core.export(); sc = v2b(v, (w + 127) // 128 * 16)
         return v2b(header, 32) + v2b(self.received_tag, 16) + v2b(self.ad_hash, 16) + sc
 
-    def import_(self, sc, st):
-        """Restore authenticated Content into a locker with the same metadata."""
+    def import_(self, sc, st, machine_use=0):
+        """Restore authenticated Content and MachineUse into a locker."""
         if self.st == INV: return
         try:
             need(len(sc) == len(self.export()))
             fields = self.unpack(b2v(sc[:32]), HEADER_WIDTHS)
-            self.ad_len, self.payload_len, self.replay_len, self.nonce_len, self.nonce_done, self.lbl, self.flags, reserved = fields
-            need(reserved == 0 and self.flags & ~31 == 0 and self.nonce_done <= self.nonce_len
+            self.ad_len, self.payload_len, self.replay_len, self.nonce_len, self.nonce_progress, self.lbl, reserved = fields
+            self.machine_use = machine_use
+            need(reserved == 0 and machine_use >> 14 == 0 and self.nonce_progress <= self.nonce_len
                  and self.lbl <= 128 and self.lbl % (1 << self.glog) == 0 and self.replay_len <= self.payload_len)
             need(st in (READY, SAV, SAV2, ABSORB, LAST, PRE, PRELAST, ENC, DEC, ELB, DLB, ETF, DTF, SUCCESS, FAILURE))
             need(self.two_pt or st not in (PRE, PRELAST) and not self.flags & (PRE_CLOSED | SIV_ISSUED))
