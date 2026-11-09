@@ -23,7 +23,7 @@ class KLE2(KLE):
         KLE.__init__(s, *a, **kw)
         s.zklio = False; s.kliobuflen = 0; s.kliobuftop = 0; s.iobuf = bytearray(256)
         s.siv = s.impqual = s.siv2 = 0; s.fmt_min_prot = 0; s.vext = True; s.csk_hardwired = s.csk_method in (3, 4); s.debug = False; s.debug_auth = False; s.rbg_dead = False; s.rbg_slow = False; s.persist = False; s.uses_rbg = True
-        s.kls = 1; s.priv = 'M'; s.stateen = True; s.fatal = False; s.lstat = [1] * 32; s.kleemu = False; s._exm = False
+        s.kls = 1; s.priv = 'M'; s.stateen = True; s.fatal = False; s.lstat = [1] * 32; s.kleemu = False
         s.maxiobuf_reset = s.maxiobuf = 256
     # ---- privileged gates (<<KLE-KLS-field-in-mstatus>>, <<KLE-CSR-llockerstatus>>, <<KLE-exception-codes>>)
     def _pre1(s):
@@ -33,7 +33,7 @@ class KLE2(KLE):
         s._pre1(); KLE.common(s)
     def tgt(s, kd, r):
         k = KLE.tgt(s, kd, r)
-        if k is not None and not s._exm: s._off(k)
+        if k is not None: s._off(k)
         return k
     def _off(s, k):
         if s.priv != 'M' and s.lstat[k] == 0: raise Trap('locker_off')
@@ -53,14 +53,11 @@ class KLE2(KLE):
     def getbt(s): s._iob(); return s.kliobuftop
     def setbl(s, v): s._iob(); s.w_kliobuflen(v)
     def setbt(s, v): s._iob(); s.w_kliobuftop(v)
-    def clear(s, kd, r=0):
-        s._exm = True
-        try: return KLE.clear(s, kd, r)
-        finally: s._exm = False
-    def mgmt(s, kd, immed, r=0, form='C', md=0):
-        s._exm = immed in (56, 58)
-        try: return KLE2._mgmt(s, kd, immed, r, form, md)
-        finally: s._exm = False
+    def mgmt(s, kd, immed, r=0, form='C', md=0): return KLE2._mgmt(s, kd, immed, r, form, md)
+    def clearall(s):            # accesses every locker: an Off field raises locker-Off, never becomes Dirty
+        s.common()
+        for k in range(32): s._off(k)
+        return KLE.clearall(s)
     def clone(s, d, src):
         s.common(); d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
         if d != src and d != NONE and src != NONE: s._off(src); s._off(d)      # neither access exempt: trap before clearing Kd
