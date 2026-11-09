@@ -344,7 +344,8 @@ Whether zero is admissible depends on the Machine.
 --
 
 [[KLE-MGR-tag-verify,MR12]]MR12:: _Verification of a tag._
-A Machine that verifies a tag or a MAC without disclosing the value it computes does so in constant time, and transitions to _Success_ if the verification succeeds and to _Failure_ otherwise (Rule <<KLE-MGR-config-data-error>>).
+A Machine that verifies a tag or a MAC without disclosing the value it computes compares that value to the expected value with <<Zkl-ISA-unpriv.adoc#KLE-def-DIEL>>, so the comparison reveals only its outcome, not where the values differ.
+It transitions to _Success_ if the verification succeeds and to _Failure_ otherwise (Rule <<KLE-MGR-config-data-error>>).
 The instruction that provides the tag or MAC to verify performs the verification. It is:
 +
 --
@@ -1269,9 +1270,9 @@ Invoked by the Form B `kl.setst` with auxiliary operand `Xs` that enters a final
 . `tag_len` {leftarrow} `min(Xs, cap)`, or `Xs` where `cap` is `None`, which must equal `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
 . Any other `Xs` transitions the locker to Error State _Invalid_.
 
-`VERIFY_TAG(expected, len)`, with `len` = `tag_len` where the invocation omits it, is invoked by the single Form B `kl.exec` that verifies a tag or MAC (Rule <<KLE-MGR-tag-verify>>):
+`VERIFY_TAG(computed, len)`, with `len` = `tag_len` where the invocation omits it, is invoked by the single Form B `kl.exec` that verifies a tag or MAC (Rule <<KLE-MGR-tag-verify>>):
 
-. It verifies `INPUT[len-1:0]` against `expected[len-1:0]`, in constant time with the outcomes of Rule <<KLE-MGR-tag-verify>>.
+. It verifies `INPUT[len-1:0]` against `computed[len-1:0]`, with the outcomes of Rule <<KLE-MGR-tag-verify>>.
 . It consumes a value of fixed width `len` from `INPUT` under Rule <<KLE-MGR-fixed-width-input>>.
 
 
@@ -2087,7 +2088,7 @@ With `last_block_len` nonzero, that `kl.setst` transitions the locker to Error S
    It performs `OUTPUT <- trunc(checksum_P, tag_len)`, and the locker transitions to _Success_.
    A `KLLEN` smaller than `tag_len` violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
 
-** In State _Hash_Verify_, a single Form B `kl.exec` completes decryption: `VERIFY_TAG(checksum_P)` (<<KLE-op-verify-tag>>) compares the `tag_len` least significant bits of `INPUT` with those of `checksum_P`, with the `tag_len` set on entering _Hash_Absorb_.
+** In State _Hash_Verify_, a single Form B `kl.exec` completes decryption: `VERIFY_TAG(checksum_P)` (<<KLE-op-verify-tag>>) compares the `tag_len` least significant bits of `INPUT` to those of `checksum_P`, with the `tag_len` set on entering _Hash_Absorb_.
 
 //
 
@@ -2302,7 +2303,7 @@ A `kl.exec` with `absorbed_all` = `true` transitions the locker to Error State _
 ** A Form B `kl.setst` with immediate `kl_state_hash_verify` enters _Hash_Verify_ by invoking `SET_TAG_LEN(b, 64)` (<<KLE-op-verify-tag>>).
 With `absorbed_all` = `false`, the `kl.setst` transitions the locker to Error State _Invalid_.
 
-** In State _Hash_Verify_, a single Form B `kl.exec` verifies the tag by invoking `VERIFY_TAG(hash)` (<<KLE-op-verify-tag>>), which compares `INPUT[tag_len-1:0]` with `hash[tag_len-1:0]`, the first `tag_len`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2.
+** In State _Hash_Verify_, a single Form B `kl.exec` verifies the tag by invoking `VERIFY_TAG(hash)` (<<KLE-op-verify-tag>>), which compares `INPUT[tag_len-1:0]` to `hash[tag_len-1:0]`, the first `tag_len`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2.
 
 //
 
@@ -2920,7 +2921,7 @@ A non-zero `Xs` of a Form B `kl.setst` into _Hash_Output_ is at least 64 (<<KLE-
    . the Form B `kl.setst` that enters State _Hash_Verify_ invokes `SET_TAG_LEN(t, 64)` (<<KLE-op-verify-tag>>):
      `tag_len` {leftarrow} `min(Xs, t)`, which must equal `tag_len_p`;
    . in State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state[tag_offset+t-1 : tag_offset])` (<<KLE-op-verify-tag>>):
-     it compares `INPUT[tag_len-1:0]` with `state[tag_offset+tag_len-1 : tag_offset]`, the first `tag_len`/8 bytes of the HMAC.
+     it compares `INPUT[tag_len-1:0]` to `state[tag_offset+tag_len-1 : tag_offset]`, the first `tag_len`/8 bytes of the HMAC.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3175,7 +3176,7 @@ a Form A `kl.setst`, or `Xs` = 0, sets `L` {leftarrow} 0, for an unbounded outpu
 * with `L` = 0, `KMACXOF128` and `KMACXOF256` squeeze arbitrarily many bits and never transition to _Success_.
 --
 
- ** In State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state, L)` (<<KLE-op-verify-tag>>): it compares `INPUT[L-1:0]` with `state[L-1:0]`.
+ ** In State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state, L)` (<<KLE-op-verify-tag>>): it compares `INPUT[L-1:0]` to `state[L-1:0]`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3398,7 +3399,7 @@ It performs:
 --
 
 ** In State _Hash_Verify_, which the decryption path enters by itself (Rule <<KLE-MGR-tag-verify>>), a single Form B `kl.exec` performs
-   `VERIFY_TAG(ASCON_TAG())` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len-1:0]` with the computed tag in constant time, and transitions the locker to _Success_ if they match and to _Failure_ otherwise.
+   `VERIFY_TAG(ASCON_TAG())` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len-1:0]` to the computed tag, and transitions the locker to _Success_ if they match and to _Failure_ otherwise.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -4206,7 +4207,8 @@ transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-
     validity: `X25519` and `X448` are defined for every `b`-bit string.
   . `R` {leftarrow} `X25519(Scalar, P)`, resp. `X448(Scalar, P)`.
   . If `R` is the all-zero string, the locker transitions to _Failure_, and `SecondPt` and `HasSecondPt` are left
-    unchanged. The check is made in constant time; cite:[RFC7748] {sect}6 makes it optional.
+    unchanged; cite:[RFC7748] {sect}6 makes this check optional.
+    By <<Zkl-ISA-unpriv.adoc#KLE-def-DIEL>>, the check reveals only whether `R` is all zero.
   . Otherwise `SecondPt` {leftarrow} `R`, `HasSecondPt` is set, `OutputType` {leftarrow} _shared secret_ if `P` is
     `SecondPt`, and _point_ otherwise, and the locker transitions to _Output_.
 
@@ -4292,7 +4294,8 @@ In addition to the fields of <<KLE-ECC>>:
   pass 1, 1 for signing pass 2, and 3 for the verification pass. In any other State it records the last completed pass:
   0 for none (also once _Sign_Generate_ has used the passes), 1 for signing pass 1, 2 for signing pass 2, and 3 for the verification pass.
 * `k'`: `b` bits, `bin(int(H(dom {vvert} R {vvert} A {vvert} M)) mod L, b)`, the whole hash read as a little-endian integer and
-  reduced modulo `L`, computed by signing pass 2 or by the verification pass, and zero otherwise; it is always below `L`. It is not secret: anyone holding `R`, `A` and `M` can compute it.
+  reduced modulo `L`, computed by signing pass 2 or by the verification pass, and zero otherwise; it is always below `L`.
+  Anyone holding `R`, `A`, `ctx` and `M` can compute it.
 * `r`: `b` bits, the secret scalar produced by the first signing pass, reduced modulo the
   group order `L`.
 
@@ -4503,7 +4506,7 @@ A `kl.setst` that enters or leaves _Msg_Absorb_ is long-running; whether it is r
 ** a `Signature` substituted after the verification pass, to forge against the `k'` already computed.
 * The verification pass records 3, open or completed:
 ** while open, 3 tells it from signing pass 1, so that the finalization, also after an export and import, is that of the open pass;
-** once completed, 3 differs from the 2 of signing pass 2; otherwise _Sign_Generate_ would compute `S` from the public `k'` of the verification pass and the zero `r` that entering _Ready_ leaves, and reveal `s`.
+** once completed, 3 differs from the 2 of signing pass 2; otherwise _Sign_Generate_ would compute `S` from the `k'` of the verification pass, which anyone holding `R`, `A`, `ctx` and `M` can compute, and the zero `r` that entering _Ready_ leaves, and reveal `s`.
 * A completed signing pass 1 records 1, so that neither _Sign_Generate_ nor _Sign_Verify_ uses a `k'` never computed.
 * In pre-hash mode `msg_pass` plays no role: `PH(M)` in the `Hash` field feeds both hashes.
 ====
@@ -4613,7 +4616,7 @@ The procedures implemented by ML-KEM are taken directly from cite:[nist-fips-203
 
 The loop of `SampleNTT` (cite:[nist-fips-203] Algorithm 7) iterates an indeterminate number of times (cite:[nist-fips-203] Appendix B).
 An implementation bounds it by an implementation-defined limit of at least 280 iterations (cite:[nist-fips-203] Appendix B, Table 4), which a correct execution reaches with a probability of at most 2^-261^.
-As in cite:[nist-fips-203], the execution time need not be independent of the number of iterations (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+The execution time may depend on its number of iterations, which is a <<Zkl-ISA-unpriv.adoc#KLE-def-secrets,public value>>.
 When the limit is reached, the operation ends without output: it destroys its intermediate values and any value drawn for it, and zeroes _MachineUse_.
 The state machine then transitions to _Failure_.
 
@@ -4935,21 +4938,25 @@ that of cite:[nist-fips-204] Table 3: 814 iterations of the loop of `ML-DSA.Sign
 of XOF output, for `RejBoundedPoly`; 298 iterations, or 894 bytes of XOF output, for `RejNTTPoly`; and, for
 `SampleInBall`, 121 iterations of the while loop of its step 8 within one iteration of its for loop, or 221 bytes of XOF
 output for the whole call. A correct execution reaches these limits with probability of about 2^-256^ or less
-(cite:[nist-fips-204] Appendix C). As in cite:[nist-fips-204], the execution time need not be independent of the number of iterations
-(<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+(cite:[nist-fips-204] Appendix C). As cite:[nist-fips-204] allows, the execution time may depend on the number of iterations,
+which is a <<Zkl-ISA-unpriv.adoc#KLE-def-secrets,public value>>.
 A limit reached ends the operation in _Failure_, without output: its intermediate values and the values drawn for it, `xi` and `rnd` included, are destroyed, and
 _MachineUse_ is zeroed.
 
 NOTE: cite:[nist-fips-204] Appendix C recommends not bounding these loops; KLE requires the bound, so that every
 operation ends in bounded time, and the limits of Table 3 are reached by a correct execution with negligible
 probability.
-//
-// NOTE: With deterministic signing, the execution time may reveal information about μ, but not about the private key (cite:[nist-fips-204] {sect}3.6.1, footnote 3); hedged signing does not.
-//
-// NOTE: The challenge `c` and response `z` of a rejected iteration of `ML-DSA.Sign_internal`, and which check rejected it,
-// reveal the private key (cite:[DBLP-journals-tches-ZhouWSY25], cite:[DBLP-conf-host-KarabulutAA21],
-// cite:[DBLP-conf-sacrypt-UlitzschMTS22]); hence the progress of _Sign_Generate_ reveals at most the number of completed
-// iterations, as the execution time does.
+
+NOTE: With deterministic signing, `Hedged` clear, the execution time and the progress of _Sign_Generate_ may reveal
+information about `mu`, and so about the message and context string, but not about the private key (cite:[nist-fips-204] {sect}3.6.1, footnote 3); hedged signing
+reveals neither.
+Hedged signing therefore suits software that signs confidential data.
+
+NOTE: The challenge `c` and response `z` of a rejected iteration of `ML-DSA.Sign_internal`, and which check rejected it,
+reveal the private key (cite:[DBLP-journals-tches-ZhouWSY25], cite:[DBLP-conf-host-KarabulutAA21],
+cite:[DBLP-conf-sacrypt-UlitzschMTS22]); hence they are <<Zkl-ISA-unpriv.adoc#KLE-def-secrets,secrets>>, as is the latency of each iteration,
+and the progress of _Sign_Generate_ reveals at most the number of completed
+iterations, as the execution time does.
 --
 
 State Machine:: {empty}
