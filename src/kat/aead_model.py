@@ -254,19 +254,20 @@ class GCM(Base):
             j = self.pack((0, 32), (self.block_base, 16), (self.cumul, 48), (0, 32))[0]
         else: j = self.J0
         tl = self.tag_len
-        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16))
+        sctr = () if self.IV else ((self.start_ctr, 32),)          # GCM_IV holds no start_ctr: it is 1
+        return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), *sctr, (self.lbl, 16), (tl, 16))
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128', tag_len_p=None):
         m = cls._blank(keybytes, policy, cipher)
         tlp = max(m.tlps()) if tag_len_p is None else tag_len_p      # AuxInfo of the MDH
-        k, j, tag, sctr, lbl, tl = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16))
+        if cls.IV: (k, j, tag, lbl, tl), sctr = cls.unpack(sc, (8 * keybytes, 128, 128, 16, 16)), 1
+        else: k, j, tag, sctr, lbl, tl = cls.unpack(sc, (8 * keybytes, 128, 128, 32, 16, 16))
         m.key = v2b(k, keybytes); m.auth = m.E(0)
         m.st, m.tag, m.start_ctr, m.lbl, m.tag_len, m.tag_len_p = st, tag, sctr, lbl, tl, tlp
         if st == SAV:
             m.block_base, m.cumul = sl(j, 47, 32), sl(j, 95, 48); m.J0 = 0  # the IV length is in the public prefix
         else: m.J0 = j
         try:
-            if cls.IV: need(sctr == 1)
             need(tlp in m.tlps())                                     # MR12
         except Inv: m._fail()
         return m
@@ -377,13 +378,13 @@ class OCB(Base):
     def __init__(self, key, policy=None, nonce=None):
         super().__init__(key, policy)
         if nonce is not None:
-            self.N, self.N_len = nonce
-            need_ok = 6 <= self.N_len <= 120
-            if not need_ok: raise ValueError('N_len outside [6,120]')
+            self.nonce, self.nonce_len = nonce
+            need_ok = 6 <= self.nonce_len <= 120
+            if not need_ok: raise ValueError('nonce_len outside [6,120]')
     def _expform(self, st): return 'D' if st in (ELB, DLB) and self.lbl == 0 else self.EXF.get(st)
     def _noexec(self, st): return st == HABL and self.lbl == 0
     def _ready(self):
-        if not hasattr(self, 'N') or not self.PRESET: self.N = self.N_len = 0
+        if not hasattr(self, 'nonce') or not self.PRESET: self.nonce = self.nonce_len = 0
         self.hasN = False
         self.hash_A = self.csum = self.index = 0
         self.lbl = 0
@@ -397,7 +398,7 @@ class OCB(Base):
         for i in range(48): self.L.append(double(self.L[-1]))
     def _enter(self, st, xs, inp):
         if st == SAV:
-            need(6 <= xs <= 120); self.N_len, self.N, self.hasN = xs, 0, False
+            need(6 <= xs <= 120); self.nonce_len, self.nonce, self.hasN = xs, 0, False
         elif st == ABSORB:
             need(self.hasN or self.PRESET); need(xs in (64, 96, 128))
             self.index, self.tag_len, self.offset = 1, xs, 0; self._setup()
@@ -407,7 +408,7 @@ class OCB(Base):
         elif st in (HABL, ELB, DLB):
             need(xs % 8 == 0 and 0 <= xs <= 120); self.lbl = xs
         elif st in (ENC, DEC):
-            Nb = cat((self.tag_len % 128, 7), (0, 120 - self.N_len), (1, 1), (nonce_be(self.N, self.N_len), self.N_len))
+            Nb = cat((self.tag_len % 128, 7), (0, 120 - self.nonce_len), (1, 1), (nonce_be(self.nonce, self.nonce_len), self.nonce_len))
             bottom = sl(Nb, 5, 0)
             Ktop = self.E(bswap(cat((sl(Nb, 127, 6), 122), (0, 6)), 16))
             Kb = bswap(Ktop, 16)
@@ -415,11 +416,11 @@ class OCB(Base):
             self.index = 1; self.offset = bswap(sl(Stretch, 191 - bottom, 64 - bottom), 16)
     def _exec(self, st, inp, kllen, klstart, halt_at):
         if st == SAV:
-            q = -(-self.N_len // 8)
+            q = -(-self.nonce_len // 8)
             need(kllen is not None and kllen >= 8 * q)          # MR8, MR6
             x = sl(inp, 8 * q - 1, 0)
-            x &= ~(mask((8 - self.N_len) % 8) << 8 * (q - 1))
-            self.N, self.hasN = x, True; return 0
+            x &= ~(mask((8 - self.nonce_len) % 8) << 8 * (q - 1))
+            self.nonce, self.hasN = x, True; return 0
         if st == ABSORB:
             def f(x):
                 need(self.index <= MAX_BLOCKS)
@@ -465,15 +466,15 @@ class OCB(Base):
             self.st = SUCCESS if ok else FAILURE; return 0
         need(False)
     def export(self):
-        return self.pack((b2v(self.key), 8 * len(self.key)), (self.N, 120), (self.N_len, 7), (0, 1),
-                         (self.Ls if self.Ls is not None else 0, 128), (self.offset, 128), (self.hash_A, 128), (self.csum, 128),
+        return self.pack((b2v(self.key), 8 * len(self.key)), (self.nonce, 120), (self.nonce_len, 7), (0, 1),
+                         (self.offset, 128), (self.hash_A, 128), (self.csum, 128),
                          (self.index, 49), (0, 2), (self.lbl, 7))   # tag_len is tag_len_p, from AuxInfo
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=None):
         m = cls._blank(keybytes, policy)
-        k, N, nl, _, Ls, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 128, 49, 2, 7))
-        m.key = v2b(k, keybytes); m.st, m.N, m.N_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
-        m.hasN = m.N_len != 0
+        k, N, nl, _, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 49, 2, 7))   # L* derived
+        m.key = v2b(k, keybytes); m.st, m.nonce, m.nonce_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
+        m.hasN = m.nonce_len != 0
         if tl or (cls.PRESET and not 6 <= nl <= 120): m._fail(); return m
         if st not in (READY, SAV): m._setup()
         return m
@@ -489,10 +490,10 @@ class OCB_NONCE(OCB):
     @classmethod
     def _blank(cls, kb, policy, cipher='AES128'): return cls(bytes(kb), (0, 6), policy)
     def __init__(self, key, nonce, policy=None):
-        N, self.N_len = nonce
-        if not 6 <= self.N_len <= 120: raise ValueError('N_len outside [6,120]')
-        q = -(-self.N_len // 8)      # PI loads N as the Set_Aux_Value kl.exec does: pad bits of byte q-1 cleared
-        self.N = sl(N, 8 * q - 1, 0) & ~(mask((8 - self.N_len) % 8) << 8 * (q - 1))
+        N, self.nonce_len = nonce
+        if not 6 <= self.nonce_len <= 120: raise ValueError('nonce_len outside [6,120]')
+        q = -(-self.nonce_len // 8)      # PI loads N as the Set_Aux_Value kl.exec does: pad bits of byte q-1 cleared
+        self.nonce = sl(N, 8 * q - 1, 0) & ~(mask((8 - self.nonce_len) % 8) << 8 * (q - 1))
         Base.__init__(self, key, policy)
 
 # =================================================================== CMAC

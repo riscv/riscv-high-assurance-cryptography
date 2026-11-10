@@ -118,7 +118,7 @@ class UnifiedAEAD(Base):
             if self.DEC_ONLY: c.setst(ABSORB)
         elif self.family == 'GCM-SIV': c.setst(SAV, 'C', inp=value)
         elif self.family == 'OCB':
-            if not self.DEC_ONLY: c.exec('B', value, (c.N_len + 7) // 8 * 8)
+            if not self.DEC_ONLY: c.exec('B', value, (c.nonce_len + 7) // 8 * 8)
             c.setst(ABSORB, 'B', self.tag_len_p)
         else:
             c.setst(ABSORB, 'A' if self.DEC_ONLY else 'C', inp=v2b(value, 16))
@@ -326,11 +326,11 @@ class UnifiedAEAD(Base):
                 need(self.core.st != INV)
                 if self.family == 'GCM' and core_st == SAV: self.core.len = self.nonce_len
                 if self.family == 'OCB': self.core.tag_len = self.tag_len_p
-            self.nonce_len = {'GCM': self.nonce_len, 'GCM-SIV': 96, 'OCB': getattr(self.core, 'N_len', 0), 'Ascon': 128}[self.family]
+            self.nonce_len = {'GCM': self.nonce_len, 'GCM-SIV': 96, 'OCB': getattr(self.core, 'nonce_len', 0), 'Ascon': 128}[self.family]
             self.key = v2b(self.core.key, 16) if self.family == 'Ascon' else self.core.key
             if self.DEC_ONLY:
                 self.preset = (self.core.J0 & mask(96) if self.family == 'GCM' else
-                               (self.core.N, self.core.N_len) if self.family == 'OCB' else v2b(self.core.nonce, 16))
+                               (self.core.nonce, self.core.nonce_len) if self.family == 'OCB' else v2b(self.core.nonce, 16))
             if self.mask_key is not None: self.mask_key = v2b(self.core.k2, 16)
             self.st, self.klstart = st, 0
         except (Inv, ValueError): self._fail()
