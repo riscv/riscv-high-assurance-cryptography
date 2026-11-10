@@ -309,6 +309,11 @@ class UnifiedAEAD(Base):
             need(st not in (READY, SAV) or self.flags == 0)
             if self.two_pt: self.ad_hash = b2v(sc[h:h + 16])
             else: self.received_tag = b2v(sc[h:h + 16])
+            sg = bool(self.flags & SIV_GENERATED)                     # selects the GCM-SIV Enc_Tag_Finalize steps
+            need(not self.two_pt or not (sg and st in (PRE, PRELAST)) and not (not sg and st in (ENC, ELB)))
+            tr = bool(self.flags & TAG_RECEIVED)                      # direction entry conditions
+            need(not (tr and st in (PRE, PRELAST, ENC, ELB, ETF)) and not (not tr and st in (DEC, DLB, DTF)))
+            need(self.two_pt or tr or self.received_tag == 0)       # rx_tag is zero before Set_Tag_Value
             core_st = ABSORB if st not in (READY, SAV) else SAV if st == SAV and self.family in ('GCM', 'OCB') else READY
             c = self.core
             if self.family == 'Ascon':

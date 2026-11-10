@@ -318,10 +318,9 @@ class GCMSIV(Base):
         t = self.tmp
         return self.EE(cat((0, 1), (sl(t, 126, 96), 31), (sl(t, 95, 0) ^ self.nonce, 96)))
     def _ks(self):
-        need(self.ctr != 2**32)
-        s = self.siv
+        s = self.siv                                        # the data_len bound (UnifiedAEAD._add) keeps ctr from wrapping
         k = self.EE(cat((1, 1), (sl(s, 126, 32), 95), ((sl(s, 31, 0) + self.ctr) % 2**32, 32)))
-        self.ctr += 1; return k
+        self.ctr = (self.ctr + 1) % 2**32; return k
     def _exec(self, st, inp, kllen, klstart, halt_at):
         if st == ABSORB: return self._multi(inp, kllen, klstart, halt_at, lambda x: self.absorb(x))
         if st == ETF:
@@ -348,14 +347,13 @@ class GCMSIV(Base):
         need(False)
     def export(self):
         kb = 8 * len(self.key)
-        return self.pack((b2v(self.key), kb), (self.nonce, 96), (self.ctr & mask(32), 32), (self.siv, 128), (self.tmp, 128),
-                         ((self.ctr >> 32) << 15 | self.lbl, 16))
+        return self.pack((b2v(self.key), kb), (self.nonce, 96), (self.ctr, 32), (self.siv, 128), (self.tmp, 128), (self.lbl, 16))
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=3, cipher='AES128'):
         m = cls._blank(keybytes, policy, cipher)
         k, n, c, siv, tmp, x = cls.unpack(sc, (8 * keybytes, 96, 32, 128, 128, 16))
         m.key = v2b(k, keybytes); m.nonce, m.siv, m.tmp, m.st = n, siv, tmp, st
-        m.ctr = c | (x >> 15) << 32; m.lbl = x & 127
+        m.ctr = c; m.lbl = x & 127
         if st != READY: m._derive()
         return m
 

@@ -143,9 +143,9 @@ class KLE:
         if form == 'B': md &= mask(64)
         g = lambda n: mdh_get(md, n)
         st, se = g('State'), g('StateExtension')
+        if g('Version') in (1, 2) or g('Reserved18') or g('KeyType') == 3: return 0
         if st >= 61 or (st == 0 and se > 6): return 0
         if st == 0 and se: return 16
-        if g('Version') in (1, 2) or g('Reserved18') or g('KeyType') == 3: return 0
         v = s.val(md, 'provision' if st == 0 and g('Version') != 3 else 'import')
         return size_of(md) if v == 'ok' else 0
     def avail(s, kd=0, r=0, form='A', md=0):

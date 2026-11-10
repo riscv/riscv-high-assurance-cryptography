@@ -224,7 +224,11 @@ class KLE2(KLE):
     def _mem_pre(s, mem, addr, xl, store):
         s.common()
         if s.nl != NONE and xl: raise IllegalInstruction('Xl != 0 with a locker')
-        if s.nl != NONE and addr % 16: raise Trap('store_misaligned' if store else 'load_misaligned')
+        if s.nl == NONE: return
+        s._off(s.nl)                                       # GR12 item 6 precedes item 8
+        md = s.md(s.nl)                                    # item 8: only if an access is performed (GR41)
+        if mdh_get(md, 'State') != 0 and s.start < size_of(md) - 16 and addr % 16:
+            raise Trap('store_misaligned' if store else 'load_misaligned')
     def load(s, mem, addr, xl=0):
         s._mem_pre(mem, addr, xl, False)
         if s.nl == NONE:

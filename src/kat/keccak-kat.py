@@ -259,7 +259,7 @@ for n in (15, 16):
     check('a sealed secret of %d bytes: %s' % (n, 'the source Invalid, the message unchanged (GR29 item 7)' if n < 16 else 'enters, Sealed set'),
           (s.bad and d.se == 0 and d.bb == 0 and not d.sealed) if n < 16 else (not s.bad and d.sealed))
 for sealed in (False, True):
-    d = Locker('KMAC128', K=b'k' * 16); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=sealed), d, 32); d.setst(VERIFY, 'B', 256)
+    d = Locker('KMAC128', K=b'k' * 16, tag_len_p=256); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=sealed), d, 32); d.setst(VERIFY, 'B', 256)
     check('KMAC128 %s secret in the message: kl.setst naming Hash_Verify %s' % (('a sealed', '-> Invalid') if sealed else ('an unsealed', 'admitted')),
           d.se == SE_INV if sealed else d.st == VERIFY)
 # StateExtension @ State at an SCC import (KLE-Metadata-validity)

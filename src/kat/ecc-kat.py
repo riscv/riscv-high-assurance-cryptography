@@ -5,7 +5,7 @@ Run: cd src && pypy3.12 kat/ecc-kat.py"""
 import sys, os, copy, hashlib, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
-import ecc_model as M, ecc_vectors as V
+import ecc_model as M, ecc_vectors as V, hash_model as HM
 from ecc_machine import *
 T0 = time.time()
 H = bytes.fromhex
@@ -517,9 +517,23 @@ check('Ed448 B(y=...) encoding length 57 bytes, public key length 57', len(ed_pu
 section('SCC export and import: Serialized Content of KLE-ECC and KLE-EdDSA, Metadata validity')
 def rt(L):
     """export, import into a new locker, re-export: the new locker and its SCC"""
-    m, c = L.export(); I = EccLocker.imported(L.name, m, c, L.rbg); return I, I.export() == (m, c)
+    m, c = L.export(); I = EccLocker.imported(L.name, m, c, L.ads(), rbg=L.rbg); return I, I.export() == (m, c)
 def remeta(L, **kw):
-    m, c = L.export(); f = mdh_unpack(m); f.update(kw); return EccLocker.imported(L.name, mdh_pack(**f), c)
+    m, c = L.export(); f = mdh_unpack(m); f.update(kw); return EccLocker.imported(L.name, mdh_pack(**f), c, L.ads())
+def aux_mp(L, mp):
+    m, c = L.export(); f = mdh_unpack(m); f['AuxInfo'] = f['AuxInfo'] & ~6 | mp << 1
+    return EccLocker.imported(L.name, mdh_pack(**f), c, L.ads())
+L = EccLocker('ed25519'); load(L, SSCAL, bytes(range(32))); L.setst(MABS, 'B', 0)
+check('m31: import of Msg_Absorb with msg_pass = 2 -> Invalid', aux_mp(L, 2).invalid and not aux_mp(L, 0).invalid)
+L = EccLocker('ed25519'); load(L, SSCAL, bytes(range(32)))
+check('m31: import of Set_Scalar with msg_pass != 0 -> Invalid', all(aux_mp(L, mp).invalid for mp in (1, 2, 3)) and not aux_mp(L, 0).invalid)
+L.setst(MABS, 'B', 0); L.exec_in(b'abc'); L.setst(MABS, 'B', 1); L.exec_in(b'abc'); L.setst(SGN)
+check('m31: import of Sign_Generate admits msg_pass 0 and 2 only', not aux_mp(L, 2).invalid and not aux_mp(L, 0).invalid and aux_mp(L, 1).invalid and aux_mp(L, 3).invalid)
+L = EccLocker('ed25519'); L.setst(S2ND); L.exec_in(bytes([1]) + bytes(31)); L.setst(SIN); L.exec_in(bytes(64)); L.setst(MABS, 'B', 2); L.exec_in(b'abc')
+ok = not aux_mp(L, 3).invalid; L.setst(SVER); ok = ok and not aux_mp(L, 3).invalid and aux_mp(L, 2).invalid; L.exec_D()
+check('m31: import admits msg_pass 3 in Msg_Absorb, Sign_Verify and the ending State of the verification', ok and L.state in (54, 55) and not aux_mp(L, 3).invalid and aux_mp(L, 2).invalid)
+L = EccLocker('ed25519')
+check('m31: import of Ready with msg_pass != 0 -> Invalid', all(aux_mp(L, mp).invalid for mp in (1, 2, 3)) and not aux_mp(L, 0).invalid)
 def spec_len(L):
     """Content1 size in bytes from the spec formulas (p1, p3, p6, varlen, Positions vii-xiii)"""
     P, X, me0 = L.policy != 0, L.policy & 1, L.ext == 0
@@ -613,6 +627,34 @@ for nm in ('ed25519', 'ed448'):
           len(c2) == len(c) - L.HS and L2.has('rnd') and L2.Hp is None)
     L.exec_in(b'c'); L.setst(SGN)
     check('%s after pass 2: Positions xi and xii zero again' % nm, not any(hpos(L, L.export()[1], 0) + hpos(L, L.export()[1], 1)))
+# a narrowing that disables the open pass (KLE-EdDSA Allowed State Transitions, MR1)
+def ed_open(nm, xsel, pol=3):
+    _, _, seed, _, _, pub, sig = [e for e in V.ED if e[0] == nm and not e[1].endswith('ph')][0]
+    L = EccLocker(nm, pol); load(L, SSCAL, seed)
+    if xsel == 2:
+        L.setst(S2ND); L.exec_in(pub); L.setst(SIN); L.exec_in(sig)
+    if xsel == 1: L.setst(MABS, 'B', 0); L.exec_in(b'a')
+    L.setst(MABS, 'B', xsel); L.exec_in(b'a'); return L
+for nm in ('ed25519', 'ed448'):
+    for xsel in (0, 1):
+        L = ed_open(nm, xsel); L.rstrl(2)
+        check('%s signing pass %d, MachinePolicy[0] cleared: the next kl.exec -> Invalid' % (nm, xsel + 1), L.exec_in(b'b') == 'invalid')
+        for t, f, x in ((MABS, 'B', 2), (SGN, 'A', 0), (SVER, 'A', 0)):
+            L = ed_open(nm, xsel); L.rstrl(2)
+            check('%s signing pass %d, MachinePolicy[0] cleared: a kl.setst ending it toward State %d -> Invalid' % (nm, xsel + 1, t), L.setst(t, f, x) == 'invalid')
+        L = ed_open(nm, xsel); L.rstrl(2)
+        check('%s signing pass %d, MachinePolicy[0] cleared: kl.setst to Ready abandons the pass' % (nm, xsel + 1),
+              L.setst(RDY) == 'ok' and L.state == RDY and L.Hh is None and not L.has('rnd'))
+    L = ed_open(nm, 1); L.rstrl(2); m, c = L.export(); I = EccLocker.imported(nm, m, c)
+    check('%s narrowed pass 2 exported and imported: no H\', Sign_Generate -> Invalid, Ready admitted' % nm,
+          I.Hp is None and copy.deepcopy(I).setst(SGN) == 'invalid' and I.setst(RDY) == 'ok')
+    L = ed_open(nm, 2); L.rstrl(1)
+    check('%s verification pass, MachinePolicy[1] cleared: the next kl.exec -> Invalid' % nm, L.exec_in(b'b') == 'invalid')
+    L = ed_open(nm, 2); L.rstrl(1)
+    check('%s verification pass, MachinePolicy[1] cleared: kl.setst into Sign_Verify -> Invalid' % nm, L.setst(SVER) == 'invalid')
+    L = ed_open(nm, 2); L.rstrl(1)
+    check('%s verification pass, MachinePolicy[1] cleared: kl.setst into Msg_Absorb opens signing pass 1' % nm,
+          L.setst(MABS, 'B', 0) == 'ok' and L.state == MABS and L.pass_id == 0)
 # import Metadata validity
 L = EccLocker('secp256r1')
 check('import: HasRndNum set in Ready -> Invalid', remeta(L, StateExtension=8).invalid)
@@ -633,6 +675,56 @@ m, c = EccLocker('secp256r1').export()
 check('secp256r1 import: Content1 one block short -> Invalid', EccLocker.imported('secp256r1', m, c[:-16]).invalid)
 check('secp256r1 import: MachinePolicy 2 -> 3 adds RndNum, so the length no longer matches -> Invalid', remeta(EccLocker('secp256r1', 2), MachinePolicy=3).invalid)
 
+# ------------------------------------------------------------------ 12
+section('SCC: ADS of a halted operation (GR37, GR38), SCProtection, kl.derive destinations (GR29, GR30, GR31)')
+L = sign_setup(); L.exec_D(halt=True); m, c = L.export(); c2 = L.ads()
+check('halted Sign_Generate: AuxDataLen = 2 + |Content2| / 16 >= 2, Content2 non-empty (Progress != 0)',
+      L.progress and c2 and mdh_get(m, 'AuxDataLen') == 2 + len(c2) // 16)
+I = EccLocker.imported(L.name, m, c, c2, rbg=rbg_k(9))
+check('import with the ADS: Progress kept, the resumed signature uses the held RndNum', I.progress == L.progress and I.exec_D() == 'output' and b2v(drain(I)[:32]) == ref[0])
+for why, mm, cc in (('Content2 absent (IMPQUAL mismatch or failed SIV2)', m, None), ('ADSDropped = 1', mdh_put(m, 'ADSDropped', 1), c2),
+                    ('Content2 altered', m, bytes([c2[0] ^ 1]) + c2[1:])):
+    I = EccLocker.imported(L.name, mm, c, cc, rbg=rbg_k(9))
+    check('import, %s: the operation restarts, Progress 0, RndNum destroyed, AuxDataLen 0' % why,
+          I.state == SGN and I.progress == 0 and not I.has('rnd') and not any(I.RndNum) and mdh_get(I.mdh, 'AuxDataLen') == 0)
+I = EccLocker.imported(L.name, m, c, None, rbg=rbg_k(5))
+check('restarted Sign_Generate draws a fresh RndNum and still signs correctly', I.exec_D() == 'output' and b2v(drain(I)[:32]) == ref[0])
+L = sign_setup(); m, c = L.export()
+check('Sign_Generate not halted: AuxDataLen 0, no Content2', mdh_get(m, 'AuxDataLen') == 0 and L.ads() == b'')
+check('import with AuxDataLen = 1 -> Invalid', EccLocker.imported(L.name, mdh_put(m, 'AuxDataLen', 1), c).invalid)
+L = EccLocker('secp256r1'); load(L, SSCAL, le(7, 32)); L.setst(PMUL); L.exec_D(halt=True); m, c = L.export()
+I = EccLocker.imported(L.name, m, c, L.ads())
+check('halted Point_Mul exported with its ADS resumes to the same Output', mdh_get(m, 'AuxDataLen') >= 2 and I.exec_D() == 'output'
+      and drain(I) == xy(M.Wei('secp256r1').mul(7, M.Wei('secp256r1').G), 32))
+for scp in range(4):
+    L = EccLocker('secp256r1', scp=scp); m, c = L.export(); I = EccLocker.imported(L.name, m, c)
+    check('SCProtection %d carried by export and import' % scp, mdh_get(m, 'SCProtection') == scp and I.scp == scp and mdh_get(I.mdh, 'SCProtection') == scp)
+# destinations of the shared secret
+nm, d, Qb, Z = V.ECDH[0]; W = EccLocker(nm).W
+def ecdh(ext=0, scp=0):
+    L = EccLocker(nm, ext=ext, scp=scp); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); L.exec_D(); return L
+L = ecdh(); D = HM.Locker('SHA-256'); D.setst('absorb')
+check('kl.derive into Hash_Absorb (unrestricted): the message is Z, source Success', L.derive_to(D) and L.state == 54 and HM.digest(D) == hashlib.sha256(Z).digest())
+L = ecdh(); D = HM.Locker('SHA-256', 'NIK'); D.setst('setkey')
+check('kl.derive into the HMAC Set_Key: K0 = Z, HasKey set', L.derive_to(D) and D.haskey and v2b(D.K0, len(Z)) == Z)
+L = ecdh(); D = HM.Key(16)
+check('kl.derive into a 16-byte key: the first 16 bytes of Z', L.derive_to(D, 16) and D.key == Z[:16] and L.state == 54)
+L = ecdh(); D = HM.Key(len(Z) + 1)
+check('kl.derive into a key longer than Z -> destination Invalid, source kept', not L.derive_to(D) and D.st == 'Invalid' and L.state == OUT)
+L = ecdh(); L.setst(RDY); D = HM.Key(16)
+check('kl.derive outside Output (not a source endpoint) -> Invalid', not L.derive_to(D) and L.invalid)
+L = ecdh(2); D = HM.Locker('SHA-256'); D.setst('absorb')
+check('sealed kl.derive into Hash_Absorb: restricted, the destination becomes Sealed', L.derive_to(D) and D.sealed and L.state == 54)
+L = ecdh(2); D = HM.Key(16, src_out=True)
+check('sealed kl.derive into a keystream key (an output source) -> both Invalid (GR31.3)', not L.derive_to(D) and D.st == 'Invalid' and L.invalid)
+L = ecdh(2); D = HM.Key(8)
+check('sealed kl.derive of fewer than 16 bytes -> source Invalid (GR29 item 7)', not L.derive_to(D, 8) and L.invalid and D.key is None)
+for ss, ds, ok in ((0, 0, True), (1, 3, True), (2, 2, True), (1, 0, False), (2, 1, False), (3, 2, False)):
+    L = ecdh(2, ss); D = HM.Key(16, mdh=mdh_pack(SCProtection=ds)); r = L.derive_to(D)
+    check('sealed kl.derive, SCProtection %d -> %d: %s (GR30)' % (ss, ds, 'admitted' if ok else 'destination Privilege Violation'),
+          (r and D.key == Z[:16]) if ok else (not r and D.st == 'PrivViolation' and D.key is None))
+L = ecdh(0, 3); D = HM.Key(16, mdh=mdh_pack(SCProtection=0))
+check('unrestricted kl.derive ignores SCProtection (GR31.1)', L.derive_to(D) and D.key == Z[:16])
 # ------------------------------------------------------------------ done
 info('runtime %.1f s' % (time.time() - T0))
 done()

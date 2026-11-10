@@ -1,10 +1,12 @@
 """Model of the Elliptic Curve Machines of Zkl-ISA-machines.adoc (KLE-ECC, KLE-X25519-X448, KLE-EdDSA), built from the spec text.
 One `EccLocker` per Configuration Controlled locker.  Operations: setst(target, form, xs), exec_in(bytes) (Form B kl.exec
 of a Set State), exec_D(halt) (Form D), exec_out(n) (Form C), rstrl(policy), clearads(), clone(), shared_secret(),
-export() -> (MDH, Content1) and EccLocker.imported(name, mdh, content1) (SCC export and import).
+export() -> (MDH, Content1), ads() -> Content2 and EccLocker.imported(name, mdh, content1, content2) (SCC export and import),
+derive_to(D) (kl.derive of the shared secret into a destination of hash_model: a Locker or a Key).
 Fields are bytearrays in the spec's little-endian order; an invalid configuration moves the locker to Error State Invalid.
 The EdDSA hashes H and H' are running hash_model lockers (SHA-512, SHAKE256), so an open pass is serialized.
-Not modelled: kl.derive destinations (only the source bytes), SCProtection and the ADS, Progress units."""
+A halted operation keeps its ADS: Content2 holds the Progress value, as the model recomputes the intermediate values on
+resumption.  SCProtection is carried in the MDH; its physical protection is not modelled, nor the SCC cryptography (scc-kat.py)."""
 import copy
 from common import *
 import ecc_model as M
@@ -18,7 +20,7 @@ class RbgFailure(Exception): pass       # GR45: the RBG failed -> Invalid
 class RbgUnavailable(Exception): pass   # KLE RBG-unavailable exception, locker unchanged
 
 class EccLocker:
-    def __init__(self, name, policy=3, aux=1, rbg=None, ext=0):
+    def __init__(self, name, policy=3, aux=1, rbg=None, ext=0, scp=0):
         self.name = name; self.kind = 'ed' if name.startswith('ed') else 'mont' if name.startswith('x') else 'wei'
         self.rbg = rbg or (lambda n: __import__('os').urandom(n))
         if self.kind == 'wei':
@@ -31,7 +33,7 @@ class EccLocker:
         self.b = self.W * 8; self.ub = self.u * self.b; self.vb = self.v * self.b
         assert (policy == 0) or self.kind != 'mont'
         assert policy != 0 or self.kind != 'ed'
-        self.policy = policy; self.aux = aux & 1; self.ext = ext; self.state = RDY; self.err = None   # ext: MachineExtension (1 = public-points, 2 = sealed variant)
+        self.policy = policy; self.aux = aux & 1; self.ext = ext; self.scp = scp; self.state = RDY; self.err = None   # ext: MachineExtension (1 = public-points, 2 = sealed variant)
         if ext == 2 and self.kind == 'ed': self.err = SE_UNSUPPORTED; self.state = 0         # no sealed EdDSA
         self.flags = 0; self.outtype = 0; self.progress = 0; self.block_base = 0
         self.Scalar = bytearray(self.W); self.SecondPt = bytearray(self.u * self.W); self.Hash = bytearray(self.h // 8)
@@ -53,8 +55,9 @@ class EccLocker:
         mu = self.outtype | (self.progress << 2)
         aux = self.aux | (self.msg_pass << 1) | (self.block_base << 8)
         if self.err is not None:
-            return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, State=0, StateExtension=self.err, MachineUse=mu, AuxInfo=aux)
-        return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, State=self.state, StateExtension=self.flags, MachineUse=mu, AuxInfo=aux)
+            return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, SCProtection=self.scp, State=0, StateExtension=self.err, MachineUse=mu, AuxInfo=aux)
+        return mdh_pack(Machine=10, MachinePolicy=self.policy, MachineExtension=self.ext, SCProtection=self.scp, State=self.state, StateExtension=self.flags,
+                        MachineUse=mu, AuxInfo=aux, AuxDataLen=2 + len(self.ads()) // 16 if self.progress else 0)   # GR37: an ADS while Progress != 0
     @property
     def invalid(self): return self.err == SE_INVALID
     def _inv(self):
@@ -133,6 +136,8 @@ class EccLocker:
             if st == target and st not in SETS and st != MABS: ok_src = False       # GR19.2
             if st == MABS and target not in (MABS, SGN, SVER): ok_src = False
             if not ok_src: return self._inv()
+        # a narrowed signing pass ends only toward Ready (KLE-EdDSA Allowed State Transitions)
+        if st == MABS and self.pass_id in (0, 1) and self._pass_disabled() and target != RDY: return self._inv()
         # MR14 / GR38: leaving a Set State drops an incomplete load; any setst drops Progress and RndNum
         if st == MABS and target in (MABS, SGN, SVER):
             if self._finalize_pass() == 'invalid': return 'invalid'
@@ -195,6 +200,7 @@ class EccLocker:
         self._live()
         s = self.state
         if s == MABS:                                   # H and H' absorb each kl.exec in lock step
+            if self._pass_disabled(): return self._inv()  # MR1: the operation of the open pass is disabled
             for h in (self.Hh, self.Hp):
                 if h: h.exec('B', bytes(data))
             return 'ok'
@@ -338,6 +344,7 @@ class EccLocker:
             self.msg_pass = 3; self.kp = 0; self.Hh = self._newH(dom + R + bytes(self.SecondPt))
         else: return self._inv()
         self.state = MABS; self.pass_id = xs; self.setf('rnd'); return 'ok'   # bit 3 = HasHashState
+    def _pass_disabled(self): return not self.policy & (2 if self.pass_id == 2 else 1)
     def _hname(self): return 'SHA-512' if self.name == 'ed25519' else 'SHAKE256'
     def _newH(self, x):
         """An instance of H set as entering Ready of its hash Machine, then absorbing the initial string x."""
@@ -350,8 +357,7 @@ class EccLocker:
             self.r = self._hmodL(h)
             self.Signature[:] = E.enc(E.mul(self.r, E.B)) + bytes(self.W); self.setf('sig', False); self.msg_pass = 1
         elif pid == 1:
-            # shortcut: an H' destroyed by a kl.rstrl clearing MachinePolicy[0] is taken as a mismatch; the spec leaves the outcome open
-            if hp is None or self._hmodL(hp) != self.r: return self._inv()
+            if self._hmodL(hp) != self.r: return self._inv()   # hp exists: without MachinePolicy[0] setst admits only Ready
             self.kp = self._hmodL(h); self.msg_pass = 2
         else:
             self.kp = self._hmodL(h)
@@ -386,6 +392,16 @@ class EccLocker:
         z = self.derive_source()
         if z is None: return self._inv()
         self.state = 54; return z
+    def derive_to(self, D, length=None):
+        """kl.derive D <- shared secret, D a hash_model Locker (Set_Key, Hash_Absorb) or Key: unrestricted (GR31.1), or restricted
+        with the MDH of this locker if sealed (GR31.3, GR30).  False if refused; D.srcinv: this locker transitions to Invalid too."""
+        self._live(); D.srcinv = False; z = self.derive_source()
+        if z is None: self._inv(); return False                                        # GR29 item 2: not a source endpoint
+        ok = D.derive(z, length=len(z) if length is None else length, stream=False, src='secret', sealed=self.sealed,
+                      smdh=self.mdh if self.sealed else None)
+        if D.srcinv: self._inv()
+        elif ok: self.state = 54                                                       # GR28: Output -> Success
+        return ok
     # ------------------------------------------------------------ restrict / clearads / clone
     def rstrl(self, pol):
         self._live()
@@ -434,23 +450,27 @@ class EccLocker:
     def export(self):
         """SCC export: (MDH, Content1). block_base travels in AuxInfo[15:8], OutputType and Progress in MachineUse."""
         self._live(); return self.mdh, b''.join(v for _, v in self._layout())
+    def ads(self): return v2b(self.progress, 16) if self.progress else b''   # Content2
     @classmethod
-    def imported(cls, name, mdh, c, rbg=None):
+    def imported(cls, name, mdh, c, c2=None, rbg=None):
         """SCC import of (mdh, Content1) into a locker of curve `name`: invalid Metadata gives Error State Invalid,
-        unsupported Metadata Error State Unsupported (KLE-Metadata-validity). Without Position ii, Generator is the default."""
+        unsupported Metadata Error State Unsupported (KLE-Metadata-validity). Without Position ii, Generator is the default.
+        c2 is the Content2 that the import retains, None when it retains no ADS (ADSDropped = 1, an IMPQUAL mismatch, a failed
+        SIV2 check): a halted operation then restarts (GR38)."""
         m = mdh_unpack(mdh); pol, ext, aux = m['MachinePolicy'], m['MachineExtension'], m['AuxInfo']
         kind = 'ed' if name.startswith('ed') else 'mont' if name.startswith('x') else 'wei'
-        if m['Machine'] != 10 or pol > 3 or ext > 2 or (kind == 'mont' and pol) or (kind == 'ed' and not pol):
+        if m['Machine'] != 10 or pol > 3 or ext > 2 or (kind == 'mont' and pol) or (kind == 'ed' and not pol) or m['AuxDataLen'] == 1:
             L = cls(name, 0 if kind == 'mont' else 3, rbg=rbg); L._inv(); return L
-        L = cls(name, pol, aux & 1, rbg, ext)
+        L = cls(name, pol, aux & 1, rbg, ext, m['SCProtection'])
         if L.err is not None: return L                                    # sealed EdDSA
         if kind == 'ed' and aux >> 3 & 31: L.err = SE_UNSUPPORTED; L.state = 0; return L   # reserved AuxInfo bits [7:3]
         st, mu = m['State'], m['MachineUse']
         L.state, L.flags, L.outtype, L.progress, L.block_base = st, m['StateExtension'], mu & 3, mu >> 2, aux >> 8
         if kind == 'ed': L.msg_pass = aux >> 1 & 3
         if st not in L._states() | {54, 55} or len(c) != sum(len(v) for _, v in L._layout()): L._inv(); return L
-        if kind == 'ed':    # HasHashState set exactly in Msg_Absorb, where msg_pass names an open pass (0, 1 or 3)
-            if L.has('rnd') != (st == MABS) or (st == MABS and L.msg_pass == 2): L._inv(); return L
+        if kind == 'ed':    # HasHashState set exactly in Msg_Absorb, where msg_pass names an open pass (0, 1 or 3); m31
+            bad = L.msg_pass not in {MABS: (0, 1, 3), SGN: (0, 2), SVER: (0, 3), 54: (0, 3), 55: (0, 3)}.get(st, (0,))
+            if L.has('rnd') != (st == MABS) or bad: L._inv(); return L
         elif L.has('rnd') and st != SGN: L._inv(); return L
         o = 0
         for n, v in L._layout():
@@ -464,4 +484,5 @@ class EccLocker:
         if st in SETS:      # a load is in progress until block_base reaches the field size (Rule KLE-MGR-load-long-field)
             f = {SGEN: L.Generator, SSCAL: L.Scalar, SHASH: L.Hash, S2ND: L.SecondPt, SIN: L.Signature, SCTX: L.ctx}[st]
             L.complete = L.block_base == (L.ctxlen if st == SCTX else len(f))
+        if L.progress and (c2 is None or m['ADSDropped'] or m['AuxDataLen'] < 2 or c2 != L.ads()): L._discard_progress()   # restart
         return L

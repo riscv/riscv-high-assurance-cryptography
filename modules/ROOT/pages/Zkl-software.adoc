@@ -238,7 +238,7 @@ The probe destroys the buffer contents: save them first, or probe only while the
 ----
   kl.getbl  t1      # save the current length
   kl.setbl  a0      # zeroes the buffer, clamps to the maximum
-  kl.getbl  t0      # t0 <- length granted
+  kl.getbl  t0      # t0 ← length granted
   kl.setbl  t1      # restore the length; the contents stay zero
 ----
 
@@ -713,7 +713,7 @@ The following listing encrypts with a CBC CC, one block per `kl.exec`.
   import_scc 0, a0                # import the SCC into locker K0
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
   vle8.v    v1, (a5)
-  kl.setst  K0, #kl_state_encrypt, v1  # IV <- v1
+  kl.setst  K0, #kl_state_encrypt, v1  # IV ← v1
   kl.getst  t1, K0
   li        t2, kl_state_encrypt
   bne       t1, t2, error         # the import failed
@@ -742,7 +742,7 @@ The following listing takes the number of blocks as a parameter; for the last gr
   import_scc 0, a0
   vsetivli  zero, 16, e8, m1, ta, ma
   vle8.v    v1, (a5)
-  kl.setst  K0, #kl_state_encrypt, v1  # IV <- v1
+  kl.setst  K0, #kl_state_encrypt, v1  # IV ← v1
   kl.getst  t1, K0
   li        t2, kl_state_encrypt
   bne       t1, t2, error         # the import failed
@@ -775,7 +775,7 @@ The following listing encrypts with CFB8, that is with an SCC whose `u` = 8, any
   import_scc 0, a0                # u = 8, from the MDH
   vsetivli  zero, 16, e8, m1, ta, ma
   vle8.v    v1, (a5)
-  kl.setst  K0, #kl_state_encrypt, v1       # IV <- v1
+  kl.setst  K0, #kl_state_encrypt, v1       # IV ← v1
   kl.getst  t1, K0
   li        t2, kl_state_encrypt
   bne       t1, t2, error         # the import failed
@@ -811,7 +811,7 @@ An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with 
   vsetivli  zero, 16, e8, m1, ta, ma # one block: KLLEN = 128
   vle8.v    v1, (a5)              # XCTR; for CTR use vl = 12 (KLLEN = 96)
   kl.setst  K0, #kl_state_operate, v1        # set the IV
-  kl.setst  K0, #kl_state_set_aux_value, a4  # ctr <- bin(a4, j)
+  kl.setst  K0, #kl_state_set_aux_value, a4  # ctr ← bin(a4, j)
 
   li        t2, 16
   beqz      a3, 2f
@@ -979,7 +979,7 @@ When `CTStealing` is set, `crypt_full_blocks` holds back the final full block an
 
   if decrypt:
       kl.exec  K                   # Form D: verifies the retained tag
-      require(kl.getst(K) == kl_success)
+      require(kl.getst(K) == kl_state_success)
   else:
       kl.exec  tag, K              # Form C: the tag; enters Success
 ----
@@ -1207,13 +1207,13 @@ An SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key must enable _Hash_
 
 To verify a MAC `T` of `T_len` bits with HMAC, KMAC128 or KMAC256 instead, the
 code from label `3` on is replaced by the listing below.
-For HMAC, min(`T_len`, `t`) must equal the locker's `tag_len_p` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>), and the listing compares that many bits.
-For KMAC128 and KMAC256, it takes `T_len` {le} `b`, and `T_len` {le} 1024 if `VLEN` = 128, since a register group with LMUL = 8 holds 8 {times} `VLEN` bits.
+min(`T_len`, `t`) for HMAC, and min(`T_len`, `b`) for KMAC128 and KMAC256, must equal the locker's `tag_len_p` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>), and the listing compares that many bits.
+For KMAC128 and KMAC256, it takes `T_len` {le} 1024 if `VLEN` = 128, since a register group with LMUL = 8 holds 8 {times} `VLEN` bits.
 
 [[KLE-pseudocode-hash-verify]]
 .MAC Verification
 ----
-# a5 = T, a6 = T_len in bits, a multiple of 8, >= 64 (KMAC: 32); for HMAC, the locker's tag_len_p
+# a5 = T, a6 = T_len in bits, a multiple of 8, capped to tag_len_p
 3:
   kl.setst  K0, #kl_state_hash_verify, a6
   srli      t1, a6, 3
@@ -1274,17 +1274,29 @@ _Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid poi
   li        t2, 1
   kl.setst  K1, #3, t2            # Set_Scalar, Xs != 0: a random scalar d
   kl.setst  K1, #4                # Point_Mul
-  kl.exec   K1                    # Form D: SecondPt <- [d]G, to Output
-  li        t1, 64
-  vsetvli   zero, t1, e8, m4, ta, ma # KLLEN = 512: one point
-  kl.exec   v0, K1                # emit [d]G, to Success
+  kl.exec   K1                    # Form D: SecondPt ← [d]G, to Output
+  li        t1, 64                # one point
+1:
+  vsetvli   t5, t1, e8, m1, ta, ma # vl <= min(t1, VLEN/8)
+  kl.exec   v0, K1                # emit the next vl bytes of [d]G; the
+                                  # last to Success
   vse8.v    v0, (a4)              # the ephemeral public key, for the peer
+  add       a4, a4, t5
+  sub       t1, t1, t5
+  bnez      t1, 1b
   kl.setst  K1, #kl_state_ready   # Form A keeps d
   kl.setst  K1, #8                # Set_SecondPt
+  li        t1, 64
+2:
+  vsetvli   t5, t1, e8, m1, ta, ma
   vle8.v    v0, (a3)
-  kl.exec   K1, v0                # load Q, set HasSecondPt
+  kl.exec   K1, v0                # load the next vl bytes of Q; the last
+                                  # sets HasSecondPt
+  add       a3, a3, t5
+  sub       t1, t1, t5
+  bnez      t1, 2b
   kl.setst  K1, #4                # Point_Mul
-  kl.exec   K1                    # SecondPt <- [d]Q, to Output with a
+  kl.exec   K1                    # SecondPt ← [d]Q, to Output with a
                                   # shared secret, or Failure for a bad Q
   kl.setst  K0, #kl_state_hash_absorb
   lui       t1, 0x01000           # the counter 00000001, big-endian
@@ -1294,7 +1306,7 @@ _Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid poi
   li        t1, 32
   kl.derive K0, K1, t1            # absorb Z, 32 bytes; K1 to Success
   kl.getst  t3, K1
-  li        t4, 54
+  li        t4, kl_state_success
   bne       t3, t4, error         # K1 not in Success: Z did not enter K0
   vsetvli   zero, a6, e8, m1, ta, ma
   vle8.v    v0, (a5)
@@ -1321,6 +1333,7 @@ It reads the SHAKE128 output for `B` = `ρ` {vvert} `j` {vvert} `i` in 12-bit pi
 
 * SHAKE128 emits each output byte from its least significant bit, so consecutive 12-bit pieces are the values `d~1~`, `d~2~` that Algorithm 7 forms from each 3 bytes, in order.
 * Each `kl.setst` sets `read_len` to 12. The first also ends the message, as a Form A `kl.setst` naming _Hash_Output_ would, for an unbounded output.
+* `B` is absorbed in as many pieces as `vsetvli` grants, each of at most `VLEN`/8 bytes: one from `VLEN` = 512, where `vl` = 34.
 * The Form C `kl.exec` that follows, with `KLLEN` = 16, emits those 12 bits and clears the 4 above them, so `vmv.x.s` returns the value itself.
 * SampleNTT runs on public data, since `ρ` is part of the encapsulation key, so its variable number of reads reveals nothing secret.
 
@@ -1333,19 +1346,23 @@ It reads the SHAKE128 output for `B` = `ρ` {vvert} `j` {vvert} `i` in 12-bit pi
   import_scc 0, a0
   kl.setst  K0, #kl_state_hash_absorb
   li        t1, 34
-  vsetvli   zero, t1, e8, m4, ta, ma # KLLEN = 272
+1:
+  vsetvli   t5, t1, e8, m1, ta, ma # vl <= min(t1, VLEN/8)
   vle8.v    v0, (a1)
-  kl.exec   K0, v0                # absorb B
+  kl.exec   K0, v0                # absorb the next vl bytes of B
+  add       a1, a1, t5
+  sub       t1, t1, t5
+  bnez      t1, 1b
   vsetivli  zero, 1, e16, m1, ta, ma # KLLEN = 16
   li        t2, 12
   li        t3, 3329              # q
   addi      t4, a2, 512           # the end of the output
-1:
+2:
   kl.setst  K0, #kl_state_hash_output_bits, t2 # read_len = 12; the first pads
   kl.exec   v0, K0                # the next 12 bits, zero-extended
   vmv.x.s   t1, v0
-  bgeu      t1, t3, 1b            # reject a value >= q
+  bgeu      t1, t3, 2b            # reject a value >= q
   sh        t1, 0(a2)
   addi      a2, a2, 2
-  bne       a2, t4, 1b
+  bne       a2, t4, 2b
 ----

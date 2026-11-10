@@ -348,8 +348,29 @@ for f, limit in (('GCM', (1 << 39) - 256), ('GCM-SIV', 1 << 39)):
     m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC)
     m.payload_len = limit; m.exec('B' if m.two_pt else 'A', 0, 128)
     check(f + ' message-length limit enforced', m.st == INV)
+m = setup('GCM-SIV'); m.setst(LAST, 'B', 0); m.setst(PRE); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
+m.payload_len = (1 << 39) - 128; m.core.ctr = 2**32 - 1; m.exec('A', 0, 128)
+check('GCM-SIV block 2^32 admitted, 32-bit ctr wraps to 0', m.st == ENC and m.core.ctr == 0)
+m.exec('A', 0, 128); check('GCM-SIV block 2^32 + 1 invalidates by data_len', m.st == INV)
+m = setup('GCM-SIV'); m.ad_len = (1 << 39) - 128; m.exec('B', 0, 128)
+check('GCM-SIV AD of A_MAX = 2^36 bytes admitted', m.st == ABSORB)
+m.exec('B', 0, 128); check('GCM-SIV AD past A_MAX invalidates', m.st == INV)
+m = setup('GCM'); m.ad_len = mask(64) - 128; m.exec('B', 0, 128)
+check('GCM AD of 2^64 - 1 bits admitted', m.st == ABSORB)
 m = setup('OCB'); m.setst(LAST, 'B', 0); m.setst(ENC); m.core.index = MAX_BLOCKS + 1; m.exec('A', 0, 128)
 check('OCB message-length limit enforced by index', m.st == INV)
+
+m = replay_ready(); sc = m.export(); mu = m.machine_use
+check('GCM-SIV prepass done: generated_siv set, State Encrypt', m.st == ENC and mu & SIV_GENERATED)
+for st, u, ok in ((ENC, mu, True), (ENC, mu & ~SIV_GENERATED, False), (ETF, mu, True)):
+    m2 = model('GCM-SIV'); m2.import_(sc, st, u); check('GCM-SIV import State %d generated_siv=%d -> %s' % (st, bool(u & SIV_GENERATED), 'ok' if ok else 'Invalid'), (m2.st != INV) == ok)
+m = setup('GCM-SIV'); m.setst(LAST, 'B', 0); m.setst(PRE); sc = m.export()
+m2 = model('GCM-SIV'); m2.import_(sc, PRE, m.machine_use | SIV_GENERATED); check('GCM-SIV import Prepass with generated_siv set -> Invalid', m2.st == INV)
+m = replay_ready(); m.exec('A', b2v(msg(32)), 256); m.setst(ELB, 'B', 0); sc = m.export()
+m2 = model('GCM-SIV'); m2.import_(sc, ETF, m.machine_use); m2.exec('C', kllen=128); check('imported second Enc_Tag_Finalize checks the replay -> Success', m2.st == SUCCESS)
+
+m = model('GCM'); check('GCM SCC Position viii is zero in Ready', m.core.export()[0] >> (8 * len(m.key)) & mask(128) == 0)
+m = setup('GCM'); m.setst(READY, 'A'); check('GCM SCC Position viii is zero again on re-entering Ready', m.core.export()[0] >> (8 * len(m.key)) & mask(128) == 0)
 
 section('SCC authenticates public lengths and MachineUse flags; raw Content checks reject malformed headers')
 for f in FAMILIES:
@@ -369,5 +390,20 @@ for f in FAMILIES:
     check(f + ' SCC authenticates MachineUse flags', not ok)
     changed = bytearray(sc); changed[h - 2] = 1
     m.import_(changed, m.st); check(f + ' nonzero reserved header rejected', m.st == INV)
+
+section('Direction entry conditions on tag_received; Ready zeroes the received tag')
+for f in FAMILIES:
+    m = setup(f, tag=bytes(16)[:model(f).tag_len_p // 8]); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC)
+    check(f + ' encryption refused after a received tag', m.st == INV)
+    m = setup(f); m.setst(LAST, 'B', 0); m.setst(DEC); check(f + ' decryption refused without a received tag', m.st == INV)
+    m = setup(f, tag=b'\x5a' * (model(f).tag_len_p // 8)); m.setst(READY); sc = m.export(); h = sum(m.header_widths()) // 8
+    check(f + ' Ready zeroes the received tag', b2v(sc[h:h + 16]) == 0 and m.machine_use == 0)
+    m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC); sc = m.export()
+    m.import_(sc, DEC, m.machine_use); check(f + ' import of a decryption State without tag_received rejected', m.st == INV)
+    m = setup(f, tag=bytes(model(f).tag_len_p // 8)); m.setst(LAST, 'B', 0); m.setst(DEC); sc = m.export()
+    m.import_(sc, ENC, m.machine_use); check(f + ' import of an encryption State with tag_received rejected', m.st == INV)
+    if not m.two_pt:
+        m = setup(f); sc = bytearray(m.export()); h = sum(m.header_widths()) // 8; sc[h] = 1
+        m.import_(bytes(sc), m.st, m.machine_use); check(f + ' nonzero rx_tag without tag_received rejected', m.st == INV)
 
 done()
