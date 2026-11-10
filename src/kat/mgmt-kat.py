@@ -37,7 +37,7 @@ FIN(e,3); check('completing: Ready, StateExtension 0, MachineUse 0', stx(e, 3) =
 e = KLE(); e.mgmt(3, 56, md=mk(MachineUse=77, AuxInfo=5)); check('provisioning zeroes MachineUse', mdh_get(e.md(3), 'MachineUse') == 0)
 for nm, kw in (('State 1', dict(State=1)), ('StateExtension 1 (Error-State PI)', dict(StateExtension=1)), ('AuxDataLen 2', dict(AuxDataLen=2)),
                ('ADSDropped', dict(ADSDropped=1)), ('AuxDataLen 1', dict(AuxDataLen=1)), ('Version 1', dict(Version=1)), ('Version 2', dict(Version=2)),
-               ('Version 3 in a PI', dict(Version=3)), ('SCProtection 4', dict(SCProtection=4)), ('KeyType 3', dict(KeyType=3)),
+               ('Version 3 in a PI', dict(Version=3)), ('reserved bit 18', dict(Reserved18=1)), ('KeyType 3', dict(KeyType=3)),
                ('Locality[5:4]=3', dict(Locality=0x30)), ('reserved bit 46', dict(Reserved46=1)),
                ('reserved 78', dict(Reserved79_78=1)), ('reserved 116-127', dict(Reserved127_116=1)), ('MachinePolicy zero for TOYENC', dict(MachinePolicy=0)),
                ('KeyType 1 w/o key field', dict(KeyType=1)), ('KeyType 2 w/o key field', dict(KeyType=2))):
@@ -72,6 +72,12 @@ section('Error States  <<KLE-State-field>>, <<KLE-GR-outcome-inert>>')
 for se in range(1, 7):
     e = KLE(); e.setste(5, se); check('kl.setste #%d: State 0, StateExtension %d' % (se, se), stx(e, 5) == (0, se))
 check('kl.setste #6 reserved without Zklexpire -> illegal', trap(KLE(zk=False).setste, 5, 6) == 'illegal')
+for zk in (True, False):
+    e = KLE(zk=zk); x = mk(State=0, StateExtension=6)
+    check('Expired image, Zklexpire %s: kl.size 16 (GR52)' % ('present' if zk else 'absent'), e.size(form='C', md=x) == 16)
+    e.mgmt(2, 58, md=x)
+    check('Expired image, Zklexpire %s: short import gives %s' % (('present', 'Expired') if zk else ('absent', 'Invalid')),
+          stx(e, 2) == (0, 6 if zk else SE_INVALID))
 check('kl.setste #0 and #7 reserved -> illegal', trap(KLE().setste, 5, 0) == 'illegal' and trap(KLE().setste, 5, 7) == 'illegal')
 check('kl.setste Form C reserved (valid only F=00)', trap(KLE().setste, 5, 1, form='C') == 'illegal')
 e = KLE(); prov(e, 5); e.setste(5, 4); check('setste in a Valid State -> Error State; slot freed (GR15)', stx(e, 5) == (0, 4) and e.slots == 8)
@@ -191,7 +197,7 @@ e = KLE(); e.mgmt(2, 58, md=mdh_pack(State=0, StateExtension=9)); check('import 
 e2 = KLE(); r = trap(e2.mgmt, 2, 58, md=mk(mach=0x99, State=1)); check('import of unsupported Machine -> kl_exc_unsupported', r == 'unsupported' and e2.md(2) == 0)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3)); check('short import: Error-State MDH installed, no operation opened, no capacity', stx(e, 2) == (0, 3) and e.slots == 8)
 e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, MachineUse=5)); check('short import installs a valid MDH as is', e.md(2) == mk(State=0, StateExtension=3, MachineUse=5))
-e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, SCProtection=4)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
+e = KLE(); e.mgmt(2, 58, md=mk(State=0, StateExtension=3, Reserved18=1)); check('short import of invalid Metadata gives Error State Invalid', stx(e, 2) == (0, SE_INVALID))
 e = KLE(); e.mgmt(2, 58, md=im); c = 0xABCD; e.mvin(c, toy_tag(c)); e.mgmt(2, 63, form='C', md=im); check('import completion with valid tag: State = ml.State', stx(e, 2) == (1, 0) and e.L[2].content == c)
 e = KLE(); e.mgmt(2, 58, md=im); e.mvin(0xABCD, 1); e.mgmt(2, 63, form='C', md=im); check('import completion with bad tag: Error State Authentication Failed, no exception', stx(e, 2) == (0, SE_MGMT_AUTH))
 control('a wrong tag is detected (negative control)', e.getstx(2) == SE_MGMT_AUTH)
@@ -212,14 +218,14 @@ FIN(e,1); check('Ready TOYSIG: 32 + 32 = 64', e.size(1) == 64)
 e = KLE(); prov(e, 1); e.mgmt(1, 57, form='A'); check('size in State 57 as Valid: 32 + c1', e.size(1) == 48)
 e = KLE(); e.mgmt(2, 58, md=mk(State=56)); check('size in ppi_importing: 16 + c1', e.size(2) == 32)
 for nm, md, w in (('Form C PI', mk(), 32), ('Form B PI', mk(), 32), ('Form C Valid', mk(State=1), 48), ('State 61', mk(State=61), 0), ('State 0 SE 1 (Error)', mdh_pack(Machine=0x99, StateExtension=1), 16),
-                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('SCProtection 4', mk(SCProtection=4), 0), ('KeyType 3', mk(KeyType=3), 0),
+                  ('State 0 SE 7', mdh_pack(Machine=M_ENC, StateExtension=7), 0), ('Version 1', mk(Version=1), 0), ('reserved bit 18', mk(Reserved18=1), 0), ('KeyType 3', mk(KeyType=3), 0),
                   ('unsupported', mk(mach=0x99), 0), ('PI with ADS fields', mk(AuxDataLen=2), 0), ('Valid with AuxDataLen 3', mk(State=1, AuxDataLen=3), 64 + 16 + 16)):
     f = 'B' if 'Form B' in nm else 'C'
     check('kl.size %s = %d' % (nm, w), KLE().size(form=f, md=md) == w)
 check('kl.size Form B ignores bits above 63 (reserved bit 116)', KLE().size(form='B', md=mk() | 1 << 120) == 32 and KLE().size(form='C', md=mk() | 1 << 120) == 0)
 check('kl.size ignores UsagePolicy/Locality/KeyType 2 as 0', KLE().size(form='C', md=mk(KeyType=0)) == KLE().size(form='C', md=mk(mach=M_KEY, KeyType=2)))
 e = KLE(); prov(e, 1); check('kl.avail A: 1 for implemented Machine, 0 Unconfigured, 0 KLNL 32', e.avail(1) == 1 and e.avail(2) == 0 and (setattr(e, 'nl', 32), e.avail(0, r=1))[1] == 0)
-check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved SCProtection/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(SCProtection=4)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
+check('kl.avail B/C: 1 implemented; 0 for unimplemented; 0 for Version 1 and 2; Version 3 is answered by the Machine fields (m12); reserved bit 18/KeyType 0', KLE().avail(form='C', md=mk()) == 1 and KLE().avail(form='C', md=mk(mach=0x99)) == 0 and KLE().avail(form='C', md=mk(Version=1)) == 0 and KLE().avail(form='C', md=mk(Version=2)) == 0 and KLE().avail(form='C', md=mk(Version=3)) == 1 and KLE().avail(form='C', md=mk(Reserved18=1)) == 0 and KLE().avail(form='B', md=mk(KeyType=3)) == 0)
 check('kl.avail examines no field but Machine/Version/reserved: State 61 still 1', KLE().avail(form='C', md=mk(State=61)) == 1)
 check('kl.avail B ignores bits above 63', KLE().avail(form='B', md=mk() | 1 << 120) == 1)
 
@@ -242,6 +248,9 @@ e = rl(); e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('boot subfield md 
 check('boot subfield changing to another nonzero -> privilege violation', trap(e.rstr, 1, mdh_pack(Locality=0x20), part='h') == 'privilege_violation')
 e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('equal subfield no change', mdh_get(e.md(1), 'Locality') == 0x10)
 e = rl(); e.rstr(1, mdh_pack(Locality=0x1C0), part='h'); check('Locality bits 6-8 ORed', mdh_get(e.md(1), 'Locality') == 0x1C0)
+e = rl(); e.lst[2] = 0; e.rstr(1, mdh_pack(Locality=3), part='h'); check('rstr to unconfigured Locality entry without substitute -> Invalid', stx(e, 1) == INV)
+e = rl(); e.rstr(1, mdh_pack(Locality=0b0110), part='h'); e.lst[0] = e.lst[1] = e.lst[2] = 0
+check('unconfigured entry wins over privilege violation -> Invalid', trap(e.rstr, 1, mdh_pack(Locality=1), part='h') != 'privilege_violation' and stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(State=3), part='v'); check('non-allowed field (State) nonzero -> Error State Invalid', stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(AuxInfo=1), part='h'); check('AuxInfo nonzero in taken half -> Invalid', stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(UsagePolicy=1), part='l'); check('rstrl does not take [127:64]: UsagePolicy in request ignored', mdh_get(e.md(1), 'UsagePolicy') == 31 and e.getst(1) == 1)
@@ -366,7 +375,8 @@ check('kl.load copies [klstart, image_end) from Xs+offset; klstart written 0 on 
 e = opened(E2()); e.start = 16; e.load(mem, 0x100); check('kl.load resumes at klstart 16: S[16:32] = mem[addr+16:addr+32], S[0:16] untouched', bytes(e.img(0)) == bytes(16) + d[16:32])
 e = opened(E2()); check('kl.load: Xl != 0 with klnamedlocker < 32 -> illegal', trap(e.load, mem, 0x100, 4) == 'illegal')
 e = opened(E2()); check('kl.load misaligned address -> address-misaligned exception', trap(e.load, mem, 0x101) == 'load_misaligned')
-e = E2(); e.nl = 4; check('misalignment is locker-state-independent: raised even for an Unconfigured named locker', trap(e.load, mem, 0x101) == 'load_misaligned')
+e = E2(); e.nl = 4; check('no access, no misalignment: Unconfigured named locker falls through (GR12 item 8, as RVV with vl = 0)', trap(e.load, mem, 0x101) is None)
+e = opened(E2()); e.start = 4096; check('empty window: no address-misaligned exception', trap(e.load, mem, 0x101) is None)
 e = E2(); e.start = 7; e.load(mem, 0x101); check('nl=32, Xl=0: no operation, klstart written 0, no alignment check, no Zklio check', e.start == 0)
 e = opened(E2()); e.mgmt(0, 63, md=mk(State=56)); check('kl.load on a Valid State locker -> illegal', trap(e.load, mem, 0x100) == 'illegal')
 e = E2(); e.nl = 4; e.start = 3; e.load(mem, 0x100); check('kl.load on Unconfigured locker: no memory access, klstart 0', e.start == 0)
@@ -968,4 +978,6 @@ control('negative: setst Encrypt with pol=2 reaches Invalid, not Encrypt', (lamb
 control('negative: validate rejects Version 1 and accepts the plain PI', validate(mk(Version=1), 'provision') == 'invalid' and validate(mk(), 'provision') == 'ok')
 control('negative: kl.size of a valid MDH is non-zero and of an invalid one zero', KLE().size(form='C', md=mk()) != 0 and KLE().size(form='C', md=mk(Version=1)) == 0)
 control('negative: unconfigured test is not true for an Error State', not is_unconfigured(mdh_pack(StateExtension=2)))
+k = KLE(); check('kl.size Form B: Version 1 Error-State MDH -> 0, Version checked before State (m3)', k.size(form='B', md=mdh_pack(Version=1, State=0, StateExtension=2)) == 0)
+check('kl.size Form B: Version 0 Error-State MDH -> 16', k.size(form='B', md=mdh_pack(State=0, StateExtension=2)) == 16)
 done()

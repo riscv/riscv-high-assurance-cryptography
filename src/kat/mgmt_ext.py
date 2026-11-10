@@ -161,14 +161,14 @@ class KLE2(KLE):
         s._pre1()
         if form != 'A' and s.kleemu:
             m = md & (mask(64) if form == 'B' else mask(128)); st, se = mdh_get(m, 'State'), mdh_get(m, 'StateExtension')
-            early = st >= 61 or (st == 0 and se) or mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'SCProtection') >= 4 or mdh_get(m, 'KeyType') == 3
+            early = st >= 61 or (st == 0 and se) or mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'Reserved18') or mdh_get(m, 'KeyType') == 3
             if not early and mdh_get(m, 'Machine') not in CONTENT: raise IllegalInstruction('kleemulation')
         return KLE.size(s, kd, r, form, md)
     def avail(s, kd=0, r=0, form='A', md=0):
         s._pre1()
         if form != 'A' and s.kleemu:
             m = md & (mask(64) if form == 'B' else mask(128))
-            early = mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'SCProtection') >= 4 or mdh_get(m, 'KeyType') == 3
+            early = mdh_get(m, 'Version') in (1, 2) or mdh_get(m, 'Reserved18') or mdh_get(m, 'KeyType') == 3
             if not early and mdh_get(m, 'Machine') not in CONTENT: raise IllegalInstruction('kleemulation')
         return KLE.avail(s, kd, r, form, md)
     # ---- Locker checks of mv / load / store (<<KLE-mv-locker-checks>>)
@@ -224,7 +224,11 @@ class KLE2(KLE):
     def _mem_pre(s, mem, addr, xl, store):
         s.common()
         if s.nl != NONE and xl: raise IllegalInstruction('Xl != 0 with a locker')
-        if s.nl != NONE and addr % 16: raise Trap('store_misaligned' if store else 'load_misaligned')
+        if s.nl == NONE: return
+        s._off(s.nl)                                       # GR12 item 6 precedes item 8
+        md = s.md(s.nl)                                    # item 8: only if an access is performed (GR41)
+        if mdh_get(md, 'State') != 0 and s.start < size_of(md) - 16 and addr % 16:
+            raise Trap('store_misaligned' if store else 'load_misaligned')
     def load(s, mem, addr, xl=0):
         s._mem_pre(mem, addr, xl, False)
         if s.nl == NONE:

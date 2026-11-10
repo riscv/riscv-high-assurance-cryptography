@@ -2,7 +2,8 @@
 written from Zkl-ISA-machines.adoc (KLE-hash-functions-MACs-XOFs, KLE-process-VLI, KLE-SHA-3, KLE-KMAC, KLE-Ascon-*).
 
 L = Locker(kind, policy=0, K=b'', S=b'', key=b'', tag_len_p=None);  L.setst(imm, form, xs=0, inp=b'');
-  AEAD: tag_len_p defaults to 128; a value outside 64..128 gives Invalid (MR12).  policy 0 means 3, and 2 for
+  AEAD: tag_len_p defaults to 128; a value other than a multiple of 8 in 64..128 gives Invalid (MR12).
+  KMAC128/KMAC256: tag_len_p defaults to b; a multiple of 8 in 32..b, b with an SKID (MR12).  policy 0 means 3, and 2 for
   _NONCE, which admits no other value (MR1): any other policy gives Invalid.
 L.exec(form, inp=b'' | None, klstart=0, out=None, halt=None) -> klstart'   (0 when the instruction completed)
   Form B: inp = INPUT bytes;  Form C/A output: out = bytearray (window, KLLEN = len(out)); Form A input: inp.
@@ -50,6 +51,8 @@ class Locker:
             rb = self.block_len // 8
             self.cs = b2v(R.bytepad(R.encode_string(b'KMAC') + R.encode_string(S), rb))
             self.kb = b2v(R.bytepad(R.encode_string(K), rb))
+            self.tag_len_p = self.block_len if tag_len_p is None else tag_len_p
+            bad = bad or self._tlp_bad()                       # MR12: provisioning completes into Invalid
         elif kind in ASCONP:
             self.fam = 'ahash'; self.iv, self.d = ASCONP[kind]; self.block_len = self.t = 64; self.state_len = 320; self.xof = self.d == 0
         elif kind in AEADV:
@@ -58,7 +61,7 @@ class Locker:
             self.tag_len_p = 128 if tag_len_p is None else tag_len_p
             if self.var == 'wsn' and policy in (0, 2): self.policy = 2
             elif self.var == 'wsn': bad = True                  # MR1: a preset nonce admits only MachinePolicy 0b10
-            if not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
+            if self.tag_len_p % 8 or not 64 <= self.tag_len_p <= 128: bad = True       # MR12: provisioning completes into Invalid
         else: raise ValueError(kind)
         self.P = R.keccak_f if self.state_len == 1600 else R.ascon12
         self.st, self.se, self.mdh = READY, 0, 0
@@ -68,6 +71,9 @@ class Locker:
             self.invalid(); self.se = 1             # unsupported Metadata: State 0, StateExtension 1
 
     # ---- helpers
+    def _tlp_bad(self):
+        return not self.xof and (self.tag_len_p % 8 or not 32 <= self.tag_len_p <= self.block_len
+                                 or self.skid is not None and self.tag_len_p != self.block_len)
     def mdh_state(self): return (self.st, self.se if self.st == 0 else 2 * self.sealed)   # Sealed: StateExtension bit 1
     def is_error(self): return self.st == 0 and self.se != 0
     def inert(self): return self.st == 0 and self.se == 0
@@ -145,7 +151,7 @@ class Locker:
                 else: self.xw(0, 1 << self.bb); self.perm(12)
                 self.zlen = self.cum = 0
             elif st == AUX: return False
-            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return True
+            self.st = ABSORB; self.bb = 0; return True
         if imm == LAST and st == ABSORB and form in 'AB':
             if form == 'A': xs = 0
             if xs > self.block_len or (xs % 8 and not self.bits_ok): return self.invalid() or True
@@ -179,7 +185,7 @@ class Locker:
         st = self.st
         if imm == ABSORB and st == READY and form == 'A':
             self.s ^= self.cs; self.s = self.P(self.s); self.s ^= self.kb; self.s = self.P(self.s)
-            self.st = ABSORB; self.lbl = self.block_len; self.bb = 0; return
+            self.st = ABSORB; self.bb = 0; return
         if imm == LAST and st == ABSORB and form in 'AB':
             return self._gen_setst(imm, form, xs) or self.invalid()
         if imm in (OUTPUT_, VERIFY) and st in (ABSORB, LAST) and form in 'AB':
@@ -190,7 +196,8 @@ class Locker:
                     if form != 'B' or not (32 <= xs < 1 << 32) or not self.policy & 1 and self.policy: return self.invalid()
                 elif xs and (xs % 8 or xs >= 1 << 32): return self.invalid()
             else:
-                if self.xof or form != 'B' or xs % 8 or not 32 <= xs <= self.block_len or (self.policy and not self.policy & 2): return self.invalid()
+                if self.xof or form != 'B' or xs % 8 or min(xs, self.block_len) != self.tag_len_p or (self.policy and not self.policy & 2): return self.invalid()
+                xs = self.tag_len_p                                # SET_TAG_LEN(b), L <- tag_len_p
             self.L = xs; self._finalize(); self.bb = self.lbl = 0
             if imm == OUTPUT_: self.ol = xs; self.st = OUTPUT_
             else: self.ol = xs; self.st = VERIFY
@@ -395,9 +402,10 @@ class Locker:
 
     def export(self):
         if self.fam == 'aead':
+            # last_block_len, padding, rx_tag (this model verifies in Hash_Verify: zero), key, state; tag_len is tag_len_p
             kf = v2b(self.skid, 8) if self.skid is not None else v2b(self.key, 16)
             if self.var == 'mask' and self.skid is None: kf += v2b(self.k2, 16)
-            r = kf + v2b(self.s, 40) + v2b(self.lbl, 2) + v2b(self.tag_len, 2)
+            r = v2b(self.lbl, 1) + bytes(31) + kf + v2b(self.s, 40)
             if self.var == 'wsn': r += v2b(self.nonce, 16)
             return r + bytes(-len(r) % 16)
         n = 200 if self.state_len == 1600 else 40
@@ -407,20 +415,20 @@ class Locker:
         return head
 
     def import_(self, sc, st, se=0, tag_len_p=None):
-        """st, se: State and StateExtension to restore; tag_len_p: AuxInfo of the MDH (None: 128)."""
+        """st, se: State and StateExtension to restore; tag_len_p: AuxInfo of the MDH (None: 128 for AEAD, unchanged for KMAC)."""
         if self.fam == 'aead':
-            o = 8 if self.skid is not None else 16
+            o = 40 if self.skid is not None else 48
             if self.skid is not None:
-                ent = self.sks.get(b2v(sc[:8]))
+                ent = self.sks.get(b2v(sc[32:40]))
                 if ent is None: return self.invalid()             # GR55.3
                 self.key, self.k2 = ent if self.var == 'mask' else (ent, 0)
             else:
-                self.key = b2v(sc[:16])
-                if self.var == 'mask': self.k2 = b2v(sc[16:32]); o = 32
-            self.s = b2v(sc[o:o + 40]); self.lbl = b2v(sc[o + 40:o + 42]); self.tag_len = b2v(sc[o + 42:o + 44])
-            self.tag_len_p = 128 if tag_len_p is None else tag_len_p
-            if self.var == 'wsn': self.nonce = b2v(sc[o + 44:o + 60])
-            if not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
+                self.key = b2v(sc[32:48])
+                if self.var == 'mask': self.k2 = b2v(sc[48:64]); o = 64
+            self.lbl = sc[0]; self.s = b2v(sc[o:o + 40])
+            self.tag_len = self.tag_len_p = 128 if tag_len_p is None else tag_len_p
+            if self.var == 'wsn': self.nonce = b2v(sc[o + 40:o + 56])
+            if self.tag_len_p % 8 or not 64 <= self.tag_len_p <= 128: return self.invalid()   # MR12: import completes into Invalid
         else:
             n = 200 if self.state_len == 1600 else 40
             self.s = b2v(sc[:n]); self.bb = b2v(sc[n:n + 2]); self.lbl = b2v(sc[n + 2:n + 4]); v = b2v(sc[n + 4:n + 8])
@@ -430,6 +438,8 @@ class Locker:
                 rb = self.block_len // 8; self.cs = b2v(sc[n + 8:n + 8 + rb])
                 if self.skid is None: self.kb = b2v(sc[n + 8 + rb:n + 8 + 2 * rb])
                 self.L = self.ol if st in (OUTPUT_, BITS, VERIFY) else 0
+                if tag_len_p is not None: self.tag_len_p = tag_len_p
+                if self._tlp_bad() or st == VERIFY and self.L != self.tag_len_p: return self.invalid()   # MR12
         if se & 2 and (self.fam == 'aead' or st not in (ABSORB, LAST, OUTPUT_, SUCCESS)): return self.invalid()   # Sealed @ State unsupported
         self.st, self.se, self.sealed = st, 0, bool(se & 2)
 

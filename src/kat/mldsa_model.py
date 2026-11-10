@@ -1,6 +1,6 @@
 """FIPS 204 (ML-DSA), written from the standard (Algorithms 6, 7, 8, 14-20, 22-37, 40-46).
 
-Independent of src/kat/fips204.py.  The external message representative mu is an input
+The external message representative mu is an input
 (Sign_internal / Verify_internal with mu supplied, as the KLE ML-DSA Machine does).
 
 API

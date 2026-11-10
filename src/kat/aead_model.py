@@ -158,8 +158,9 @@ class GCM(Base):
     def _ready(self):
         self.auth = self.E(0)
         self.tag = self.tag_len = 0
-        if not hasattr(self, 'lbl'): self.lbl = 0
-        if not hasattr(self, 'J0'): self.J0 = self.start_ctr = 0      # Ready entry does not touch J0, start_ctr
+        self.lbl = 0
+        if not self.IV: self.J0 = 0
+        if not hasattr(self, 'start_ctr'): self.start_ctr = 0      # Ready entry does not touch start_ctr
         self.len = self.block_base = self.cumul = 0
         if self.IV: self.J0 = (self.J0 & mask(96)) | bswap(1, 4) << 96
         self.klstart = 0
@@ -250,7 +251,7 @@ class GCM(Base):
     def export(self):
         kb = 8 * len(self.key)
         if self.st == SAV:
-            j = self.pack((self.len, 16), (0, 16), (self.block_base, 16), (self.cumul, 48), (0, 32))[0]
+            j = self.pack((0, 32), (self.block_base, 16), (self.cumul, 48), (0, 32))[0]
         else: j = self.J0
         tl = self.tag_len
         return self.pack((b2v(self.key), kb), (j, 128), (self.tag, 128), (self.start_ctr, 32), (self.lbl, 16), (tl, 16))
@@ -262,7 +263,7 @@ class GCM(Base):
         m.key = v2b(k, keybytes); m.auth = m.E(0)
         m.st, m.tag, m.start_ctr, m.lbl, m.tag_len, m.tag_len_p = st, tag, sctr, lbl, tl, tlp
         if st == SAV:
-            m.len, _, m.block_base, m.cumul = sl(j, 15, 0), 0, sl(j, 47, 32), sl(j, 95, 48); m.J0 = 0
+            m.block_base, m.cumul = sl(j, 47, 32), sl(j, 95, 48); m.J0 = 0  # the IV length is in the public prefix
         else: m.J0 = j
         try:
             if cls.IV: need(sctr == 1)
@@ -299,7 +300,7 @@ class GCMSIV(Base):
         self._ready()
     def _ready(self):
         self.nonce = self.ctr = self.tmp = self.siv = 0
-        if not hasattr(self, 'lbl'): self.lbl = 0     # Ready entry leaves last_block_len
+        self.lbl = 0
         self.ek = self.ak = None
     def _derive(self):
         k = len(self.key) * 8
@@ -318,10 +319,9 @@ class GCMSIV(Base):
         t = self.tmp
         return self.EE(cat((0, 1), (sl(t, 126, 96), 31), (sl(t, 95, 0) ^ self.nonce, 96)))
     def _ks(self):
-        need(self.ctr != 2**32)
-        s = self.siv
+        s = self.siv                                        # the data_len bound (UnifiedAEAD._add) keeps ctr from wrapping
         k = self.EE(cat((1, 1), (sl(s, 126, 32), 95), ((sl(s, 31, 0) + self.ctr) % 2**32, 32)))
-        self.ctr += 1; return k
+        self.ctr = (self.ctr + 1) % 2**32; return k
     def _exec(self, st, inp, kllen, klstart, halt_at):
         if st == ABSORB: return self._multi(inp, kllen, klstart, halt_at, lambda x: self.absorb(x))
         if st == ETF:
@@ -348,14 +348,13 @@ class GCMSIV(Base):
         need(False)
     def export(self):
         kb = 8 * len(self.key)
-        return self.pack((b2v(self.key), kb), (self.nonce, 96), (self.ctr & mask(32), 32), (self.siv, 128), (self.tmp, 128),
-                         ((self.ctr >> 32) << 15 | self.lbl, 16))
+        return self.pack((b2v(self.key), kb), (self.nonce, 96), (self.ctr, 32), (self.siv, 128), (self.tmp, 128), (self.lbl, 16))
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=3, cipher='AES128'):
         m = cls._blank(keybytes, policy, cipher)
         k, n, c, siv, tmp, x = cls.unpack(sc, (8 * keybytes, 96, 32, 128, 128, 16))
         m.key = v2b(k, keybytes); m.nonce, m.siv, m.tmp, m.st = n, siv, tmp, st
-        m.ctr = c | (x >> 15) << 32; m.lbl = x & 127
+        m.ctr = c; m.lbl = x & 127
         if st != READY: m._derive()
         return m
 
@@ -387,7 +386,8 @@ class OCB(Base):
         if not hasattr(self, 'N') or not self.PRESET: self.N = self.N_len = 0
         self.hasN = False
         self.hash_A = self.csum = self.index = 0
-        if not hasattr(self, 'offset'): self.offset = self.lbl = 0     # Ready entry leaves offset, L*, last_block_len
+        self.lbl = 0
+        if not hasattr(self, 'offset'): self.offset = 0     # Ready entry leaves offset, L*
         self.tag_len = 128
         if not hasattr(self, 'Ls'): self.Ls = None
         self.Ld = None; self.L = []
@@ -467,15 +467,14 @@ class OCB(Base):
     def export(self):
         return self.pack((b2v(self.key), 8 * len(self.key)), (self.N, 120), (self.N_len, 7), (0, 1),
                          (self.Ls if self.Ls is not None else 0, 128), (self.offset, 128), (self.hash_A, 128), (self.csum, 128),
-                         (self.index, 49), (self.tag_len // 32 - 2, 2), (self.lbl, 7))
+                         (self.index, 49), (0, 2), (self.lbl, 7))   # tag_len is tag_len_p, from AuxInfo
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=None):
         m = cls._blank(keybytes, policy)
         k, N, nl, _, Ls, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 128, 49, 2, 7))
         m.key = v2b(k, keybytes); m.st, m.N, m.N_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
         m.hasN = m.N_len != 0
-        if tl == 3 or (cls.PRESET and not 6 <= nl <= 120): m._fail(); return m
-        m.tag_len = 32 * (tl + 2)
+        if tl or (cls.PRESET and not 6 <= nl <= 120): m._fail(); return m
         if st not in (READY, SAV): m._setup()
         return m
 
@@ -509,7 +508,7 @@ class CMAC(Base):
         super().__init__(key, policy, tag_len_p)
     def tlps(self): return tuple(range(64, self.B + 1, 8))
     def _ready(self):
-        self.hash = self.lbl = self.tag_len = 0; self.any = self.all = False
+        self.hash = self.lbl = 0; self.any = self.all = False
     def _dbl(self, s): return double(s, self.B)
     def _noexec(self, st): return st == HABL and (self.all or self.lbl == 0)
     def _subkeys(self):
@@ -524,7 +523,7 @@ class CMAC(Base):
                 self.hash = self.E(self.hash ^ cat((0, b - 8), (0x80, 8)) ^ K2); self.all = True
         elif st == HOUT: need(self.all)
         elif st == HV:
-            need(xs % 8 == 0 and xs >= 64 and self.all and min(xs, b) == self.tag_len_p); self.tag_len = min(xs, b)   # MR12
+            need(xs % 8 == 0 and xs >= 64 and self.all and min(xs, b) == self.tag_len_p)   # MR12
     def _exec(self, st, inp, kllen, klstart, halt_at):
         b = self.B
         if st == ABSORB:
@@ -541,22 +540,22 @@ class CMAC(Base):
             need(kllen is not None and kllen >= self.tag_len_p); self.st = SUCCESS
             return self.hash & mask(self.tag_len_p)
         if st == HV:
-            need(kllen is not None and kllen >= self.tag_len)
-            ok = sl(inp, self.tag_len - 1, 0) == sl(self.hash, self.tag_len - 1, 0)
+            need(kllen is not None and kllen >= self.tag_len_p)
+            ok = sl(inp, self.tag_len_p - 1, 0) == sl(self.hash, self.tag_len_p - 1, 0)
             self.st = SUCCESS if ok else FAILURE; return 0
         need(False)
     def derive_src(self):
         if self.st == INV: return None
         if self.st != HOUT or not self.all: self._fail(); return None
-        return v2b(self.hash, self.B // 8)
+        return v2b(self.hash & mask(self.tag_len_p), self.tag_len_p // 8)   # what Form C would emit
     def export(self):
         b = self.B
-        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (self.tag_len, 32), (int(self.any), 1), (int(self.all), 1))
+        return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (int(self.any), 1), (int(self.all), 1))
     @classmethod
     def from_sc(cls, st, sc, keybytes=16, policy=None, cipher='AES128', tag_len_p=None):
         m = cls._blank(keybytes, policy, cipher)
         tlp = max(m.tlps()) if tag_len_p is None else tag_len_p      # AuxInfo of the MDH
-        k, h, lb, tl, a, al = cls.unpack(sc, (8 * keybytes, m.B, 32, 32, 1, 1))
-        m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.tag_len, m.any, m.all, m.tag_len_p = st, h, lb, tl, bool(a), bool(al), tlp
+        k, h, lb, a, al = cls.unpack(sc, (8 * keybytes, m.B, 32, 1, 1))
+        m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.any, m.all, m.tag_len_p = st, h, lb, bool(a), bool(al), tlp
         if tlp not in m.tlps(): m._fail()                             # MR12
         return m

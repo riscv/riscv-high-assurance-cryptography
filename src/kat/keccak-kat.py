@@ -181,7 +181,7 @@ section('Provisioning Input and Serialized Content')
 for k in ALL:
     L = Locker(k); sc0 = L.export(); check(k + ' SC length 208 B (1664 bits), Ready all zero', len(sc0) == 208 and sc0 == bytes(208))
 L = Locker('SHA3-256'); L.setst(2, 'A'); L.exec('B', msg(5)); sc = L.export()
-check('SC layout: state | block_base 40 | last_block_len = b | out_len 0', sc[200:202] == v2b(40, 2) and sc[202:204] == v2b(1088, 2) and sc[204:208] == bytes(4))
+check('SC layout: state | block_base 40 | last_block_len 0 | out_len 0', sc[200:202] == v2b(40, 2) and sc[202:204] == v2b(0, 2) and sc[204:208] == bytes(4))
 L.setst(6, 'B', 96); sc = L.export(); check('SC in Hash_Output: out_len = 96, last_block_len = 0', sc[204:208] == v2b(96, 4) and sc[202:204] == bytes(2))
 for k in ('SHA3-384', 'SHAKE256'):
     m = msg(50)
@@ -259,7 +259,7 @@ for n in (15, 16):
     check('a sealed secret of %d bytes: %s' % (n, 'the source Invalid, the message unchanged (GR29 item 7)' if n < 16 else 'enters, Sealed set'),
           (s.bad and d.se == 0 and d.bb == 0 and not d.sealed) if n < 16 else (not s.bad and d.sealed))
 for sealed in (False, True):
-    d = Locker('KMAC128', K=b'k' * 16); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=sealed), d, 32); d.setst(VERIFY, 'B', 256)
+    d = Locker('KMAC128', K=b'k' * 16, tag_len_p=256); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=sealed), d, 32); d.setst(VERIFY, 'B', 256)
     check('KMAC128 %s secret in the message: kl.setst naming Hash_Verify %s' % (('a sealed', '-> Invalid') if sealed else ('an unsealed', 'admitted')),
           d.se == SE_INV if sealed else d.st == VERIFY)
 # StateExtension @ State at an SCC import (KLE-Metadata-validity)

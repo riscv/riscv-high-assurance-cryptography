@@ -62,7 +62,7 @@ def machine_checks(fn, ref):
         L = mk(); L.setst('absorb'); run(L, [msg]) if msg else None; return L
     section('%s: state machine' % fn)
     L = mk(); check('%s Ready: S = IV, fields zero' % fn, L.st == 'Ready' and (L.lbl, L.bb, L.cum, L.outl, L.blk) == (0,) * 5)
-    L.setst('absorb'); check('%s Absorb entry sets last_block_len = block_len' % fn, L.st == 'Absorb' and L.lbl == block_len)
+    L.setst('absorb'); check('%s Absorb entry keeps last_block_len = 0' % fn, L.st == 'Absorb' and L.lbl == 0)
     check('%s Form B kl.setst naming Ready -> Invalid' % fn, inv(_do(at('A'), 'ready', 'B', 8)))
     check('%s Form B kl.setst naming Hash_Absorb -> Invalid' % fn, inv(_do(mk(), 'absorb', 'B', 8)))
     L = at('A'); L.exec('B', b'ab', halt=False); L.exec('B', b''); L.exec('B', b'c')
@@ -117,7 +117,7 @@ def machine_checks(fn, ref):
     check('%s fields in order' % fn, (w[0], w[-1]) == (f.state_len, block_len) and w[1:-1] == [16, 16, 32, 64] and names[1:3] == ['last_block_len', 'block_base'], names)
     pad = -sum(w) % 128; check('%s Serialized Content: %d bits + %d padding = multiple of 128' % (fn, sum(w), pad), (sum(w) + pad) % 128 == 0)
     L = at('A', msg_of(block_len // 8 + 5)); fl = {n: v for n, v, _ in L.fields()}
-    check('%s fields after block_len/8+5 bytes: block_base = 40, cumul_len = block_len+40, last_block_len = block_len' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, block_len + 40, block_len))
+    check('%s fields after block_len/8+5 bytes: block_base = 40, cumul_len = block_len+40, last_block_len = 0' % fn, (fl['block_base'], fl['cumul_len'], fl['last_block_len']) == (40, block_len + 40, 0))
     for cut in (0, 1, block_len // 8 - 1, block_len // 8, block_len // 8 + 3):
         m = msg_of(cut + 77); L = at('A', m[:cut]); L2 = copy.deepcopy(L); run(L2, [m[cut:]]); L2.setst('output')
         check('%s export/import after %d bytes continues to the same digest' % (fn, cut), out_all(L2, d) == ref(m))
@@ -197,6 +197,10 @@ def bits_checks(fn, mk, ref):
     """Hash_Output_Bits (State 16) of KLE-hash-functions-MACs-XOFs; mk() -> a locker in Hash_Output whose output is ref."""
     section('%s: Hash_Output_Bits' % fn)
     R = b2v(ref); D = 8 * len(ref)
+    if mk().f.kind in ('sha2', 'sm3'):                                     # whole bytes only (KLE-SHA-2)
+        L = mk(); x, n, c = read_bits(L, 16); check('%s Xs = 16: the first two bytes' % fn, (x, n, c, L.st) == (R & mask(16), 16, True, 'Bits'))
+        L = mk(); L.setst('bits', 'B', 12); check('%s Xs = 12, not a multiple of 8 -> Invalid' % fn, inv(L))
+        return
     for pieces, kl, halts in (((1, 3, 7, 8, 13), None, False), ((61, 5, 100), 16, True), ((3, 4000), 24, True), ((D,), 8, True)):
         L = mk(); v = got = 0; clean = True; i = 0
         while L.st == 'Output' or L.st == 'Bits':

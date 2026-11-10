@@ -69,7 +69,7 @@ Lk = Locker(k, K=KEY); Lk.setst(2, 'A'); Lk.exec('B', b'abc'); Lk.setst(6, 'B', 
 check('KMACXOF Xs=80 sets L: output = KMAC reference with right_encode(0) prefix, Success', Lk.st == SUCCESS and o[:10] == want[:10] and o[10:] == bytes(10))
 
 section('States and transitions')
-def kl(k='KMAC128'): L = Locker(k, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); return L
+def kl(k='KMAC128', tlp=None): L = Locker(k, K=KEY, tag_len_p=tlp); L.setst(2, 'A'); L.exec('B', b'abc'); return L
 for xs in (0, 31, 2 ** 32):
     L = kl(); L.setst(6, 'B', xs) if xs else L.setst(6, 'A'); check('KMAC128 Hash_Output Xs=%d / Form A -> Invalid' % xs, L.se == SE_INV)
 L = kl('KMACXOF128'); L.setst(6, 'B', 12); check('KMACXOF Xs=12 (not whole bytes) -> Invalid', L.se == SE_INV)
@@ -80,25 +80,30 @@ L = kl(); L.setst(2, 'A'); check('same-state setst -> Invalid', L.se == SE_INV)
 L, _ = mac('KMAC128', KEY, b'abc'); L.exec('C', out=bytearray(4)); check('exec in Success -> Invalid', L.se == SE_INV)
 L, _ = mac('KMAC128', KEY, b'abc', b'', 256); L.setst(1, 'A'); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B', 256); o = bytearray(32); L.exec('C', out=o)
 check('Success -> Ready re-absorbs cshake_block and key_block', bytes(o) == refmac('KMAC128', KEY, b'abc', b'', 256))
-L = kl(); L.setst(5, 'B', 40); check('Hash_Verify on KMAC128 Xs=40 admitted', L.st == VERIFY)
+L = kl(); L.setst(5, 'B', 1344); check('Hash_Verify on KMAC128 Xs=b = default tag_len_p admitted', L.st == VERIFY)
+L = kl(); L.setst(5, 'B', 2048); check('Hash_Verify Xs > b: min(Xs, b) = tag_len_p admitted, L = b', L.st == VERIFY and L.L == 1344)
+L = kl(); L.setst(5, 'B', 128); check('Hash_Verify Xs=128 != tag_len_p=b -> Invalid (MR12)', L.se == SE_INV)
+for tlp in (31, 36, 1344 + 8):
+    check('provisioning tag_len_p=%d -> Invalid (MR12)' % tlp, Locker('KMAC128', K=KEY, tag_len_p=tlp).se == SE_INV)
+check('KMACXOF ignores tag_len_p', Locker('KMACXOF128', K=KEY, tag_len_p=36).st == READY)
 L = kl('KMACXOF128'); L.setst(5, 'B', 128); check('Hash_Verify on KMACXOF -> Invalid', L.se == SE_INV)
-for xs in (31, 36, 8 * 168 + 8):
+for xs in (31, 36, 40, 1344 - 8):
     L = kl(); L.setst(5, 'B', xs); check('Hash_Verify Xs=%d -> Invalid' % xs, L.se == SE_INV)
 L = kl(); L.setst(5, 'A'); check('Hash_Verify Form A -> Invalid', L.se == SE_INV)
 
 section('Hash_Verify')
 tag = refmac('KMAC128', KEY, b'abc', b'', 128)
 def verify(t, xs=128, kllen=None):
-    L = kl(); L.setst(5, 'B', xs); L.exec('B', t if kllen is None else t[:kllen]); return L
+    L = kl(tlp=xs); L.setst(5, 'B', xs); L.exec('B', t if kllen is None else t[:kllen]); return L
 check('matching tag -> Success', verify(tag).st == SUCCESS)
 bad = bytearray(tag); bad[7] ^= 0x10; check('flipped tag bit -> Failure', verify(bytes(bad)).st == FAILURE)
 bad = bytearray(tag + b'\xaa'); check('bytes beyond L ignored -> Success', verify(bytes(bad)).st == SUCCESS)
 check('KLLEN < L -> Invalid', verify(tag, kllen=15).se == SE_INV)
 L = verify(tag); L.exec('B', tag); check('exec in Success after verify -> Invalid', L.se == SE_INV)
 t40 = refmac('KMAC128', KEY, b'abc', b'', 40); check('L=40 verify', verify(t40, 40).st == SUCCESS)
-L = Locker('KMAC128', policy=1, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy bit0 only: Hash_Verify not admitted', L.se == SE_INV)
+L = Locker('KMAC128', policy=1, K=KEY, tag_len_p=128); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy bit0 only: Hash_Verify not admitted', L.se == SE_INV)
 L = Locker('KMAC128', policy=2, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B', 128); check('MachinePolicy bit1 only: Hash_Output not admitted', L.se == SE_INV)
-L = Locker('KMAC128', policy=2, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy bit1: Hash_Verify admitted', L.st == VERIFY)
+L = Locker('KMAC128', policy=2, K=KEY, tag_len_p=128); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy bit1: Hash_Verify admitted', L.st == VERIFY)
 
 section('Final piece of any bit length')
 for k in ('KMAC128', 'KMAC256', 'KMACXOF256'):
@@ -190,13 +195,18 @@ Ls = Locker('KMAC128', skid=0x0101010101010101, sks=SKS, S=b'cust')
 check('SKID-keyed KMAC128 = KMAC with the resolved key', macof(Ls) == v2b(R.ref_kmac(168, KEY, b'abc', 256, b'cust'), 32))
 check('SC with SKID: key_block replaced by the 8-byte SKID', len(Ls.export()) == 208 + 168 + 8, len(Ls.export()))
 check('unresolved SKID -> Invalid at provisioning', Locker('KMAC128', skid=0x0202020202020202, sks=SKS).se == SE_INV)
+check('SKID-keyed KMAC128 with tag_len_p < b -> Invalid (MR12)', Locker('KMAC128', skid=0x0101010101010101, sks=SKS, tag_len_p=128).se == SE_INV)
+L = kl(tlp=128); L.setst(5, 'B', 128); sc = L.export(); L2 = Locker('KMAC128', tag_len_p=128); L2.import_(sc, VERIFY); L2.exec('B', v2b(R.ref_kmac(168, KEY, b'abc', 128), 16))
+check('import into Hash_Verify with matching tag_len_p, verify -> Success', L2.st == SUCCESS)
+L2 = Locker('KMAC128'); L2.import_(sc, VERIFY, tag_len_p=256); check('import into Hash_Verify with L != tag_len_p -> Invalid', L2.se == SE_INV)
+L2 = Locker('KMAC128'); L2.import_(sc, ABSORB, tag_len_p=36); check('import with tag_len_p=36 -> Invalid', L2.se == SE_INV)
 d = Locker('KMAC128', skid=0x0101010101010101, sks=SKS); d.setst(2, 'A'); s = Secret(b'S' * 32); derive(s, d, 32)
 check('derive into SKID-keyed KMAC absorb is still admitted (message input)', d.st == ABSORB)
 for pol, vo, vv in ((1, True, False), (2, False, True), (3, True, True)):
     L = Locker('KMAC128', policy=pol, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B', 128); check('MachinePolicy=%d: Hash_Output %s' % (pol, 'admitted' if vo else 'refused'), (L.st == OUTPUT_) == vo)
-    L = Locker('KMAC128', policy=pol, K=KEY); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy=%d: Hash_Verify %s' % (pol, 'admitted' if vv else 'refused'), (L.st == VERIFY) == vv)
+    L = Locker('KMAC128', policy=pol, K=KEY, tag_len_p=128); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(5, 'B', 128); check('MachinePolicy=%d: Hash_Verify %s' % (pol, 'admitted' if vv else 'refused'), (L.st == VERIFY) == vv)
 L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(1); L.setst(2, 'A'); L.setst(6, 'B', 128); check('rstrl 3 -> 1: Hash_Output stays admitted', L.st == OUTPUT_)
-L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(1); L.setst(2, 'A'); L.setst(5, 'B', 128); check('rstrl 3 -> 1: Hash_Verify now refused', L.se == SE_INV)
+L = Locker('KMAC128', policy=3, K=KEY, tag_len_p=128); L.rstrl(1); L.setst(2, 'A'); L.setst(5, 'B', 128); check('rstrl 3 -> 1: Hash_Verify now refused', L.se == SE_INV)
 L = Locker('KMAC128', policy=1, K=KEY); L.rstrl(2); check('rstrl narrowing to a forbidden value (0 bits) -> Invalid (GR20)', L.se == SE_INV)
 L = Locker('KMAC128', policy=3, K=KEY); L.rstrl(mask(64)); check('rstrl all-ones: unchanged', L.policy == 3 and L.st == READY)
 for k in ('KMACXOF128', 'KMACXOF256'):
@@ -205,9 +215,9 @@ for k in ('KMACXOF128', 'KMACXOF256'):
 section('Form D (KLIOBUF substitution of kl.exec)')
 L = Locker('KMAC128', K=KEY); L.setst(2, 'A'); L.exec_d(bytearray(b'abc'), 3); L.setst(6, 'B', 256); io = bytearray(b'\xff' * 40); L.exec_d(io, 40)
 check('Form D absorb and output: KMAC128 with window 40 B, tail cleared (MR9)', bytes(io) == v2b(R.ref_kmac(168, KEY, b'abc', 256), 32) + bytes(8))
-L = Locker('KMAC128', K=KEY); L.setst(2, 'A'); L.exec_d(bytearray(b'abc'), 3); L.setst(5, 'B', 256)
+L = Locker('KMAC128', K=KEY, tag_len_p=256); L.setst(2, 'A'); L.exec_d(bytearray(b'abc'), 3); L.setst(5, 'B', 256)
 tag = v2b(R.ref_kmac(168, KEY, b'abc', 256), 32); L.exec_d(bytearray(tag), 32); check('Form D Hash_Verify of the right tag -> Success', L.st == SUCCESS)
-L = Locker('KMAC128', K=KEY); L.setst(2, 'A'); L.exec_d(bytearray(b'abc'), 3); L.setst(5, 'B', 256); L.exec_d(bytearray(32), 32); check('Form D Hash_Verify of a wrong tag -> Failure', L.st == FAILURE)
+L = Locker('KMAC128', K=KEY, tag_len_p=256); L.setst(2, 'A'); L.exec_d(bytearray(b'abc'), 3); L.setst(5, 'B', 256); L.exec_d(bytearray(32), 32); check('Form D Hash_Verify of a wrong tag -> Failure', L.st == FAILURE)
 L = Locker('KMAC128', K=KEY); io = bytearray(b'q' * 4); L.exec_d(io, 4); check('Form D exec in Ready -> Invalid, window zeroed', L.se == SE_INV and bytes(io) == bytes(4))
 check('Form D with unconfigured KLIOBUF -> illegal instruction', raises(lambda: Locker('KMAC128', K=KEY).exec_d(bytearray(4), 0), exc=IllegalInstruction))
 
