@@ -44,7 +44,7 @@ Without these Rules, interposed software could skip its operand prefix or use th
 [[KLE-SR-klstart-save,SR3]]SR3:: <<KLE-interposed-software,Interposed software>> must save `klstart` (`kl.getks` or a CSR read) before any other KLE instruction, write 0 to it before its first instruction that honors it, and restore it before returning to the interrupted software.
 A handler that skips the trapping instruction applies the retirement effects to `klstart` instead (Rule <<KLE-SR-handler-duty>>).
 
-[[KLE-SR-klstart-no-reset,SR4]]SR4:: Software should not write 0 to `klstart` to restart a `kl.exec` or `kl.derive` that has committed per-block state effects.
+[[KLE-SR-klstart-no-reset,SR4]]SR4:: Software should not write 0 to `klstart` to restart a `kl.exec` that has committed per-block state effects.
 
 [[KLE-SR-klstart-iobuf,SR5]]SR5:: Software that transfers an image through the KLIOBUF must save `klstart` after each `kl.mvin KLIOBUF` or `kl.mvout KLIOBUF`, write 0 to it before the `kl.input` or `kl.output` that next fills or drains the KLIOBUF, and restore it before the next `kl.mvin KLIOBUF` or `kl.mvout KLIOBUF`.
 
@@ -105,7 +105,7 @@ Unless it terminates the owner, software must complete a base or nested export b
 [[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a `kl.mvin` or `kl.mvout` sequence by the image size read with `kl.size` beforehand and check the _State_ afterward.
 `klstart` is not a loop bound (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>).
 
-[[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export, or in the MDH that `kl.getmd*` returned when the image is the MDH alone, is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
+[[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export is neither _Unconfigured_ nor an Error State or, when the image is the MDH alone, if the MDH that `kl.getmd*` returned is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
 After a `kl.mgmt` that opens an export from a Valid State, software must continue only if the _State_ is `kl_cfg_exporting`; a Valid State means a refusal (<<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>).
 
 [[KLE-SR-csk-change,SR16]]SR16:: M-mode must not change the value of a CSK (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>), or erase it without keeping what re-establishes the same value, until every export open on the hart under it, base or nested, has completed and its image has been saved.
@@ -187,6 +187,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 . Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
 These Rules make it the owner of the authentication registers, if a locker owns them (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
+If the field of the managed locker that the saving mode owns is _Off_, keep its saved image and treat it as a locker other than the managed locker in <<KLE-restore-order>>: a locker under deferred restore has no open operation in the hardware.
 If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>), choosing the path by its _State_, read with `kl.getst`, and transferring through GPRs or vector registers, not the KLIOBUF, which step 4 has yet to save:
 .. _Unconfigured_: save no locker image;
 .. an Error State: save its MDH by the short Error-State path (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
@@ -421,7 +422,7 @@ finished:
   kl.getst   t2, KLNL
   beqz       t2, handle_errors    # cleared, or Error State set meanwhile
   li         t3, kl_cfg_provisioning # 56, the lowest Configuration State
-  bltu       t2, t3, export_refused # Valid State: export refused (Rule SR15)
+  bltu       t2, t3, export_refused # Valid State: export refused
   kl.size    t2, KLNL             # size now that the export is open
   bne        t2, s1, handle_errors # ADS changed since the buffer was sized
   addi       s1, s1, -16          # adjust size to remove the MDH
@@ -981,7 +982,9 @@ When `CTStealing` is set, `crypt_full_blocks` holds back the final full block an
       kl.exec  K                   # Form D: verifies the retained tag
       require(kl.getst(K) == kl_state_success)
   else:
-      kl.exec  tag, K              # Form C: the tag; enters Success
+      kl.exec  tag, K              # Form C: the tag; Success, or Failure
+                                   # with a zero tag if a replayed PT changed
+      require(kl.getst(K) == kl_state_success)
 ----
 
 [[KLE-pseudocode-unified-AEAD-final]]

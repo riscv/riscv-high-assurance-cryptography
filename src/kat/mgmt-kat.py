@@ -248,6 +248,9 @@ e = rl(); e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('boot subfield md 
 check('boot subfield changing to another nonzero -> privilege violation', trap(e.rstr, 1, mdh_pack(Locality=0x20), part='h') == 'privilege_violation')
 e.rstr(1, mdh_pack(Locality=0x10), part='h'); check('equal subfield no change', mdh_get(e.md(1), 'Locality') == 0x10)
 e = rl(); e.rstr(1, mdh_pack(Locality=0x1C0), part='h'); check('Locality bits 6-8 ORed', mdh_get(e.md(1), 'Locality') == 0x1C0)
+e = rl(); e.lst[2] = 0; e.rstr(1, mdh_pack(Locality=3), part='h'); check('rstr to unconfigured Locality entry without substitute -> Invalid', stx(e, 1) == INV)
+e = rl(); e.rstr(1, mdh_pack(Locality=0b0110), part='h'); e.lst[0] = e.lst[1] = e.lst[2] = 0
+check('unconfigured entry wins over privilege violation -> Invalid', trap(e.rstr, 1, mdh_pack(Locality=1), part='h') != 'privilege_violation' and stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(State=3), part='v'); check('non-allowed field (State) nonzero -> Error State Invalid', stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(AuxInfo=1), part='h'); check('AuxInfo nonzero in taken half -> Invalid', stx(e, 1) == INV)
 e = rl(); e.rstr(1, mdh_pack(UsagePolicy=1), part='l'); check('rstrl does not take [127:64]: UsagePolicy in request ignored', mdh_get(e.md(1), 'UsagePolicy') == 31 and e.getst(1) == 1)

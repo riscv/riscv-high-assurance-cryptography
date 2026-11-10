@@ -283,6 +283,8 @@ for f in FAMILIES:
     check(f + ' disabled decryption invalidates tag load', m.st == INV)
     m = setup(f); m.setst(LAST, 'B', 129)
     check(f + ' oversized final piece invalidates', m.st == INV)
+    m = setup(f); m.setst(LAST, 'B', 64); m.setst(READY); r = model(f); r.setst(READY)
+    check(f + ' abandoned final piece: Ready zeroes last_block_len', m.lbl == 0 and m.export() == r.export())
     # Interface path: Set_Tag_Value only from Hash_Absorb, before any AD, once, with Xs = tag_len_p
     m = model(f); m.setst(SAV2, 'B', m.tag_len_p)
     check(f + ' tag load from Ready invalidates', m.st == INV)

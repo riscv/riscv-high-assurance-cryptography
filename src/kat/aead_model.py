@@ -158,8 +158,9 @@ class GCM(Base):
     def _ready(self):
         self.auth = self.E(0)
         self.tag = self.tag_len = 0
-        if not hasattr(self, 'lbl'): self.lbl = 0
-        if not hasattr(self, 'J0'): self.J0 = self.start_ctr = 0      # Ready entry does not touch J0, start_ctr
+        self.lbl = 0
+        if not self.IV: self.J0 = 0
+        if not hasattr(self, 'start_ctr'): self.start_ctr = 0      # Ready entry does not touch start_ctr
         self.len = self.block_base = self.cumul = 0
         if self.IV: self.J0 = (self.J0 & mask(96)) | bswap(1, 4) << 96
         self.klstart = 0
@@ -299,7 +300,7 @@ class GCMSIV(Base):
         self._ready()
     def _ready(self):
         self.nonce = self.ctr = self.tmp = self.siv = 0
-        if not hasattr(self, 'lbl'): self.lbl = 0     # Ready entry leaves last_block_len
+        self.lbl = 0
         self.ek = self.ak = None
     def _derive(self):
         k = len(self.key) * 8
@@ -385,7 +386,8 @@ class OCB(Base):
         if not hasattr(self, 'N') or not self.PRESET: self.N = self.N_len = 0
         self.hasN = False
         self.hash_A = self.csum = self.index = 0
-        if not hasattr(self, 'offset'): self.offset = self.lbl = 0     # Ready entry leaves offset, L*, last_block_len
+        self.lbl = 0
+        if not hasattr(self, 'offset'): self.offset = 0     # Ready entry leaves offset, L*
         self.tag_len = 128
         if not hasattr(self, 'Ls'): self.Ls = None
         self.Ld = None; self.L = []
@@ -545,7 +547,7 @@ class CMAC(Base):
     def derive_src(self):
         if self.st == INV: return None
         if self.st != HOUT or not self.all: self._fail(); return None
-        return v2b(self.hash, self.B // 8)
+        return v2b(self.hash & mask(self.tag_len_p), self.tag_len_p // 8)   # what Form C would emit
     def export(self):
         b = self.B
         return self.pack((b2v(self.key), 8 * len(self.key)), (self.hash, b), (self.lbl, 32), (int(self.any), 1), (int(self.all), 1))

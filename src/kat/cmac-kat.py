@@ -189,6 +189,7 @@ check('verify-only: Hash_Verify allowed', (lambda m: (m.setst(HV, 'B', 128), m.s
 m = CMAC(key); m.rstr(1); check('restrict 3 -> 1', m.policy == 1 and m.st == READY)
 m.rstr(2); check('restrict to disjoint (0): Invalid', inv(m))
 m = at(HOUT); src = m.derive_src(); check('Hash_Output as kl.derive source supplies b/8 bytes of hash', src == v2b(m.hash, 16) and len(src) == 16)
+m = at(HOUT, tag_len_p=96); src = m.derive_src(); check('tag_len_p=96: kl.derive source supplies the 12-byte Form C output', src == v2b(m.exec('C', 0, 128), 12))
 m = at(HOUT, 'TDEA'); check('TDEA Hash_Output derive source supplies 8 bytes', len(m.derive_src()) == 8)
 check('kl.derive source in Hash_Absorb: Invalid', inv((lambda m: (m.derive_src(), m)[1])(at(ABSORB))))
 k2 = RB(16); m = CMAC(key); m.derive_dest(k2); check('derive into key in Ready: new key', cmac_gen(m, b'hello') == cmac_gen(CMAC(k2), b'hello'))

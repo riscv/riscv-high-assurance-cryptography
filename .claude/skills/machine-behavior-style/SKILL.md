@@ -1,6 +1,7 @@
 ---
 name: machine-behavior-style
-description: Rewrite a long paragraph in a KLE Machine's State Machine Behavior (Zkl-ISA-machines.adoc) into the house structure: entering / while in / leaving steps, one closing Invalid line, rationale moved to a NOTE. Use when asked to make a Machine description "structured", "concise" or "like 5.4.6".
+description: >-
+  Rewrite a long paragraph in a KLE Machine's State Machine Behavior (Zkl-ISA-machines.adoc) into the house structure: entering / while in / leaving steps, one closing Invalid line, rationale moved to a NOTE. Use when asked to make a Machine description "structured", "concise" or "like 5.4.6".
 ---
 
 # Restructuring Machine State Behavior text

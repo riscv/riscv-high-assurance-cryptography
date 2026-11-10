@@ -256,6 +256,7 @@ class KLE:
             e, c = mdh_get(rq, 'ExpirationDate'), mdh_get(m, 'ExpirationDate')
             if e and (c == 0 or e <= c): m = mdh_put(m, 'ExpirationDate', e)
             lm, lr = mdh_get(m, 'Locality'), mdh_get(rq, 'Locality'); out = lm
+            if not all(s.conf(j) for j in loc_entries(lr)): s.err(k, SE_INVALID); return   # validity before privilege
             for sh, hw in ((0, 1), (2, 1), (4, 0)):
                 a, b = lm >> sh & 3, lr >> sh & 3
                 if b == 0 or b == a: continue

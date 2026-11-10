@@ -145,6 +145,7 @@ class Locker:
                 if s.st != 'Output': return
                 st = 'Output'
             if st not in ('Output', 'Bits') or form != 'B' or not 0 < Xs < 2**16: return s.inv()
+            if f.kind in ('sha2', 'sm3') and Xs % 8: return s.inv()            # SHA-2/SM3: whole bytes only
             s.lbl = Xs; s.st = 'Bits'; return                                  # no finalize(); block_base, out_len kept
         if imm == 'aux':
             if st != 'Ready' or f.kind != 'blake2' or form != 'B': return s.inv()
