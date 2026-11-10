@@ -62,6 +62,8 @@ for f in FAMILIES:
     check(f + ' descriptor independent of key', i == UnifiedAEAD(f, msg(16)).getinfo())
     before = m.export(); check(f + ' query leaves Content unchanged', m.getinfo() == i and m.export() == before)
     m._fail(); check(f + ' invalid locker returns zero', m.getinfo() == 0)
+    for st in (19, 20):                 # reserved CT prepass States
+        m = model(f); m.setst(st); check(f + ' kl.setst into reserved State %d: Invalid' % st, m.st == INV)
 
 section('Common driver: independent reference')
 for f in FAMILIES:

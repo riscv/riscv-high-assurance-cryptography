@@ -238,8 +238,8 @@ Each Machine states, for each of its States:
 
 * the bit of _MachinePolicy_ (<<Zkl-ISA-unpriv.adoc#KLE-Machine-field>>), if any, that enables its operation; “if encryption is allowed” refers to _MachinePolicy_[0] and “if decryption is allowed” to _MachinePolicy_[1].
 A bit gates the States of its operation and every State that follows uniquely from them, its _Gated States_:
-** encryption: _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_;
-** decryption: _Decrypt_, _Dec_Last_Block_, and _Dec_Tag_Finalize_;
+** encryption: _AEAD_Prepass_, _AEAD_Prepass_Last_, _Encrypt_, _Enc_Last_Block_ and _Enc_Tag_Finalize_;
+** decryption: _Set_Tag_Value_, _Decrypt_, _Dec_Last_Block_, and _Dec_Tag_Finalize_;
 ** signature generation: _Sign_Generate_, _Output_ with a signature, and _Sign_Output_;
 ** signature verification: _Sign_Input_ and _Sign_Verify_;
 ** MAC generation: _Hash_Output_ and _Hash_Output_Bits_; MAC verification: _Hash_Verify_; and
@@ -526,8 +526,8 @@ Absorb data: the message of a hash function, MAC or XOF, or the associated data 
 |  16   |  `kl_state_hash_output_bits`     | _Hash_Output_Bits_  | Output the hash a set number of bits at a time.
 |  17   |  `kl_state_aead_prepass`         | _AEAD_Prepass_      | Read plaintext before the encryption pass of an AEAD Machine that requires it.
 |  18   |  `kl_state_aead_prepass_last`    | _AEAD_Prepass_Last_ | Process the final piece of that plaintext prepass.
-|  19   |  `kl_state_aead_ct_prepass`      | _AEAD_CT_Prepass_   | Read ciphertext before the decryption pass of an AEAD Machine that requires it.
-|  20   |  `kl_state_aead_ct_prepass_last` | _AEAD_CT_Prepass_Last_ | Process the final piece of that ciphertext prepass.
+|  19   |  `kl_state_aead_ct_prepass`      | _AEAD_CT_Prepass_   | Reserved for future use: a ciphertext prepass of an AEAD Machine.
+|  20   |  `kl_state_aead_ct_prepass_last` | _AEAD_CT_Prepass_Last_ | Reserved for future use: the final piece of that ciphertext prepass.
 |===
 
 Rule <<KLE-operation-immediates>> applies to the Machines that use
@@ -1045,11 +1045,27 @@ Setting the tweak is an operation, not a State (Rule <<KLE-operation-immediates>
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-unified-AEAD]]
-=== Unified AEAD Algorithm Interface
+=== Unified AEAD Machine Interface
 
-This interface defines processing for GCM, GCM-SIV, OCB and Ascon-AEAD128, including their preset-nonce and nonce-masking variants. It supersedes their state transitions, input and final-block handling, and caller-supplied length blocks. The individual sections define only primitive, key, nonce, tag-length, and cryptographic-function requirements.
+This interface defines processing for GCM, GCM-SIV, OCB and Ascon-AEAD128, including their preset-nonce and nonce-masking variants.
+It defines their state transitions, input and final-block handling, and caller-supplied length blocks, so that the same code can be used with all AEAD Machines. Since some methods may require a different number of passes on the Associated Data (AD), Plaintext (PT) and Ciphertext (CT), software learns about this by issuing the instruction `kl.getinfo`: the latter returns this public descriptor for an AEAD locker:
 
-In what follows, PT and CT denote the plaintext and ciphertext bit strings, not their transport buffers.
+[[KLE-unified-AEAD-info]]
+[cols="^15%,^20%,<65%",options="header"]
+|===
+| Bits | Name | Meaning
+| [3:0] | `glog` | Base-2 logarithm of meaningful-input granularity in bits.
+| 4 | `TwoPTPasses` | Encryption reads PT once to authenticate it and again to encrypt it.
+| 5 | `TwoCTPasses` | Decryption requires two CT traversals.
+| 6 | `CTStealing` | The AEAD algorithm uses ciphertext stealing.
+| [XLEN-1:7] | Reserved | Zero.
+|===
+
+All current profiles return zero for `TwoCTPasses` and `CTStealing`; their ordinary final partial blocks are not ciphertext stealing. These two bits are defined only for a possible future AEAD Machine: this interface gives them no semantics.
+
+Note that AD, PT and CT denote the associated data, plaintext and ciphertext bit strings, not their transport buffers.
+
+The individual sections of the aforementioned AEAD Machines define only primitive, key, nonce, tag-length, and cryptographic-function requirements.
 
 [cols="<22%,<22%,<20%,<18%,<18%",options="header"]
 |===
@@ -1064,7 +1080,7 @@ In what follows, PT and CT denote the plaintext and ciphertext bit strings, not 
 | Ascon-AEAD128 Nonce Masking | Ascon | Supplied 128-bit nonce, masked internally | 64 to 128 bits, a multiple of 8 | One PT, one CT
 |===
 
-Supplied-nonce profiles begin with nonce setup. Preset-nonce profiles begin with AD and retain their decryption-only _MachinePolicy_. Every current profile has transfer-block size `b` = 128. `glog` is 3 for GCM, GCM-SIV and OCB, and 0 for Ascon-AEAD128. The selected Machine's `tag_len_p` remains in _AuxInfo_.
+Supplied-nonce profiles begin with nonce setup. Preset-nonce profiles begin with AD and retain their decryption-only _MachinePolicy_. Every current profile has transfer-block size `b` = 128. `glog` is 3 for GCM, GCM-SIV and OCB, and 0 for Ascon-AEAD128. The selected Machine's `tag_len_p` remains in _AuxInfo_. Each Machine's Parameters give `b`, `glog`, its nonce lengths, its `tag_len_p` values, and its bounds on `ad_len` and `data_len`, if any.
 
 Data Structures::
 
@@ -1074,9 +1090,9 @@ Each Unified AEAD Content begins with a public prefix holding those of the follo
 * `nonce_len`: supplied-nonce length, held by a Machine that admits more than one.
 * `last_block_len`: meaningful length of a final piece.
 
-The Unified AEAD profiles use _MachineUse_[2:0] for `tag_received`, `ad_absorbed`, and `generated_siv`, respectively. The _Set_Tag_Value_ `kl.exec` sets `tag_received`, the first `kl.exec` that commits AD sets `ad_absorbed`, and the `kl.exec` that issues a SIV sets `generated_siv`, which a Machine without `TwoPTPasses` keeps zero. The remaining bits of _MachineUse_ are implementation-defined (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>). These flags are public, authenticated MDH state; entering _Ready_ clears them and zeroes the received tag, held in `rx_tag`, or in `SIV` for GCM-SIV.
+The Unified AEAD profiles use _MachineUse_[2:0] for `tag_received`, `ad_absorbed`, and `generated_siv`, respectively. The _Set_Tag_Value_ `kl.exec` sets `tag_received`, the first `kl.exec` that commits AD sets `ad_absorbed`, and the `kl.exec` that issues a SIV sets `generated_siv`, which a Machine without `TwoPTPasses` keeps zero. The remaining bits of _MachineUse_ are implementation-defined (<<Zkl-ISA-unpriv.adoc#KLE-MachineUse>>). These flags are public, authenticated MDH state; entering _Ready_ clears them and zeroes the received tag, held in `rx_tag`; a SIV Machine, such as GCM-SIV, names it `SIV`.
 
-Entering _Ready_ zeroes the counters and `last_block_len`, where the Machine holds them. The counters increase only when `kl.exec` commits meaningful input; they exclude transport padding, zero fill, cryptographic padding, tags, and Machine-generated length blocks. A `kl.exec` in _Hash_Absorb_ or _Hash_Absorb_Last_Block_ adds to `ad_len`, and one in any other State of the table below except _Set_Aux_Value_, _Set_Tag_Value_ and the tag States adds to `data_len`, the bit length of the meaningful input that it commits: `b` per whole block, and `last_block_len` for a final piece. A `kl.exec` that would carry a counter past the bound that its Machine states transitions the locker to Error State _Invalid_ and performs no operation. Each Machine's Data Structures section gives its PI and SCC formats, including the applicable public prefix and private algorithm state. The public prefix contributes to `SCC_ClearLen1` and is authenticated before import restores it.
+Entering _Ready_ zeroes the counters and `last_block_len`, where the Machine holds them. The counters increase only when `kl.exec` commits meaningful input, and only the first _Enc_Tag_Finalize_ of a Machine with `TwoPTPasses` zeroes `data_len` (<<KLE-unified-AEAD>> Behavior); they exclude transport padding, zero fill, cryptographic padding, tags, and Machine-generated length blocks. A `kl.exec` in _Hash_Absorb_ or _Hash_Absorb_Last_Block_ adds to `ad_len`, and one in any other State of the table below except _Set_Aux_Value_, _Set_Tag_Value_ and the tag States adds to `data_len`, the bit length of the meaningful input that it commits: `b` per whole block, and `last_block_len` for a final piece. A `kl.exec` that would carry a counter past the bound that its Machine states transitions the locker to Error State _Invalid_ and performs no operation. Each Machine's Data Structures section gives its PI and SCC formats, including the applicable public prefix and private algorithm state. The public prefix contributes to `SCC_ClearLen1` and is authenticated before import restores it.
 
 An import of an SCC with a nonzero reserved bit, an inconsistent flag or State, or a counter beyond the selected standard's bound completes into Error State _Invalid_. The Machine enforces its standard's per-message bounds; the caller retains nonce uniqueness, aggregate key-use, and failed-verification limits (<<KLE-MGR-caller-limits>>).
 
@@ -1091,7 +1107,6 @@ State Machine::
 | _Hash_Absorb_, _Hash_Absorb_Last_Block_ | Process AD, then its final piece.
 | _Set_Tag_Value_ | Load the received tag for decryption, before the AD.
 | _AEAD_Prepass_, _AEAD_Prepass_Last_ | Read PT without output when `TwoPTPasses` is set.
-| _AEAD_CT_Prepass_, _AEAD_CT_Prepass_Last_ | Read CT without output when `TwoCTPasses` is set.
 | _Encrypt_, _Enc_Last_Block_; _Decrypt_, _Dec_Last_Block_ | Process PT or CT and its final piece.
 | _Enc_Tag_Finalize_, _Dec_Tag_Finalize_ | Produce or verify, respectively, the tag.
 |===
@@ -1099,33 +1114,106 @@ State Machine::
 * *Allowed State Transitions:* Each Machine admits only the paths that use its State subset.
  ** Encryption: _Ready_ -> { _Set_Aux_Value_ -> } _Hash_Absorb_ -> _Hash_Absorb_Last_Block_. A Machine with `TwoPTPasses` then takes _AEAD_Prepass_ -> _AEAD_Prepass_Last_ -> _Enc_Tag_Finalize_ -> _Encrypt_; every other Machine enters _Encrypt_ directly.
  ** Encryption completes _Encrypt_ -> _Enc_Last_Block_ -> _Enc_Tag_Finalize_ -> _Success_, or, for a Machine with `TwoPTPasses`, _Failure_ when the replayed PT differs from the prepass.
- ** Decryption: _Ready_ -> { _Set_Aux_Value_ -> } _Hash_Absorb_ -> _Set_Tag_Value_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_. A Machine with `TwoCTPasses` then takes _AEAD_CT_Prepass_ -> _AEAD_CT_Prepass_Last_ -> _Decrypt_; every other Machine enters _Decrypt_ directly. _Set_Tag_Value_ is entered from _Hash_Absorb_ only while `ad_absorbed` and `tag_received` are clear, and its `kl.exec` returns to _Hash_Absorb_.
- ** Entry conditions (Rule <<KLE-MGR-policy-gate>>): _Decrypt_, _AEAD_CT_Prepass_ and, by the bypass, _Dec_Tag_Finalize_ require `tag_received` = 1; _Encrypt_, _AEAD_Prepass_ and, by the bypass, _Enc_Tag_Finalize_ require `tag_received` = 0. An import of an SCC whose State is one of these States, or their last-block and tag States, with `tag_received` of the other value completes into Error State _Invalid_.
+ ** Decryption: _Ready_ -> { _Set_Aux_Value_ -> } _Hash_Absorb_ -> _Set_Tag_Value_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_ -> _Decrypt_. _Set_Tag_Value_ is entered from _Hash_Absorb_ only while `ad_absorbed` and `tag_received` are clear, and its `kl.exec` returns to _Hash_Absorb_.
+ ** Entry conditions (Rule <<KLE-MGR-policy-gate>>): _Decrypt_ and, by the bypass, _Dec_Tag_Finalize_ require `tag_received` = 1; _Encrypt_, _AEAD_Prepass_ and, by the bypass, _Enc_Tag_Finalize_ require `tag_received` = 0. An import of an SCC whose State is one of these States, or their last-block and tag States, with `tag_received` of the other value completes into Error State _Invalid_.
  ** Decryption completes _Decrypt_ -> _Dec_Last_Block_ -> _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
  ** For an empty final piece, a Form A `kl.setst` from _Encrypt_ into _Enc_Tag_Finalize_, resp. from _Decrypt_ into _Dec_Tag_Finalize_, bypasses the last-block State (Rule <<KLE-MGR-single-last-block>>).
 
-* *Common Behavior:*
- ** The `kl.setst` naming _Set_Tag_Value_ is of Form B, and its `Xs` must equal `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
- ** A `kl.setst` naming _Set_Tag_Value_ in that State transitions the locker to Error State _Invalid_.
- ** The `kl.exec` instructions of _Hash_Absorb_, _Hash_Absorb_Last_Block_, _AEAD_Prepass_, _AEAD_Prepass_Last_, _AEAD_CT_Prepass_ and _AEAD_CT_Prepass_Last_ are of Form B, and those of _Encrypt_, _Enc_Last_Block_, _Decrypt_ and _Dec_Last_Block_ are of Form A. In _Hash_Absorb_, _AEAD_Prepass_, _AEAD_CT_Prepass_, _Encrypt_ and _Decrypt_, `KLLEN` is a multiple of `b`; any other `KLLEN` violates the granularity (Rule <<KLE-MGR-granularity>>). The interruption points of a `kl.exec` in these States are the multiples of `b`/8 bytes (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>); the input granularity and `glog` give only the admissible lengths of a final piece. Each final-piece State invokes `FINAL_BLOCK_ENTRY` (<<KLE-op-final-block-entry>>) with the range and granularity that its Machine states. It takes one `kl.exec` when nonzero, ignores transport bits above the meaningful length, zero-fills, and applies the algorithm's padding. The Machine forms every required length block. A zero-length piece completes its final action. Every other transition, repeated finalization other than the second _Enc_Tag_Finalize_ of a Machine with `TwoPTPasses`, and AD after its final piece is rejected. For such a Machine, `generated_siv` tells the two _Enc_Tag_Finalize_ apart: it is clear in _AEAD_Prepass_ and _AEAD_Prepass_Last_ and set in _Encrypt_ and _Enc_Last_Block_, and an import of an SCC in which it is not completes into Error State _Invalid_.
- ** The prepass authenticates its input. A replayed PT or CT is cryptographically bound to that prepass; a changed replay enters _Failure_. Rule <<Zkl-software.adoc#KLE-SR-unverified-plaintext>> applies to emitted PT until _Success_. If `CTStealing` is set, the final `kl.exec` takes the withheld full block followed by the partial block; its length is at least `b + last_block_len`.
+* *Machine Operations:* Each Machine defines those of the following operations that it uses, and the Behavior below invokes them. `X` is a `bits(b)` value. In a last-block operation, `n` = `last_block_len`, a multiple of `unit` = 2^`glog`^ with 0 {le} `n` {le} `b`, and `X` is `trunc(INPUT, n)`, which ignores transport bits above the meaningful length and is zero for `n` = 0. A Machine that does not define an operation performs nothing in its place.
++
+[cols="<50%,<50%",options="header"]
+|===
+| Operation | Invoked
+| `reset()` | On entering _Ready_.
+| `setup_nonce(X)` | In nonce setup.
+| `absorb_ad_full_block(X)`, `absorb_ad_last_block(X, n)` | In _Hash_Absorb_, resp. _Hash_Absorb_Last_Block_.
+| `absorb_pt_full_block(X)`, `absorb_pt_last_block(X, n)` | In _AEAD_Prepass_, resp. _AEAD_Prepass_Last_.
+| `begin_data()` | On entering the PT or CT phase.
+| `encrypt_full_block(X) -> bits(b)`, `encrypt_last_block(X, n) -> bits(n)` | In _Encrypt_, resp. _Enc_Last_Block_.
+| `decrypt_full_block(X) -> bits(b)`, `decrypt_last_block(X, n) -> bits(n)` | In _Decrypt_, resp. _Dec_Last_Block_.
+| `begin_replay()` | After a Machine with `TwoPTPasses` issues its SIV.
+| `compute_tag() -> bits(b)` | In _Enc_Tag_Finalize_ and _Dec_Tag_Finalize_.
+|===
++
+A Machine's operations apply its algorithm's padding and form every length block that its algorithm requires.
+
+* *Behavior:*
+ ** When entering State _Ready_: `reset()`.
+ ** Nonce setup, unless the Machine states otherwise:
+  *** In a supplied-nonce profile:
++
+--
+. When entering State _Set_Aux_Value_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` and auxiliary operand `Xs` selects the nonce length: `Xs` must be a nonce length of the Machine. A Machine with several nonce lengths holds `Xs` in `nonce_len` or in the field that it names.
+. In State _Set_Aux_Value_, a single Form B `kl.exec` performs `setup_nonce(INPUT)` (Rule <<KLE-MGR-fixed-width-input>>).
+. The locker transitions to State _Hash_Absorb_.
+--
+  *** In a preset-nonce profile, a Form A `kl.setst` with immediate `kl_state_hash_absorb` enters State _Hash_Absorb_ from _Ready_ and performs `setup_nonce(V)`, with `V` the preset value (<<KLE-op-preset-value>>).
+ ** To load the received tag:
++
+--
+. When entering State _Set_Tag_Value_, the `kl.setst` is of Form B, and its `Xs` must equal `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
+. In State _Set_Tag_Value_, a single Form B `kl.exec` performs `rx_tag <- INPUT[tag_len_p-1:0]`.
+--
+ ** While in a full-block State, a `kl.exec` performs for each block:
+  *** in _Hash_Absorb_ or _AEAD_Prepass_, of Form B and without output: `absorb_ad_full_block(INPUT)`, resp. `absorb_pt_full_block(INPUT)`;
+  *** in _Encrypt_ or _Decrypt_, of Form A: `OUTPUT <- encrypt_full_block(INPUT)`, resp. `OUTPUT <- decrypt_full_block(INPUT)`.
++
+In these States, `KLLEN` is a multiple of `b`; any other `KLLEN` violates the granularity (Rule <<KLE-MGR-granularity>>). The interruption points of a `kl.exec` in these States are the multiples of `b`/8 bytes (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruption-point>>); the input granularity and `glog` give only the admissible lengths of a final piece.
+ ** In a final-piece State:
++
+--
+. When entering it: `FINAL_BLOCK_ENTRY(0, b, unit)` (<<KLE-op-final-block-entry>>).
+. Its single `kl.exec` when `n` {ne} 0, or for an empty piece the `kl.setst` that enters or bypasses the State (Rule <<KLE-MGR-single-last-block>>), performs:
+.. in _Hash_Absorb_Last_Block_, of Form B: `absorb_ad_last_block(X, n)`. The final AD piece, even an empty one, is processed in this State;
+.. in _AEAD_Prepass_Last_, of Form B: `absorb_pt_last_block(X, n)`;
+.. in _Enc_Last_Block_, of Form A: `OUTPUT <- encrypt_last_block(X, n)`;
+.. in _Dec_Last_Block_, of Form A: `OUTPUT <- decrypt_last_block(X, n)`.
+--
+ ** When entering State _AEAD_Prepass_, _Encrypt_ or _Decrypt_ from _Hash_Absorb_Last_Block_: `begin_data()`.
+ ** In State _Enc_Tag_Finalize_, a single Form C `kl.exec`:
+  *** in a Machine without `TwoPTPasses`:
++
+--
+. `OUTPUT <- compute_tag()[tag_len_p-1:0]`.
+. The locker transitions to State _Success_.
+--
+  *** in a Machine with `TwoPTPasses`, with `generated_siv` clear, issues the SIV:
++
+--
+. `rx_tag <- compute_tag()`.
+. `OUTPUT <- rx_tag[tag_len_p-1:0]`.
+. `begin_replay()`.
+. `data_len <- 0`.
+. It sets `generated_siv`.
+. The locker transitions to State _Encrypt_.
+
+NOTE: Zeroing `data_len` lets the second pass absorb and count the PT again.
+--
+  *** in a Machine with `TwoPTPasses`, with `generated_siv` set, checks the replay, with `T` a local `bits(b)`:
++
+--
+. `T <- compute_tag()`.
+. If `T[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>): `OUTPUT <- rx_tag[tag_len_p-1:0]`, and the locker transitions to State _Success_.
+. Otherwise: `OUTPUT <- zeros(tag_len_p)`, and the locker transitions to State _Failure_.
+--
+ ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec`:
++
+--
+. If `compute_tag()[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), the locker transitions to State _Success_.
+. Otherwise, the locker transitions to State _Failure_.
+--
+ ** In a Machine with `TwoPTPasses`, `generated_siv` tells the two _Enc_Tag_Finalize_ apart: it is clear in _AEAD_Prepass_ and _AEAD_Prepass_Last_, and set in _Encrypt_ and _Enc_Last_Block_.
+ ** Every other transition, repeated finalization other than the second _Enc_Tag_Finalize_ of a Machine with `TwoPTPasses`, and AD after its final piece is rejected.
+ ** The locker transitions to Error State _Invalid_ on:
++
+--
+. a `kl.setst` into _Set_Aux_Value_ whose `Xs` is not a nonce length of the Machine;
+. a `kl.setst` naming _Set_Tag_Value_ in that State;
+. an import of an SCC of a Machine with `TwoPTPasses` whose `generated_siv` is not as stated above for its State.
+--
+ ** The prepass authenticates its input. A replayed PT is cryptographically bound to that prepass; a changed replay enters _Failure_. Rule <<Zkl-software.adoc#KLE-SR-unverified-plaintext>> applies to emitted PT until _Success_.
  ** GCM and GCM-SIV form their GHASH or POLYVAL length blocks internally. OCB and Ascon apply their standard final-block rules internally. Ascon applies no AD padding to empty AD, but adds a padded block when nonempty AD ends at a block boundary.
  ** `kl.exec` transfers whole bytes. For a non-byte-aligned Ascon final bit string, the least significant bits of the final byte are meaningful; the Machine ignores the rest and does not round the message length upward.
-
-[[KLE-unified-AEAD-info]]
-`kl.getinfo` returns this public descriptor for an AEAD locker:
-
-[cols="^15%,^20%,<65%",options="header"]
-|===
-| Bits | Name | Meaning
-| [3:0] | `glog` | Base-2 logarithm of meaningful-input granularity in bits.
-| 4 | `TwoPTPasses` | Encryption reads PT once to authenticate it and again to encrypt it.
-| 5 | `TwoCTPasses` | Decryption requires two CT traversals.
-| 6 | `CTStealing` | The AEAD algorithm uses ciphertext stealing.
-| [XLEN-1:7] | Reserved | Zero.
-|===
-
-All current profiles return zero for `TwoCTPasses` and `CTStealing`; their ordinary final partial blocks are not ciphertext stealing.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1394,6 +1482,8 @@ Software holds the same key in another locker when it can provision, by its SKID
 [[KLE-GCM-mode]]
 === GCM Mode
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>); this section gives only the details specific to the mode.
+
 The GCM mode was designed by David McGrew and John Viega cite:[DBLP-conf-indocrypt-McGrewV04] and became a NIST Recommendation in 2007 cite:[nist-SP-800-38D].
 cite:[nist-SP-800-38D] {sect}5.1 defines GCM only for block ciphers whose block is 128 bits, such as AES and SM4 (<<KLE-exec-encodings>>).
 (((KLE, Machine, GCM)))
@@ -1404,6 +1494,7 @@ Parameters::
 * `b` = 128 = block size in bits.
 * `c` = 32 = counter size in bits.
 * Input granularity: 8 bits (`glog` = 3; <<KLE-unified-AEAD>>).
+* Nonce lengths: an IV of a multiple of 8 bits from 8 to 8192 bits, held in `nonce_len`.
 * `tag_len_p` = 128, 120, 112, 104, 96 or 64, the tag lengths of cite:[nist-SP-800-38D] {sect}5.2.1.2 other than 32 (Rule <<KLE-MGR-tag-verify>>); held in _AuxInfo_.
 * The AD holds at most 2^64^ − 1 bits and the plaintext or ciphertext at most 2^39^ − 256 bits, the bounds of cite:[nist-SP-800-38D] {sect}5.2.1.1. A `kl.exec` that would carry `ad_len` or `data_len` past its bound transitions the locker to Error State _Invalid_ and performs no operation (<<KLE-unified-AEAD>>).
 
@@ -1475,16 +1566,34 @@ bit 1 that of `x^6^`, and so on.
 
 State Machine::
 
-* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_, _AEAD_Prepass_Last_, _AEAD_CT_Prepass_ and _AEAD_CT_Prepass_Last_.
+* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_ and _AEAD_Prepass_Last_.
 
 * *Allowed State Transitions:* Those of <<KLE-unified-AEAD>> among these States.
 
-* *Behavior:*
- ** Entering State _Ready_:
+* *Operations* (<<KLE-unified-AEAD>>):
+ ** `reset()`:
   *** `auth_key <- enc_blk(key, zeros(b))`
   *** `tag <- zeros(b)`
   *** `J0 <- zeros(b)`
 
+ ** `absorb_ad_full_block(X)`: `absorb(X)`.
+
+ ** `absorb_ad_last_block(X, n)`: if `n` {ne} 0, `absorb(X)`; an empty final piece leaves `tag` unchanged.
+
+ ** `encrypt_full_block(X)` and `decrypt_full_block(X)`, with `K` and `C` local `bits(b)`:
++
+--
+. `K <- next_ks()`.
+. `C <- X xor K` in `encrypt_full_block`, resp. `C <- X` in `decrypt_full_block`.
+. `absorb(C)`.
+. Return `C` in `encrypt_full_block`, resp. `C xor K` in `decrypt_full_block`.
+--
+
+ ** `encrypt_last_block(X, n)` and `decrypt_last_block(X, n)`: if `n` = 0, nothing, which leaves `tag` and `J0` unchanged; otherwise the steps of the full-block operation with `K <- trunc(next_ks(), n)`.
+
+ ** `compute_tag()`: `close_tag(bswap(bin(data_len,64)) @ bswap(bin(ad_len,64)))`, and return `tag`, whose `tag_len_p` least significant bits are the truncated tag `MSB~tag_len_p~(T)` of cite:[nist-SP-800-38D] {sect}7.1.
+
+* *Nonce setup:* GCM replaces that of <<KLE-unified-AEAD>>, since its IV takes any number of `kl.exec`:
  ** When entering State _Set_Aux_Value_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` sets the IV length in bits:
 +
 --
@@ -1506,40 +1615,6 @@ State Machine::
 --
 +
 NOTE: The IV is absorbed into `tag`, which entering _Set_Aux_Value_ zeroes, and only the finished value is copied to `J0`: until then, the slot of `J0` in the Serialized Content carries the IV progress, so that a CC exported part-way through the IV can resume.
-
- ** In State _Hash_Absorb_, a Form B `kl.exec` performs `absorb(INPUT)` for each AD block.
-
- ** _Hash_Absorb_Last_Block_ invokes `FINAL_BLOCK_ENTRY(0, b, 8)` (<<KLE-op-final-block-entry>>), and its single `kl.exec` performs `absorb(trunc(INPUT, last_block_len))`.
-An empty final piece leaves `tag` unchanged.
-
- ** In State _Set_Tag_Value_, a single Form B `kl.exec` loads the received tag into the field `rx_tag`: `rx_tag <- INPUT[tag_len_p-1:0]`.
-
- ** In State _Encrypt_ or _Decrypt_, a Form A `kl.exec` processes each block, with `K` and `C` local `bits(b)`:
-+
---
-. `K <- next_ks()`.
-. `C <- INPUT xor K` in _Encrypt_, resp. `C <- INPUT` in _Decrypt_.
-. `absorb(C)`.
-. `OUTPUT <- C` in _Encrypt_, resp. `OUTPUT <- C xor K` in _Decrypt_.
---
-
- ** _Enc_Last_Block_ and _Dec_Last_Block_ invoke `FINAL_BLOCK_ENTRY(0, b, 8)`, and their single Form A `kl.exec` performs the steps of _Encrypt_, resp. _Decrypt_, with `K <- trunc(next_ks(), last_block_len)` and `trunc(INPUT, last_block_len)` in place of `INPUT`.
-An empty final piece leaves `tag` and `J0` unchanged.
-
- ** In State _Enc_Tag_Finalize_, a single Form C `kl.exec`:
-+
---
-. `close_tag(bswap(bin(data_len,64)) @ bswap(bin(ad_len,64)))`.
-. `OUTPUT <- tag[tag_len_p-1:0]`, the truncated tag `MSB~tag_len_p~(T)` of cite:[nist-SP-800-38D] {sect}7.1.
-. The locker transitions to State _Success_.
---
-
- ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec`:
-+
---
-. `close_tag(bswap(bin(data_len,64)) @ bswap(bin(ad_len,64)))`.
-. The locker transitions to State _Success_ if `tag[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), and to State _Failure_ otherwise.
---
 
 [NOTE]
 ====
@@ -1702,6 +1777,8 @@ Code examples: <<Zkl-software.adoc#KLE-pseudocode-GCM-encryption>>, <<Zkl-softwa
 [[KLE-GCM-with-IV-mode]]
 === GCM with Preset IV
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>) and the Machine of which it is a variant; this section gives only the details specific to the variant.
+
 The mode of operation (((KLE, Machine, GCM with Preset IV))) “GCM with a Preset IV” is a variant of GCM in which the initialization vector (IV) is provisioned with the key, rather than supplied by software for each message.
 
 This Machine is `PRESET(GCM, IV)` (<<KLE-op-preset-value>>, <<KLE-GCM-mode>>).
@@ -1758,9 +1835,7 @@ State Machine::
 
 * *Allowed State Transitions:* Those of GCM, with _Ready_ -> _Hash_Absorb_ in place of nonce setup.
 
-* *Behavior:* That of GCM, with these changes:
- ** Entering State _Ready_ does not zero `J0`: it keeps `J0[95:0]`, the IV, and restores the counter, `J0[127:96] <- bswap(bin(1,32))`.
- ** A Form A `kl.setst` with immediate `kl_state_hash_absorb` enters State _Hash_Absorb_ from _Ready_.
+* *Operations:* Those of GCM, except that `reset()` does not zero `J0`: it keeps `J0[95:0]`, the IV, and restores the counter, `J0[127:96] <- bswap(bin(1,32))`. The nonce setup of GCM does not apply, and the `kl.setst` of <<KLE-unified-AEAD>> from _Ready_ into _Hash_Absorb_ performs no further step.
 
 ////
 
@@ -1797,6 +1872,8 @@ the tag mask of IV `N`, so that software could forge tags under a key that it ne
 [[KLE-GCM-SIV-mode]]
 === GCM-SIV Mode
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>); this section gives only the details specific to the mode.
+
 The (((KLE, Machine, GCM-SIV))) GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
 This specification defines GCM-SIV only for AES, whose block is 128 bits, as cite:[RFC8452] does (<<KLE-exec-encodings>>); the definition will be extended to other block ciphers if needed.
 
@@ -1806,6 +1883,7 @@ Parameters::
 * `b` = 128 = block size.
 * `c` = 32 = counter size.
 * Input granularity: 8 bits (`glog` = 3; <<KLE-unified-AEAD>>).
+* Nonce length: 96 bits.
 * The authentication tag is `b` = 128 bits long.
 * A plaintext or ciphertext holds at most 2^32^ blocks, the final partial block included: the `P_MAX` of cite:[RFC8452] {sect}6. The AD holds at most the `A_MAX` of cite:[RFC8452] {sect}6, 2^36^ bytes. A `kl.exec` that would carry `data_len` or `ad_len` past 2^39^ bits transitions the locker to Error State _Invalid_ and performs no operation (<<KLE-unified-AEAD>>).
 
@@ -1843,7 +1921,7 @@ Data Structures::
 |===
 --
 
-`enc_key` and `auth_key` are derived from `key` and `nonce`.
+`enc_key` and `auth_key` are derived from `key` and `nonce`. `SIV` is the `rx_tag` of <<KLE-unified-AEAD>>.
 
 Machine-Specific Functions::
 
@@ -1883,70 +1961,39 @@ The loop makes `k`/64 + 2 calls, four for `k` = 128 and six for `k` = 256, and k
 
 State Machine::
 
-* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_CT_Prepass_ and _AEAD_CT_Prepass_Last_.
+* *States:* Those of <<KLE-unified-AEAD>>.
 
 * *Allowed State Transitions:* Those of <<KLE-unified-AEAD>> among these States. `TwoPTPasses` is set, so encryption always takes the prepass.
 
-* *Behavior:*
- ** Entering State _Ready_:
+* *Operations* (<<KLE-unified-AEAD>>):
+ ** `reset()`:
   *** `nonce <- zeros(96)`
   *** `ctr <- 0`
   *** `tmp <- zeros(b)`
-  *** `SIV <- zeros(b)`
   *** `ad_hash <- zeros(b)`
 
- ** When entering State _Set_Aux_Value_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` requires `Xs` = 96; any other `Xs` transitions the locker to Error State _Invalid_.
-
- ** In State _Set_Aux_Value_, a single Form B `kl.exec` loads the nonce:
+ ** `setup_nonce(X)`:
 +
 --
-. `nonce <- INPUT[95:0]` (Rule <<KLE-MGR-fixed-width-input>>).
+. `nonce <- X[95:0]`.
 . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(k, key, nonce)`.
-. The locker transitions to State _Hash_Absorb_.
 --
 
- ** In State _Hash_Absorb_, a Form B `kl.exec` performs `absorb(INPUT)` for each AD block.
+ ** `absorb_ad_full_block(X)` and `absorb_pt_full_block(X)`: `absorb(X)`.
 
- ** _Hash_Absorb_Last_Block_ invokes `FINAL_BLOCK_ENTRY(0, b, 8)` (<<KLE-op-final-block-entry>>). Its single `kl.exec` performs `absorb(trunc(INPUT, last_block_len))`; an empty final piece absorbs nothing. Completing the AD sets `ad_hash <- tmp`.
+ ** `absorb_ad_last_block(X, n)`: if `n` {ne} 0, `absorb(X)`; then `ad_hash <- tmp`, which completes the AD.
 
- ** In State _Set_Tag_Value_, a single Form B `kl.exec` loads the received tag: `SIV <- INPUT[127:0]`.
+ ** `absorb_pt_last_block(X, n)`: if `n` {ne} 0, `absorb(X)`.
 
- ** In State _AEAD_Prepass_, a Form B `kl.exec` performs `absorb(INPUT)` for each PT block, without output.
-_AEAD_Prepass_Last_ invokes `FINAL_BLOCK_ENTRY(0, b, 8)`, and its single `kl.exec` performs `absorb(trunc(INPUT, last_block_len))`.
+ ** `begin_replay()`: `tmp <- ad_hash`.
 
- ** In State _Enc_Tag_Finalize_ with `generated_siv` clear, a single Form C `kl.exec` issues the SIV and sets `generated_siv`:
-+
---
-. `synth_siv(bin(data_len,64) @ bin(ad_len,64))`.
-. `SIV <- tmp` and `OUTPUT <- SIV`.
-. `tmp <- ad_hash` and `data_len <- 0`, so that the second pass absorbs and counts the PT again.
-. The locker transitions to State _Encrypt_.
---
+ ** `encrypt_full_block(X)`, with `C` a local `bits(b)`: `C <- X xor next_ks()`, then `absorb(X)`, and return `C`.
 
- ** In State _Encrypt_ or _Decrypt_, a Form A `kl.exec` processes each block:
-+
---
-. `OUTPUT <- INPUT xor next_ks()`.
-. `absorb(INPUT)` in _Encrypt_, resp. `absorb(OUTPUT)` in _Decrypt_, which absorbs the PT.
---
+ ** `decrypt_full_block(X)`, with `P` a local `bits(b)`: `P <- X xor next_ks()`, then `absorb(P)`, which absorbs the PT, and return `P`.
 
- ** _Enc_Last_Block_ and _Dec_Last_Block_ invoke `FINAL_BLOCK_ENTRY(0, b, 8)`, and their single Form A `kl.exec` performs the steps of _Encrypt_, resp. _Decrypt_, with `trunc(INPUT, last_block_len)` in place of `INPUT` and `trunc(next_ks(), last_block_len)` in place of `next_ks()`.
-An empty final piece absorbs nothing.
+ ** `encrypt_last_block(X, n)` and `decrypt_last_block(X, n)`: if `n` = 0, nothing; otherwise the steps of the full-block operation with `trunc(next_ks(), n)` in place of `next_ks()`.
 
- ** In State _Enc_Tag_Finalize_ with `generated_siv` set, a single Form C `kl.exec` checks the replay:
-+
---
-. `synth_siv(bin(data_len,64) @ bin(ad_len,64))`.
-. If `tmp` = `SIV`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), then `OUTPUT <- SIV` and the locker transitions to State _Success_.
-. Otherwise, `OUTPUT <- zeros(b)` and the locker transitions to State _Failure_.
---
-
- ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec`:
-+
---
-. `synth_siv(bin(data_len,64) @ bin(ad_len,64))`.
-. The locker transitions to State _Success_ if `tmp` = `SIV`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), and to State _Failure_ otherwise.
---
+ ** `compute_tag()`: `synth_siv(bin(data_len,64) @ bin(ad_len,64))`, and return `tmp`.
 
 ////
 
@@ -2050,6 +2097,8 @@ Code examples: <<Zkl-software.adoc#KLE-GCM-SIV-mode-examples>>.
 [[KLE-OCB-mode]]
 === OCB Mode
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>); this section gives only the details specific to the mode.
+
 Only (((KLE, Machine, OCB))) OCB3 is architected, following RFC{nbsp}7253 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21], and only for AES, as in the AEAD algorithms of cite:[RFC7253] (<<KLE-exec-encodings>>).
 The state machine follows RFC{nbsp}7253 except in notation.
 Bit positions count from 0 at the least significant bit (<<Zkl-notation.adoc#KLE-Notation>>); RFC{nbsp}7253 counts them from 1 at the most significant bit.
@@ -2069,6 +2118,9 @@ Parameters::
   (Rule <<KLE-MGR-caller-limits>>).
 * `tag_len_p` = 128, 96 or 64, the tag lengths of the AEAD algorithms of cite:[RFC7253] (Rule <<KLE-MGR-tag-verify>>); held in _AuxInfo_.
 * Input granularity: 8 bits (`glog` = 3; <<KLE-unified-AEAD>>).
+* Nonce lengths: every bit length from 6 to 120, held in `N_len`: the nonce is a bit string and need not fill whole bytes.
++
+NOTE: cite:[RFC7253] places no lower bound on the nonce length. KLE requires at least 6 bits because a shorter nonce leaves the `bottom` and `Stretch` derivation of cite:[RFC7253] {sect}4.2 without enough entropy to remain sound, as analyzed in cite:[cryptoeprint-2023-326].
 --
 
 Data Structures::
@@ -2152,55 +2204,46 @@ strings.
 
 State Machine::
 
-* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_, _AEAD_Prepass_Last_, _AEAD_CT_Prepass_ and _AEAD_CT_Prepass_Last_.
+* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_ and _AEAD_Prepass_Last_.
 
 * *Allowed State Transitions:* Those of <<KLE-unified-AEAD>> among these States.
 
-* *Behavior:*
- ** Entering State _Ready_:
+* *Operations* (<<KLE-unified-AEAD>>):
+ ** `reset()`:
   *** `N <- zeros(120)` and `N_len <- 0`
   *** `hash_A <- zeros(b)`
   *** `checksum_P <- zeros(b)`
   *** `index <- 0`
 
- ** When entering State _Set_Aux_Value_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` sets `N_len <- Xs`, which must satisfy `6` {le} `Xs` {le} `120`; any other `Xs` transitions the locker to Error State _Invalid_.
-Every bit length in that range is admissible: the nonce is a bit string and need not fill whole bytes.
-+
-NOTE: cite:[RFC7253] places no lower bound on the nonce length. KLE requires at least 6 bits because a shorter nonce leaves the `bottom` and `Stretch` derivation of cite:[RFC7253] {sect}4.2 without enough entropy to remain sound, as analyzed in cite:[cryptoeprint-2023-326].
-
- ** In State _Set_Aux_Value_, a single Form B `kl.exec` loads the nonce and prepares the offsets, with `q` = {lceil}``N_len``/8{rceil}:
+ ** `setup_nonce(X)` loads the nonce and prepares the offsets, with `q` = {lceil}``N_len``/8{rceil}:
 +
 --
-. `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared: they pad the final, partial byte of the nonce string (Rule <<KLE-MGR-fixed-width-input>>).
+. `N <- zeros(120 - 8q) @ X[8q-1:0]`, with the `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared: they pad the final, partial byte of the nonce string.
 . The offset setup:
 .. `index <- 1`.
 .. `offset <- zeros(b)`, `Offset~0~` of cite:[RFC7253].
 .. `L* <- enc_blk(key, zeros(b))`.
 .. `L$ <- double(L*)`, `L[0] <- double(L$)`, and `L[i] <- double(L[i-1])` for `0 < i` {le} 48.
-. The locker transitions to State _Hash_Absorb_.
 --
 
- ** In State _Hash_Absorb_, a Form B `kl.exec` processes each AD block:
+ ** `absorb_ad_full_block(X)`:
 +
 --
 . `next_offset()`.
-. `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`.
+. `hash_A <- hash_A xor enc_blk(key, X xor offset)`.
 --
 
- ** _Hash_Absorb_Last_Block_ invokes `FINAL_BLOCK_ENTRY(0, b, 8)` (<<KLE-op-final-block-entry>>), and its single Form B `kl.exec` processes the final AD piece:
+ ** `absorb_ad_last_block(X, n)`:
 +
 --
-. If `last_block_len` = `b`, the steps of _Hash_Absorb_.
+. If `n` = 0, nothing: `hash_A` is unchanged.
+. If `n` = `b`, `absorb_ad_full_block(X)`.
 . Otherwise:
 .. `last_offset()`.
-.. `hash_A <- hash_A xor enc_blk(key, pad10(INPUT, last_block_len) xor offset)`.
+.. `hash_A <- hash_A xor enc_blk(key, pad10(X, n) xor offset)`.
 --
-+
-An empty final piece leaves `hash_A` unchanged.
 
- ** In State _Set_Tag_Value_, a single Form B `kl.exec` loads the received tag into the field `rx_tag`: `rx_tag <- INPUT[tag_len_p-1:0]`.
-
- ** When entering State _Encrypt_ or _Decrypt_, the Machine computes the nonce-dependent offset of cite:[RFC7253] {sect}4.2, with local `Nonce_be`, `Ktop` and `Ktop_be` of 128 bits, `Stretch_be` of 192 bits, and the integer `bottom`; `Nonce_be` and `Stretch_be` are `Nonce` and `Stretch` of cite:[RFC7253] in the big-endian view:
+ ** `begin_data()` computes the nonce-dependent offset of cite:[RFC7253] {sect}4.2, with local `Nonce_be`, `Ktop` and `Ktop_be` of 128 bits, `Stretch_be` of 192 bits, and the integer `bottom`; `Nonce_be` and `Stretch_be` are `Nonce` and `Stretch` of cite:[RFC7253] in the big-endian view:
 +
 --
 . `Nonce_be <- bin(tag_len_p mod 128, 7) @ zeros(120 - N_len) @ 1 @ nonce_be(N, N_len)`.
@@ -2212,42 +2255,28 @@ An empty final piece leaves `hash_A` unchanged.
 . `offset <- bswap(Stretch_be[191-bottom : 64-bottom])`.
 --
 
- ** In State _Encrypt_ or _Decrypt_, a Form A `kl.exec` processes each block, with `P` a local `bits(b)`:
+ ** `encrypt_full_block(X)` and `decrypt_full_block(X)`, with `P` and `C` local `bits(b)`:
 +
 --
 . `next_offset()`.
-. In _Encrypt_: `P <- INPUT` and `OUTPUT <- offset xor enc_blk(key, INPUT xor offset)`.
-. In _Decrypt_: `P <- offset xor dec_blk(key, INPUT xor offset)` and `OUTPUT <- P`.
+. In `encrypt_full_block`: `P <- X` and `C <- offset xor enc_blk(key, X xor offset)`, and the result is `C`.
+. In `decrypt_full_block`: `P <- offset xor dec_blk(key, X xor offset)`, and the result is `P`.
 . `checksum_P <- checksum_P xor P`.
 --
 
- ** _Enc_Last_Block_ and _Dec_Last_Block_ invoke `FINAL_BLOCK_ENTRY(0, b, 8)`, and their single Form A `kl.exec` processes the final piece, with `P` a local `bits(b)`:
+ ** `encrypt_last_block(X, n)` and `decrypt_last_block(X, n)`, with `P` and `O` local `bits(b)`:
 +
 --
-. If `last_block_len` = `b`, the steps of _Encrypt_, resp. _Decrypt_.
+. If `n` = 0, nothing: `offset` and `checksum_P` are unchanged.
+. If `n` = `b`, `encrypt_full_block(X)`, resp. `decrypt_full_block(X)`.
 . Otherwise:
 .. `last_offset()`.
-.. `OUTPUT <- trunc(INPUT, last_block_len) xor trunc(enc_blk(key, offset), last_block_len)`. // enc_blk(key, offset) is Pad in RFC{nbsp}7253
-.. `P` is `INPUT` in _Enc_Last_Block_, resp. `OUTPUT` in _Dec_Last_Block_.
-.. `checksum_P <- checksum_P xor pad10(P, last_block_len)`.
---
-+
-An empty final piece leaves `offset` and `checksum_P` unchanged.
-
- ** In State _Enc_Tag_Finalize_, a single Form C `kl.exec`:
-+
---
-. `ocb_tag(offset)`.
-. `OUTPUT <- trunc(checksum_P, tag_len_p)`.
-. The locker transitions to State _Success_.
+.. `O <- X xor trunc(enc_blk(key, offset), n)`, the result. // enc_blk(key, offset) is Pad in RFC{nbsp}7253
+.. `P` is `X` in `encrypt_last_block`, resp. `O` in `decrypt_last_block`.
+.. `checksum_P <- checksum_P xor pad10(P, n)`.
 --
 
- ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec`:
-+
---
-. `ocb_tag(offset)`.
-. The locker transitions to State _Success_ if `checksum_P[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), and to State _Failure_ otherwise.
---
+ ** `compute_tag()`: `ocb_tag(offset)`, and return `checksum_P`.
 
 ////
 
@@ -2423,6 +2452,8 @@ Code examples: <<Zkl-software.adoc#KLE-OCB-mode-examples>>.
 [[KLE-OCB-with-nonce-mode]]
 === OCB with Preset Nonce
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>) and the Machine of which it is a variant; this section gives only the details specific to the variant.
+
 The mode of operation (((KLE, Machine, OCB with Preset Nonce))) “OCB with Preset Nonce” is a variant of OCB (<<KLE-OCB-mode>>) in which the nonce is
 carried in the Provisioning Input, as the IV is in <<KLE-GCM-with-IV-mode>>.
 This Machine is `PRESET(OCB, N)` (<<KLE-op-preset-value>>), with `N_len` preset together with `N`, and is otherwise the same as OCB, its Parameters and Machine-Specific Functions included, except as follows.
@@ -2482,9 +2513,9 @@ State Machine::
 
 * *Allowed State Transitions:* Those of OCB, with _Ready_ -> _Hash_Absorb_ in place of nonce setup.
 
-* *Behavior:* That of OCB, with these changes:
- ** Entering State _Ready_ clears `hash_A`, `checksum_P`, and `index`, and keeps `N` and `N_len`.
- ** A Form A `kl.setst` with immediate `kl_state_hash_absorb` enters State _Hash_Absorb_ from _Ready_ and performs the offset setup of the _Set_Aux_Value_ `kl.exec` of OCB.
+* *Operations:* Those of OCB, except:
+ ** `reset()` clears `hash_A`, `checksum_P`, and `index`, and keeps `N` and `N_len`.
+ ** `setup_nonce(X)` performs only the offset setup, step 2 of that of OCB.
 
 [NOTE]
 ====
@@ -3528,6 +3559,8 @@ The Ascon Machines share:
 [[KLE-Ascon-AEAD128]]
 === Ascon-AEAD128
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>); this section gives only the details specific to the mode.
+
 Ascon-AEAD128 applies ``pad(``{nbsp}{interpunct}``, 128)`` to non-empty associated data and to the final plaintext or ciphertext block, as cite:[nist-SP-800-232] specifies.
 
 Parameters::
@@ -3535,6 +3568,7 @@ Parameters::
 * `b` = 128.
 * `k` = 128.
 * Input granularity: 1 bit (`glog` = 0; <<KLE-unified-AEAD>>).
+* Nonce length: 128 bits.
 
 Data Structures::
 
@@ -3587,16 +3621,14 @@ Machine-Specific Functions::
 
 State Machine::
 
-* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_, _AEAD_Prepass_Last_, _AEAD_CT_Prepass_ and _AEAD_CT_Prepass_Last_.
+* *States:* Those of <<KLE-unified-AEAD>> except _AEAD_Prepass_ and _AEAD_Prepass_Last_.
 
 * *Allowed State Transitions:* Those of <<KLE-unified-AEAD>> among these States.
 
-* *Behavior:*
- ** Entering State _Ready_: `state <- zeros(320)`.
+* *Operations* (<<KLE-unified-AEAD>>):
+ ** `reset()`: `state <- zeros(320)`.
 
- ** When entering State _Set_Aux_Value_, a Form B `kl.setst` with immediate `kl_state_set_aux_value` requires `Xs` = 128; any other `Xs` transitions the locker to Error State _Invalid_.
-
- ** [[KLE-Ascon-AEAD128-nonce-setup,nonce setup of Ascon-AEAD128]]In State _Set_Aux_Value_, a single Form B `kl.exec` initializes `state` with the nonce `N` = `INPUT[127:0]` (Rule <<KLE-MGR-fixed-width-input>>):
+ ** [[KLE-Ascon-AEAD128-nonce-setup,nonce setup of Ascon-AEAD128]]`setup_nonce(X)` initializes `state` with the nonce `N` = `X[127:0]`:
 +
 --
 . `state[0] <- 0x00001000808c0001`
@@ -3607,85 +3639,67 @@ State Machine::
 . `ASCON(12)`
 . `state[3] <- state[3] xor key[63:0]`
 . `state[4] <- state[4] xor key[127:64]`
-. The locker transitions to State _Hash_Absorb_.
 --
 +
-NOTE: The key enters `state` only within this `kl.exec` and within `ASCON_TAG()`, each of which completes with the key permuted or masked by permutation output. The key field is serialized separately; no serialized `state` word holds it (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>).
+NOTE: The key enters `state` only within this operation and within `ASCON_TAG()`, each of which completes with the key permuted or masked by permutation output. The key field is serialized separately; no serialized `state` word holds it (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>).
 
- ** In State _Hash_Absorb_, a Form B `kl.exec` processes each AD block:
+ ** `absorb_ad_full_block(X)`:
 +
 --
-. `absorb_rate(INPUT)`
+. `absorb_rate(X)`
 . `ASCON(8)`
 --
 
- ** _Hash_Absorb_Last_Block_ invokes `FINAL_BLOCK_ENTRY(0, b, 1)` (<<KLE-op-final-block-entry>>).
-`last_block_len` need not be a multiple of 8: cite:[nist-SP-800-232] orders the bits within a byte as <<Zkl-notation.adoc#KLE-Notation>> does, so `pad` places the terminating `1` at bit position `last_block_len` for any length.
-Its single Form B `kl.exec` closes the AD:
+ ** `absorb_ad_last_block(X, n)` closes the AD.
+`n` need not be a multiple of 8: cite:[nist-SP-800-232] orders the bits within a byte as <<Zkl-notation.adoc#KLE-Notation>> does, so `pad` places the terminating `1` at bit position `n` for any length.
 +
 --
-. If `last_block_len` = `b`, the steps of _Hash_Absorb_, then `absorb_rate(pad(∅, 128))`.
-. Otherwise, `absorb_rate(pad(INPUT[last_block_len-1:0], 128))`.
-. `ASCON(8)`.
+. If `n` = 0: `absorb_rate(pad(∅, 128))` and `ASCON(8)` if `ad_absorbed` is set, and nothing otherwise.
+. If `n` = `b`: `absorb_ad_full_block(X)`, `absorb_rate(pad(∅, 128))` and `ASCON(8)`.
+. Otherwise: `absorb_rate(pad(X[n-1:0], 128))` and `ASCON(8)`.
 --
-+
-An empty final piece performs `absorb_rate(pad(∅, 128))` and `ASCON(8)` if `ad_absorbed` is set, and nothing otherwise.
 
- ** In State _Set_Tag_Value_, a single Form B `kl.exec` loads the received tag into the field `rx_tag`: `rx_tag <- INPUT[tag_len_p-1:0]`.
+ ** `begin_data()` performs the domain separation `state[4] <- state[4] xor (bin(1,64) << 63)`.
 
- ** Entering State _Encrypt_ or _Decrypt_ performs the domain separation `state[4] <- state[4] xor (bin(1,64) << 63)`.
-
- ** In State _Encrypt_, a Form A `kl.exec` processes each block:
+ ** `encrypt_full_block(X)`, with `C` a local `bits(b)`:
 +
 --
-. `absorb_rate(INPUT)`
-. `OUTPUT <- state[1] @ state[0]`
+. `absorb_rate(X)`
+. `C <- state[1] @ state[0]`
 . `ASCON(8)`
+. Return `C`.
 --
 
- ** In State _Decrypt_, a Form A `kl.exec` processes each block, with `P` a local `bits(b)`:
+ ** `decrypt_full_block(X)`, with `P` a local `bits(b)`:
 +
 --
-. `P <- (state[1] xor INPUT[127:64]) @ (state[0] xor INPUT[63:0])`
-. `state[0] <- INPUT[63:0]`
-. `state[1] <- INPUT[127:64]`
+. `P <- (state[1] xor X[127:64]) @ (state[0] xor X[63:0])`
+. `state[0] <- X[63:0]`
+. `state[1] <- X[127:64]`
 . `ASCON(8)`
-. `OUTPUT <- P`
+. Return `P`.
 --
 
- ** _Enc_Last_Block_ and _Dec_Last_Block_ invoke `FINAL_BLOCK_ENTRY(0, b, 1)`, with `last_block_len` as in _Hash_Absorb_Last_Block_.
-The single Form A `kl.exec` of _Enc_Last_Block_ performs:
+ ** `encrypt_last_block(X, n)`:
 +
 --
-. If `last_block_len` = `b`, the steps of _Encrypt_, then `absorb_rate(pad(∅, 128))`.
-. Otherwise:
-.. `absorb_rate(pad(INPUT[last_block_len-1:0], 128))`.
-.. `OUTPUT <- trunc(state[1] @ state[0], last_block_len)`.
+. If `n` = `b`: `C <- encrypt_full_block(X)`, then `absorb_rate(pad(∅, 128))`, and return `C`.
+. Otherwise: `absorb_rate(pad(X[n-1:0], 128))`, and return `trunc(state[1] @ state[0], n)`.
 --
-+
-The single Form A `kl.exec` of _Dec_Last_Block_ performs, with `P` a local `bits(b)`:
-+
---
-. If `last_block_len` = `b`, the steps of _Decrypt_, then `absorb_rate(pad(∅, 128))`.
-. Otherwise:
-.. `P <- trunc(state[1] @ state[0], last_block_len) xor trunc(INPUT, last_block_len)`.
-.. `OUTPUT <- P`.
-.. `absorb_rate(pad(P[last_block_len-1:0], 128))`.
---
-+
-An empty final piece performs `absorb_rate(pad(∅, 128))`.
 
- ** In State _Enc_Tag_Finalize_, a single Form C `kl.exec`:
+ ** `decrypt_last_block(X, n)`, with `P` a local `bits(b)`:
 +
 --
-. `OUTPUT <- trunc(ASCON_TAG(), tag_len_p)`.
-. The locker transitions to State _Success_.
+. If `n` = `b`: `P <- decrypt_full_block(X)`, then `absorb_rate(pad(∅, 128))`, and return `P`.
+. Otherwise: `P <- trunc(state[1] @ state[0], n) xor trunc(X, n)`, then `absorb_rate(pad(P[n-1:0], 128))`, and return `P`.
 --
++
+For `n` = 0, both perform `absorb_rate(pad(∅, 128))` and return no output.
+
+ ** `compute_tag()` returns `ASCON_TAG()`.
 +
 NOTE: A truncated tag is the leftmost `tag_len_p` bits of the 128-bit tag in the bit order of cite:[nist-SP-800-232] {sect}4.2.1, which are the `tag_len_p` least significant bits of `state[4] @ state[3]`.
 Rule <<KLE-MGR-caller-limits>> leaves the bound on failed verifications of cite:[nist-SP-800-232] {sect}4.3 R4–R5, and a single `tag_len_p` across lockers that hold the same key by value, to the caller.
-
- ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec` transitions the locker to State _Success_ if `ASCON_TAG()[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), and to State _Failure_ otherwise.
 
 ////
 
@@ -3838,6 +3852,8 @@ It performs:
 [[KLE-Ascon-AEAD128-wsn]]
 === Ascon-AEAD128 with Preset Nonce
 
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>) and the Machine of which it is a variant; this section gives only the details specific to the variant.
+
 Like GCM with Preset IV (<<KLE-GCM-with-IV-mode>>), Ascon-AEAD128 has a variant with a preset nonce:
 this Machine is `PRESET(Ascon-AEAD128, nonce)` (<<KLE-op-preset-value>>, <<KLE-Ascon-AEAD128>>).
 
@@ -3891,9 +3907,7 @@ State Machine::
 
 * *Allowed State Transitions:* Those of Ascon-AEAD128, with _Ready_ -> _Hash_Absorb_ in place of nonce setup.
 
-* *Behavior:* That of Ascon-AEAD128, with these changes:
- ** Entering State _Ready_ keeps `nonce`.
- ** A Form A `kl.setst` with immediate `kl_state_hash_absorb` enters State _Hash_Absorb_ from _Ready_ and initializes `state` by the steps of the <<KLE-Ascon-AEAD128-nonce-setup>>, with `N` = `nonce`.
+* *Operations:* Those of Ascon-AEAD128, except that `reset()` keeps `nonce`. The `kl.setst` of <<KLE-unified-AEAD>> from _Ready_ into _Hash_Absorb_ performs the <<KLE-Ascon-AEAD128-nonce-setup>> with `X` = `nonce`.
 
 // NOTE: This Machine protects the confidentiality of the nonce, not against its reuse (Rule <<KLE-MGR-caller-limits>>).
 // A key derived into the key field while the nonce is kept would pair the provisioned nonce with a key it was not
@@ -3908,6 +3922,8 @@ State Machine::
 
 [[KLE-Ascon-AEAD128-N-masking]]
 === Ascon-AEAD128 with Nonce Masking
+
+This Machine assumes the Unified AEAD interface (<<KLE-unified-AEAD>>) and the Machine of which it is a variant; this section gives only the details specific to the variant.
 
 cite:[nist-SP-800-232] also describes a version of Ascon-AEAD128 with _Nonce
 Masking_:
@@ -3928,7 +3944,7 @@ Data Structures::
 * *Internal State*:
  ** `K1`: 128 bits.
  ** `K2`: 128 bits.
- ** `state`, `last_block_len`, `rx_tag` and `tag_len_p`: as in <<KLE-Ascon-AEAD128>>, whose _Enc_Last_Block_ and _Dec_Last_Block_ states this Machine inherits.
+ ** `state`, `last_block_len`, `rx_tag` and `tag_len_p`: as in <<KLE-Ascon-AEAD128>>.
 
 * *Serialized Content*:
 +
@@ -3951,7 +3967,7 @@ Data Structures::
 --
 
 The Machine has the Parameters and Machine-Specific Functions of <<KLE-Ascon-AEAD128>>, with `K1` as
-the key `key`. Its State Machine is that of <<KLE-Ascon-AEAD128>>, except that the <<KLE-Ascon-AEAD128-nonce-setup>> uses `N` = `INPUT[127:0] xor K2`.
+the key `key`. Its State Machine is that of <<KLE-Ascon-AEAD128>>, except that its `setup_nonce(X)`, the <<KLE-Ascon-AEAD128-nonce-setup>>, uses `N` = `X[127:0] xor K2`.
 `K2` enters `state` only in the nonce setup, inside the masked nonce, before `ASCON(12)`; `K1` enters it wherever `key` does in <<KLE-Ascon-AEAD128>>.
 
 Nonce masking with a set nonce needs no Machine of its own: the Machine of
@@ -4502,17 +4518,19 @@ The bits of `Scalar` beyond the key are zero.
 
  ** In State _Output_, Form C `kl.exec` instructions emit the output, ending in _Success_ (Rule <<KLE-MGR-load-long-field>>),
     in which no `kl.derive` is admitted.
-  *** This State allows the export of the shared secret through `kl.exec`, except in the sealed variant, where a Form C
-      `kl.exec` with `OutputType` = _shared secret_ transitions the locker to Error State _Invalid_.
-      The shared secret is also a `kl.derive` source, unrestricted, or sealed in the sealed variant (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>), as a field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>), of one
-      `kl.derive`, and only while `block_base` = 0, before a Form C `kl.exec` has emitted any of it: that `kl.derive`
-      transitions the locker to _Success_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>), and one made
-      once `block_base` {ne} 0 transitions it to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 2).
-      The transfer reads it from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>): for
-      X25519 and X448, a key field receives the first `eff_length` bytes of the shared secret; for the other curves, a
-      key field is not a destination (<<KLE-derive-endpoints>>); a message input receives the whole shared secret, with
-      `length` equal to the length of the shared secret
-      (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 6 and <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
+  *** The shared secret leaves the locker in one of two ways:
+      **** through Form C `kl.exec` instructions, except in the sealed variant, where a Form C `kl.exec` with
+           `OutputType` = _shared secret_ transitions the locker to Error State _Invalid_;
+      **** as a field (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>) of one `kl.derive`, as a source that is unrestricted, or
+           sealed in the sealed variant (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>). That `kl.derive` is admitted only while
+           `block_base` = 0, before a Form C `kl.exec` has emitted any of the shared secret, and transitions the locker
+           to _Success_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>). A `kl.derive` once `block_base` {ne} 0
+           transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 2).
+  *** The `kl.derive` reads the shared secret from its first byte (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-derive-rule-both-fixed-size>>):
+      **** for X25519 and X448, a key field receives the first `eff_length` bytes of the shared secret;
+      **** for the other curves, a key field is not a destination (<<KLE-derive-endpoints>>);
+      **** a message input receives the whole shared secret, with `length` equal to the length of the shared secret
+           (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-checks>> item 6 and <<Zkl-ISA-unpriv.adoc#KLE-GR-shared-secret>>).
 // Before byte-granular hash inputs:
 //    field receives the first `eff_length` bytes of the shared secret, and a message input `length` bytes, at least the
 //    length of the shared secret and at most that length rounded up to the granularity of the destination, zero beyond

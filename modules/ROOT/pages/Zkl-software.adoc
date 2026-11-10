@@ -936,7 +936,6 @@ The following pseudocode drives every AEAD Machine.
 It reads `glog` and the pass flags with `kl.getinfo`; the MDH supplies `tag_len_p` as usual.
 `AD_FINAL`, `DATA_FINAL` and `PREPASS_FINAL` set the corresponding final-block State with the meaningful bit length of the remaining piece, then issue its one `kl.exec` if the length is nonzero.
 <<KLE-pseudocode-unified-AEAD-final>> gives them; the Machine ignores the bits of the final transport byte above that length.
-When `CTStealing` is set, `crypt_full_blocks` holds back the final full block and `DATA_FINAL` supplies that block followed by the final partial block, as <<Zkl-ISA-machines.adoc#KLE-unified-AEAD>> specifies.
 
 [[KLE-pseudocode-unified-AEAD]]
 .Unified AEAD Processing
@@ -949,10 +948,6 @@ When `CTStealing` is set, `crypt_full_blocks` holds back the final full block an
   andi       t1, t0, 0xf          # glog
   srli       t2, t0, 4
   andi       t2, t2, 1            # TwoPTPasses
-  srli       t3, t0, 5
-  andi       t3, t3, 1            # TwoCTPasses
-  srli       t4, t0, 6
-  andi       t4, t4, 1            # CTStealing
 
   setup_nonce(K, N)
   if decrypt:
@@ -967,16 +962,12 @@ When `CTStealing` is set, `crypt_full_blocks` holds back the final full block an
       absorb_full_blocks(K, PT)
       PREPASS_FINAL(K, PT_tail, PT_bits - full_bits(PT))
       kl.exec  siv, K              # Form C: the SIV; enters Encrypt
-  elif decrypt and t3:
-      kl.setst K, #kl_state_aead_ct_prepass
-      absorb_full_blocks(K, CT)
-      CT_PREPASS_FINAL(K, CT_tail, CT_bits - full_bits(CT)) # to Decrypt
   else:
       kl.setst K, decrypt ? #kl_state_decrypt : #kl_state_encrypt
 
-  crypt_full_blocks(K, decrypt ? CT : PT, decrypt ? PT : CT, t4)
+  crypt_full_blocks(K, decrypt ? CT : PT, decrypt ? PT : CT)
   DATA_FINAL(K, decrypt ? CT_tail : PT_tail,
-             decrypt ? CT_bits - full_bits(CT) : PT_bits - full_bits(PT), t4)
+             decrypt ? CT_bits - full_bits(CT) : PT_bits - full_bits(PT))
 
   if decrypt:
       kl.exec  K                   # Form D: verifies the retained tag
@@ -995,11 +986,8 @@ When `CTStealing` is set, `crypt_full_blocks` holds back the final full block an
 # full-block routines process up to eight blocks per kl.exec and return
 # a0 = the final piece and a1 = its length; full_bits(X) is X_bits with
 # its low 7 bits cleared.  crypt_full_blocks and DATA_FINAL also take
-# a2 = output buffer (advanced), a4 = CTStealing, and DATA_FINAL a3 = 1
-# to decrypt.  With CTStealing, which needs one full block, the final
-# piece starts with the withheld full block, but its length stays n.
+# a2 = output buffer (advanced), and DATA_FINAL a3 = 1 to decrypt.
 # The final pieces are a multiple of 2^glog bits, at most b = 128.
-# CT_PREPASS_FINAL is PREPASS_FINAL with #kl_state_aead_ct_prepass_last.
 
 setup_nonce:                      # a supplied nonce, any length
   kl.setst  K0, #kl_state_set_aux_value, a1 # Form B: Xs = nonce_len
@@ -1028,10 +1016,6 @@ crypt_full_blocks:                # in Encrypt or Decrypt
   srli      t5, a1, 7
   slli      t5, t5, 4
   andi      a1, a1, 127
-  beqz      a4, 1f
-  beqz      a1, 1f
-  addi      t5, t5, -16           # CTStealing: withhold the last block
-1:
   beqz      t5, 3f
 2:
   li        t6, 128
@@ -1072,9 +1056,7 @@ DATA_FINAL:
   beqz      a1, 3f                # n = 0: the locker is in *_Tag_Finalize
   addi      t5, a1, 7
   srli      t5, t5, 3             # ceil(n/8) bytes
-  slli      t6, a4, 4
-  add       t5, t5, t6            # and b/8 bytes of the withheld block
-  vsetvli   zero, t5, e8, m2, ta, ma # up to 32 bytes
+  vsetvli   zero, t5, e8, m1, ta, ma # KLLEN = 8 * ceil(n/8) >= n
   vle8.v    v0, (a0)
   kl.exec   v2, K0, v0            # Form A; enters *_Tag_Finalize
   vse8.v    v2, (a2)
