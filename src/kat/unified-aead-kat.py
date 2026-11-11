@@ -442,6 +442,9 @@ for f in FAMILIES:
     m.import_(sc, DEC, m.machine_use); check(f + ' import of a decryption State without tag_received rejected', m.st == INV)
     m = setup(f, tag=bytes(model(f).tag_len_p // 8)); m.setst(LAST, 'B', 0); m.setst(DEC); sc = m.export()
     m.import_(sc, ENC, m.machine_use); check(f + ' import of an encryption State with tag_received rejected', m.st == INV)
+    m = setup(f); sc = m.export(); m.import_(sc, ABSORB, m.machine_use | DATA_ABSORBED); check(f + ' import with data_absorbed set before the data, or with data_len held: inconsistent flag, rejected', m.st == INV)
+    m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC); m.setst(PRELAST if m.two_pt else ELB, 'B', 8); sc = m.export(); st0 = m.st
+    m.import_(sc, PRE if m.two_pt else ENC, m.machine_use); check(f + ' import with last_block_len non-zero outside a final-piece State rejected', st0 != INV and m.st == INV)
     if not m.two_pt:
         m = setup(f); sc = bytearray(m.export()); h = sum(m.header_widths()) // 8; sc[h] = 1
         m.import_(bytes(sc), m.st, m.machine_use); check(f + ' nonzero rx_tag without tag_received rejected', m.st == INV)

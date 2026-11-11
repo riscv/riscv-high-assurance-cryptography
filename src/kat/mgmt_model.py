@@ -281,7 +281,10 @@ class KLE:
     def rename(s, d, src):
         d, src = s._two(d, src)
         if d == NONE or src == NONE or d == src: return
-        if is_unconfigured(s.md(src)): return s.clear(d)
+        if is_unconfigured(s.md(src)):      # <<KLE-GR-klnamedlocker-updates>> item 3: klnamedlocker follows also an Unconfigured source
+            s.clear(d)
+            if s.nl == src: s.nl = d
+            return
         s.free(d)
         if s.nl == d: s.nl = NONE
         s.L[d] = s.L[src]; s.L[src] = Locker()

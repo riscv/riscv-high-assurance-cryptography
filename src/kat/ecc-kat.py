@@ -567,6 +567,7 @@ check('ed448 Position i.a = 112 bits, ii Generator, iii SecondPt, iii.a = 112 bi
 L = EccLocker('secp384r1'); W = L.W; L.setst(SHASH); L.exec_in(le(0x5a5a, W)[:20])
 m, c = L.export()
 check('Set_Hash partial load: AuxInfo[15:8] = block_base = 20', mdh_get(m, 'AuxInfo') >> 8 == 20 and L.block_base == 20)
+L.clearads(); check('kl.clearads does not restart a load in progress (MR14 item 5)', L.block_base == 20 and L.export() == (m, c))
 I, same = rt(L); I.exec_in(le(0x5a5a, W)[20:])
 check('imported partial load resumes: Hash complete, HasHash set', same and I.has('hash') and b2v(I.Hash) == 0x5a5a and I.complete)
 L = EccLocker('secp256r1', rbg=rbg_k(5)); load(L, SSCAL, le(0x1234, 32)); load(L, SHASH, le(0x777, 32)); L.setst(SGN); L.exec_D(halt=True)

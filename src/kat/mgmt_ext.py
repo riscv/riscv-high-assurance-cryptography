@@ -106,12 +106,13 @@ class KLE2(KLE):
         st = mdh_get(md, 'State')
         return 0 if st in PI_STATES else (48 if mdh_get(md, 'AuxDataLen') >= 2 else 16)
     def _export_open(s, k):
+        nested = s.config(s.md(k))
         KLE._export_open(s, k)
         l = s.L[k]; md = l.mdh
         if mdh_get(md, 'State') in (57, 59) and getattr(l, 'img', None) is None:
             im = bytearray(s.image_end(k)); o = s.offset(md); c1 = CONTENT[mdh_get(md, 'Machine')]
             if mdh_get(md, 'Version') != 3: im[o:o + c1] = v2b(getattr(l, 'skid', None) if mdh_get(md, 'KeyType') == 1 else l.content, c1)
-            if mdh_get(md, 'KeyType') == 1:      # <<KLE-GR-skid-field>>: a fresh mask seed per export, from the RBG (<<KLE-GR-rbg-failure>>)
+            if mdh_get(md, 'KeyType') == 1 and not nested:      # <<KLE-GR-skid-field>>: a fresh mask seed per Valid-State export, from the RBG
                 if s.rbg_dead: s.start = 0; s.err(k, SE_INVALID); return
                 im[o + c1:o + c1 + 16] = os.urandom(16)      # shortcut: the toy content has no masked field, so only the seed is modelled
             l.img = im; s.siv = toy_tag(l.content)
