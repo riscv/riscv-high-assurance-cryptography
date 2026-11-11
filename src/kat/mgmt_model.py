@@ -115,6 +115,13 @@ class KLE:
         return kd
     def common(s):                 # locker-state-independent checks (GR12), reduced
         if not s.csk or not s.csk_levels: raise Trap('no_csk', 0)
+    def write_mklcsk(s, i, v):     # <<KLE-CSR-mklcsk>>, first way, RV64: a write to mklcsk0 restarts the group
+        if i == 0: s.csk_partial.clear()
+        s.csk_partial[:] = [p for p in s.csk_partial if p[0] != i] + [(i, v)]
+        s.csk_levels.discard(s.csk_sel)                       # partially written: not configured
+        if len(s.csk_partial) == 4:
+            if any(x for _, x in s.csk_partial): s.csk_levels.add(s.csk_sel)   # zeros(256) unconfigures
+            s.csk_partial.clear()
     def require_csk(s, md):        # only the SCC opening/completion steps that use this level (not GR12)
         level = mdh_get(md, 'SCProtection')
         if level in s.csk_levels and (s.multcsk or level == s.csk_sel): return

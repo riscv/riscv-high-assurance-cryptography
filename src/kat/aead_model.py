@@ -160,7 +160,7 @@ class GCM(Base):
         self.tag = self.tag_len = 0
         self.lbl = 0
         if not self.IV: self.J0 = 0
-        if not hasattr(self, 'start_ctr'): self.start_ctr = 0      # Ready entry does not touch start_ctr
+        self.start_ctr = 0                                         # reset() zeroes nonce_len and start_ctr
         self.len = self.block_base = self.cumul = 0
         if self.IV: self.J0 = (self.J0 & mask(96)) | bswap(1, 4) << 96
         self.klstart = 0

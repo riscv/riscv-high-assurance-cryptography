@@ -1,5 +1,5 @@
 """Extension of the management model: serialized image and memory instructions, KLIOBUF, kl.exec windows,
-kl.derive, long-running operation, system-specific import, reset, instruction encodings.
+kl.derive, checkpointable operation, system-specific import, reset, instruction encodings.
 Toy kl.exec: M_ENC State 2 Form A, 16-byte blocks, out = in xor key (granularity 16)."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -7,7 +7,7 @@ from common import *
 from mgmt_model import *
 
 PAGE = 4096
-LR_STEPS = 5        # steps of the toy long-running operation (M_SIG State 3)
+LR_STEPS = 5        # steps of the toy checkpointable operation (M_SIG State 3)
 
 class Mem:
     """Byte memory with page faults and non-idempotent regions; log lists the byte addresses touched."""
@@ -112,8 +112,7 @@ class KLE2(KLE):
         if mdh_get(md, 'State') in (57, 59) and getattr(l, 'img', None) is None:
             im = bytearray(s.image_end(k)); o = s.offset(md); c1 = CONTENT[mdh_get(md, 'Machine')]
             if mdh_get(md, 'Version') != 3: im[o:o + c1] = v2b(getattr(l, 'skid', None) if mdh_get(md, 'KeyType') == 1 else l.content, c1)
-            if mdh_get(md, 'KeyType') == 1 and not nested:      # <<KLE-GR-skid-field>>: a fresh mask seed per Valid-State export, from the RBG
-                if s.rbg_dead: s.start = 0; s.err(k, SE_INVALID); return
+            if mdh_get(md, 'KeyType') == 1 and not nested:      # <<KLE-GR-skid-field>>: a fresh mask seed per Valid-State export, held ready (no draw)
                 im[o + c1:o + c1 + 16] = os.urandom(16)      # shortcut: the toy content has no masked field, so only the seed is modelled
             l.img = im; s.siv = toy_tag(l.content)
     def _mgmt(s, kd, immed, r=0, form='C', md=0):
@@ -307,7 +306,7 @@ class KLE2(KLE):
         if r != 'ok': return r
         l = s.L[kd]; ok = v2b(l.content, 16) == bytes(tag)
         l.mdh = mdh_put(l.mdh, 'State', 54 if ok else 55); return mdh_get(l.mdh, 'State')
-    # ---- long-running operation (GR36-58): M_SIG State 3
+    # ---- checkpointable operation (GR36-58): M_SIG State 3
     def lr(s, kd=0, budget=2):
         l0 = s.L[kd]
         r = s.usage(kd, 0, None)
@@ -393,6 +392,7 @@ class KLE2(KLE):
         if not s.csk_hardwired: s.csk = False; s.csk_levels.clear()
         if s.csk_method in (1, 2): s.csk_sel = 0
         if s.csk_method == 1: s.csk_partial.clear()
+        s.fatal = s.rbg_dead and s.sks is not None     # <<KLE-GR-skid-field>>: no random bits for the mask seeds
 
 # ---- encodings (<<KLE-instruction-exec>>, <<KLE-instruction-mv>>, <<KLE-instruction-derive>>, <<KLE-instruction-clone>>)
 def enc_rtype(rd, rs1, rs2, b25=0, r=0, b27=0, form=0, f2=0):

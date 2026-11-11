@@ -204,7 +204,9 @@ class EccLocker:
             for h in (self.Hh, self.Hp):
                 if h: h.exec('B', bytes(data))
             return 'ok'
-        if s not in SETS or self.complete: return self._inv()          # MR14: no load in progress
+        if s not in SETS: return self._inv()
+        if not data: return 'ok'                                        # GR18: empty window, State kept
+        if self.complete: return self._inv()                           # MR14 item 3: load complete
         f = {SGEN: self.Generator, SSCAL: self.Scalar, SHASH: self.Hash, S2ND: self.SecondPt, SIN: self.Signature, SCTX: self.ctx}[s]
         size = self.ctxlen if s == SCTX else len(f)
         n = min(len(data), size - self.block_base)                      # the excess of the last kl.exec is ignored
@@ -259,6 +261,7 @@ class EccLocker:
         while True:
             rs = sign(c, d, e, self.iv(self.RndNum))
             if rs is not None: break
+            self.progress = 0                  # a retry restarts: Progress is zero before the draw (MR19)
             k = self._draw_k()
             if k is None: return self._inv()
             self.RndNum[:] = k.to_bytes(self.j // 8, 'little')

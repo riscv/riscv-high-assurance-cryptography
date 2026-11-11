@@ -400,12 +400,15 @@ check('GCM AD of 2^64 - 1 bits admitted', m.st == ABSORB)
 m = setup('OCB'); m.setst(LAST, 'B', 0); m.setst(ENC); m.core.index = MAX_BLOCKS + 1; m.exec('A', 0, 128)
 check('OCB message-length limit enforced by index', m.st == INV)
 
+m = setup('GCM'); n0, s0 = m.nonce_len, m.core.start_ctr; m.setst(READY, 'A')
+check('GCM reset(): nonce_len and start_ctr zeroed on entering Ready', n0 != 0 and s0 != 0 and m.nonce_len == 0 and m.core.start_ctr == 0)
 m = replay_ready(); sc = m.export(); mu = m.machine_use
 check('GCM-SIV prepass done: generated_siv set, State Encrypt', m.st == ENC and mu & SIV_GENERATED)
 for st, u, ok in ((ENC, mu, True), (ENC, mu & ~SIV_GENERATED, False), (ETF, mu, True)):
     m2 = model('GCM-SIV'); m2.import_(sc, st, u); check('GCM-SIV import State %d generated_siv=%d -> %s' % (st, bool(u & SIV_GENERATED), 'ok' if ok else 'Invalid'), (m2.st != INV) == ok)
 m = setup('GCM-SIV'); m.setst(LAST, 'B', 0); m.setst(PRE); sc = m.export()
 m2 = model('GCM-SIV'); m2.import_(sc, PRE, m.machine_use | SIV_GENERATED); check('GCM-SIV import Prepass with generated_siv set -> Invalid', m2.st == INV)
+m = setup('GCM-SIV'); sc = m.export(); m2 = model('GCM-SIV'); m2.import_(sc, ABSORB, m.machine_use | SIV_GENERATED); check('GCM-SIV import Hash_Absorb with generated_siv set -> Invalid', m2.st == INV)
 m = replay(msg(32)); sc = m.export()
 m2 = model('GCM-SIV'); m2.import_(sc, ETF, m.machine_use); m2.exec('C', kllen=128); check('imported second Enc_Tag_Finalize checks the replay -> Success', m2.st == SUCCESS)
 
@@ -448,6 +451,12 @@ for f in FAMILIES:
         check(f + (' import in Set_Tag_Value with %s set rejected' % nm if fl else ' import in Set_Tag_Value with clear flags accepted'), (m.st == INV) == bool(fl))
     m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC); m.setst(PRELAST if m.two_pt else ELB, 'B', 8); sc = m.export(); st0 = m.st
     m.import_(sc, PRE if m.two_pt else ENC, m.machine_use); check(f + ' import with last_block_len non-zero outside a final-piece State rejected', st0 != INV and m.st == INV)
+    m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE if m.two_pt else ENC); sc = m.export(); mu = m.machine_use
+    m.import_(sc, PRELAST if m.two_pt else ELB, mu); check(f + ' import of a single-successor final-piece State with last_block_len = 0 rejected', m.st == INV)
+    m = model(f); sc = m.export(); m.import_(sc, READY, AD_ABSORBED); check(f + ' import in Ready with a flag set rejected', m.st == INV)
+    if not m.DEC_ONLY:
+        m = model(f); xs = {'GCM': 96, 'GCM-SIV': 96, 'OCB': 96, 'Ascon': 128}[m.family]
+        m.setst(SAV, 'B', xs); m.setst(SAV, 'B', xs); check(f + ' same-State kl.setst into Set_Aux_Value admitted', m.st == SAV)
     if not m.two_pt:
         m = setup(f); sc = bytearray(m.export()); h = sum(m.header_widths()) // 8; sc[h] = 1
         m.import_(bytes(sc), m.st, m.machine_use); check(f + ' nonzero rx_tag without tag_received rejected', m.st == INV)

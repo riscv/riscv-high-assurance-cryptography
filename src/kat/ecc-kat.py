@@ -115,6 +115,9 @@ for nm in ('secp256r1', 'brainpoolP256r1', 'sm2'):
     check(nm + ': neutral/zero SecondPt -> Failure', L.exec_D() == 'failure')
     L = EccLocker(nm); L.setst(SSCAL); L.exec_in(b'\x01' * 10); L.setst(RDY)
     check(nm + ': incomplete load then Ready zeroes the field (MR14)', not any(L.Scalar))
+    L = EccLocker(nm); load(L, SSCAL, le(3, W)); L.exec_in(b'')
+    check(nm + ': load complete, empty-window kl.exec keeps the State (MR14 item 3)', L.state == SSCAL and L.complete)
+    check(nm + ': load complete, further kl.exec -> Invalid (MR14 item 3)', L.exec_in(b'x') == 'invalid')
     L = EccLocker(nm); L.setst(SSCAL); L.exec_in(b'\x01' * 10); L.setst(SSCAL)
     check(nm + ': same-State setst restarts load, field zero', not any(L.Scalar) and L.state == SSCAL and not L.invalid)
     L = EccLocker(nm); L.setst(SSCAL); L.exec_in(le(5, W) + b'\xff' * 9)
@@ -158,6 +161,9 @@ for nm in ('secp256r1', 'brainpoolP256r1', 'sm2'):
         ref = (M.sm2_sign if nm == 'sm2' else M.ecdsa_sign)(C, d, e, k2)
         check('%s %s: k1 rejected, retry with k2 -> signature from k2' % (nm, lab), r == 'output' and ref is not None and sg == ref, sg, ref)
         check('%s %s: result verifies' % (nm, lab), (M.sm2_verify if nm == 'sm2' else M.ecdsa_verify)(C, C.mul(d, C.G), e, sg))
+        L = EccLocker(nm); seq = iter([k1]); L.rbg = lambda m, seq=seq: (next(seq, None) or (_ for _ in ()).throw(RbgFailure())) and (k1 - 1).to_bytes(m, 'big')
+        L.setst(SSCAL); L.exec_in(le(d, 32)); L.setst(SHASH); L.exec_in(le(e, 32)); L.setst(SGN); L.exec_D(halt=True); p1 = L.progress
+        check('%s %s: RBG fails at the retry of a resumed signature: Progress zero, Invalid (MR19)' % (nm, lab), p1 != 0 and L.exec_D() == 'invalid' and L.progress == 0)
     check('%s: Scalar range: n-1 (n-2 for SM2) allowed at Sign_Generate entry' % nm, (lambda L: (load(L, SHASH, le(1, 32)), load(L, SSCAL, le(n - (2 if nm == 'sm2' else 1), 32)), L.setst(SGN))[2] == 'ok')(EccLocker(nm)))
     if nm == 'sm2':
         L = EccLocker(nm); load(L, SHASH, le(1, 32)); load(L, SSCAL, le(n - 1, 32))

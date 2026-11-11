@@ -507,7 +507,7 @@ check('GR5: vector MDH operand with VL*SEW < 128 -> illegal; GR6: vstart != 0 ->
 section('GR1 reserved setst/mgmt immediates through KLNL and GR3')
 e = KLE2(); check('GR4: KLNL requires the locker field 0 (r=1, kd!=0): illegal for getmd, exec, size', all(trap(fn, 5, 1) == 'illegal' for fn in (e.getmd, e.size, e.avail, e.exec)))
 
-section('Long-running operation  <<KLE-GR-long-running-progress>>, <<KLE-GR-progress-discard>>, <<KLE-GR-long-running-restart>>')
+section('Checkpointable operation  <<KLE-GR-long-running-progress>>, <<KLE-GR-progress-discard>>, <<KLE-GR-long-running-restart>>')
 def lrs():
     e = E2(); prov(e, 1, mach=M_SIG, pol=0, up=0x4); e.setst(1, 3); return e
 e = lrs(); ps = []
@@ -661,11 +661,11 @@ seed = lambda e: bytes(e.img(0)[16 + CONTENT[M_KEY]:32 + CONTENT[M_KEY]])
 check('KeyType 1: Content1 ends with a 128-bit mask seed, so the SCC is 16 bytes longer than with KeyType 0 (GR55.1, GR52)', e.size(0) == size_of(mk(mach=M_KEY, KeyType=0, State=57)) + 16 and len(e.img(0)) == e.size(0) - 16)
 check('KeyType 1: a PI carries no mask seed (GR55.1)', e.size(form='C', md=mk(mach=M_KEY, KeyType=1)) == e.size(form='C', md=mk(mach=M_KEY, KeyType=0)))
 s1 = seed(e); e2 = skp(); prov_skid(e2); e2.nl = 0; e2.mgmt(0, 57, form='A')
-check('each export draws a fresh mask seed (GR55.1)', seed(e2) != s1 and s1 != bytes(16))
-e = skp(); prov_skid(e); e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A'); check('KeyType 1 export with a failed RBG: the locker enters Invalid (GR45)', stx(e, 0) == INV)
+check('each export uses a fresh mask seed (GR55.1)', seed(e2) != s1 and s1 != bytes(16))
+e = skp(); prov_skid(e); e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A'); check('KeyType 1 export with a failed RBG: no draw, the export opens with a mask seed (GR55.1)', e.getst(0) == 57 and seed(e) != bytes(16))
 e = E2(); e.mgmt(0, 56, md=mk(mach=M_KEY)); e.L[0].content = 0xAAAA; FIN(e, 0); e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A')
 control('negative: a KeyType 0 export draws no random bits, so a failed RBG leaves it unaffected', stx(e, 0) != INV)
-e = skp(); e.mgmt(0, 56, md=mk(mach=M_KEY, KeyType=1)); e.L[0].skid = K64; e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A'); check('a nested KeyType 1 export draws no mask seed, so a failed RBG leaves it unaffected (GR55.1)', e.getst(0) == 59)
+e = skp(); e.mgmt(0, 56, md=mk(mach=M_KEY, KeyType=1)); e.L[0].skid = K64; e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A'); check('a nested KeyType 1 export takes no new mask seed and is unaffected by a failed RBG (GR55.1)', e.getst(0) == 59)
 e = E2(); e.sks = None; check('no SKID support: opening KeyType 1 -> kl_exc_unsupported; kl.avail 0, Forms A, B, C', trap(e.mgmt, 0, 56, md=mk(mach=M_KEY, KeyType=1)) == 'unsupported' and e.avail(form='C', md=mk(mach=M_KEY, KeyType=1)) == 0 and e.avail(form='B', md=mk(mach=M_KEY, KeyType=1)) == 0 and e.avail(form='C', md=mk(mach=M_KEY)) == 1)
 e = E2(); e.has_rng = False; check('no random key generation: KeyType 2 -> kl_exc_unsupported; kl.avail 0; KeyType 0 unaffected', trap(e.mgmt, 0, 56, md=mk(mach=M_KEY, KeyType=2)) == 'unsupported' and e.avail(form='C', md=mk(mach=M_KEY, KeyType=2)) == 0 and e.avail(form='C', md=mk(mach=M_KEY)) == 1)
 e = E2(); e.has_rng = False; check('kl.size of an unsupported KeyType is 0', e.size(form='C', md=mk(mach=M_KEY, KeyType=2)) == 0)
@@ -726,6 +726,16 @@ for method in (1, 2, 3, 4):
               and e.csk_sel == (2 if mult and method in (1, 2) else sel)
               and (e.csk_partial == ([] if mult else [0x1234]) if method == 1 else not hasattr(e, 'csk_partial'))
               and e.csk_levels == {0})
+e = E2(csk_levels=set(), multcsk=False, csk_method=1)
+for i in (1, 2, 3): e.write_mklcsk(i, 5)
+check('mklcsk1..3 written without mklcsk0: CSK not configured', e.csk_levels == set())
+e.write_mklcsk(0, 5); check('a write to mklcsk0 restarts the group: the earlier parts are discarded', e.csk_levels == set() and e.csk_partial == [(0, 5)])
+for i in (1, 2, 3): e.write_mklcsk(i, 5)
+check('mklcsk0 then mklcsk1..3: CSK configured, write complete', e.csk_levels == {0} and e.csk_partial == [])
+e.write_mklcsk(1, 5); check('after a full write, one CSR alone starts a partial write and configures nothing', e.csk_levels == set())
+for i in range(4): e.write_mklcsk(i, 0)
+check('full write of zeros(256) unconfigures the CSK', e.csk_levels == set() and e.csk_partial == [])
+e.write_mklcsk(3, 5); check('after the all-zero write, one CSR alone configures nothing', e.csk_levels == set())
 for state in PI_STATES:
     e = csks(); e.mgmt(1, 58, md=mdh_put(im, 'State', state)); e.mgmt(1, 63, md=mk(State=56)); FIN(e, 1)
     check('PI-base PCCC State %d needs no level CSK to import and provision' % state,
@@ -756,6 +766,10 @@ check('KLS Off: every KLE instruction raises an illegal-instruction exception (f
 e = E2(csk=False); e.kls = 0; e.fatal = True
 check('KLS Off precedes the fatal-error and the missing-CSK exceptions; fatal precedes second-group illegal and no-CSK (GR12 items 1, 2, 4)', trap(e.exec, 1) == 'illegal' and (setattr(e, 'kls', 1), trap(e.exec, 1))[1] == 'fatal'
       and (setattr(e, 'fatal', False), trap(e.exec, 1))[1] == 'no_csk')
+e = skp(); e.rbg_dead = True; e.reset()
+check('entropy source dead at reset, System Keys supported: fatal condition that persists (GR55.1)', trap(e.exec, 1) == 'fatal' and trap(e.exec, 1) == 'fatal')
+e.rbg_dead = False; e.reset(); check('a later reset with a working entropy source ends it', trap(e.exec, 1) != 'fatal')
+e = E2(); e.sks = None; e.rbg_dead = True; e.reset(); check('no System Key support: a dead entropy source at reset is not fatal', trap(e.exec, 1) != 'fatal')
 e = E2(); e.fatal = True; check('fatal precedes the second-group illegal of a vector mv (GR12 item 3 after item 2)', trap(e.vec_in, d[:8], 32) == 'fatal')
 e = E2(); e.kls = 0; check('KLS Off with M-mode too; hardwired identification CSRs stay readable (not modelled as instructions)', trap(e.size, 1) == 'illegal')
 e = E2(); e.priv = 'S'; e.stateen = False; check('Smstateen KLE bit clear in a lower mode: every KLE instruction is illegal', trap(e.getmd, 1) == 'illegal' and trap(e.setst, 1, 2) == 'illegal')

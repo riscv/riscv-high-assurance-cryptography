@@ -78,7 +78,9 @@ class Mach:
     def load(s, data):
         """Form B kl.exec: one transfer of the loading State."""
         if s.st == 0: return
-        if s.st not in (S_EIN, S_DIN, S_CIN) or s.W >= s._fsize(s.st): return s._invalid()
+        if s.st not in (S_EIN, S_DIN, S_CIN): return s._invalid()
+        if not data: return                                  # GR18: empty window, State kept
+        if s.W >= s._fsize(s.st): return s._invalid()        # MR14 item 3
         size = s._fsize(s.st); take = min(len(data), size - s.W)
         dst, base = (s.ct, 0) if s.st == S_CIN else (s.dk, s.eo if s.st == S_EIN else 0)
         dst[base + s.W: base + s.W + take] = data[:take]; s.W += take
@@ -522,5 +524,5 @@ section('Controls')
 control('RBG failure path is reachable (RBG without data fails the scripted read)', raises(RBG().read, 32, exc=RBGFail))
 control('SampleNTT limit path is reachable', raises(lambda: (M.SAMPLE_LIMIT.__setitem__(0, 1), M.keygen_internal('ML-KEM-512', bytes(32), bytes(32))), exc=M.SampleNTTLimit))
 M.SAMPLE_LIMIT[0] = None
-spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR38 halting and resumption of long-running exec); GR30 narrowing and SCProtection checks of derive.')
+spec_note('Not modelled: ISA layer (SEW/KLIOBUF encodings, kl.size, ADS, export/import, GR38 halting and resumption of checkpointable exec); GR30 narrowing and SCProtection checks of derive.')
 done()

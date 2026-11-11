@@ -106,7 +106,7 @@ Unless it terminates the owner, software must complete a base or nested export b
 
 [horizontal]
 [[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a `kl.mvin` or `kl.mvout` sequence by a length fixed beforehand, the image size read with `kl.size` or, for a provisioning, the length of the PI that it built, and check the _State_ afterward.
-`klstart` is not a loop bound (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>).
+`klstart` is not a loop bound (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>).
 
 [[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export is neither _Unconfigured_ nor an Error State or, when the image is the MDH alone, if the MDH that `kl.getmd*` returned is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
 After a `kl.mgmt` that opens an export from a Valid State, software must continue only if the _State_ is `kl_cfg_exporting`; a Valid State means a refusal (<<Zkl-ISA-unpriv.adoc#KLE-SCC-export>>).
@@ -151,7 +151,7 @@ Immediately after a usage instruction, check for a Valid State before using its 
 === Probing the Maximum KLIOBUF Length
 
 As with `vsetvl`, the getter and setter instructions give the maximum KLIOBUF length: write a large value with `kl.setbl`, then read it back with `kl.getbl`.
-The probe destroys the buffer contents.
+The probe destroys the buffer contents and sets `kliobuftop` to `kliobuflen`; software that needs its `kliobuftop` saves it with `kl.getbt` and restores it with `kl.setbt` after the last `kl.setbl`.
 A context restore does not probe: each OS, or other execution environment, probes once and keeps the value, which only an M-mode write to `mklmaxiobuflen` changes (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>).
 
 [source,asm]
@@ -231,12 +231,9 @@ Complete each export with `kl.mgmt` and an outcome check before clearing its loc
 An export-opening `kl.mgmt` that leaves a Valid locker in its Valid State was refused (Rule <<KLE-SR-export-final-check>>): the handler saves no image for that locker and reports the error to the code that owns it, and the restore order clears the locker, whose CC is lost.
 Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures the Locality Secret CSRs before it exports (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) encounters no refused export.
 
-The export-opening `kl.mgmt` of a locker with _KeyType_ = 1 in a Valid State draws random bits (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-skid-field>>).
-If it raises a KLE RBG-unavailable exception, the saving code re-executes it, or defers the context switch, until it succeeds.
-If it leaves the locker in Error State _Invalid_, the entropy source has failed permanently: the code saves the MDH alone (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>) and reports the loss to the code that owns the locker.
 
 Software does not read or compare `IMPQUAL`: the unit does, on import.
-An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted long-running operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
+An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted checkpointable operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
 
 If the handler clears a locker being provisioned or imported under Rule <<KLE-SR-no-unconditional-clear>>, the interrupted operation restarts (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); restore 32 instead of a saved `klnamedlocker` that named it (<<KLE-restore-order>>).
 
@@ -267,8 +264,8 @@ The getter and setter instructions are the recommended way for software to acces
 A handler that can neither resolve nor forward a KLE exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, nor terminate the process, follows Rule <<KLE-SR-handler-duty>>.
 
 For KLE fatal-error, missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
-A KLE RBG-unavailable exception is resolved by re-executing the instruction once the entropy source has recovered; until then the instruction traps again (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
-A handler follows Rule <<KLE-SR-handler-duty>> for it only when it gives up, and never for an export-opening `kl.mgmt`.
+A KLE RBG-unavailable exception is resolved by re-executing the instruction after a delay that the handler chooses: the architecture does not report the recovery of the entropy source, and until then the instruction traps again (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
+A handler follows Rule <<KLE-SR-handler-duty>> for it only when it gives up.
 
 An M-mode handler resolves a KLE missing-CSK exception by establishing a CSK and re-executing the instruction (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>).
 With `mtval` = 0, it establishes the CSK of the level that the platform uses most or, with `Smklmultcsk`, every CSK that it holds; an export or import at another level then traps again with 8 + L.
@@ -648,8 +645,8 @@ The architecture does not enforce these sequences or their order.
 
 The listings of <<KLE-machine-code-examples>> are RV64 code for the V extension (`VLEN` {ge} 128) and Zbb; locker `K0` is the target, and <<KLE-pseudocode-ECDH-KDF>> also uses `K1` and `K2`.
 On a hart with `VLEN` = 64 (<<Zkl-ISA-unpriv.adoc#KLE-unpriv-exts-overview>>), a 128-bit operand needs a register group: code selects `LMUL` {ge} 2 and vector register numbers that are multiples of it (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-vector-legality>>), and checks the `vl` that `vsetvli` grants before it issues a KLE instruction.
-Arguments arrive in `a0`–`a7`, `s9` and `s10`; `error` is the caller's error handling, not shown, which erases the output buffer of a decryption before it reports (Rule <<KLE-SR-unverified-plaintext>>).
-`import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`. It changes `vtype`, but no `a` register, `s9` or `s10`.
+Arguments arrive in `a0`–`a6`; `error` is the caller's error handling, not shown, which erases the output buffer of a decryption before it reports (Rule <<KLE-SR-unverified-plaintext>>).
+`import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`. It changes `vtype`, but no `a` register.
 Most examples have `b` = 128: a 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, and a shorter piece of `p` bytes with `vl` = `p`, so `KLLEN` = 8 {times} `p`.
 Most listings omit the `kl.getst` that checks, before an output is used, that the locker is still in a Valid State (<<KLE-reading-locker-state>>). A usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
 
@@ -753,14 +750,14 @@ The following listing encrypts with a CBC CC, one block per `kl.exec`.
 2:
 ----
 
-With `VLEN` = 128 and LMUL = 8, a register group holds eight blocks, and one `kl.exec` chains them in order inside the KLE unit.
+With `VLEN` {ge} 128 and LMUL = 8, a register group holds at least eight blocks, and one `kl.exec` chains them in order inside the KLE unit.
 The following listing takes the number of blocks as a parameter; for the last group, of fewer than eight blocks, it reduces `vl`.
 
 [[KLE-pseudocode-CBC-encryption-multi-block]]
 .CBC Encryption, Eight Blocks per Instruction
 ----
 # a0 = SCC, a1 = plaintext, a2 = ciphertext buffer, a3 = number of blocks,
-# a5 = the 16-byte IV; VLEN = 128, so LMUL = 8 holds 8 blocks
+# a5 = the 16-byte IV; LMUL = 8 holds at least 8 blocks
 
   import_scc 0, a0
   vsetivli  zero, 16, e8, m1, ta, ma
@@ -1227,13 +1224,13 @@ For KMAC128 and KMAC256, it takes `T_len` {le} 8 {times} `VLEN`, since a registe
 [[KLE-pseudocode-hash-verify]]
 .MAC Verification
 ----
-# a5 = T, a6 = T_len in bits, a multiple of 8; HMAC: capped to tag_len_p
+# a5 = T, a6 = T_len in bits, a multiple of 8; HMAC: capped at t
 3:
   kl.setst  K0, #kl_state_hash_verify, a6
   srli      t1, a6, 3
   vsetvli   zero, t1, e8, m8, ta, ma # KLLEN = T_len
   vle8.v    v0, (a5)
-  kl.exec   K0, v0                # compares the first T_len bits
+  kl.exec   K0, v0                # compares tag_len_p bits
   kl.getst  t1, K0                # _Success_ if T matches,
                                   # _Failure_ otherwise
 ----

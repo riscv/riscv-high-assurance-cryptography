@@ -308,6 +308,8 @@ class UnifiedAEAD(Base):
             need(st != SAV2 or not self.flags & (AD_ABSORBED | TAG_RECEIVED))
             need(not self.flags & DATA_ABSORBED or self.family not in ('GCM', 'GCM-SIV') and st not in (ABSORB, LAST, SAV2))
             need(self.lbl == 0 or st in (LAST, PRELAST, ELB, DLB))      # non-zero only in a final-piece State
+            need(self.lbl != 0 or st not in (PRELAST, ELB, DLB))        # a single-successor final-piece State never rests
+            need(not self.flags & SIV_GENERATED or st in (ENC, ELB, ETF, SUCCESS, FAILURE))
             if self.two_pt: self.ad_hash = b2v(sc[h:h + 16])
             else: self.received_tag = b2v(sc[h:h + 16])
             sg = bool(self.flags & SIV_GENERATED)                     # selects the GCM-SIV Enc_Tag_Finalize steps

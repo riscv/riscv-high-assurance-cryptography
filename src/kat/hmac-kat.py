@@ -93,6 +93,7 @@ for fn in ('SHA-256', 'SHA-512', 'SM3', 'SHA3-256'):
     L.setst('absorb'); check('%s incomplete load, leaving Set_Key -> K0 zeroed, Hash_Absorb refused (Invalid)' % fn, inv(L) or (L.K0 == 0 and not L.haskey))
     L = Locker(fn, 'NIK'); L.setst('setkey'); L.exec('B', msg_of(10)); L.setst('setkey'); check('%s same-State kl.setst Set_Key restarts the load' % fn, L.st == 'SetKey' and L.K0 == 0 and L.cum == 0)
     L.exec('B', K0of(fn, k)); check('%s load of block_bytes bytes complete: HasKey set' % fn, L.haskey)
+    L.exec('B', b''); check('%s load complete, empty-window kl.exec keeps the State (MR14 item 3)' % fn, L.st == 'SetKey' and L.haskey)
     L.exec('B', b'extra'); check('%s excess bytes after a complete load are not loaded' % fn, L.K0 == b2v(K0of(fn, k)) or inv(L))
     L = mknik(fn, k); L.setst('absorb'); L.setst('ready'); check('%s K0 kept across Ready' % fn, L.haskey and L.K0 == b2v(K0of(fn, k)))
     check('%s ... one load serves two messages' % fn, tag(L, b'one') == ref(fn, k, b'one') and (L.setst('ready') or True) and tag(L, b'two') == ref(fn, k, b'two'))

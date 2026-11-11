@@ -128,6 +128,8 @@ check('incomplete privkey load zeroed on leaving', lk.privkey == bytes(P44['sk']
 lk = mk(); lk.setst(S_MUIN); lk.exec('B', mu44[:10]); lk.setst(S_READY)
 check('incomplete mu load zeroed, no HasMu', lk.mu == bytes(64) and not lk.flag(HAS_MU))
 lk = mk(); put(lk, S_MUIN, mu44 + b'x'); check('excess data for mu ignored', lk.flag(HAS_MU) and lk.mu == mu44)
+lk = mk(); put(lk, S_MUIN, mu44); lk.exec('B', b''); check('load complete, empty-window kl.exec keeps the State (MR14 item 3)', lk.st == S_MUIN and lk.mu == mu44)
+lk.exec('B', b'x'); check('load complete, further kl.exec -> Invalid (MR14 item 3)', lk.se == SE_INVALID)
 lk.setst(S_READY); check('Ready after a completed mu load clears mu and HasMu', lk.mu == bytes(64) and not lk.flag(HAS_MU))
 # malformed privkey: flip a byte of s1 so a 3-bit coefficient decodes to 7 (> 2*eta=4)
 bad = bytearray(sk44); bad[128] = 0xFF

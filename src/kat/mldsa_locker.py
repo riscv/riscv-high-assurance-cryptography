@@ -151,7 +151,9 @@ class Locker:
         if (st in (S_SGEN, S_SOUT) and not self.policy & 1) or (st in (S_SVER, S_SIN) and not self.policy & 2):
             return self.invalid()                                                            # MR1
         if st in LOADING:
-            if form != 'B' or self.mu_use >= self.size[LOADING[st]]: return self.invalid()
+            if form != 'B': return self.invalid()
+            if not data: return None                                 # GR18: empty window, State kept
+            if self.mu_use >= self.size[LOADING[st]]: return self.invalid()   # MR14 item 3
             f = LOADING[st]; size = self.size[f]
             take = min(len(data), size - self.mu_use)
             buf = bytearray(getattr(self, f)); buf[self.mu_use:self.mu_use + take] = data[:take]
