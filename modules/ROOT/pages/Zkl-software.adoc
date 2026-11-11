@@ -141,7 +141,7 @@ The normative Rules of <<KLE-software-requirements>> take precedence over these 
 
 To inspect lockers by number, software writes each number in turn to `klnamedlocker` and names `KLNL` in the following instructions. While an import or export is open, it first saves that locker by a nested export (Rule <<KLE-SR-nested-export-first>>). To find an open locker, as step 3 of <<KLE-save-order>> requires, software issues `kl.getst` with the explicit operands `K0` to `K31`, which leaves `klnamedlocker` unchanged.
 
-It then uses the instructions `kl.getst`, `kl.getstx` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getst>>) and `kl.getmd` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getmd>>).
+To inspect a locker so named, it then uses the instructions `kl.getst`, `kl.getstx` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getst>>) and `kl.getmd` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getmd>>).
 
 Immediately after a usage instruction, check for a Valid State before using its output; for AEAD plaintext, also follow Rule <<KLE-SR-unverified-plaintext>>.
 
@@ -209,14 +209,14 @@ A handler that skips the trapping instruction applies its retirement effects to 
 [[KLE-save-order]]
 === Context Save Order
 
-Before any export, the saving mode sets the Locality Secret CSRs that it owns to the values under which the images are to be restored; a hypervisor sets its own `skllocality` (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>).
+Before any export, the saving mode saves the Locality Secret CSR values of the context, unless it holds them, and sets the Locality Secret CSRs that it owns to the values under which the images are to be restored; a hypervisor writes its own value to `skllocality` (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>).
 
 . Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one; for a locker whose field that the saving mode owns is _Off_, its saved image gives that State (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
 These Rules make it the owner of the authentication registers, if a locker owns them (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
 If the field of the managed locker that the saving mode owns is _Off_, keep its saved image: it remains the managed locker, which <<KLE-restore-order>> restores last or defers again.
-Otherwise, if there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>). How depends on its _State_, read with `kl.getst`; transfer directly to or from memory (`kl.store`, `kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has yet to save:
+Otherwise, if there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>). How depends on its _State_, read with `kl.getst`; transfer directly to memory (`kl.store` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has yet to save:
 .. _Unconfigured_: save no locker image;
 .. an Error State: export only its MDH (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is in a Configuration State.
@@ -235,7 +235,7 @@ Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures 
 
 
 Software does not read or compare `IMPQUAL`: the unit does, on import.
-An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_AuxDataLen_ = 0 in `kl.getmd` after the import), and a halted checkpointable operation restarts; software whose mode the _UsagePolicy_ of the locker admits may call `kl.clearads` before the export, which shortens the image; otherwise the import on the target drops the ADS.
+An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_AuxDataLen_ reads 0 in `kl.getmd` after the import, unless the implementation has already written a new ADS), and a halted checkpointable operation restarts; software whose mode the _UsagePolicy_ of the locker admits may call `kl.clearads` before the export, which shortens the image; otherwise the import on the target drops the ADS.
 
 If the handler clears a locker being provisioned or imported under Rule <<KLE-SR-no-unconditional-clear>>, the interrupted operation restarts (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); restore 32 instead of a saved `klnamedlocker` that named it (<<KLE-restore-order>>).
 
@@ -245,7 +245,7 @@ If the handler clears a locker being provisioned or imported under Rule <<KLE-SR
 === Context Restore Order
 
 . Clear every locker for which no image is restored below, a locker whose restoration is deferred included, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
-. Set the Locality Secret CSRs to the values in force when the images were saved (<<KLE-save-order>>, <<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) before any import; restore a value of the context that differs from them, such as the `skllocality` of a guest, after the last import and before `KLS`.
+. Set the Locality Secret CSRs to the values in force when the images were saved (<<KLE-save-order>>, <<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) before any import; restore a value of the context that differs from them, such as the `skllocality` of a guest, after the last import and before `KLS`. A later import of a deferred locker needs the same values around it.
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
@@ -266,8 +266,8 @@ The getter and setter instructions are the recommended way for software to acces
 A handler that can neither resolve nor forward a KLE exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, nor terminate the process, follows Rule <<KLE-SR-handler-duty>>.
 
 For KLE missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
-A KLE fatal-error exception has no Error State either and cannot be resolved: the M-mode handler re-establishes the M-mode KLE state that the KLE unit reset cleared (<<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>>) and reports the loss of their lockers to the contexts that held them.
-If the condition persists (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>), it makes no KLE instruction or KLE CSR access until a full reset of the KLE unit.
+A KLE fatal-error exception has no Error State either and cannot be resolved: the M-mode handler re-establishes the M-mode KLE state that the hart KLE state reset cleared (<<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>>) and reports the loss of their KLE state to the contexts that held it.
+If the condition persists (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>), its first KLE instruction or KLE CSR access raises the exception again, so it saves `mepc`, `mcause` and `mstatus` first; it then makes none until a KLE unit reset.
 A KLE RBG-unavailable exception is resolved by re-executing the instruction after a delay that the handler chooses: the architecture does not report the recovery of the entropy source, and until then the instruction traps again (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
 A handler follows Rule <<KLE-SR-handler-duty>> for it only when it gives up.
 
@@ -957,7 +957,7 @@ With stealing, the locker ends in _Success_, and a `kl.setst` into _Ready_ prece
 
 The following pseudocode drives every AEAD Machine.
 It reads `glog` and the pass flags with `kl.getinfo`; the MDH supplies `tag_len_p` as usual.
-`AD_FINAL`, `DATA_FINAL` and `PREPASS_FINAL` set the corresponding final-block State with the meaningful bit length of the remaining piece, then issue its one `kl.exec` if the length is nonzero.
+`AD_FINAL`, `DATA_FINAL` and `PREPASS_FINAL` set the corresponding final-block State with the meaningful bit length of the remaining piece, then issue its one `kl.exec` if the length is non-zero.
 The final piece is the last 1 to 128 bits, a full block included, and is empty only for an empty AD, PT or CT (<<Zkl-ISA-machines.adoc#KLE-unified-AEAD>>).
 <<KLE-pseudocode-unified-AEAD-final>> gives them; the Machine ignores the bits of the final transport byte above that length.
 

@@ -107,6 +107,7 @@ class KLE2(KLE):
         return 0 if st in PI_STATES else (48 if mdh_get(md, 'AuxDataLen') >= 2 else 16)
     def _export_open(s, k):
         nested = s.config(s.md(k))
+        # <<KLE-GR-skid-field>>: the source failed before it supplied the mask-seed bits
         KLE._export_open(s, k)
         l = s.L[k]; md = l.mdh
         if mdh_get(md, 'State') in (57, 59) and getattr(l, 'img', None) is None:
@@ -385,16 +386,18 @@ class KLE2(KLE):
             s.L[src].mdh = mdh_put(s.md(src), 'State', 1); s.L[src].content = 0
         return 'ok'
     # ---- reset (<<KLE-out-of-reset-unpriv>>)
-    def reset(s, full=True):     # full: every hart of the unit in reset (<<KLE-reset-and-m-mode-only>>)
+    def reset(s, unit=True):     # unit: KLE unit reset; else a hart KLE state reset only (<<KLE-reset-and-m-mode-only>>)
         for k in range(32): s.free(k)
         s.pool = []; s.nl = NONE; s.start = 0; s.slots = s.slots + 0
         s.kliobuflen = s.kliobuftop = 0; s.iobuf = bytearray(len(s.iobuf)); s.siv = s.impqual = s.siv2 = 0
         if not s.csk_hardwired: s.csk = False; s.csk_levels.clear()
         if s.csk_method in (1, 2): s.csk_sel = 0
         if s.csk_method == 1: s.csk_partial.clear()
-        # <<KLE-GR-rbg-failure>>: source tested only at a full reset; a slow source is treated as dead; the condition persists
-        if full: s.persist = (s.rbg_dead or s.rbg_slow) and s.uses_rbg
+        # <<KLE-GR-rbg-failure>>: source tested only at a KLE unit reset; a slow source is treated as dead: the unit does not become active
+        if unit: s.persist = (s.rbg_dead or s.rbg_slow) and (s.uses_rbg or s.csk_method == 4)   # fourth way: boot-generated CSKs draw
         s.fatal = s.persist
+    def fatal_cond(s, unit):     # <<KLE-error-architecture>>: unit-internal corruption causes a KLE unit reset, hart-side a hart KLE state reset
+        s.reset(unit=unit); s.fatal = True
 
 # ---- encodings (<<KLE-instruction-exec>>, <<KLE-instruction-mv>>, <<KLE-instruction-derive>>, <<KLE-instruction-clone>>)
 def enc_rtype(rd, rs1, rs2, b25=0, r=0, b27=0, form=0, f2=0):

@@ -461,4 +461,11 @@ for f in FAMILIES:
         m = setup(f); sc = bytearray(m.export()); h = sum(m.header_widths()) // 8; sc[h] = 1
         m.import_(bytes(sc), m.st, m.machine_use); check(f + ' nonzero rx_tag without tag_received rejected', m.st == INV)
 
+# OCB nonce_len at import: 0 (no nonce set) or 6..120; anything else completes into Invalid
+import aead_model as AM
+def ocb_imp(nl):
+    sc = AM.OCB(bytes(16)).pack((0, 128), (0, 120), (nl, 7), (0, 1), (0, 128), (0, 128), (0, 128), (0, 49), (0, 2), (0, 7))[0]
+    return AM.OCB.from_sc(AM.READY, sc).st == INV
+check('OCB import: nonce_len outside {0} and [6,120] is Invalid', [ocb_imp(n) for n in (0, 5, 6, 120, 121, 127)] == [False, True, False, False, True, True])
+
 done()

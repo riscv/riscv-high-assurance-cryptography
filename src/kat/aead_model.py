@@ -475,7 +475,7 @@ class OCB(Base):
         k, N, nl, _, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 49, 2, 7))   # L* derived
         m.key = v2b(k, keybytes); m.st, m.nonce, m.nonce_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
         m.hasN = m.nonce_len != 0
-        if tl or (cls.PRESET and not 6 <= nl <= 120): m._fail(); return m
+        if tl or (nl and not 6 <= nl <= 120) or (cls.PRESET and not nl): m._fail(); return m   # nonce_len: 0 (none set) or 6..120
         if st not in (READY, SAV): m._setup()
         return m
 
