@@ -56,6 +56,7 @@ def size_of(md):
     if mdh_get(md, 'Version') == 3: return 16 + 16 * mdh_get(md, 'AuxDataLen')
     adl, dr = mdh_get(md, 'AuxDataLen'), mdh_get(md, 'ADSDropped')
     if st in (56, 59, 60) or st == 0: return 16 + c1
+    c1 += 16 if mdh_get(md, 'KeyType') == 1 else 0      # <<KLE-GR-skid-field>>: Content1 ends with the mask seed
     if adl >= 2: return 64 + c1 + (16 * (adl - 2) if dr == 0 else 0)
     return 32 + c1
 

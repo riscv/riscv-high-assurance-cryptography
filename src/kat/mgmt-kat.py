@@ -450,6 +450,7 @@ e = dv(); e.L[1].mdh = mdh_put(e.md(1), 'Transparent', 1); check('control: dest 
 for ln in (0, 31): e = dv(); e.derive(2, 1, ln); check('shared secret into a key field requires length >= dest_length (%d) -> dest Invalid (GR29 item 6)' % ln, stx(e, 2) == INV and e.getst(1) == 2)
 e = dv(); r = e.derive(2, 1, 33); check('shared secret, length 33 > dest_length 32: the key field receives the first 32 bytes (GR28, GR29 item 6)', r == 'ok' and e.L[2].content == SEC)
 e = dv(sst=1); r = e.derive(2, 1, 32); check('source not a source endpoint (Ready) -> source Invalid (GR29 item 2)', stx(e, 1) == INV and e.getst(2) == 1)
+e = dv(sst=1); e.start = 16; e.derive(2, 1, 32); check('source not an endpoint and klstart != 0: GR29 item 1 comes first -> dest Invalid, source unchanged (not GR13.5 item 4)', stx(e, 2) == INV and e.getst(1) == 1)
 e = dv(); e.derive(2, 1, 32); check('a field source feeds one kl.derive: the source leaves to Ready, sharedkey zeroed (GR28)', e.getst(1) == 1 and e.L[1].content == 0)
 r = e.derive(2, 1, 32); check('a second kl.derive of the same field -> source Invalid (GR28, GR29 item 2)', r == 'invalid' and stx(e, 1) == INV)
 e = dv(dstm=M_ENC); e.setst(2, 2); r = e.derive(2, 1, 32); check('dest not a destination endpoint (key field outside Ready) -> dest Invalid (GR29 item 3)', stx(e, 2) == INV and e.getst(1) == 2)
@@ -655,6 +656,14 @@ e = skp(minprot=2); prov_skid(e, SCProtection=1); check('SCProtection below the 
 e = skp(minprot=2); prov_skid(e, SCProtection=2); check('SCProtection at the minimum resolves', stx(e, 0) == (1, 0))
 e = skp(); prov_skid(e, skid=mask(64)); check('the all-ones SKID is an ordinary SKID: unresolved -> Invalid', stx(e, 0) == INV)
 e = skp(); prov_skid(e); e.nl = 0; e.mgmt(0, 57, form='A'); check('export of a KeyType 1 locker carries the SKID, never the key (GR55.1)', bytes(e.img(0)[16:24]) == v2b(K64, 8) and v2b(0xAAAA, 2) not in bytes(e.img(0)))
+seed = lambda e: bytes(e.img(0)[16 + CONTENT[M_KEY]:32 + CONTENT[M_KEY]])
+check('KeyType 1: Content1 ends with a 128-bit mask seed, so the SCC is 16 bytes longer than with KeyType 0 (GR55.1, GR52)', e.size(0) == size_of(mk(mach=M_KEY, KeyType=0, State=57)) + 16 and len(e.img(0)) == e.size(0) - 16)
+check('KeyType 1: a PI carries no mask seed (GR55.1)', e.size(form='C', md=mk(mach=M_KEY, KeyType=1)) == e.size(form='C', md=mk(mach=M_KEY, KeyType=0)))
+s1 = seed(e); e2 = skp(); prov_skid(e2); e2.nl = 0; e2.mgmt(0, 57, form='A')
+check('each export draws a fresh mask seed (GR55.1)', seed(e2) != s1 and s1 != bytes(16))
+e = skp(); prov_skid(e); e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A'); check('KeyType 1 export with a failed RBG: the locker enters Invalid (GR45)', stx(e, 0) == INV)
+e = E2(); e.mgmt(0, 56, md=mk(mach=M_KEY)); e.L[0].content = 0xAAAA; FIN(e, 0); e.rbg_dead = True; e.nl = 0; e.mgmt(0, 57, form='A')
+control('negative: a KeyType 0 export draws no random bits, so a failed RBG leaves it unaffected', stx(e, 0) != INV)
 e = E2(); e.sks = None; check('no SKID support: opening KeyType 1 -> kl_exc_unsupported; kl.avail 0, Forms A, B, C', trap(e.mgmt, 0, 56, md=mk(mach=M_KEY, KeyType=1)) == 'unsupported' and e.avail(form='C', md=mk(mach=M_KEY, KeyType=1)) == 0 and e.avail(form='B', md=mk(mach=M_KEY, KeyType=1)) == 0 and e.avail(form='C', md=mk(mach=M_KEY)) == 1)
 e = E2(); e.has_rng = False; check('no random key generation: KeyType 2 -> kl_exc_unsupported; kl.avail 0; KeyType 0 unaffected', trap(e.mgmt, 0, 56, md=mk(mach=M_KEY, KeyType=2)) == 'unsupported' and e.avail(form='C', md=mk(mach=M_KEY, KeyType=2)) == 0 and e.avail(form='C', md=mk(mach=M_KEY)) == 1)
 e = E2(); e.has_rng = False; check('kl.size of an unsupported KeyType is 0', e.size(form='C', md=mk(mach=M_KEY, KeyType=2)) == 0)
@@ -759,12 +768,16 @@ check('locker Off in lower modes: exec, setst, getmd, getst, restrict, size, cle
       ((e.exec, (1,)), (e.setst, (1, 2)), (e.getmd, (1,)), (e.getst, (1,)), (e.rstr, (1, 0)), (e.size, (1,)), (e.clearads, (1,)), (e.setste, (1, 2)))) and (setattr(e, 'nl', 1), trap(e.getmd, 0, 1))[1] == 'locker_off')
 check('locker Off in M-mode: no gate (the field governs the modes below)', (setattr(e, 'priv', 'M'), trap(e.getmd, 1))[1] is None)
 e = lowp(); e.lstat[1] = 0
-check('destructive configuration is exempt: kl.clear, provisioning-opening and import-opening kl.mgmt, clone/rename into the locker', trap(e.clear, 1) is None and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 56, md=mk()))[1] is None
-      and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 58, md=mk(State=1)))[1] is None and (e.lstat.__setitem__(1, 0), trap(e.clone, 1, 2))[1] is None and (e.lstat.__setitem__(1, 0), trap(e.rename, 1, 2))[1] is None)
+check('destructive configuration is exempt: kl.clear, provisioning-opening and import-opening kl.mgmt', trap(e.clear, 1) is None and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 56, md=mk()))[1] is None
+      and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 58, md=mk(State=1)))[1] is None)
 e = lowp(); e.lstat[1] = 0
-check('not exempt: export-opening and completing kl.mgmt, clone/rename out of it, kl.swap, the named-locker transfers', trap(e.mgmt, 1, 57, form='A') == 'locker_off' and trap(e.mgmt, 1, 63, form='A') == 'locker_off'
-      and trap(e.clone, 2, 1) == 'locker_off' and trap(e.rename, 2, 1) == 'locker_off' and trap(e.swap, 1, 2) == 'locker_off' and trap(e.swap, 2, 1) == 'locker_off'
+check('not exempt: export-opening and completing kl.mgmt, clone or rename into or out of it, kl.swap, the named-locker transfers', trap(e.mgmt, 1, 57, form='A') == 'locker_off' and trap(e.mgmt, 1, 63, form='A') == 'locker_off'
+      and trap(e.clone, 2, 1) == 'locker_off' and trap(e.clone, 1, 2) == 'locker_off' and trap(e.rename, 2, 1) == 'locker_off' and trap(e.rename, 1, 2) == 'locker_off' and trap(e.swap, 1, 2) == 'locker_off' and trap(e.swap, 2, 1) == 'locker_off'
       and (setattr(e, 'nl', 1), trap(e.gpr_in, 1), trap(e.load, Mem(), 0))[1:] == ('locker_off', 'locker_off'))
+e = lowp(); e.lstat[1] = 0; c1 = (e.L[1].mdh, e.L[1].content)
+check('kl.clone into an Off locker traps before clearing it: the destination and its Off mark are unchanged', trap(e.clone, 1, 2) == 'locker_off' and (e.L[1].mdh, e.L[1].content) == c1 and e.lstat[1] == 0)
+c2 = (e.L[2].mdh, e.L[2].content)
+check('kl.rename into an Off locker traps before discarding it: both lockers and the Off mark are unchanged', trap(e.rename, 1, 2) == 'locker_off' and (e.L[1].mdh, e.L[1].content) == c1 and (e.L[2].mdh, e.L[2].content) == c2 and e.lstat[1] == 0)
 e = lowp(); e.lstat[1] = 0; check('same-locker clone, rename and swap perform no operation and are not an access', all(trap(f, 1, 1) is None for f in (e.clone, e.rename, e.swap)))
 e = lowp(); e.lstat[3] = 0; check('with klnamedlocker = 32 nothing is accessed: no locker-Off', (e.getmd(0, 1), trap(e.exec, 0, 1))[1] is None)
 e = lowp(csk=False); e.lstat[1] = 0; check('missing CSK precedes locker-Off (GR12 items 4, 6)', trap(e.exec, 1) == 'no_csk')

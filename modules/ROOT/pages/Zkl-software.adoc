@@ -56,7 +56,7 @@ A handler that skips the trapping instruction applies the retirement effects to 
 [[KLE-SR-management]]
 === Requirements on Management Operations
 
-The hardware does not enforce Rules <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>>: instructions use the current `klnamedlocker`, and a `kl.mgmt` naming its locker explicitly overwrites it regardless of an open operation (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
+The KLE implementation does not enforce Rules <<KLE-SR-klnamedlocker-write>> and <<KLE-SR-nested-export-first>>: instructions use the current `klnamedlocker`, and a `kl.mgmt` naming its locker explicitly overwrites it regardless of an open operation (<<Zkl-ISA-unpriv.adoc#KLE-named-locker-rules>>).
 
 [horizontal]
 [[KLE-SR-klnamedlocker-write,SR6]]SR6:: Before `kl.load`, `kl.store`, `kl.mvin`, `kl.mvout`, an instruction naming `KLNL` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>), or a `kl.mgmt` naming its locker explicitly, interposed software must, if `klnamedlocker` differs from the intended value, save it, write that value, and restore the saved value before returning to the code that set it.
@@ -65,7 +65,7 @@ On completing or abandoning a management operation, any software must write 32 t
 
 [[KLE-SR-nested-export-first,SR7]]SR7:: Before a `kl.mgmt` on another locker, all software must save any locker in `kl_cfg_exporting` or `kl_cfg_importing` by nested export, whether or not `klnamedlocker` names it.
 It must restore the locker before returning to the code that opened the operation, or terminate that code; it may instead clear a locker in `kl_cfg_importing`, whose import then restarts (<<Zkl-ISA-unpriv.adoc#KLE-CC-management>>).
-Until then, software must write only that locker number or 32 to `klnamedlocker`: context-switch code uses it to identify the owner of the hart's single set of authentication registers (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>).
+While such a locker is open and no nested export has saved it, software must write only that locker number or 32 to `klnamedlocker`: context-switch code uses it to identify the owner of the hart's single set of authentication registers (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>, <<Zkl-ISA-unpriv.adoc#KLE-KLF>>).
 
 [[KLE-SR-no-interleaving,SR8]]SR8:: Software should complete or discard a management operation before it performs cryptographic operations or manages other lockers; code that must interleave them, such as threads of one process, needs coordination, such as a mutex or lightweight threads with KLE context-switching support.
 Software that writes 32 to `klnamedlocker` while its own import or export is open, for instance for a transfer through the KLIOBUF (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mv>>), must have no other locker in State `kl_cfg_importing` or `kl_cfg_exporting`, even one that a nested export has saved: context-switch code then finds the open operation by its State (<<KLE-save-order>>).
@@ -84,7 +84,7 @@ Unless it terminates the owner, software must complete a base or nested export b
 +
 --
 . set the locker on which the exception was raised, for `KLNL` the one that `klnamedlocker` names (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>), to the _State_ that the same table gives, with a `kl.setste` (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-error-state-can-be-reconfigured>>), even if the locker is _Unconfigured_; and
-. advance `xepc` past the trapping instruction, which would otherwise trap again, and, for a usage instruction, keep the output prefix that `klstart` and `vstart` record, zero the rest of the output window, and apply the retirement effects on `klstart` and `vstart` (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-outcomes>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klstart-vstart>>).
+. advance `xepc` past the trapping instruction, which would otherwise trap again, and, for a usage instruction, keep the output prefix that `klstart` and `vstart` record, zero the rest of the output window, and apply the retirement effects on `klstart` and `vstart` (Rules <<Zkl-ISA-unpriv.adoc#KLE-GR-outcomes>> and <<Zkl-ISA-unpriv.adoc#KLE-GR-klstart-vstart>>); for a `kl.mgmt`, also write to `klnamedlocker` the number of the locker it names, as its retirement would (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-updates>>).
 --
 
 [[KLE-SR-uninterruptible,SR11]]SR11:: Software must not rely on whether an uninterruptible instruction (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-interruptibility-classes>>) has retired when a handler runs, and must interact with it only as Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-conflicting-access-rule>> prescribes.
@@ -105,7 +105,7 @@ Unless it terminates the owner, software must complete a base or nested export b
 === Requirements on Transfers, Keys and Outputs
 
 [horizontal]
-[[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a `kl.mvin` or `kl.mvout` sequence by the image size read with `kl.size` beforehand and check the _State_ afterward.
+[[KLE-SR-no-klstart-loop,SR14]]SR14:: Software must bound a `kl.mvin` or `kl.mvout` sequence by a length fixed beforehand, the image size read with `kl.size` or, for a provisioning, the length of the PI that it built, and check the _State_ afterward.
 `klstart` is not a loop bound (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>, NOTE after Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-memory-instructions>>).
 
 [[KLE-SR-export-final-check,SR15]]SR15:: Software must rely on an exported image only if the _State_ read after the last instruction of the export is neither _Unconfigured_ nor an Error State or, when the image is the MDH alone, if the MDH that `kl.getmd*` returned is not _Unconfigured_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>).
@@ -151,11 +151,12 @@ Immediately after a usage instruction, check for a Valid State before using its 
 === Probing the Maximum KLIOBUF Length
 
 As with `vsetvl`, the getter and setter instructions give the maximum KLIOBUF length: write a large value with `kl.setbl`, then read it back with `kl.getbl`.
+The probe destroys the buffer contents.
 A context restore does not probe: each OS, or other execution environment, probes once and keeps the value, which only an M-mode write to `mklmaxiobuflen` changes (<<Zkl-ISA-priv.adoc#KLE-CSR-mklmaxiobuflen>>).
-The probe destroys the buffer contents: save them first, or probe only while the buffer is unused.
 
 [source,asm]
 ----
+  li        a0, -1  # a0 ← all ones, above any maximum
   kl.getbl  t1      # save the current length
   kl.setbl  a0      # zeroes the buffer, clamps to the maximum
   kl.getbl  t0      # t0 ← length granted
@@ -197,7 +198,7 @@ Before each instruction that Rule <<KLE-SR-klnamedlocker-write>> lists, it sets 
 
 On exit, the handler:
 
-. restores `klnamedlocker` (`kl.setnl`) to its saved value, or to 32 if it has cleared, instead of saving, the locker that value named (<<KLE-save-order>>);
+. restores `klnamedlocker` (`kl.setnl`) to its saved value, or to the value that item 2 of Rule <<KLE-SR-handler-duty>> writes, or to 32 if it has cleared, instead of saving, the locker that value named (<<KLE-save-order>>);
 . restores the vector state, including `vstart`; and
 . restores `klstart` last (`kl.setks`), exactly as saved (Rules <<KLE-SR-klstart-save>> and <<KLE-SR-klstart-no-reset>>).
 
@@ -210,16 +211,16 @@ A handler that skips the trapping instruction applies its retirement effects to 
 
 . Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
-. Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
+. Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one; for a locker whose field that the saving mode owns is _Off_, its saved image gives that State (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
 These Rules make it the owner of the authentication registers, if a locker owns them (<<Zkl-ISA-unpriv.adoc#KLE-auth-reg-association>>).
-If the field of the managed locker that the saving mode owns is _Off_, keep its saved image and treat it as a locker other than the managed locker in <<KLE-restore-order>>: a locker under deferred restore has no open operation in the hardware.
-If there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>). How depends on its _State_, read with `kl.getst`; transfer through GPRs or vector registers, not the KLIOBUF, which step 4 has yet to save:
+If the field of the managed locker that the saving mode owns is _Off_, keep its saved image: it remains the managed locker, which <<KLE-restore-order>> restores last or defers again.
+Otherwise, if there is a managed locker, save it first, with Form C or D `kl.mgmt` (Rule <<KLE-SR-nested-export-first>>). How depends on its _State_, read with `kl.getst`; transfer directly to or from memory (`kl.store`, `kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has yet to save:
 .. _Unconfigured_: save no locker image;
 .. an Error State: export only its MDH (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>);
 .. otherwise, export the locker, by nested export if it is in a Configuration State.
 . With `Zklio`:
 .. save `kliobuflen` and `kliobuftop` (`kl.getbl`, `kl.getbt`);
-.. if `kliobuflen` is non-zero, save the buffer contents with `kl.output`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
+.. if `kliobuflen` is non-zero, save the buffer contents with a `kl.output` whose `Xl` holds the saved `kliobuflen`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen` (`kl.setnli 32`, `kl.setksi 0`, `kl.setbt` of the saved length), then write 0 to `kliobuflen` (`kl.setbli 0`).
 . For every locker other than the managed locker, act by its `*llockerstatus` field that the saving mode owns (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>); a locker without such a field counts as Dirty. Keep `klnamedlocker` = 32 between exports.
 ** Clean or _Off_: keep its saved image;
 ** Dirty and _Unconfigured_: erase its saved image;
@@ -240,14 +241,14 @@ If the handler clears a locker being provisioned or imported under Rule <<KLE-SR
 [[KLE-restore-order]]
 === Context Restore Order
 
-. Clear the lockers for which no image is restored below, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
+. Clear every locker for which no image is restored below, a locker whose restoration is deferred included, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
 . Restore the Locality Secret CSRs that the context owns, if any (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), before any import of a locker that they bind.
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
-.. restore the buffer contents, if saved, with `kl.input`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
+.. restore the buffer contents, if saved, with a `kl.input` whose `Xl` holds the saved `kliobuflen`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop` (`kl.setbt`), after the buffer, since a write of `kliobuflen` resets it.
-. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring through GPRs or vector registers, not the KLIOBUF, which step 4 has restored.
+. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring directly to or from memory (`kl.store`, `kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has restored.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` after every other KLE instruction (`kl.setks`).
 . Write the `*llockerstatus` fields that the restoring mode owns: Clean for a restored locker, _Off_ for a locker whose restoration is deferred, and Initial for a cleared locker. Then write `KLS`, after those CSRs (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
@@ -949,6 +950,7 @@ With stealing, the locker ends in _Success_, and a `kl.setst` into _Ready_ prece
 The following pseudocode drives every AEAD Machine.
 It reads `glog` and the pass flags with `kl.getinfo`; the MDH supplies `tag_len_p` as usual.
 `AD_FINAL`, `DATA_FINAL` and `PREPASS_FINAL` set the corresponding final-block State with the meaningful bit length of the remaining piece, then issue its one `kl.exec` if the length is nonzero.
+The final piece is the last 1 to 128 bits, a full block included, and is empty only for an empty AD, PT or CT (<<Zkl-ISA-machines.adoc#KLE-unified-AEAD>>).
 <<KLE-pseudocode-unified-AEAD-final>> gives them; the Machine ignores the bits of the final transport byte above that length.
 
 [[KLE-pseudocode-unified-AEAD]]
@@ -998,8 +1000,9 @@ It reads `glog` and the pass flags with `kl.getinfo`; the MDH supplies `tag_len_
 # K is K0.  Each routine takes a0 = input and a1 = its length in bits,
 # and changes only t5, t6, v0-v15 and the registers it returns.  The
 # full-block routines process up to eight blocks per kl.exec and return
-# a0 = the final piece and a1 = its length; full_bits(X) is X_bits with
-# its low 7 bits cleared.  crypt_full_blocks and DATA_FINAL also take
+# a0 = the final piece and a1 = its length, 1 to 128 bits for nonempty
+# input; full_bits(X) is 0 for an empty X, else X_bits - 1 with its low
+# 7 bits cleared.  crypt_full_blocks and DATA_FINAL also take
 # a2 = output buffer (advanced), and DATA_FINAL a3 = 1 to decrypt.
 # The final pieces are a multiple of 2^glog bits, at most b = 128.
 
@@ -1010,9 +1013,11 @@ setup_nonce:                      # a supplied nonce, any length
   j         1f                    # the last kl.exec enters Hash_Absorb
 
 absorb_full_blocks:               # in Hash_Absorb or a prepass State
-  srli      t5, a1, 7
-  slli      t5, t5, 4             # bytes in full blocks
-  andi      a1, a1, 127           # length of the final piece
+  beqz      a1, 2f                # empty input: empty final piece
+  addi      t5, a1, -1
+  andi      t5, t5, -128          # bits before the final piece
+  sub       a1, a1, t5            # final piece: 1 to 128 bits
+  srli      t5, t5, 3             # their bytes
   beqz      t5, 2f
 1:
   li        t6, 128
@@ -1027,9 +1032,11 @@ absorb_full_blocks:               # in Hash_Absorb or a prepass State
   ret
 
 crypt_full_blocks:                # in Encrypt or Decrypt
-  srli      t5, a1, 7
-  slli      t5, t5, 4
-  andi      a1, a1, 127
+  beqz      a1, 3f
+  addi      t5, a1, -1
+  andi      t5, t5, -128
+  sub       a1, a1, t5
+  srli      t5, t5, 3
   beqz      t5, 3f
 2:
   li        t6, 128
@@ -1206,13 +1213,14 @@ An SCC of HMAC, KMAC128, KMAC256, or BLAKE2 with a system key must enable _Hash_
 
 To verify a MAC `T` of `T_len` bits with HMAC, KMAC128 or KMAC256 instead, the
 code from label `3` on is replaced by the listing below.
-min(`T_len`, `t`) for HMAC, and min(`T_len`, `b`) for KMAC128 and KMAC256, must equal the locker's `tag_len_p` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>), and the listing compares that many bits.
-For KMAC128 and KMAC256, it takes `T_len` {le} 1024 if `VLEN` = 128, since a register group with LMUL = 8 holds 8 {times} `VLEN` bits.
+For HMAC, min(`T_len`, `t`) must equal the locker's `tag_len_p`; KMAC128 and KMAC256 bind `L` = `tag_len_p` into the MAC, so `T_len` must equal `tag_len_p` (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>).
+The listing compares `tag_len_p` bits.
+For KMAC128 and KMAC256, it takes `T_len` {le} 8 {times} `VLEN`, since a register group with LMUL = 8 holds 8 {times} `VLEN` bits.
 
 [[KLE-pseudocode-hash-verify]]
 .MAC Verification
 ----
-# a5 = T, a6 = T_len in bits, a multiple of 8, capped to tag_len_p
+# a5 = T, a6 = T_len in bits, a multiple of 8; HMAC: capped to tag_len_p
 3:
   kl.setst  K0, #kl_state_hash_verify, a6
   srli      t1, a6, 3

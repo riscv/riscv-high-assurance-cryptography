@@ -120,11 +120,11 @@ for f in FAMILIES:
         if f in ('GCM', 'GCM-SIV'): check(f + ' counts meaningful bits only', m.ad_len == 424 and m.payload_len == 552)
         m = restore(m); m.setst(READY); check(f + ' Ready resets lengths and flags', not (m.ad_len | m.payload_len | m.flags))
 
-section('Routines of KLE-pseudocode-unified-AEAD-final: eight blocks per kl.exec, final piece = length mod 128')
+section('Routines of KLE-pseudocode-unified-AEAD-final: eight blocks per kl.exec, final piece of 1 to 128 bits')
 def listing_drive(m, n, ad, data, tag=None):
     """Instruction sequence of the software chapter's unified AEAD routines (byte-length inputs)."""
     def full_blocks(form, buf):              # absorb_full_blocks / crypt_full_blocks
-        out, full = b'', len(buf) // 16 * 16
+        out, full = b'', max(0, len(buf) - 1) // 16 * 16   # leaves 1 to 16 bytes, or none if empty
         for i in range(0, full, 128):
             chunk = buf[i:min(i + 128, full)]
             y = m.exec(form, b2v(chunk), len(chunk) * 8)
@@ -303,20 +303,49 @@ for f in FAMILIES:
     check(f + ' same-State nonce kl.setst restarts the load', m.st in (PRE, ENC))
     m = setup(f); m.setst(SAV2, 'B', m.tag_len_p - 8 if m.tag_len_p > 64 else 72)
     check(f + ' tag load with Xs != tag_len_p invalidates', m.st == INV)
-    # Empty final piece: Form A bypass of the last-block State
+    # Final pieces: AD, PT and CT each end in their last-block State; Xs = 0 only when empty
     n, ad, pt = nonce(f), msg(16, 3), msg(32, 4)
     c, t = reference(f, n, ad, pt)
-    m = setup(f); m.exec('B', b2v(ad), 128); m.setst(LAST, 'B', 0)
-    if m.two_pt:
-        m.setst(PRE); m.exec('B', b2v(pt), 256); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
+    k, nn, want = {'GCM': (bytes(16), bytes(12), '58e2fccefa7e3061367f1d57a4e7455a'),
+                   'GCM-SIV': (SK1, SN, 'dc20e2d83f25705bb49e439eca56de25'),
+                   'OCB': (KEY, ON(0), '785407BFFFC8AD9EDCC5520AC9111EE6'),
+                   'Ascon': (KEY, nonce(f), '4427d64b8e1e1451fc445960f0839bb0')}[f]
+    c0, t0 = listing_drive(UnifiedAEAD(f, k), nn, b'', b'')    # Xs = 0 into every last-block State
+    p0, ok = listing_drive(UnifiedAEAD(f, k), nn, b'', c0, t0)
+    check(f + ' empty AD and PT through Xs = 0: published tag', c0 == b'' and t0 == H(want) and ok and p0 == b'')
+    m = setup(f); m.setst(LAST, 'B', 128); m.exec('B', b2v(ad), 128)
+    if m.two_pt: m.setst(PRE); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
     else: m.setst(ENC)
-    out = m.exec('A', b2v(pt), 256); m.setst(ETF); tag = m.exec('C', kllen=128)
-    check(f + ' Form A bypass into Enc_Tag_Finalize', m.st == SUCCESS and (v2b(out, 32), v2b(tag, 16)) == (c, t))
-    m = setup(f, t); m.exec('B', b2v(ad), 128); m.setst(LAST, 'B', 0); m.setst(DEC)
-    out = m.exec('A', b2v(c), 256); m.setst(DTF); m.exec('D', 0)
-    check(f + ' Form A bypass into Dec_Tag_Finalize', m.st == SUCCESS and v2b(out, 32) == pt)
-    m = setup(f, t); m.setst(LAST, 'B', 0); m.setst(DEC); m.setst(DTF, 'B', 0)
-    check(f + ' Form B bypass into Dec_Tag_Finalize invalidates', m.st == INV)
+    m.setst(ELB, 'B', 0); tag = m.exec('C', kllen=128)
+    check(f + ' empty PT after a full AD block: Xs = 0 admitted', m.st == SUCCESS and v2b(tag, 16) == reference(f, n, ad, b'')[1])
+    m = setup(f); m.setst(LAST, 'B', 128); m.exec('B', b2v(ad), 128)    # Ascon: the block, then a padding block
+    if m.two_pt:
+        m.setst(PRE); m.exec('B', b2v(pt[:16]), 128); m.setst(PRELAST, 'B', 128); m.exec('B', b2v(pt[16:]), 128)
+        m.exec('C', kllen=128)
+    else: m.setst(ENC)
+    out = m.exec('A', b2v(pt[:16]), 128); m.setst(ELB, 'B', 128); out |= m.exec('A', b2v(pt[16:]), 128) << 128
+    tag = m.exec('C', kllen=128)
+    check(f + ' full final blocks in the last-block States', m.st == SUCCESS and (v2b(out, 32), v2b(tag, 16)) == (c, t))
+    m = setup(f, t); m.setst(LAST, 'B', 128); m.exec('B', b2v(ad), 128); m.setst(DEC)
+    out = m.exec('A', b2v(c[:16]), 128); m.setst(DLB, 'B', 128); out |= m.exec('A', b2v(c[16:]), 128) << 128; m.exec('D')
+    check(f + ' full final blocks decrypt and verify', m.st == SUCCESS and v2b(out, 32) == pt)
+    def bulk(tag=None):                  # empty AD (GCM-SIV encryption: empty prepass), one data kl.exec
+        m = setup(f, tag); m.setst(LAST, 'B', 0)
+        if tag is None and m.two_pt: m.setst(PRE); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
+        else: m.setst(ENC if tag is None else DEC)
+        m.exec('A', b2v(pt if tag is None else c), 256); return m
+    m = setup(f); m.exec('B', b2v(ad), 128); m.setst(LAST, 'B', 0)
+    check(f + ' Xs = 0 after AD was committed invalidates', m.st == INV)
+    m = bulk(); m.setst(ELB, 'B', 0); check(f + ' Xs = 0 after PT was committed invalidates', m.st == INV)
+    m = bulk(t); m.setst(DLB, 'B', 0); check(f + ' Xs = 0 after CT was committed invalidates', m.st == INV)
+    m = bulk(); m.setst(ELB, 'B', 128); check(f + ' control: Xs = 128 after PT was committed is admitted', m.st == ELB)
+    m = bulk(); m.setst(ETF); check(f + ' former bypass Encrypt -> Enc_Tag_Finalize invalidates', m.st == INV)
+    m = bulk(t); m.setst(DTF); check(f + ' former bypass Decrypt -> Dec_Tag_Finalize invalidates', m.st == INV)
+    if m.two_pt:
+        m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE); m.exec('B', b2v(pt), 256); m.setst(PRELAST, 'B', 0)
+        check(f + ' Xs = 0 after prepass PT was committed invalidates', m.st == INV)
+        m = setup(f); m.setst(LAST, 'B', 0); m.setst(PRE); m.exec('B', b2v(pt), 256); m.setst(ETF)
+        check(f + ' bypass AEAD_Prepass -> Enc_Tag_Finalize invalidates', m.st == INV)
     if f != 'Ascon':
         m = setup(f); m.setst(LAST, 'B', 7)
         check(f + ' non-byte message length rejected, not rounded', m.st == INV)
@@ -337,14 +366,21 @@ for f in FAMILIES:
 
 def replay_ready():
     m = setup('GCM-SIV'); m.setst(LAST, 'B', 0); m.setst(PRE)
-    m.exec('B', b2v(msg(32)), 256); m.setst(PRELAST, 'B', 0); m.exec('C', kllen=128)
+    m.exec('B', b2v(msg(16)), 128); m.setst(PRELAST, 'B', 128); m.exec('B', b2v(msg(32)[16:]), 128)
+    m.exec('C', kllen=128)
     return m
 
-m = replay_ready(); m.exec('A', b2v(msg(32)) ^ 1, 256); m.setst(ELB, 'B', 0); t = m.exec('C', kllen=128)
+def replay(p):                           # second pass over p, its last 1 to 16 bytes in Enc_Last_Block
+    m = replay_ready(); k = (len(p) - 1) // 16 * 16
+    if k: m.exec('A', b2v(p[:k]), 8 * k)
+    m.setst(ELB, 'B', 8 * (len(p) - k)); m.exec('A', b2v(p[k:]), 8 * (len(p) - k))
+    return m
+
+m = replay(bytes([msg(32)[0] ^ 1]) + msg(32)[1:]); t = m.exec('C', kllen=128)
 check('changed PT replay is detected cryptographically', m.st == FAILURE and t == 0)
-m = replay_ready(); m.exec('A', b2v(msg(16)), 128); m.setst(ELB, 'B', 0); m.exec('C', kllen=128)
+m = replay(msg(16)); m.exec('C', kllen=128)
 check('short PT replay fails the tag check', m.st == FAILURE)
-m = replay_ready(); m.exec('A', b2v(msg(48)), 384); m.setst(ELB, 'B', 0); m.exec('C', kllen=128)
+m = replay(msg(48)); m.exec('C', kllen=128)
 check('long PT replay fails the tag check', m.st == FAILURE)
 m = setup('GCM'); m.ad_len = mask(64) - 7; m.exec('B', 0, 128)
 check('AD counter overflow invalidates without wrapping', m.st == INV)
@@ -370,7 +406,7 @@ for st, u, ok in ((ENC, mu, True), (ENC, mu & ~SIV_GENERATED, False), (ETF, mu, 
     m2 = model('GCM-SIV'); m2.import_(sc, st, u); check('GCM-SIV import State %d generated_siv=%d -> %s' % (st, bool(u & SIV_GENERATED), 'ok' if ok else 'Invalid'), (m2.st != INV) == ok)
 m = setup('GCM-SIV'); m.setst(LAST, 'B', 0); m.setst(PRE); sc = m.export()
 m2 = model('GCM-SIV'); m2.import_(sc, PRE, m.machine_use | SIV_GENERATED); check('GCM-SIV import Prepass with generated_siv set -> Invalid', m2.st == INV)
-m = replay_ready(); m.exec('A', b2v(msg(32)), 256); m.setst(ELB, 'B', 0); sc = m.export()
+m = replay(msg(32)); sc = m.export()
 m2 = model('GCM-SIV'); m2.import_(sc, ETF, m.machine_use); m2.exec('C', kllen=128); check('imported second Enc_Tag_Finalize checks the replay -> Success', m2.st == SUCCESS)
 
 m = model('GCM'); check('GCM SCC Position viii is zero in Ready', m.core.export()[0] >> (8 * len(m.key)) & mask(128) == 0)

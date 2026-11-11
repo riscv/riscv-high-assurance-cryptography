@@ -63,11 +63,11 @@ class KLE2(KLE):
         finally: s._exm = False
     def clone(s, d, src):
         s.common(); d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
-        if d != src and d != NONE and src != NONE: s._off(src)
+        if d != src and d != NONE and src != NONE: s._off(src); s._off(d)      # neither access exempt: trap before clearing Kd
         return KLE2._clone(s, d, src)
     def rename(s, d, src):
         s.common(); d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
-        if d != src and d != NONE and src != NONE: s._off(src)
+        if d != src and d != NONE and src != NONE: s._off(src); s._off(d)      # neither access exempt: trap before discarding Kd
         return KLE.rename(s, d, src)
     def swap(s, d, src):
         s.common(); d, src = (s.nl if d == 'NL' else d), (s.nl if src == 'NL' else src)
@@ -111,6 +111,9 @@ class KLE2(KLE):
         if mdh_get(md, 'State') in (57, 59) and getattr(l, 'img', None) is None:
             im = bytearray(s.image_end(k)); o = s.offset(md); c1 = CONTENT[mdh_get(md, 'Machine')]
             if mdh_get(md, 'Version') != 3: im[o:o + c1] = v2b(getattr(l, 'skid', None) if mdh_get(md, 'KeyType') == 1 else l.content, c1)
+            if mdh_get(md, 'KeyType') == 1:      # <<KLE-GR-skid-field>>: a fresh mask seed per export, from the RBG (<<KLE-GR-rbg-failure>>)
+                if s.rbg_dead: s.start = 0; s.err(k, SE_INVALID); return
+                im[o + c1:o + c1 + 16] = os.urandom(16)      # shortcut: the toy content has no masked field, so only the seed is modelled
             l.img = im; s.siv = toy_tag(l.content)
     def _mgmt(s, kd, immed, r=0, form='C', md=0):
         short = form != 'A' and mdh_get(md, 'State') == 0 and 1 <= mdh_get(md, 'StateExtension') <= 6

@@ -1,5 +1,5 @@
 """SCC cryptography and function-level export/import (extracted from scc-kat.py so other KATs can import it)."""
-import os, sys
+import os, sys, hmac as _hmac, hashlib as _hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 
@@ -61,7 +61,7 @@ def scc_encrypt(AD, sep, P, K):
     siv = _E(ek, cat((0, 1), (sep, 1), (sl(siv, 125, 0), 126)))
     return siv, [p ^ _E(ek, _ctr(sep, siv, i)) for i, p in enumerate(P)]
 def scc_decrypt(AD, sep, SIV, C, K, nclear=0):
-    assert len(AD) <= 7 + nclear
+    assert len(AD) <= 5 + nclear
     ek, ak = scc_keyderiv(K)
     ad = list(AD)
     if sep == 0: ad[0] &= ~(1 << 47)
@@ -125,8 +125,18 @@ def _bytes(vs): return b''.join(v2b(v, 16) for v in vs)
 def scc_ad(mdh, lst):
     ad = [mdh]
     for j, s in enumerate(scc_lst_eff(lst)):
-        if scc_includes(mdh_get(mdh, 'Locality'), j): ad.append(s)
+        if j >= 6 and scc_includes(mdh_get(mdh, 'Locality'), j): ad.append(s)   # HW entries go through eff_CSK
     return ad
+def hw_kdf(csk, l1, l2):
+    # stand-in for the implementation-defined HW_KDF: HMAC-SHA-256 keyed by L1 || L2 over the CSK (UP NOTE)
+    return b2v(_hmac.new(v2b(l1, 16) + v2b(l2, 16), v2b(csk, 32), _hashlib.sha256).digest())
+def scc_eff_csk(mdh, csk, lst):
+    loc = mdh_get(mdh, 'Locality')
+    if loc & 0xf == 0: return csk
+    e = scc_lst_eff(lst)
+    l1 = e[(loc & 3) - 1] if loc & 3 else 0
+    l2 = e[2 + ((loc >> 2) & 3)] if (loc >> 2) & 3 else 0
+    return hw_kdf(csk, l1, l2)
 def scc_export(L, csk, lst, impq, clear1=None, clear2=0):
     """L: dict(mdh, c1 bytes, c2 bytes).  Returns the SCC image bytes.  clear1/clear2: SCC_ClearLen1/2 (GR9)."""
     f = mdh_unpack(L['mdh'])
@@ -135,11 +145,12 @@ def scc_export(L, csk, lst, impq, clear1=None, clear2=0):
     pad = L['c1'] + b'\0' * (-len(L['c1']) % 16)
     n1 = scc_clearlen1(L['mdh'], clear1); P1 = _blocks(pad)
     if f['Transparent']: n1, clear2 = len(P1), len(L['c2']) // 16   # GR9: the whole Content in clear
-    siv, c1 = scc_encrypt(scc_ad(L['mdh'], lst) + P1[:n1], 0, P1[n1:], csk); c1 = P1[:n1] + c1
+    k = scc_eff_csk(L['mdh'], csk, lst)
+    siv, c1 = scc_encrypt(scc_ad(L['mdh'], lst) + P1[:n1], 0, P1[n1:], k); c1 = P1[:n1] + c1
     img = v2b(L['mdh'], 16) + v2b(siv, 16)
     if f['AuxDataLen'] >= 2:
         P2 = _blocks(L['c2'])
-        siv2, c2 = scc_encrypt([impq, siv] + P2[:clear2], 1, P2[clear2:], csk); c2 = P2[:clear2] + c2
+        siv2, c2 = scc_encrypt([impq, siv] + P2[:clear2], 1, P2[clear2:], k); c2 = P2[:clear2] + c2
         img += v2b(impq, 16) + v2b(siv2, 16)
     else: c2 = []
     return img + _bytes(c1) + _bytes(c2)
@@ -165,14 +176,15 @@ def scc_import(img, csk, lst, impq, max_ads=64, ml_state=None, zklexpire=False, 
     c2 = _blocks(img[o:o + 16 * (f['AuxDataLen'] - 2)]) if ads and not drop else []
     n1 = scc_clearlen1(work, clear1)
     if f['Transparent']: n1, clear2 = len(c1), len(c2)   # GR9: the whole Content in clear
-    ok, P = scc_decrypt(scc_ad(work, lst) + c1[:n1], 0, siv, c1[n1:], csk, n1); P = c1[:n1] + P if ok else [0] * len(c1)
+    k = scc_eff_csk(work, csk, lst)
+    ok, P = scc_decrypt(scc_ad(work, lst) + c1[:n1], 0, siv, c1[n1:], k, n1); P = c1[:n1] + P if ok else [0] * len(c1)
     if not ok:
         e = mdh_put(mdh_put(mdh_put(work, 'State', 0), 'StateExtension', 4), 'AuxDataLen', 0)
         return 'authfail', dict(mdh=mdh_put(e, 'ADSDropped', 0), c1=b'', c2=b'')
     p2 = []
     if ads and not drop:
         good = iq == impq
-        if good: good, p2 = scc_decrypt([iq, siv] + c2[:clear2], 1, siv2, c2[clear2:], csk, clear2); p2 = c2[:clear2] + p2
+        if good: good, p2 = scc_decrypt([iq, siv] + c2[:clear2], 1, siv2, c2[clear2:], k, clear2); p2 = c2[:clear2] + p2
         if not good: drop = 1
         work = mdh_put(work, 'ADSDropped', drop)
     if f['AuxDataLen'] == 0 or drop:

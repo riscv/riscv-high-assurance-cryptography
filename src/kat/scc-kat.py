@@ -9,7 +9,7 @@ common.py, SCC_Encrypt/Decrypt) and a function-level locker model of export/impo
 output is compared with (1) assembled by hand from the SCC layout.  Contents are AES ECB lockers (Machine 0x20 =
 AES256_ECB, 0x00 = AES128_ECB).  Instruction-level behavior (kl.mgmt sequencing, klnamedlocker) is out of scope.
 """
-import os, sys
+import os, sys, hmac, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
 from scc_core import *
@@ -26,6 +26,12 @@ def mk(machine=0x20, key=KEY, adl=0, c2=b'', js=(), **kw):
     m = mdh_pack(Machine=machine, MachinePolicy=3, State=ST_READY, AuxDataLen=adl,
                  Locality=scc_loc_bits(js), **kw)
     return dict(mdh=m, c1=key[:SCC_MACHINES[machine]], c2=c2)
+def ind_key(js):
+    """Independent eff_CSK: the CSK if no HW entry (0-5) is named, else the HMAC-SHA-256 stand-in for HW_KDF."""
+    if not any(j < 6 for j in js): return CSK
+    l1 = next((LST[j] for j in js if j < 3), bytes(16)); l2 = next((LST[j] for j in js if 3 <= j < 6), bytes(16))
+    return hmac.new(l1 + l2, CSK, hashlib.sha256).digest()
+def ind_ad(js): return b''.join(LST[j] for j in js if j >= 6)   # only the SW entries stay in the AD
 
 def main():
     section('POLYVAL and SCC_KeyDeriv anchors (RFC 8452)')
@@ -101,7 +107,7 @@ def main():
     allf = sorted(MDH_FIELDS, key=lambda t: t[1])
     check('MDH fields tile bits [127:0]', sum(w for _, _, w in allf) == 128 and all(allf[i][1] + allf[i][2] == allf[i + 1][1] for i in range(len(allf) - 1)))
     check('Locality encoding round-trips for every entry', all(scc_includes(scc_loc_bits([j]), k) == (j == k) for j in range(11) for k in range(11)))
-    check('a six-entry Locality set has len_AD = 7', len(scc_ad(mdh_pack(Locality=scc_loc_bits([0, 4, 6, 8, 9, 10])), LSTV)) == 7)
+    check('a six-entry Locality set has len_AD = 5 (entries 0 and 4 go through eff_CSK)', len(scc_ad(mdh_pack(Locality=scc_loc_bits([0, 4, 6, 8, 9, 10])), LSTV)) == 5)
     lst2 = list(LSTV); lst2[0] = 0
     check('unconfigured SiPScrt is substituted by ChipFamScrt, then ChipScrt', scc_lst_eff(lst2)[0] == LSTV[1] and scc_lst_eff([0, 0, 5] + [0] * 8)[0] == 5)
 
@@ -126,8 +132,8 @@ def main():
     for js in ((), (2,), (1, 4, 6, 8, 9, 10)):
         L = mk(js=js); img = scc_export(L, CSKV, LSTV, IMPQ)
         # independent assembly: AD = MDH (bit 47 cleared) | selected secrets (bytes), no lengths, zero nonce, sep 0
-        ad = v2b(L['mdh'] & ~(1 << 47), 16) + b''.join(LST[j] for j in js)
-        c, t = scc_rfc_seal(CSK, bytes(12), ad, L['c1'], lenblock=False, sep=0)
+        ad = v2b(L['mdh'] & ~(1 << 47), 16) + ind_ad(js)
+        c, t = scc_rfc_seal(ind_key(js), bytes(12), ad, L['c1'], lenblock=False, sep=0)
         check('Localities %s: image = MDH | SIV | Content1 matches the independent model' % (js,), img == v2b(L['mdh'], 16) + t + c, img.hex())
         st, R = scc_import(img, CSKV, LSTV, IMPQ)
         check('Localities %s: import reproduces the locker' % (js,), st == 'ok' and R == L)
@@ -235,12 +241,12 @@ def main():
     check('the symmetric Machines designate no public field: SCC_ClearLen1 = 0', all(scc_clearlen1(mdh_pack(Machine=m)) == 0 for m in SCC_MACHINES))
     L = mk(adl=5, c2=bytes(range(0x30, 0x60)), js=(2, 9)); ref = scc_export(L, CSKV, LSTV, IMPQ)
     check('clear lengths 0 give the existing image', scc_export(L, CSKV, LSTV, IMPQ, clear1=0, clear2=0) == ref)
-    ad = v2b(L['mdh'] & ~(1 << 47), 16) + LST[2] + LST[9]
+    ad = v2b(L['mdh'] & ~(1 << 47), 16) + LST[9]; k29 = ind_key((2, 9))
     for n1, n2 in ((1, 0), (2, 0), (0, 1), (1, 2), (2, 3)):
         img = scc_export(L, CSKV, LSTV, IMPQ, clear1=n1, clear2=n2)
         c1p, c2p = L['c1'], L['c2']
-        c, t = scc_rfc_seal(CSK, bytes(12), ad + c1p[:16 * n1], c1p[16 * n1:], lenblock=False, sep=0)
-        c_2, t2 = scc_rfc_seal(CSK, bytes(12), v2b(IMPQ, 16) + t + c2p[:16 * n2], c2p[16 * n2:], lenblock=False, sep=1)
+        c, t = scc_rfc_seal(k29, bytes(12), ad + c1p[:16 * n1], c1p[16 * n1:], lenblock=False, sep=0)
+        c_2, t2 = scc_rfc_seal(k29, bytes(12), v2b(IMPQ, 16) + t + c2p[:16 * n2], c2p[16 * n2:], lenblock=False, sep=1)
         tag = '(n1 = %d, n2 = %d)' % (n1, n2)
         check('%s image = MDH | SIV | IMPQUAL | SIV2 | clear1 | ct1 | clear2 | ct2, clear blocks as AD of the independent model' % tag,
               img == v2b(L['mdh'], 16) + t + v2b(IMPQ, 16) + t2 + c1p[:16 * n1] + c + c2p[:16 * n2] + c_2)
@@ -280,12 +286,37 @@ def main():
           timg[64:] == T['c1'] + T['c2'] and scc_import(timg, CSKV, LSTV, IMPQ) == ('ok', T)
           and scc_import(v2b(L['mdh'], 16) + timg[16:], CSKV, LSTV, IMPQ)[0] == 'authfail')
 
+    section('eff_CSK: the HW Binding Group keys the sealing (KLE-SCC-eff-CSK)')
+    dig = lambda L: hashlib.sha256(scc_export(L, CSKV, LSTV, IMPQ)).hexdigest()[:32]
+    check('no HW Locality: the SCC is unchanged (digests recorded before eff_CSK)',
+          dig(mk()) == '56d75b9b709da0882f0d6d41c0f02740' and dig(mk(js=(8,))) == 'f74685713489e196ab5f51fd8171d8e7'
+          and dig(mk(adl=4, c2=bytes(range(32)), js=(6, 9, 10))) == '4d4ce7bd677ebd5d401c4ab87440ed09')
+    check('eff_CSK = CSK exactly when Locality[3:0] = 0',
+          all(scc_eff_csk(mk(js=js)['mdh'], CSKV, LSTV) == CSKV for js in ((), (6,), (7,), (8, 9, 10)))
+          and all(scc_eff_csk(mk(js=js)['mdh'], CSKV, LSTV) != CSKV for js in ((0,), (3,), (2, 5), (1, 6))))
+    m = mk(js=(1, 4, 6, 8))['mdh']
+    check('the AD holds the MDH and the SW entries only', scc_ad(m, LSTV) == [m, LSTV[6], LSTV[8]])
+    base = scc_eff_csk(m, CSKV, LSTV); lx = list(LSTV); ly = list(LSTV); lx[1] ^= 1; ly[4] ^= 1
+    check('eff_CSK depends on the CSK, L1 and L2',
+          len({base, scc_eff_csk(m, CSKV ^ 1, LSTV), scc_eff_csk(m, CSKV, lx), scc_eff_csk(m, CSKV, ly)}) == 4)
+    for js in ((2,), (3,), (1, 4), (2, 9)):
+        img = scc_export(mk(adl=4, c2=bytes(range(32)), js=js), CSKV, LSTV, IMPQ); lz = list(LSTV)
+        for j in js:
+            if j < 6: lz[j] ^= 1
+        check('Localities %s: a different HW secret under the same CSK fails authentication' % (js,),
+              scc_import(img, CSKV, lz, IMPQ)[0] == 'authfail')
+    L = mk(js=(2,)); old = scc_rfc_seal(CSK, bytes(12), v2b(L['mdh'] & ~(1 << 47), 16) + LST[2], L['c1'], lenblock=False, sep=0)
+    check('an SCC sealed with the CSK and the HW secret as AD (the former scheme) does not import',
+          scc_import(v2b(L['mdh'], 16) + old[1] + old[0], CSKV, LSTV, IMPQ)[0] == 'authfail')
+    control('negative: the same HW-bound SCC imports with the right secrets',
+            scc_import(scc_export(mk(adl=4, c2=bytes(range(32)), js=(1, 4)), CSKV, LSTV, IMPQ), CSKV, LSTV, IMPQ)[0] == 'ok')
+
     section('regression vectors (CSK 000102..1f, LST[j] = 16 x (0x40+j), key 8081..9f)')
     spec_note('vectors below are produced by the spec model and equal the independent RFC-based assembly checked above')
     for js in ((), (2,), (1, 4, 6, 8, 9, 10)):
         L = mk(js=js); img = scc_export(L, CSKV, LSTV, IMPQ)
-        ad = v2b(L['mdh'] & ~(1 << 47), 16) + b''.join(LST[j] for j in js)
-        c, t = scc_rfc_seal(CSK, bytes(12), ad, L['c1'], lenblock=False, sep=0)
+        ad = v2b(L['mdh'] & ~(1 << 47), 16) + ind_ad(js)
+        c, t = scc_rfc_seal(ind_key(js), bytes(12), ad, L['c1'], lenblock=False, sep=0)
         info('Localities %s: SIV %s' % (js, t.hex()))
         check('SCC for Localities %s equals the independent assembly' % (js,), img[16:] == t + c)
     locker_level()
@@ -320,11 +351,11 @@ def locker_level():
             check(tag + ': kl.getmd before the opening returns the stored MDH', pre == md)
             check(tag + ': export-opening sets State kl_cfg_exporting (57), names the locker', _st(K, 3) == (57, 0) and K.nl == 3)
             # independent assembly of S (RFC 8452 core without lengths block; AD[0] = MDH with ADSDropped clear)
-            ad = v2b(md, 16) + b''.join(LST[j] for j in js)
-            ct, siv = scc_rfc_seal(CSK, bytes(12), ad, key, lenblock=False, sep=0)
+            ad = v2b(md, 16) + ind_ad(js)
+            ct, siv = scc_rfc_seal(ind_key(js), bytes(12), ad, key, lenblock=False, sep=0)
             want = siv
             if adl >= 2:
-                ct2, siv2 = scc_rfc_seal(CSK, bytes(12), v2b(IMPQ, 16) + siv, c2[:16 * (adl - 2)], lenblock=False, sep=1)
+                ct2, siv2 = scc_rfc_seal(ind_key(js), bytes(12), v2b(IMPQ, 16) + siv, c2[:16 * (adl - 2)], lenblock=False, sep=1)
                 want += v2b(IMPQ, 16) + siv2 + ct + ct2
             else: want += ct
             check(tag + ': S equals the independent assembly (SIV | [IMPQUAL | SIV2] | Content1 | Content2)', S == want)

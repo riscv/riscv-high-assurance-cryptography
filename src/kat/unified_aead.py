@@ -14,7 +14,7 @@ from aead_model import (Base, GCM, GCM_IV, GCMSIV, OCB, OCB_NONCE, Inv, need,
 from sponge_model import Locker
 
 PRE, PRELAST = 17, 18
-TAG_RECEIVED, AD_ABSORBED, SIV_GENERATED = 1, 2, 4
+TAG_RECEIVED, AD_ABSORBED, SIV_GENERATED, DATA_ABSORBED = 1, 2, 4, 8
 
 
 class UnifiedAEAD(Base):
@@ -70,11 +70,11 @@ class UnifiedAEAD(Base):
 
     @property
     def flags(self):
-        return self.machine_use & 7
+        return self.machine_use & 15
 
     @flags.setter
     def flags(self, value):
-        self.machine_use = (self.machine_use & ~7) | value
+        self.machine_use = (self.machine_use & ~15) | value
 
     def header_widths(self):
         """Public prefix of the Content: only the fields this Machine uses."""
@@ -146,6 +146,8 @@ class UnifiedAEAD(Base):
             elif st in (LAST, PRELAST, ELB, DLB):
                 need(cur == {LAST: ABSORB, PRELAST: PRE, ELB: ENC, DLB: DEC}[st])
                 need(self._formok('B', form, xs, inp) and 0 <= xs <= 128 and xs % (1 << self.glog) == 0)
+                # Xs = 0 only if nothing of this AD, resp. PT or CT, was committed
+                need(xs or not (self.flags & AD_ABSORBED if st == LAST else self.payload_len or self.flags & DATA_ABSORBED))
                 self.lbl = xs; self.st = st
                 if xs == 0: self._final_piece(0)
                 return
@@ -154,11 +156,6 @@ class UnifiedAEAD(Base):
                 need(st == DEC if self.flags & TAG_RECEIVED else st == PRE if self.two_pt else st == ENC)
                 if self.family == 'OCB': self.core._enter(DEC if st == DEC else ENC, 0, 0)
                 if self.family == 'Ascon': self.core.xw(4, 1 << 63)
-            elif st in (ETF, DTF):
-                # MR10's empty-final bypass.  PRELAST completes into ETF itself.
-                need(cur == (ENC if st == ETF else DEC) and form == 'A')
-                self.st = ELB if st == ETF else DLB; self.lbl = 0; self._final_piece(0)
-                return
             else: need(False)
             self.st = st
         except Inv: self._fail()
@@ -209,6 +206,7 @@ class UnifiedAEAD(Base):
         if self.st in (ABSORB, LAST):
             self._add('ad_len', n); self._ad(x, n); self.flags |= AD_ABSORBED; return 0
         self._add('payload_len', n)
+        if self.family not in ('GCM', 'GCM-SIV'): self.flags |= DATA_ABSORBED    # data_len stands in for it
         return self._payload(x, n)
 
     def _final_piece(self, x):

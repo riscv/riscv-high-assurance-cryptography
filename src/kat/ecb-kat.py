@@ -128,7 +128,7 @@ for t, pi, c1, scc in ((0, 32, 16, 48), (1, 48, 32, 64), (2, 48, 32, 64), (3, 32
     L = lk(t, 3); n = TYPES[t] + '_ECB'
     check(n + ' PI %d bytes' % pi, pi_size(machine(t, 0)) == pi)
     check(n + ' Content1 %d bytes, SCC %d bytes' % (c1, scc), len(L.content1()) == c1 and 32 + len(L.content1()) == scc)
-    check(n + ' by SKID: PI 32, Content1 16, SCC 48', pi_size(machine(t, 0), 1) == 32 and len(Locker(machine(t, 0), 3, bytes(8), skid=True).content1()) == 16)
+    check(n + ' by SKID: PI 32, Serialized Content 16 (Content1 adds the mask seed, GR55.1)', pi_size(machine(t, 0), 1) == 32 and len(Locker(machine(t, 0), 3, bytes(8), skid=True).content1()) == 16)
 L = lk(0, 3, k); L.setst(S_ENC); L.exec(blocks_v(P4[:2]), 256)
 mdh, c1 = L.export(); L2 = Locker.import_(mdh, c1)
 check('export after 2 blocks, import: Encrypt, same key, same output', L2.state == S_ENC and L2.exec(blocks_v(P4), 512)[0] == blocks_v(C4))
