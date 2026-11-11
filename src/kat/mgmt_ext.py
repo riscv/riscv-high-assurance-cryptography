@@ -22,7 +22,7 @@ class KLE2(KLE):
     def __init__(s, *a, **kw):
         KLE.__init__(s, *a, **kw)
         s.zklio = False; s.kliobuflen = 0; s.kliobuftop = 0; s.iobuf = bytearray(256)
-        s.siv = s.impqual = s.siv2 = 0; s.fmt_min_prot = 0; s.vext = True; s.csk_hardwired = s.csk_method in (3, 4); s.debug = False; s.debug_auth = False; s.rbg_dead = False
+        s.siv = s.impqual = s.siv2 = 0; s.fmt_min_prot = 0; s.vext = True; s.csk_hardwired = s.csk_method in (3, 4); s.debug = False; s.debug_auth = False; s.rbg_dead = False; s.rbg_slow = False; s.persist = False; s.uses_rbg = True
         s.kls = 1; s.priv = 'M'; s.stateen = True; s.fatal = False; s.lstat = [1] * 32; s.kleemu = False; s._exm = False
         s.maxiobuf_reset = s.maxiobuf = 256
     # ---- privileged gates (<<KLE-KLS-field-in-mstatus>>, <<KLE-CSR-llockerstatus>>, <<KLE-exception-codes>>)
@@ -385,14 +385,16 @@ class KLE2(KLE):
             s.L[src].mdh = mdh_put(s.md(src), 'State', 1); s.L[src].content = 0
         return 'ok'
     # ---- reset (<<KLE-out-of-reset-unpriv>>)
-    def reset(s):
+    def reset(s, full=True):     # full: every hart of the unit in reset (<<KLE-reset-and-m-mode-only>>)
         for k in range(32): s.free(k)
         s.pool = []; s.nl = NONE; s.start = 0; s.slots = s.slots + 0
         s.kliobuflen = s.kliobuftop = 0; s.iobuf = bytearray(len(s.iobuf)); s.siv = s.impqual = s.siv2 = 0
         if not s.csk_hardwired: s.csk = False; s.csk_levels.clear()
         if s.csk_method in (1, 2): s.csk_sel = 0
         if s.csk_method == 1: s.csk_partial.clear()
-        s.fatal = s.rbg_dead and s.sks is not None     # <<KLE-GR-skid-field>>: no random bits for the mask seeds
+        # <<KLE-GR-rbg-failure>>: source tested only at a full reset; a slow source is treated as dead; the condition persists
+        if full: s.persist = (s.rbg_dead or s.rbg_slow) and s.uses_rbg
+        s.fatal = s.persist
 
 # ---- encodings (<<KLE-instruction-exec>>, <<KLE-instruction-mv>>, <<KLE-instruction-derive>>, <<KLE-instruction-clone>>)
 def enc_rtype(rd, rs1, rs2, b25=0, r=0, b27=0, form=0, f2=0):

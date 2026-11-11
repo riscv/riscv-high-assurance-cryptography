@@ -366,6 +366,7 @@ class KLE:
         if v3: adm = {58, 57} | ({0} if st == 58 else set())
         if mst not in adm: raise IllegalInstruction('ml.State not admitted')
         if v3 and mst == 0: return s._sysfmt_complete(k)
+        if 1 <= mst <= 55: s.require_csk(m)       # <<KLE-CSK-selection>>: after the admission of ml.State, before the Locality check
         l.mdh = mdh_put(m, 'State', mst)
         if 1 <= mst <= 55 and not all(s.conf(j) for j in loc_entries(mdh_get(m, 'Locality'))):
             s.err(k, SE_INVALID); return       # completion into a Valid State naming an unconfigured entry with no substitute: Invalid, no decryption

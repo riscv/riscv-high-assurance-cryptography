@@ -388,7 +388,7 @@ class OCB(Base):
         self.hasN = False
         self.hash_A = self.csum = self.index = 0
         self.lbl = 0
-        if not hasattr(self, 'offset'): self.offset = 0     # Ready entry leaves offset, L*
+        self.offset = 0                             # reset() zeroes offset; L* stays
         self.tag_len = 128
         if not hasattr(self, 'Ls'): self.Ls = None
         self.Ld = None; self.L = []

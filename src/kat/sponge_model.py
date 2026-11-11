@@ -268,8 +268,8 @@ class Locker:
                 if self.bb == self.block_len: self.s = self.P(self.s); self.bb = 0
             self.lbl = 0; return 0
         ib = 8 * klstart
-        if st == AUX and self.zlen == 0: self.invalid(); return 0   # Z_len = 0: any kl.exec, even an empty window
-        if ib >= K: return 0                       # empty window (GR18)
+        if ib >= K: return 0                       # empty window (GR18), also with Z_len = 0
+        if st == AUX and self.zlen == 0: self.invalid(); return 0   # Z_len = 0: the load is complete on entry
         if klstart and self.bb != 0: self.invalid(); return 0
         mx = self.zlen if st == AUX else 0
         if st == AUX and self.cum >= mx: self.invalid(); return 0

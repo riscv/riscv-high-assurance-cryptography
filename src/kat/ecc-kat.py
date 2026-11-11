@@ -422,6 +422,8 @@ L = EccLocker('x25519', policy=0); check('x25519 rstrl cannot add bits', L.rstrl
 
 # ------------------------------------------------------------------ 10
 section('EdDSA: Ed25519 / Ed448 (RFC 8032) through Set_Ctx, Msg_Absorb passes, pre-hash')
+L = EccLocker('ed25519'); L.setst(SCTX, 'B', 4); L.exec_in(b'ab'); check('incomplete ctx load, then Msg_Absorb -> Invalid', L.setst(MABS, 'B') == 'invalid')
+L = EccLocker('ed25519'); L.setst(SCTX, 'B', 4); L.exec_in(b'ab'); check('incomplete ctx load, then Ready: admitted, ctx zeroed', L.setst(RDY) != 'invalid' and L.ctxlen == 0 and not any(L.ctx))
 def ed_load_key(L, seed): load(L, SSCAL, seed)
 def ed_pub(nm, seed):
     L = EccLocker(nm); load(L, SSCAL, seed); L.setst(PMUL); L.exec_D(); return drain(L)

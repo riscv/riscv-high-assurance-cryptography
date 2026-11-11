@@ -121,11 +121,14 @@ Only the exceptions of the instruction fetch, an instruction-address breakpoint 
 |===
 
 `kl.load` raises the load causes (4, 13, 21, 5) and `kl.store` the store/AMO causes (6, 15, 23, 7); `kl.input` raises 13, 21 and 5, and `kl.output` 15, 23 and 7.
-The relative order of the standard exceptions is that of the Privileged Specification, with one exception: for `kl.load` and `kl.store`, the load/store address breakpoint and the address-misaligned exception of the first component access (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, item 8) precede the illegal-instruction exceptions of the <<Zkl-ISA-unpriv.adoc#KLE-fourth-group-ILL-grounds>> and the other locker-state-dependent exceptions, which the Privileged Specification orders before them.
+The relative order of the standard exceptions is that of the Privileged Specification, with one exception: for `kl.load` and `kl.store`, the load/store address breakpoint and the address-misaligned exception of the first component access (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, item 8) precede the illegal-instruction exceptions of the <<Zkl-ISA-unpriv.adoc#KLE-fourth-group-ILL-grounds>> and the other locker-state-dependent exceptions. The Privileged Specification gives the illegal-instruction exception priority over the address-misaligned exception, and puts it in the same priority class as the load/store address breakpoint.
 The load/store address breakpoint and the load/store faults are evaluated per component access, because the state of the KLE unit determines the component addresses of a KLE memory instruction.
 
 The `medeleg` and `hedeleg` bits of the KLE fatal-error cause are read-only zero, so the exception always traps to M-mode: the KLE unit reset that accompanies it clears M-mode state that only M-mode can restore (<<KLE-out-of-reset-priv>>).
 M-mode may forward the exception to a less privileged mode in software.
+
+WARNING: An `mtval` value is needed to distinguish a persisting fatal condition (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>) from one that the KLE unit reset ends.
+None is defined yet.
 
 NOTE: The `medeleg` and `hedeleg` bits of the other KLE exceptions follow the standard ISA definition and so may be read-only zero or writable, but never read-only one.
 
@@ -171,6 +174,7 @@ KLE extends `*status` and `misa`, and provides up to 22 direct CSRs (39 when MXL
 When MXLEN is 32, the implemented 64-bit CSR `mllockerstatus` is accompanied by a 32-bit CSR `mllockerstatush`; when SXLEN is 32, each of the implemented `sllockerstatus` and `vsllockerstatus` is accompanied by `sllockerstatush`, resp. `vsllockerstatush`. Each such 32-bit CSR accesses bits [63:32]. An access to the 64-bit CSR made at an XLEN of 32 accesses bits [31:0]; one made at an XLEN of 64 accesses all 64 bits.
 `vsllockerstatush` also exists when VSXLEN is 32: while V=1, an access to `sllockerstatush` then accesses it, as one to `sllockerstatus` accesses `vsllockerstatus`.
 Likewise, `skllocality{0..1}h` exist when VSXLEN is 32, and are accessible while V=1 (<<KLE-locality-CSR-groups>>).
+An access to an `h` shadow made at an XLEN of 64 raises an illegal-instruction exception, or the virtual-instruction exception that the H extension prescribes.
 In this Book, RV32 and RV64 denote an XLEN of 32, resp. 64, in the privilege mode that accesses the CSR.
 
 None of these CSRs, including the `mklcsk` group, is available without the KLE extension or while a `KLS` field in effect is Off (<<KLE-KL-field-in-misa>>, <<KLE-KLS-field-in-mstatus>>, <<KLE-KLS-field-VS>>).
@@ -288,16 +292,17 @@ An implementation may provide implementation-defined means to disable, selective
 These means belong to the KLE unit, not to a hart: harts that share a KLE unit share them.
 No mode below M-mode can operate these means.
 A disabled combination is not natively implemented: its Metadata is unsupported (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>), and M-mode may emulate it in place of the native one.
-These means can be changed only after a reset of every hart that the KLE unit serves (<<KLE-out-of-reset-priv>>), until the first KLE instruction or KLE CSR access is issued in any mode on any of these harts, whether or not it raises an exception.
+These means can be changed only after a reset that holds every hart that the KLE unit serves in reset at the same time (a _full reset_ of the KLE unit, <<Zkl-ISA-unpriv.adoc#KLE-reset-and-m-mode-only>>), until the first KLE instruction, KLE CSR access or invocation of an emulation primitive (<<KLE-unsupported-handling>>) is issued in any mode on any of these harts, whether or not it raises an exception or succeeds.
 An access to the means themselves is not such an access, and `KLS` does not gate it.
-From then on they are locked until the next such reset: neither a reset of only some of these harts, nor a KLE unit reset caused by a fatal condition, unlocks them.
+From then on they are locked until the next full reset: neither a reset of only some of these harts, nor a KLE unit reset caused by a fatal condition, unlocks them.
 Their state out of reset is implementation-defined and documented.
 M-mode that emulates Machines sets these means while it sets up its environment and does not change them afterwards: it ensures that they do not change while any software on the platform may be using KLE.
 The KLE units of all harts among which software can migrate must have these means set alike: the harts of a cluster that shares a KLE unit share them, and a system with several KLE units is responsible for setting them in the same way in each.
 
 NOTE: Disabling a native Machine lets M-mode replace a defective implementation with a corrected emulated one, and import the CCs of the native Machine into it.
-The lock keeps the set of native Machines of a KLE unit fixed between two resets, so no CC is native and emulated in the same KLE unit in the same boot.
-It does not protect SCCs in memory: after a reset, or in another KLE unit whose harts hold the same CSK and that has the Machine disabled, the primitives of <<KLE-unsupported-handling>> unseal the SCCs of that Machine.
+The lock keeps the set of native Machines of a KLE unit fixed between two full resets, so no CC is native and emulated in the same KLE unit in the same boot.
+It does not protect SCCs in memory: after a full reset, or in another KLE unit whose harts hold the same CSK and that has the Machine disabled, the primitives of <<KLE-unsupported-handling>> unseal the SCCs of that Machine.
+An implementation can keep a hart that is reset on its own from changing these means, for instance by accepting a change only while a single hart of the cluster is running.
 M-mode is trusted with them, as with every CC that it emulates (<<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
 
 NOTE: The position of `kleemulation` is provisional and will be assigned by the ARC (<<Zkl-introduction.adoc#KLE-open-points>>).
@@ -409,7 +414,7 @@ The primitives refuse a locker at a level whose protection they lack; M-mode the
 They seal or unseal only a whole SCC.
 The MDH that they test is the one that enters `AD[0]`, and it must be unsupported Metadata (<<Zkl-ISA-unpriv.adoc#KLE-Metadata-validity>>).
 They compute the `sep` = 1 segment only for an SCC whose `sep` = 0 segment they have sealed, or have unsealed with a successful authentication, in the same invocation.
-M-mode therefore cannot seal or unseal through them any part of a CC that the same KLE unit would import before its next reset (<<KLE-kleemulation>>).
+M-mode therefore cannot seal or unseal through them any part of a CC that the same KLE unit would import before the next full reset of that KLE unit (<<KLE-kleemulation>>).
 An implementation without these primitives does not support the emulation of Machines: `kleemulation` is read-only zero, and M-mode treats a KLE unsupported-Metadata exception as unresolvable.
 
 An emulator keeps one copy per locker slot and replaces it:
@@ -443,6 +448,7 @@ M-mode firmware enables `KLS` before it establishes a CSK.
 The _current write_ of the group begins at the latest of: a KLE unit reset; the completion of the previous full write of the group, whether it configured CSK~L~ or, with the value `zeros(256)`, unconfigured it; a write to `mklcfg`, or a KLE missing-CSK exception with the same effect, that abandoned a partial write (<<KLE-CSR-mklcfg>>); and a write to `mklcsk0`, which discards the parts written before it and is itself part of the write that it begins.
 A new CSK~L~ becomes configured when, and only when, every CSR of the group has been written in the current write.
 From the first write to the group in the current write until then, CSK~L~ is _partially written_ and not configured, so with trapped selection the KLE unit is unavailable (KLE missing-CSK exception, <<Zkl-ISA-unpriv.adoc#KLE-CSK-requirements>>).
+The first write of a current write unconfigures CSK~L~, and abandoning the partial write does not restore it: CSK~L~ stays unconfigured until a full write completes.
 
 A read of a register of the group returns the corresponding part of CSK~L~.
 While CSK~L~ is not configured (none established, or partially written), the read returns zero, the value of an unconfigured CSK (below).
@@ -473,7 +479,7 @@ It has the accessibility of the `mklcsk` group (<<KLE-CSR-mklcsk>>), and is acce
 | Bits       | Field       | Description
 | [2:0]      | _CSKSel_    | WARL. The side-channel protection level L of the selected CSK, CSK~L~. A value is legal only if the implementation defines that level (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
 | 3          | _CSKErase_  | Writing 1 erases a CSK, as described below. Reads as 0.
-| MXLEN−1:4  | —           | WPRI; read-only zero in this version.
+| [MXLEN−1:4] | —          | WPRI; read-only zero in this version.
 |===
 
 A write of a value `v` to bits [3:0] of `mklcfg` leaves `mklcfg` and the CSKs unchanged if `v`[2:0] is not a level that the hart implements, except that under trapped selection a write with `v`[3] = 1 still unconfigures the CSK held, abandons a partially written `mklcsk` group, and leaves _CSKSel_ unchanged.
@@ -527,7 +533,7 @@ The lower bound is the larger of 16 bytes and the largest basic processing unit 
 (((CSR, `mkllocality`)))
 (((CSR, `hkllocality`)))(((CSR, `skllocality`)))
 Each group listed in <<KLE-locality-CSR-groups>> holds one 128-bit Locality Secret (<<Zkl-ISA-unpriv.adoc#KLE-locality-indexes>>) in two _W_-bit RW CSRs, numbered “0” and “1”, and, when _W_ = 32, in their shadows, numbered “0h” and “1h”.
-_W_ is MXLEN for an M-mode group, SXLEN for an HS-mode group, and, for the `skllocality` group, the XLEN of the mode that accesses it: MXLEN in M-mode, SXLEN in (H)S-mode, or VSXLEN while V=1.
+_W_ is the XLEN of the mode that accesses the group: MXLEN in M-mode, SXLEN in (H)S-mode, or VSXLEN while V=1.
 A write to CSR __i__ of a group sets bits [64·_i_+_W_−1 : 64·_i_] of its secret, and a write to CSR __i__``h`` bits [64·_i_+63 : 64·_i_+32].
 An access below the privilege of the group raises the exception that <<KLE-privileged-CSRs>> prescribes.
 An access in Debug mode that the External Debug Security extension does not authorize for the privilege of the group raises an illegal-instruction exception.
@@ -575,10 +581,11 @@ This section and <<Zkl-ISA-unpriv.adoc#KLE-out-of-reset-unpriv>> are the authori
 . all fields of `mllockerstatus`, `sllockerstatus` and `vsllockerstatus` are _Initial_;
 . `kleemulation` in `mstatus` is 0;
 . with `Zklio`, `mklmaxiobuflen` holds its hardwired maximum (<<KLE-CSR-mklmaxiobuflen>>); and
-. the means of <<KLE-kleemulation>> that disable native Machines are unlocked, in their implementation-defined reset state, if every hart that the KLE unit serves is reset; otherwise they are unchanged.
+. the means of <<KLE-kleemulation>> that disable native Machines are unlocked, in their implementation-defined reset state, at a full reset of the KLE unit (<<KLE-kleemulation>>); at any other reset they are unchanged.
 
 A KLE unit reset caused by a fatal condition (<<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>) differs in items 1, 2, 7 and 10: `misa.L` is unchanged; a `KLS` field that is Off stays Off, and every other `KLS` field becomes Dirty; every `*llockerstatus` field becomes _Dirty_; and the means that disable native Machines keep their setting and stay locked.
 After such a reset, `klstart` is 0 and `klnamedlocker` is 32, as out of reset (<<Zkl-ISA-unpriv.adoc#KLE-out-of-reset-unpriv>>).
 Until the KLE fatal-error exception is raised, any KLE instruction or KLE CSR access raises it instead, unless an exception that precedes it is raised (<<KLE-exceptions>>, <<Zkl-ISA-unpriv.adoc#KLE-error-architecture>>).
+Under a persisting fatal condition (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>), every later one raises it as well.
 
 // ////////////////////////////////////////////////////////////////////

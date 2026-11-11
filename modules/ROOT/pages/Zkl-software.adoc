@@ -139,7 +139,7 @@ The normative Rules of <<KLE-software-requirements>> take precedence over these 
 [[KLE-reading-locker-state]]
 === Reading the _State_ of a Locker
 
-To inspect lockers by number, software writes each number in turn to `klnamedlocker` and names `KLNL` in the following instructions. While an import or export is open, it first saves that locker by a nested export (Rule <<KLE-SR-nested-export-first>>).
+To inspect lockers by number, software writes each number in turn to `klnamedlocker` and names `KLNL` in the following instructions. While an import or export is open, it first saves that locker by a nested export (Rule <<KLE-SR-nested-export-first>>). To find an open locker, as step 3 of <<KLE-save-order>> requires, software issues `kl.getst` with the explicit operands `K0` to `K31`, which leaves `klnamedlocker` unchanged.
 
 It then uses the instructions `kl.getst`, `kl.getstx` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getst>>) and `kl.getmd` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getmd>>).
 
@@ -209,6 +209,8 @@ A handler that skips the trapping instruction applies its retirement effects to 
 [[KLE-save-order]]
 === Context Save Order
 
+Before any export, the saving mode sets the Locality Secret CSRs that it owns to the values under which the images are to be restored; a hypervisor sets its own `skllocality` (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>).
+
 . Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
 . Let the _managed locker_ be the locker that the saved `klnamedlocker` indexes, if it is in [0..31]; otherwise, the locker in State `kl_cfg_importing` or `kl_cfg_exporting`, if there is one; for a locker whose field that the saving mode owns is _Off_, its saved image gives that State (Rules <<KLE-SR-nested-export-first>> and <<KLE-SR-no-interleaving>>).
@@ -233,7 +235,7 @@ Software that complies with Rule <<KLE-SR-locality-unconfigure>> and configures 
 
 
 Software does not read or compare `IMPQUAL`: the unit does, on import.
-An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_ADSDropped_ in `kl.getmd`), and a halted checkpointable operation restarts; software that migrates a locker to such a unit may call `kl.clearads` before the export, so that the operation restarts on the target.
+An image restored on a unit whose `IMPQUAL` differs has its ADS dropped (_AuxDataLen_ = 0 in `kl.getmd` after the import), and a halted checkpointable operation restarts; software whose mode the _UsagePolicy_ of the locker admits may call `kl.clearads` before the export, which shortens the image; otherwise the import on the target drops the ADS.
 
 If the handler clears a locker being provisioned or imported under Rule <<KLE-SR-no-unconditional-clear>>, the interrupted operation restarts (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-outcome-inert>>); restore 32 instead of a saved `klnamedlocker` that named it (<<KLE-restore-order>>).
 
@@ -243,13 +245,13 @@ If the handler clears a locker being provisioned or imported under Rule <<KLE-SR
 === Context Restore Order
 
 . Clear every locker for which no image is restored below, a locker whose restoration is deferred included, or all of them with `kl.clearall` (Rule <<KLE-SR-clear-before-lower-mode>>).
-. Restore the Locality Secret CSRs that the context owns, if any (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>), before any import of a locker that they bind.
+. Set the Locality Secret CSRs to the values in force when the images were saved (<<KLE-save-order>>, <<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) before any import; restore a value of the context that differs from them, such as the `skllocality` of a guest, after the last import and before `KLS`.
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
 .. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
 .. restore the buffer contents, if saved, with a `kl.input` whose `Xl` holds the saved `kliobuflen`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop` (`kl.setbt`), after the buffer, since a write of `kliobuflen` resets it.
-. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring directly to or from memory (`kl.store`, `kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has restored.
+. If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring directly from memory (`kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has restored.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` after every other KLE instruction (`kl.setks`).
 . Write the `*llockerstatus` fields that the restoring mode owns: Clean for a restored locker, _Off_ for a locker whose restoration is deferred, and Initial for a cleared locker. Then write `KLS`, after those CSRs (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
@@ -263,7 +265,9 @@ The getter and setter instructions are the recommended way for software to acces
 
 A handler that can neither resolve nor forward a KLE exception for which <<Zkl-ISA-unpriv.adoc#KLE-exception-error-correspondence>> gives an Error State, nor terminate the process, follows Rule <<KLE-SR-handler-duty>>.
 
-For KLE fatal-error, missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
+For KLE missing-CSK and locker-Off, which have no Error State, a handler issues no `kl.setste`: it resolves the exception, forwards it (for locker-Off, see <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), or terminates the process.
+A KLE fatal-error exception has no Error State either and cannot be resolved: the M-mode handler re-establishes the M-mode KLE state that the KLE unit reset cleared (<<Zkl-ISA-priv.adoc#KLE-out-of-reset-priv>>) and reports the loss of their lockers to the contexts that held them.
+If the condition persists (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>), it makes no KLE instruction or KLE CSR access until a full reset of the KLE unit.
 A KLE RBG-unavailable exception is resolved by re-executing the instruction after a delay that the handler chooses: the architecture does not report the recovery of the entropy source, and until then the instruction traps again (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
 A handler follows Rule <<KLE-SR-handler-duty>> for it only when it gives up.
 
@@ -569,7 +573,7 @@ success:
 ----
 
 The opening `kl.mgmt` of provisioning and import receives the MDH in Form D (<<Zkl-ISA-unpriv.adoc#KLE-MVR-open>>) and checks all of it, even for the image of a locker in an Error State (<<Zkl-ISA-unpriv.adoc#KLE-error-state-transfer>>).
-The completing `kl.mgmt KLNL, #kl_cfg_management_end` can still transition the locker to an Error State, at SKS resolution (provisioning) or authentication (import).
+The completing `kl.mgmt KLNL, #kl_cfg_management_end` can still transition the locker to an Error State (<<Zkl-ISA-unpriv.adoc#KLE-instruction-mgmt>>), for instance at SKS resolution, at a Machine check on the PI or at key generation (provisioning), or at Locality resolution or authentication (import); with _KeyType_ = 2 it can also raise a KLE RBG-unavailable exception (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-rbg-failure>>).
 The `kl.getst` after it detects this, as well as a clear or an Error State set earlier.
 A data error found by a Machine check on a field of the PI or SCC leaves the locker in _Failure_ instead (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-completion-state>>); these listings do not test for it.
 
@@ -784,7 +788,7 @@ The following listing takes the number of blocks as a parameter; for the last gr
 ----
 
 A CFB CC takes its segment size `u` from the _AuxInfo_ field of its MDH, which is fixed at provisioning.
-The following listing encrypts with CFB8, that is with an SCC whose `u` = 8, any number of bytes.
+The following listing encrypts any number of bytes with CFB8, that is, with an SCC whose `u` = 8.
 
 [[KLE-pseudocode-CFB8-encryption]]
 .CFB8 Encryption
@@ -861,7 +865,7 @@ otherwise the last block is partial, and the data unit is completed by <<Zkl-ISA
 .XEX Encryption
 ----
 # a0 = SCC, a1 = PT, a2 = CT (may equal a1), a3 = n blocks, the last of
-# a4 = last_len bytes, 1 <= last_len <= 16, n >= 2 if last_len < 16,
+# a4 = last_len bytes, 1 <= last_len <= 16, n >= 1, n >= 2 if last_len < 16,
 # a5 = the 16-byte tweak
 
   import_scc 0, a0

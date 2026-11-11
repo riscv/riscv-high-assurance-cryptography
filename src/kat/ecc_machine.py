@@ -136,6 +136,8 @@ class EccLocker:
             if st == target and st not in SETS and st != MABS: ok_src = False       # GR19.2
             if st == MABS and target not in (MABS, SGN, SVER): ok_src = False
             if not ok_src: return self._inv()
+        # <<KLE-EdDSA>>: leaving Set_Ctx with an incomplete ctx load, for a State other than Ready or Set_Ctx: Invalid
+        if st == SCTX and not self.complete and target not in (RDY, SCTX): return self._inv()
         # a narrowed signing pass ends only toward Ready (KLE-EdDSA Allowed State Transitions)
         if st == MABS and self.pass_id in (0, 1) and self._pass_disabled() and target != RDY: return self._inv()
         # MR14 / GR38: leaving a Set State drops an incomplete load; any setst drops Progress and RndNum
@@ -264,7 +266,7 @@ class EccLocker:
             self.progress = 0                  # a retry restarts: Progress is zero before the draw (MR19)
             k = self._draw_k()
             if k is None: return self._inv()
-            self.RndNum[:] = k.to_bytes(self.j // 8, 'little')
+            self.RndNum[:] = k.to_bytes(self.j // 8, 'little'); self.setf('rnd')
         self.Signature[:] = rs[0].to_bytes(self.W, 'little') + rs[1].to_bytes(self.W, 'little'); self.setf('sig')
         self.RndNum[:] = bytes(len(self.RndNum)); self.setf('rnd', False)
         return self._out(1)
