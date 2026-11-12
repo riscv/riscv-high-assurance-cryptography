@@ -252,7 +252,7 @@ class Locker:
             if s.outl:
                 s.outl -= a
                 if s.outl == 0:
-                    out &= M(ob); s.st = 'Success'; return v2b(out, kl // 8)
+                    out &= M(ob); s.st = 'Success'; s.lbl = 0 if bits else s.lbl; return v2b(out, kl // 8)
             if s.bb == f.t:
                 if f.kind == 'sha3': s._P()
                 s.bb = 0
@@ -300,7 +300,7 @@ class Locker:
         if f.kind == 'sha3': L = [('state', s.S, 1600), ('block_base', s.bb, 16), ('last_block_len', s.lbl, 16), ('out_len', s.outl, 32)] + ([('cumul_len', s.cum, 64)] if s.hmac == 'NIK' else [])
         else: L = [('state', s.S, f.state_len), ('last_block_len', s.lbl, 16), ('block_base', s.bb, 16), ('out_len', s.outl, 32), ('cumul_len', s.cum, 64), ('block', s.blk, f.block_len)]
         if f.kind == 'blake2':                                 # nn, kk in Positions v, vi; out_len in vii in the output States
-            vii = ('out_len', s.outl, 64) if s.st in ('Output', 'Bits') else ('cumul_len', s.cum, 64)
+            vii = ('out_len', 0 if s.st == 'Success' else s.outl, 64) if s.st in ('Output', 'Bits', 'Success') else ('cumul_len', s.cum, 64)
             L = ([('SKID', 0, 64)] if s.syskey is not None else []) + L[:3] + [('nn', s.nn, 16), ('kk', s.kk, 16), vii, L[5]]
         if s.hmac: L += [('K0', s.K0, f.block_len)]
         return L
@@ -335,6 +335,8 @@ def import_(L):
     """SCC import or kl.clone of L: a copy, Invalid if its StateExtension @ State is unsupported (KLE-Metadata-validity)."""
     C = copy.deepcopy(L)
     if not C.meta_ok(): C.inv()
+    f = C.f; dmax = 8 * C.nn if f.kind == 'blake2' else getattr(f, 'd', f.t)
+    if C.bb > f.block_len or C.st in ('Output', 'Bits') and (C.bb >= f.t or not f.xof and not 0 < C.outl <= dmax): C.inv()   # block_base, out_len out of range
     return C
 
 def run(L, chunks, halts=False):

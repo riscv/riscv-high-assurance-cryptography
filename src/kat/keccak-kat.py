@@ -270,6 +270,8 @@ check('... in Hash_Absorb too', c.sealed and c.st == ABSORB)
 for st in (READY, BITS):
     c = Locker('SHA3-256'); c.import_(sl().export(), st, se=2); check('Sealed in State %d: unsupported StateExtension @ State, the import -> Invalid' % st, c.se == SE_INV)
 c = Locker('KMAC128', K=b'k' * 16); c.import_(c.export(), VERIFY, se=2); check('KMAC128 Sealed in Hash_Verify: the import -> Invalid', c.se == SE_INV)
+c = Locker('SHA3-256'); c.setst(2, 'A'); sc = bytearray(c.export()); sc[200:202] = b'\xff\xff'; c2 = Locker('SHA3-256'); c2.import_(bytes(sc), ABSORB); check('SHA3-256 import: block_base above b -> Invalid', c2.se == SE_INV)
+c = Locker('SHA3-256'); c.setst(2, 'A'); c.setst(6, 'A'); sc = bytearray(c.export()); sc[204:208] = bytes(4); c2 = Locker('SHA3-256'); c2.import_(bytes(sc), 6); check('SHA3-256 import: out_len 0 in Hash_Output of a fixed-output Machine -> Invalid', c2.se == SE_INV)
 c = Locker('ASCON-AEAD128'); c.import_(c.export(), READY, se=2); check('Ascon-AEAD128 has no Sealed: the import -> Invalid', c.se == SE_INV)
 # GR30: a sealed hop is a restricted transfer that narrows the destination MDH; an unsealed output narrows nothing (GR31.2)
 d = Locker('SHA3-256'); d.mdh = mdh_pack(UsagePolicy=0x7); d.setst(2, 'A'); derive(Secret(b'S' * 32, sealed=True, mdh=mdh_pack(UsagePolicy=0x5, ExpirationDate=7)), d, 32)

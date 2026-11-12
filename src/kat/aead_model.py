@@ -266,6 +266,7 @@ class GCM(Base):
         m.st, m.tag, m.start_ctr, m.lbl, m.tag_len, m.tag_len_p = st, tag, sctr, lbl, tl, tlp
         if st == SAV:
             m.block_base, m.cumul = sl(j, 47, 32), sl(j, 95, 48); m.J0 = 0  # the IV length is in the public prefix
+            if m.block_base != m.cumul % 128: m._fail(); return m       # IV progress inconsistent at import
         else: m.J0 = j
         try:
             need(tlp in m.tlps())                                     # MR12
@@ -475,7 +476,8 @@ class OCB(Base):
         k, N, nl, _, off, hA, cs, ix, tl, lb = cls.unpack(sc, (8 * keybytes, 120, 7, 1, 128, 128, 128, 49, 2, 7))   # L* derived
         m.key = v2b(k, keybytes); m.st, m.nonce, m.nonce_len, m.offset, m.hash_A, m.csum, m.index, m.lbl = st, N, nl, off, hA, cs, ix, lb
         m.hasN = m.nonce_len != 0
-        if tl or (nl and not 6 <= nl <= 120) or (cls.PRESET and not nl): m._fail(); return m   # nonce_len: 0 (none set) or 6..120
+        if tl or (nl and not 6 <= nl <= 120) or (not nl and st != READY): m._fail(); return m  # nonce_len: 0 in Ready only, else 6..120
+        if ix > 2**48 + 1 or (ix == 0) != (st in (READY, SAV)): m._fail(); return m            # index: 0 before Hash_Absorb, then 1..MAX_BLOCKS+1
         if st not in (READY, SAV): m._setup()
         return m
 
@@ -559,4 +561,5 @@ class CMAC(Base):
         k, h, lb, a, al = cls.unpack(sc, (8 * keybytes, m.B, 32, 1, 1))
         m.key = v2b(k, keybytes); m.st, m.hash, m.lbl, m.any, m.all, m.tag_len_p = st, h, lb, bool(a), bool(al), tlp
         if tlp not in m.tlps(): m._fail()                             # MR12
+        if lb > m.B or st == READY and (a or al) or st in (HOUT, HV) and not al: m._fail()   # progress fields out of range at import
         return m

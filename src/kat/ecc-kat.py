@@ -335,15 +335,15 @@ for nm in ('ed25519', 'x25519'):
 section('sealed variant (MachineExtension = 2): Generator fixed, the shared secret leaves only by kl.derive (GR31.3)')
 for nm, d, Qb, Z in V.ECDH[:1]:
     W = EccLocker(nm).W
-    L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); r = L.exec_D()
+    L = EccLocker(nm, policy=1, ext=2); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); r = L.exec_D()
     check('%s Point_Mul on SecondPt: a sealed kl.derive source = Z' % nm, r == 'output' and L.outtype == 2 and L.sealed and L.derive_source() == Z)
     check('%s Form C kl.exec of the shared secret -> Invalid' % nm, L.exec_out(1) == 'invalid' and L.invalid)
-    L = EccLocker(nm, ext=2); load(L, SSCAL, le(d, W)); L.setst(PMUL); r = L.exec_D()
+    L = EccLocker(nm, policy=1, ext=2); load(L, SSCAL, le(d, W)); L.setst(PMUL); r = L.exec_D()
     check('%s Point_Mul on the default Generator: the public key d.G stays readable' % nm, r == 'output' and L.exec_out(2 * W) == xy(L.C.mul(d, L.C.G), W))
-    check('%s Form B kl.setst to Set_Generator, non-zero operand -> Invalid' % nm, EccLocker(nm, ext=2).setst(SGEN, 'B', 1) == 'invalid')
-    L = EccLocker(nm, ext=2); load(L, S2ND, xy(Qb, W)); L.setst(RDY)
+    check('%s Form B kl.setst to Set_Generator, non-zero operand -> Invalid' % nm, EccLocker(nm, policy=1, ext=2).setst(SGEN, 'B', 1) == 'invalid')
+    L = EccLocker(nm, policy=1, ext=2); load(L, S2ND, xy(Qb, W)); L.setst(RDY)
     check('%s Ready bit 5 (SecondPt -> Generator) with HasSecondPt set -> Invalid' % nm, L.setst(RDY, 'B', 1 << 5) == 'invalid')
-    L = EccLocker(nm, ext=2); load(L, S2ND, xy(Qb, W)); m, c = L.export(); I = EccLocker.imported(nm, m, c)
+    L = EccLocker(nm, policy=1, ext=2); load(L, S2ND, xy(Qb, W)); m, c = L.export(); I = EccLocker.imported(nm, m, c)
     check('%s SCC: no Generator (Position ii), SecondPt private; import sets the default Generator' % nm,
           c[L.vb // 8:L.vb // 8 + L.ub // 8] == xy(Qb, W) and L.scc_clear_len1 == -(-L.vb // 128)
           and bytes(I.Generator) == I._default_gen() and bytes(I.SecondPt) == xy(Qb, W) and not I.invalid)
@@ -356,6 +356,12 @@ load(L, S2ND, H('e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4
 check('x25519 sealed: one kl.derive, then Success; a second -> Invalid',
       L.derive().hex() == 'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552' and L.state == 54 and L.derive() == 'invalid')
 check('ed25519 with MachineExtension = 2: unsupported Metadata', EccLocker('ed25519', ext=2).err == SE_UNSUPPORTED)
+for _f, _x in (('A', 0), ('B', 0), ('B', 1 << 2)):
+    L = EccLocker(V.ECDH[0][0], policy=3, ext=2); _W = L.W; load(L, SSCAL, le(V.ECDH[0][1], _W)); load(L, S2ND, xy(V.ECDH[0][2], _W)); L.setst(PMUL); L.exec_D()
+    L.setst(RDY, _f, _x) if _f == 'B' else L.setst(RDY)
+    check('sealed variant: entering Ready (Form %s, Xs=%d) with a shared secret erases SecondPt' % (_f, _x), L.state == RDY and not L.has('second') and not any(L.SecondPt) and L.outtype == 0)
+L = EccLocker(V.ECDH[0][0], policy=3, ext=2); load(L, S2ND, xy(V.ECDH[0][2], L.W)); L.setst(RDY)
+check('sealed variant: a loaded SecondPt survives a return to Ready', L.has('second') and any(L.SecondPt))
 
 # ------------------------------------------------------------------ 9
 section('X25519 / X448 (RFC 7748)')
@@ -711,7 +717,7 @@ for scp in range(4):
 # destinations of the shared secret
 nm, d, Qb, Z = V.ECDH[0]; W = EccLocker(nm).W
 def ecdh(ext=0, scp=0):
-    L = EccLocker(nm, ext=ext, scp=scp); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); L.exec_D(); return L
+    L = EccLocker(nm, policy=1 if ext == 2 else 3, ext=ext, scp=scp); load(L, SSCAL, le(d, W)); load(L, S2ND, xy(Qb, W)); L.setst(PMUL); L.exec_D(); return L
 L = ecdh(); D = HM.Locker('SHA-256'); D.setst('absorb')
 check('kl.derive into Hash_Absorb (unrestricted): the message is Z, source Success', L.derive_to(D) and L.state == 54 and HM.digest(D) == hashlib.sha256(Z).digest())
 L = ecdh(); D = HM.Locker('SHA-256', 'NIK'); D.setst('setkey')

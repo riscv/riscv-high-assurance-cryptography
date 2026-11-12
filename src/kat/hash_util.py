@@ -185,12 +185,12 @@ def read_bits(L, r, kl=None, halts=False):
     is used up or the output ends, resuming after halts. -> (bits as int, number read, OUTPUT cleared beyond them)."""
     kl = kl or 8 * ((r + 7) // 8); L.setst('bits', 'B', r); v = got = 0; clean = True
     while L.st == 'Bits' and L.lbl:
-        rl = L.lbl; k = 0; buf = bytes(kl // 8)
+        rl = L.lbl; ol = L.outl; k = 0; buf = bytes(kl // 8)
         while True:
             o = L.exec('C', kllen=kl, klstart=k, halt=halts); buf = buf[:k] + o[k:]
             if L.halted is None: break
             k = L.halted
-        n = rl - L.lbl; x = b2v(buf); clean &= x >> n == 0; v |= (x & mask(n)) << got; got += n
+        n = ol if L.st == 'Success' else rl - L.lbl; x = b2v(buf); clean &= x >> n == 0; v |= (x & mask(n)) << got; got += n
     return v, got, clean
 
 def bits_checks(fn, mk, ref):

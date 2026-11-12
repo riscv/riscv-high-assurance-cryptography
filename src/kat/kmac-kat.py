@@ -81,7 +81,7 @@ L, _ = mac('KMAC128', KEY, b'abc'); L.exec('C', out=bytearray(4)); check('exec i
 L, _ = mac('KMAC128', KEY, b'abc', b'', 256); L.setst(1, 'A'); L.setst(2, 'A'); L.exec('B', b'abc'); L.setst(6, 'B', 256); o = bytearray(32); L.exec('C', out=o)
 check('Success -> Ready re-absorbs cshake_block and key_block', bytes(o) == refmac('KMAC128', KEY, b'abc', b'', 256))
 L = kl(); L.setst(5, 'B', 1344); check('Hash_Verify on KMAC128 Xs=b = default tag_len_p admitted', L.st == VERIFY)
-L = kl(); L.setst(5, 'B', 2048); check('Hash_Verify Xs > b: min(Xs, b) = tag_len_p admitted, L = b', L.st == VERIFY and L.L == 1344)
+L = kl(); L.setst(5, 'B', 2048); check('Hash_Verify Xs > b -> Invalid: L enters the MAC', L.se == SE_INV)
 L = kl(); L.setst(5, 'B', 128); check('Hash_Verify Xs=128 != tag_len_p=b -> Invalid (MR12)', L.se == SE_INV)
 for tlp in (31, 36, 1344 + 8):
     check('provisioning tag_len_p=%d -> Invalid (MR12)' % tlp, Locker('KMAC128', K=KEY, tag_len_p=tlp).se == SE_INV)

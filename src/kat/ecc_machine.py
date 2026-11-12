@@ -181,6 +181,8 @@ class EccLocker:
         self.block_base = self.W; self.complete = True; return 'ok'
     def _to_ready(self, form, xs):
         if form == 'B' and xs >> 7: return self._inv()
+        secret = self.ext == 2 and self.outtype == 2      # sealed variant: a shared secret never stays in SecondPt in Ready
+        if secret: form, xs = 'B', (xs if form == 'B' else 0) | 2
         if form == 'B':
             gen, sec, hs = bytes(self.Generator), bytes(self.SecondPt), self.has('second')
             if xs >> 4 & 1: self.SecondPt[:] = gen; self.setf('second')
@@ -193,6 +195,7 @@ class EccLocker:
                 if xs >> 3 & 1: self.Hash[:] = bytes(len(self.Hash)); self.setf('hash', False)
                 if xs >> 6 & 1: self.Signature[:] = bytes(len(self.Signature)); self.setf('sig', False)
             if self.kind == 'mont': pass
+        if secret: self.outtype = 0
         self.state = RDY
         if self.kind == 'ed':
             self.msg_pass = 0; self.r = 0; self.kp = 0; self.ctx[:] = bytes(255); self.ctxlen = 0; self.Hh = self.Hp = None

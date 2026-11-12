@@ -196,7 +196,7 @@ class Locker:
                     if form != 'B' or not (32 <= xs < 1 << 32) or not self.policy & 1 and self.policy: return self.invalid()
                 elif xs and (xs % 8 or xs >= 1 << 32): return self.invalid()
             else:
-                if self.xof or form != 'B' or xs % 8 or min(xs, self.block_len) != self.tag_len_p or (self.policy and not self.policy & 2): return self.invalid()
+                if self.xof or form != 'B' or xs % 8 or xs != self.tag_len_p or (self.policy and not self.policy & 2): return self.invalid()
                 xs = self.tag_len_p                                # SET_TAG_LEN(b), L <- tag_len_p
             self.L = xs; self._finalize(); self.bb = self.lbl = 0
             if imm == OUTPUT_: self.ol = xs; self.st = OUTPUT_
@@ -441,6 +441,8 @@ class Locker:
                 if tag_len_p is not None: self.tag_len_p = tag_len_p
                 if self._tlp_bad() or st == VERIFY and self.L != self.tag_len_p: return self.invalid()   # MR12
         if se & 2 and (self.fam == 'aead' or st not in (ABSORB, LAST, OUTPUT_, SUCCESS)): return self.invalid()   # Sealed @ State unsupported
+        if self.fam != 'aead' and (self.bb > self.block_len or st in (OUTPUT_, BITS) and (self.bb >= self.t or not self.xof and self.d and not 0 < self.ol <= self.d)):
+            return self.invalid()                                      # block_base, out_len out of range at import
         self.st, self.se, self.sealed = st, 0, bool(se & 2)
 
 

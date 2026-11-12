@@ -468,4 +468,15 @@ def ocb_imp(nl):
     return AM.OCB.from_sc(AM.READY, sc).st == INV
 check('OCB import: nonce_len outside {0} and [6,120] is Invalid', [ocb_imp(n) for n in (0, 5, 6, 120, 121, 127)] == [False, True, False, False, True, True])
 
+def ocb_imp2(st, nl, ix):
+    sc = AM.OCB(bytes(16)).pack((0, 128), (0, 120), (nl, 7), (0, 1), (0, 128), (0, 128), (0, 128), (ix, 49), (0, 2), (0, 7))[0]
+    return AM.OCB.from_sc(st, sc).st == INV
+check('OCB import: nonce_len 0 outside Ready, index 0 after Hash_Absorb, index in Ready or above MAX_BLOCKS + 1 are Invalid',
+      [ocb_imp2(AM.ABSORB, 0, 1), ocb_imp2(AM.ABSORB, 96, 0), ocb_imp2(AM.READY, 0, 1), ocb_imp2(AM.ABSORB, 96, 2**48 + 2), ocb_imp2(AM.ABSORB, 96, 1)] == [True, True, True, True, False])
+def cmac_imp(st, lb, a, al):
+    sc = AM.CMAC(bytes(16)).pack((0, 128), (0, 128), (lb, 32), (a, 1), (al, 1))[0]
+    return AM.CMAC.from_sc(st, sc).st == INV
+check('CMAC import: last_block_len above b, flags set in Ready, absorbed_all clear in Hash_Output are Invalid',
+      [cmac_imp(AM.ABSORB, 129, 0, 0), cmac_imp(AM.READY, 0, 1, 0), cmac_imp(AM.HOUT, 0, 1, 0), cmac_imp(AM.HOUT, 0, 1, 1), cmac_imp(AM.ABSORB, 0, 1, 0)] == [True, True, True, False, False])
+
 done()

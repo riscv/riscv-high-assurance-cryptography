@@ -210,6 +210,7 @@ A handler that skips the trapping instruction applies its retirement effects to 
 === Context Save Order
 
 Before any export, the saving mode saves the Locality Secret CSR values of the context, unless it holds them, and sets the Locality Secret CSRs that it owns to the values under which the images are to be restored; a hypervisor writes its own value to `skllocality` (<<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>).
+It also saves the `*llockerstatus` CSRs that less privileged modes of the context own (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
 
 . Save `klstart` (`kl.getks`).
 . Save `klnamedlocker` (`kl.getnl`).
@@ -248,13 +249,13 @@ If the handler clears a locker being provisioned or imported under Rule <<KLE-SR
 . Set the Locality Secret CSRs to the values in force when the images were saved (<<KLE-save-order>>, <<Zkl-ISA-priv.adoc#KLE-CSR-locality-groups>>) before any import; restore a value of the context that differs from them, such as the `skllocality` of a guest, after the last import and before `KLS`. A later import of a deferred locker needs the same values around it.
 . Restore the lockers other than the managed locker (<<KLE-save-order>>), with `klnamedlocker` = 32 between imports.
 . With `Zklio`:
-.. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it;
+.. restore `kliobuflen` (`kl.setbl`), which zeroes the buffer and sets `kliobuftop` to it, and read it back (`kl.getbl`): a value below the saved one means that this hart cannot hold the context;
 .. restore the buffer contents, if saved, with a `kl.input` whose `Xl` holds the saved `kliobuflen`, with `klnamedlocker` = 32, `klstart` = 0 and `kliobuftop` = `kliobuflen`;
 .. restore `kliobuftop` (`kl.setbt`), after the buffer, since a write of `kliobuflen` resets it.
 . If an image was saved for the managed locker, restore it last, with Form C or D `kl.mgmt`, transferring directly from memory (`kl.load` with `Xl` = `x0`) or through GPRs or vector registers, not through the KLIOBUF, which step 4 has restored.
 . Restore the saved value of `klnamedlocker`, or 32 if the handler has cleared the locker it named instead of saving it.
 . Restore `klstart` after every other KLE instruction (`kl.setks`).
-. Write the `*llockerstatus` fields that the restoring mode owns: Clean for a restored locker, _Off_ for a locker whose restoration is deferred, and Initial for a cleared locker. Then write `KLS`, after those CSRs (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
+. Write the `*llockerstatus` fields that the restoring mode owns: Clean for a restored locker, _Off_ for a locker whose restoration is deferred, and Initial for a cleared locker. Restore the `*llockerstatus` CSRs of the less privileged modes of the context. Then write `KLS`, after those CSRs (<<Zkl-ISA-priv.adoc#KLE-KLS-field-in-mstatus>>).
 
 The getter and setter instructions are the recommended way for software to access `klnamedlocker`, `kliobuflen`, `kliobuftop` and `klstart` (<<Zkl-ISA-unpriv.adoc#KLE-instruction-getter-setter>>).
 
@@ -653,6 +654,7 @@ Arguments arrive in `a0`–`a6`; `error` is the caller's error handling, not sho
 `import_scc n, rs` stands for the import code of <<KLE-import-code>> with `t0` = `n` and `t6` = `rs`. It changes `vtype`, but no `a` register.
 Most examples have `b` = 128: a 16-byte block is processed with `vl` = 16 and SEW = 8, so `KLLEN` = 128, and a shorter piece of `p` bytes with `vl` = `p`, so `KLLEN` = 8 {times} `p`.
 Most listings omit the `kl.getst` that checks, before an output is used, that the locker is still in a Valid State (<<KLE-reading-locker-state>>). A usage instruction on a locker that a handler has cleared or invalidated performs no operation and writes zeros.
+<<KLE-pseudocode-keystream-modes>> keeps the check, because those zeros would leave the plaintext in its output.
 
 // ////////////////////////////////////////////////////////////////////////////
 
@@ -820,7 +822,7 @@ The following listing encrypts any number of bytes with CFB8, that is, with an S
 ----
 
 CBC and CFB8 decryption differ from the listings above only in the State: `kl_state_decrypt` replaces `kl_state_encrypt`.
-An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with Form C `kl.exec` instructions that return keystream blocks, except that OFB has no counter, so the `kl.setst` into _Set_Aux_Value_ is omitted.
+An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with Form C `kl.exec` instructions that return keystream blocks, except that OFB has no counter, so the `kl.setst` with immediate `kl_state_set_aux_value` is omitted.
 
 [[KLE-keystream-modes-example]]
 === CTR/XCTR Keystream Generation
@@ -853,6 +855,9 @@ An OFB CC (State _Operate_) is used as in <<KLE-keystream-modes-example>>, with 
   sub       a3, a3, t1
   bnez      a3, 1b
 2:
+  kl.getst  t1, K0
+  li        t2, kl_state_operate
+  bne       t1, t2, error         # K0 inert: CT holds PT, erase it
 ----
 
 === XEX/XTS Modes
@@ -1273,7 +1278,8 @@ The ECC States have no named constants, so the listing writes them by number (<<
 * *Points.* The listing returns the ephemeral public key for the peer.
 The peer's public key `Q` arrives encoded as <<Zkl-ISA-machines.adoc#KLE-ECC>> specifies: its X coordinate, then its Y coordinate, each 32 bytes little-endian.
 _Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid point.
-* *The check after the first `kl.derive`.* A `kl.derive` from a locker in _Failure_ makes that locker _Invalid_ and leaves `K0` unchanged, so `K` would be derived without `Z`; the `kl.getst` that follows rejects that case.
+* *The checks after `kl.derive`.* A `kl.derive` from a locker in _Failure_ makes that locker _Invalid_ and leaves `K0` unchanged, so `K` would be derived without `Z`; the `kl.getst` that follows rejects that case.
+The same check on `K0` after the second `kl.derive` rejects a `K2` that did not receive `K`.
 * *FixedInfo* takes at most 16 bytes here; a longer one is absorbed in chunks, as in <<KLE-pseudocode-hash>>.
 
 [[KLE-pseudocode-ECDH-KDF]]
@@ -1328,6 +1334,8 @@ _Point_Mul_ validates `Q`, and transitions to _Failure_ if it is not a valid poi
   kl.exec   K0, v0                # absorb FixedInfo
   kl.setst  K0, #kl_state_hash_output # pad: the digest is K
   kl.derive K2, K0, t1            # K into the AES-256 key; K0 to Success
+  kl.getst  t3, K0
+  bne       t3, t4, error         # K0 not in Success: K did not enter K2
 ----
 
 *Sealed variant.* With _MachineExtension_ = 2 in the ECC SCC, the same listing also keeps `Z` and `K` from software that controls the lockers (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>).
