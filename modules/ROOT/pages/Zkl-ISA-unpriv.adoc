@@ -390,6 +390,8 @@ It is present when an SCC has _AuxDataLen_ {ge} 2, and lets an implementation de
 In the rest of the document, “metadata” refers to the first kind.
 The implementation qualifier is always called `IMPQUAL`.
 
+The MDH, and with it the Machine, the State and the policies, is a public value of every operation that uses it (<<KLE-def-public>>), since `kl.getmd*` returns it in every mode and State.
+
 <<KLE-metadata-header>> summarizes the MDH fields, which the following subsections describe.
 
 [[KLE-metadata-header]]
@@ -463,7 +465,8 @@ This suits Machines that use the KLE interface for uniformity rather than for co
 
 The two bits of _SCProtection_ select the side-channel protection of a CC independently: bit 0 adds differential side-channel protection, and bit 1 adds the detection of injected faults.
 The value of the field is the _level_ of the CC.
-Every level is free of timing leakage in its protected operations (below): the same cryptographic operation on the same number of input units takes the same time in the KLE unit, whatever the values of the key, of the internal state, of the input data and of any random value drawn for the operation, except for the dependence that the Machine allows (below).
+Side-channel protection, timing included, protects the _secrets_ of an operation, not its _public values_ (<<KLE-def-public>>).
+Every operation of the KLE unit must have <<KLE-def-DIEL>>.
 
 [[KLE-SC-protection-levels]]
 .Levels of _SCProtection_
@@ -485,13 +488,46 @@ Wherever this specification compares levels, it uses this ordering, not the nume
 
 cite:[riscvPlatformSecurityModel] gives the threat model and security concepts in which these levels are used.
 
-A level applies only to the _protected_ operations of a Machine: those that handle a secret, and those that the list below keeps protected.
-Their execution time may depend on a secret only where the Machine states it: that of ML-DSA, for instance, may depend on the number of iterations of its rejection loops (<<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>).
-Every protected operation is free of timing leakage in this sense at every level, and the export and import of a locker are always protected (<<KLE-KLF>>).
-An _exempt_ operation, such as signature verification, is one that the list below exempts; it needs no side-channel protection, no timing leakage protection, and no detection of or recovery from injected faults.
+[[KLE-def-public,public values]]Definition: _Public values and secrets_.::
++
+--
+The _public values_ of an operation are the values that it uses and that this specification designates public: the MDH (<<KLE-Metadata>>), the operands that control the instruction (<<KLE-public-operands>>), the public fields of the Content (Rule <<KLE-GR-scc-clear-blocks>>), and the values of Rule <<Zkl-ISA-machines.adoc#KLE-MGR-public-values>>.
+[[KLE-def-secrets,secrets of an operation]]Every other value that the operation uses is one of its _secrets_, whatever produced it.
+--
 
-The exempt operations are signature verification (ECDSA, SM2, EdDSA and ML-DSA), checks of public inputs alone, such as the ML-KEM encapsulation-key checks, and, in a locker that holds only a public key, every Machine operation that neither draws nor produces a secret.
-These remain protected, also in such a locker: MAC and tag verification, which compares against a secret value; ML-KEM encapsulation, which draws a secret; the validation of a point that a secret scalar then multiplies; key generation; public-key derivation; and unkeyed hashing, whose input may be secret.
+[NOTE]
+====
+The secrets of an operation include:
+
+* every field of the Content outside the public fields (Rule <<KLE-GR-scc-clear-blocks>>) that is not a public value, such as a key, a private key, a preset IV or nonce, a shared secret or the internal state of a hash, also while an operation loads it or `kl.derive` moves it into another locker (Rule <<KLE-GR-shared-secret>>), whatever produced it, and even where _Transparent_ = 1 exports it in clear (<<KLE-Transparent-bit>>);
+* the plaintext of an encryption or a decryption, the ciphertext of a symmetric decryption, associated data, an IV, nonce or tweak that software supplies, unless it is a tag to verify, the message that a hash, XOF or MAC Machine absorbs, to generate a tag or to verify one, and the message and context string of a signature generation, such as those of the signing passes of EdDSA (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>), and the message that the verification pass of EdDSA absorbs, whose digest alone is public (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-public-values>>);
+* every other output, such as the ciphertext or tag of a symmetric Machine, also where an encryption uses the tag that it computes as an IV, such as the SIV of GCM-SIV, a keystream, or the output of a hash, MAC or XOF, which software or `kl.derive` may use as a key (<<Zkl-ISA-machines.adoc#KLE-derive-endpoints>>);
+* every random value drawn for the operation;
+* for the export and import of a locker, the CSK of its _SCProtection_ level (<<KLE-CSK-requirements>>), the keys derived from it and the Locality Secrets (<<KLE-SCC-AEAD>>);
+* every other value that is computed from a secret and is not a public value, such as the internal state, the value that a verification compares to a tag (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-tag-verify>>), or which key an ML-KEM decapsulation places in `sharedkey`; and
+* the number of iterations of any other loop that depends on a secret, as for a variable-time inversion or a scalar multiplication that skips the leading zero bits of the scalar.
+====
+
+[[KLE-def-DIEL,DIEL]]Definition: _Data-Independent Execution Latency (DIEL)_.::
+An operation has DIEL if its execution latency is independent of its secrets and of the parts of its operands that it does not use.
+
+It is strongly recommended that neither the non-architectural state that an operation leaves, such as that of caches and predictors, nor its use of a resource that it shares with other code depend on its secrets.
+
+[NOTE]
+====
+DIEL is not constant time: the latency may depend on any public value.
+The parts of an operand that an operation does not use include the tail elements of a vector register and the unused bits of an input, where software may hold a secret.
+
+DIEL is modeled on the property that the `Zkt` and `Zvkt` extensions attest for their instructions, with the secrets in place of the data operands that an instruction uses.
+It covers fewer values: `Zkt` and `Zvkt` cover every data operand only because an instruction cannot tell a secret from a public value, whereas the latency of a `kl.exec` may depend on an input that the Machine takes as public, such as a tag to verify or the digest of a signature verification.
+KLE requires neither `Zkt` nor `Zvkt`: software that handles a secret outside the KLE unit, such as plaintext, relies on them for the instructions it uses.
+====
+
+The protections that a level adds to DIEL apply to the export and import of a locker, which are always protected (<<KLE-KLF>>), and otherwise only to the _protected_ operations of a Machine, those that use a <<KLE-def-secrets,secret>>, and only as far as the cryptographic method needs them.
+An _exempt_ operation, one that uses no secret, needs only DIEL.
+
+Exempt operations include a signature verification that uses only public values, such as a digest, public key and `ctx` that software loaded for it and, for ECDSA and SM2, a public `Generator` (<<Zkl-ISA-machines.adoc#KLE-ECC>>); checks of public inputs alone, such as the ML-KEM encapsulation-key checks; and the load of a public field.
+These remain protected: a signature verification that uses a secret, such as a `Generator` that is not public or a public key that an import restored (<<Zkl-ISA-machines.adoc#KLE-ECC>>); the verification pass of pure EdDSA, which absorbs the message, a secret, although the `kl.exec` of _Sign_Verify_ that uses its digest may be exempt (<<Zkl-ISA-machines.adoc#KLE-EdDSA>>); a scalar multiplication, including the validation of its peer's point or of a `Generator` that is not public, which are its secrets; MAC and tag verification, which compares against a secret value; ML-KEM encapsulation, which draws a secret; key generation; public-key derivation; and unkeyed hashing, whose input may be secret.
 
 (((KLE, Machine, side-channel protection variants)))
 A side-channel-protected Machine is an implementation variant of the unprotected one, distinguished architecturally only by the _SCProtection_ field of the MDH.
@@ -1072,6 +1108,10 @@ Each unit keeps its own information, and the two values can still be explicitly 
 +
 `kl.mvin` and `kl.mvout` keep the two independent by design: their `klstart` is a locker offset that accumulates across instructions, while `vstart` tracks the vector register.
 
+[[KLE-public-operands,public operands]]
+The operands that control an instruction are public values (<<KLE-def-public>>): its register numbers, immediate and address, `KLLEN`, `klstart`, `vl`, `vtype`, `kliobuftop` and a GPR operand that selects what it does or gives a length, and with them the number of input units.
+No other GPR operand, such as a CTR counter, is a public value.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[KLE-management-operations]]
@@ -1449,7 +1489,7 @@ It sets the locker's _State_ to _Unconfigured_ and releases its KLF resources.
 It is a configuration instruction, not a usage instruction: the _UsagePolicy_ does not restrict it, nor can the Machine (<<KLE-instruction-properties>>).
 A `kl.clear` that clears the named locker sets `klnamedlocker` to 32 (Rule <<KLE-GR-klnamedlocker-updates>>).
 
-A `kl.clear` sets to Dirty every `*llockerstatus` field in effect for its locker, and every `KLS` field in effect, if it changes the locker or if any of those `*llockerstatus` fields is _Off_ (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
+A `kl.clear` sets to Dirty every `*llockerstatus` field in effect for its locker, and every `KLS` field in effect, if it changes the locker (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>); on a locker with an _Off_ field in effect it raises a KLE locker-Off exception instead (<<KLE-destructive-config>>).
 It also sets every `KLS` field in effect to Dirty if it changes `klnamedlocker`.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1464,8 +1504,9 @@ It unconfigures every locker, as `kl.clear` on each would.
 With `Zklio`, it also unconfigures the KLIOBUF by setting `kliobuflen` and `kliobuftop` to 0.
 The contents become inaccessible and are erased only as <<KLE-destructive-config>> requires.
 In every case it sets `klstart` to 0, zeroizes the three authentication registers of <<KLE-KLF>>, and writes 32 to `klnamedlocker` (Rule <<KLE-GR-klnamedlocker-updates>>).
-As `kl.clear` does, it sets to Dirty every `*llockerstatus` field in effect for each locker that it changes or for which any of those fields is _Off_.
-It sets the `KLS` fields in effect to Dirty if it changes a locker, `kliobuflen`, `kliobuftop`, `klstart`, `klnamedlocker` or an authentication register, or if any `*llockerstatus` field in effect is _Off_.
+As `kl.clear` does, it sets to Dirty every `*llockerstatus` field in effect for each locker that it changes.
+It sets the `KLS` fields in effect to Dirty if it changes a locker, `kliobuflen`, `kliobuftop`, `klstart`, `klnamedlocker` or an authentication register.
+It accesses every locker (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>): if any locker has an _Off_ field in effect, it raises a KLE locker-Off exception and changes nothing (<<KLE-destructive-config>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1490,19 +1531,20 @@ A destination with a different KLE unit would drop the ADS anyway.
 === Destructive Configuration Instructions
 
 `kl.clear` and `kl.clearall` (<<KLE-instruction-clear>> and <<KLE-instruction-clearall>>) are two of the _destructive configuration instructions_: the configuration instructions, other than `kl.setste`, that discard the CC in a locker without reading it.
-`kl.setste` also discards the Content of its locker (Rule <<KLE-GR-clear-locker-content-error-state>>), but it is not one of them: it leaves `klnamedlocker` unchanged (Rule <<KLE-GR-klnamedlocker-updates>>), and it is not exempt from the KLE locker-Off exception.
+`kl.setste` also discards the Content of its locker (Rule <<KLE-GR-clear-locker-content-error-state>>), but it is not one of them: it leaves `klnamedlocker` unchanged (Rule <<KLE-GR-klnamedlocker-updates>>).
 The other destructive configuration instructions are:
 
 * a provisioning- or import-opening `kl.mgmt` (<<KLE-instruction-mgmt>>), which zeroizes the locker before configuring it;
 * `kl.clone` and `kl.rename` (<<KLE-instruction-clone>>), which replace the CC of their destination locker with that of the source; and
 * `kl.swap` (same section), a special case that overwrites each of its lockers with the CC of the other, so nothing is lost.
 
-A destructive configuration instruction destroys the replaced CC immediately after Rule <<KLE-GR-management-check-order>>'s checks, including `kl.mgmt`'s MDH operand check, regardless of the subsequent outcome.
+A destructive configuration instruction other than `kl.clone` destroys the replaced CC immediately after Rule <<KLE-GR-management-check-order>>'s checks, including `kl.mgmt`'s MDH operand check, regardless of the subsequent outcome.
+A `kl.clone` destroys it only when it raises no exception, so that an exception leaves its destination unchanged (<<KLE-instruction-clone>>).
 It performs no operation if it names `KLNL` while `klnamedlocker` = 32 (Rule <<KLE-GR-outcome-inert>>), or if `kl.clone`, `kl.rename` or `kl.swap` has identical source and destination (<<KLE-instruction-clone>>).
 
-Item 6 of Rule <<KLE-GR-management-check-order>> gives the accesses exempt from the KLE locker-Off exception; no access of a `kl.clone`, `kl.rename` or `kl.swap` on two lockers is exempt.
-// So is any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker, which performs no operation (<<KLE-instruction-clone>>).
-// Every other access raises it: the source access of `kl.clone` and `kl.rename`, either access of `kl.swap`, and every access by another instruction, such as `kl.load`, `kl.mvin` or `kl.setste`, even one that writes the locker without reading it.
+A destructive configuration instruction is not exempt from the KLE locker-Off exception (item 6 of Rule <<KLE-GR-management-check-order>>): one that accesses a locker with an _Off_ field in effect raises it and changes nothing, although it would only discard the CC there, and a `kl.clearall` raises it if any locker has such a field.
+No instruction replaces an _Off_ field with _Dirty_; only the mode that owns the field changes it (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
+A `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker performs no operation and raises no KLE locker-Off exception (<<KLE-instruction-clone>>).
 
 KLF capacity that `kl.mgmt` or `kl.clone` allocates to a locker reads as zero, to the locker's Machine and to every architectural access, until written.
 An implementation that supports a level with _SCProtection_[1] = 1 (<<KLE-SC-protection-levels>>) must also zeroize at once the Content and any ADS of every locker that transitions to an Error State (Rule <<KLE-GR-clear-locker-content-error-state>>) or whose CC is discarded by `kl.clear` or `kl.clearall`, or as the previous CC of the destination of `kl.rename` or `kl.clone`.
@@ -1881,17 +1923,18 @@ Description::
 Clones source locker `Ks` into destination locker `Kd`:
 
 * If source and destination are the same locker, the instruction performs no operation and sets no `*llockerstatus` or `KLS` field to Dirty (<<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>), even if the locker is _Unconfigured_, _Off_, or in a Configuration State; in the last case, Rule <<KLE-GR-outcome-config-state>> does not apply.
-* If they are different lockers and neither of them is `KLNL` while `klnamedlocker` = 32, the instruction first clears the destination, as `kl.clear` would, even if it then raises an exception (<<KLE-destructive-config>>); a KLE locker-Off exception for either locker precedes this step and leaves the destination unchanged.
-With that step, `klnamedlocker` becomes 32 if it named the destination.
-Once the destination is cleared, every `*llockerstatus` field in effect for it and every `KLS` field in effect are set to Dirty, whatever the outcome of the steps that follow.
-The source then decides the result:
-** An _Unconfigured_ source leaves the destination _Unconfigured_.
+* If they are different lockers and neither of them is `KLNL` while `klnamedlocker` = 32, the source decides the outcome:
 ** A source in a Configuration State raises a KLE privilege-violation exception (Rule <<KLE-GR-outcome-config-state>>).
-** A source in an Error State is cloned as its MDH alone (Rule <<KLE-GR-clear-locker-content-error-state>>).
-** Any other source is copied verbatim, with its internal data, MDH and internal state; if the available KLF capacity cannot hold the clone, the instruction instead raises a KLE out-of-memory exception.
-As the only exception to the verbatim copy, if the source has an interrupted checkpointable operation, the copy restarts it (Rule <<KLE-GR-long-running-restart>>): its progress is zeroed and the values drawn or computed for the operation are discarded, as at an import that completes without `Content2`.
+** A source in a Valid State whose clone the available KLF capacity, counting that which the destination holds, cannot hold raises a KLE out-of-memory exception.
+** Any other source replaces the CC of the destination, which is discarded as by `kl.clear` (<<KLE-destructive-config>>).
+An _Unconfigured_ source leaves the destination _Unconfigured_, and a source in an Error State is cloned as its MDH alone (Rule <<KLE-GR-clear-locker-content-error-state>>).
+Any other source is copied verbatim, with its internal data, MDH and internal state, except that if the source has an interrupted checkpointable operation, the copy restarts it (Rule <<KLE-GR-long-running-restart>>): its progress is zeroed and the values drawn or computed for the operation are discarded, as at an import that completes without `Content2`.
 Like the source, the copy stays usable whatever the current Locality Secrets.
-`kl.clone` is not a usage instruction, so no _UsagePolicy_ restricts it (Rule <<KLE-GR-usage-policy>>).
+`klnamedlocker` becomes 32 if it named the destination.
+Every `*llockerstatus` field in effect for the destination and every `KLS` field in effect are set to Dirty.
+* A `kl.clone` that raises an exception, even one raised after Rule <<KLE-GR-management-check-order>>'s checks, leaves the destination, `klnamedlocker` and every `*llockerstatus` and `KLS` field unchanged (Rule <<KLE-exception-state-change>>).
+A destination with an _Off_ field in effect raises a KLE locker-Off exception, as a source with one does (Rule <<KLE-GR-management-check-order>>).
+* `kl.clone` is not a usage instruction, so no _UsagePolicy_ restricts it (Rule <<KLE-GR-usage-policy>>).
 
 `kl.rename`::
 If `Ks` and `Kd` name the same locker, through `KLNL` too, `kl.rename` performs no operation, even if the locker is _Off_, and sets no `*llockerstatus` or `KLS` field to Dirty.
@@ -2131,6 +2174,7 @@ The clear blocks of an SCC hold no secret field unless its _Transparent_ bit is 
 * `SCC_ClearLen1` is the number of whole blocks filled by the _public fields_ of the Machine, which its Serialized Content places first, and by any padding that it places after them; it is 0 for a Machine that designates no public field.
   Which fields are public depends only on the _Machine_, _MachineExtension_ and _KeyType_ of the MDH; their number of blocks depends also on the _MachinePolicy_, which determines the fields present (<<KLE-length-rule>>).
   In every State and at every point of an operation, a public field holds only zero or a value that its cryptographic role makes public, such as a public key, a ciphertext or a signature.
+  A public field, and every value that it holds, is a public value (<<KLE-def-public>>).
   It never holds a secret key, a SKID, a value derived from a secret field other than such a public value, or an intermediate value of an operation (Rule <<KLE-GR-long-running-progress>>) other than a part of its public result.
   A public field is never a `kl.derive` destination.
 * `SCC_ClearLen2` is implementation-defined and documented, is at most _AuxDataLen_ − 2, and depends only on `IMPQUAL` and on the MDH fields other than _ADSDropped_.
@@ -2194,7 +2238,7 @@ On an inert locker they act as Rule <<KLE-GR-outcome-inert>> states.
 [[KLE-GR-outcome-inert,GR13.2]]{eightnbsp}GR13.2:: _Inert locker._ An instruction on an inert locker falls through (Rule <<KLE-GR-outcomes>>), with the results of <<KLE-insn-outcomes-inert>>, except:
 +
 --
-* a destructive configuration instruction or a `kl.setste` on an _Unconfigured_ or Error-State locker acts as on any locker: the first raises an exception only after its destructive step (Rule <<KLE-exception-state-change>>), the second raises none (Rule <<KLE-GR-error-state-can-be-reconfigured>>); on a `KLNL` that names no locker, both fall through;
+* a destructive configuration instruction or a `kl.setste` on an _Unconfigured_ or Error-State locker acts as on any locker: the first raises an exception only after its destructive step (Rule <<KLE-exception-state-change>>), or, if it is a `kl.clone`, with its destination unchanged (<<KLE-instruction-clone>>); the second raises none (Rule <<KLE-GR-error-state-can-be-reconfigured>>); on a `KLNL` that names no locker, both fall through;
 * a `kl.clone`, `kl.rename` or `kl.swap` acts as <<KLE-instruction-clone>> states whichever of its lockers is inert, and falls through if either is a `KLNL` that names no locker;
 * a `kl.derive` falls through only if either operand is a `KLNL` that names no locker, if its source is inert, or if its source is in a Valid State and its destination is inert; otherwise it is checked as Rule <<KLE-GR-derive-check-order>> states;
 * an inspection instruction on an Error-State locker performs its operation on the MDH, which is all that the locker holds, with the results of <<KLE-insn-outcomes-inert>>.
@@ -2254,7 +2298,7 @@ Every implementation-defined field or subfield (<<KLE-MachineUse>>) is set to 0.
 Any other exception leaves the KLE state unchanged, except for the following changes, which the instruction makes before or while it raises the exception, and which are kept and not rolled back when the exception is taken:
 +
 --
-* the destructive step (<<KLE-destructive-config>>) of a provisioning- or import-opening `kl.mgmt` or of a `kl.clone`, which zeroizes the locker, resp. clears the destination as `kl.clear` would (<<KLE-instruction-clone>>), updates `klnamedlocker` (Rule <<KLE-GR-klnamedlocker-updates>>), and sets to Dirty every `*llockerstatus` field in effect for that locker and every `KLS` field in effect;
+* the destructive step (<<KLE-destructive-config>>) of a provisioning- or import-opening `kl.mgmt`, which zeroizes the locker, updates `klnamedlocker` (Rule <<KLE-GR-klnamedlocker-updates>>), and sets to Dirty every `*llockerstatus` field in effect for that locker and every `KLS` field in effect;
 * the zeroization of `SIV`, `IMPQUAL` and `SIV2` by an import-opening `kl.mgmt` (<<KLE-MVR-open>>);
 * on a KLE missing-CSK exception with `mtval` = 8 + L, with `Smklmultcsk` and `mklcfg` implemented, setting _CSKSel_ to L as a write of L to `mklcfg` with _CSKErase_ = 0 does (<<Zkl-ISA-priv.adoc#KLE-CSR-mklcfg>>); under the first CSK establishment way, this also abandons a partially written `mklcsk` group;
 * the effects of a restart of a checkpointable operation (Rule <<KLE-GR-progress-discard>>, event 1) that precedes a KLE RBG-unavailable exception: the zeroing of the progress field _P_, the destruction of the material, and the clearing of the flag of an ephemeral random value (Rule <<KLE-GR-long-running-progress>>);
@@ -2350,7 +2394,7 @@ Subsequent usage instructions follow Rule <<Zkl-ISA-machines.adoc#KLE-MGR-policy
 +
 --
 . a `kl.mgmt` that names a locker and raises no exception sets `klnamedlocker` to the number of that locker, whether it opens, completes or falls through on an inert locker (an _Unconfigured_ or Error-State one); so does a `kl.mgmt` that reaches the destructive step of a provisioning or import opening, even if it then raises an exception (Rule <<KLE-exception-state-change>>); any other `kl.mgmt` that raises an exception leaves it unchanged; a `kl.mgmt` issued with `KLNL` while `klnamedlocker` is 32 falls through and leaves it 32 (Rule <<KLE-GR-outcome-inert>>);
-. a destructive configuration instruction other than `kl.mgmt` and `kl.swap` that clears or overwrites the named locker as its destination, whether it names it by number or as `KLNL` and whatever its _State_, sets `klnamedlocker` to 32, even if it then raises an exception, as a reconfiguration of that locker would; `kl.clearall` also sets it to 32;
+. a destructive configuration instruction other than `kl.mgmt` and `kl.swap` that clears or overwrites the named locker as its destination, whether it names it by number or as `KLNL` and whatever its _State_, sets `klnamedlocker` to 32, as a reconfiguration of that locker would; `kl.clearall` also sets it to 32;
 . a `kl.rename` on two lockers whose source is the named locker, or a `kl.swap` on two lockers one of which is the named locker, sets `klnamedlocker` to the number of the other locker, whatever the States of the two lockers, an _Unconfigured_ one included (<<KLE-instruction-clone>>).
 --
 
@@ -2423,7 +2467,7 @@ Rule <<KLE-GR-outcome-inert>> states what instructions do on an inert locker, an
 
 | <<KLE-instruction-clear,kl.clear>> {dagger}
 | Clears the locker; the `*llockerstatus` and `KLS` fields in effect become _Dirty_.
-| Writes nothing to the locker; every `*llockerstatus` field in effect becomes _Dirty_ if any of them was _Off_, and every `KLS` field in effect if one of those `*llockerstatus` fields was _Off_ or `klnamedlocker` changes.
+| Writes nothing to the locker; every `KLS` field in effect becomes _Dirty_ if `klnamedlocker` changes.
 | Writes nothing.
 
 4+| {dagger} `kl.clear` updates `klnamedlocker` as Rule <<KLE-GR-klnamedlocker-updates>> states.
@@ -2633,7 +2677,7 @@ A checkpointable operation makes the State transition of its instruction, if any
 * *Progress.* The MDH's _progress field_ _P_, _MachineUse_ or a subfield, records progress in an implementation-defined format.
 It is non-zero and monotonically increasing from the first precise halt of the current attempt until completion or restart, and zero otherwise.
 * *Interruption points.* Only the timing of the halt determines the interruption point.
-The set of interruption points, and the progress recorded at each, never depend on key material, a secret field, plaintext or ciphertext, or the value of any ephemeral random value drawn for the operation, except that, where the Machine states that the execution time may depend on the number of iterations of a loop, such as a rejection loop (<<Zkl-ISA-machines.adoc#KLE-ECC>>, <<Zkl-ISA-machines.adoc#KLE-PQC-ML-KEM>>, <<Zkl-ISA-machines.adoc#KLE-PQC-ML-DSA>>), they may depend on that number.
+The set of interruption points, and the progress recorded at each, never depend on the <<KLE-def-secrets,secrets>> of the operation; they may depend on its <<KLE-def-public,public values>>, such as the number of iterations of a rejection loop (Rule <<Zkl-ISA-machines.adoc#KLE-MGR-public-values>>).
 * *Intermediate state.* It keeps its intermediate results in the ADS and updates architected Content only at completion.
 Besides the changes that the semantics of the instruction make at its issue and retirement, it changes only _P_ and _AuxDataLen_ in the MDH, and the flag of an ephemeral random value (below) in _StateExtension_.
 _AuxDataLen_ depends only on the State and on the halt point.
@@ -2864,8 +2908,8 @@ KLE missing-CSK:: No CSK is configured: raised by every KLE instruction and KLE 
 The CSK of the level of an export or import is not in use: raised by the `kl.mgmt` instructions that <<KLE-CSK-requirements>> lists.
 This second condition is locker-state-dependent and is checked in those instructions' stated steps, after the applicable locker-Off check.
 
-KLE locker-Off:: An access to a locker marked _Off_, except the destination access of a destructive configuration instruction other than `kl.clone`, `kl.rename` and `kl.swap`, and any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker (<<KLE-destructive-config>>, <<KLE-instruction-clone>>, <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
-`kl.load`, `kl.mvin` and `kl.setste` are not exempt.
+KLE locker-Off:: An access to a locker marked _Off_, except any access of a `kl.clone`, `kl.rename` or `kl.swap` whose source and destination are the same locker (<<KLE-instruction-clone>>, <<Zkl-ISA-priv.adoc#KLE-CSR-llockerstatus>>).
+Every other access raises it, including one that only writes the locker, as by `kl.load`, `kl.mvin` or `kl.setste`, or only discards its CC, as by a destructive configuration instruction (<<KLE-destructive-config>>).
 
 [[KLE-third-group-ILL-grounds,Third Group of Illegal-Instruction Exception Grounds]]Third Group of Illegal-Instruction Exception Grounds::
 +
@@ -3581,8 +3625,6 @@ function SCC_Decrypt(AD, sep, SIV, C, K, len_AD, len_PC) = {
 }
 ----
 
-The comparison `tmp {ne} SIV` is performed in constant time.
-
 In the algorithms below, `CSK` is the CSK of the _SCProtection_ level of the locker that is exported or imported (<<KLE-CSK-requirements>>).
 
 [[KLE-SCC-eff-CSK]]
@@ -3595,9 +3637,7 @@ The sealing key `eff_CSK` binds the SCC to the entries of the HW Binding Group t
 `HW_KDF` must be a pseudorandom function of its inputs to a party that lacks the CSK, and to a party that lacks at least one non-zero value among `L1` and `L2`, even if that party knows the other inputs and chooses any number of CSKs (<<KLE-CSK-requirements>>, first way).
 An SCC whose _Locality_ names an entry of the HW Binding Group imports only where `HW_KDF` is the same: implementations that share such a Locality Secret agree on `HW_KDF` by the implementation-defined means by which they share it.
 `HW_KDF`, `SCC_KeyDeriv`, `SCC_Encrypt` and `SCC_Decrypt` have the protection of that level (<<KLE-KLF>>).
-At every level, they run in time independent of the CSK, `eff_CSK`, the derived keys, the Locality Secrets and the plaintext.
-It is strongly recommended that their memory accesses also be independent of these values.
-Hence, any data-dependent speculation and load value prediction should be disabled.
+At every level, they have <<KLE-def-DIEL>>, so the comparison `tmp {ne} SIV` reveals only its outcome.
 
 NOTE: HMAC-SHA-256 cite:[nist-fips-198-1] or KMAC256 cite:[nist-SP-800-185], keyed by `L1 {vvert} L2` and applied to the CSK, is suitable for `HW_KDF`; a function that XORs a value into the CSK, or is otherwise invertible in it, is not, since M-mode can choose the CSK under the first way.
 A level has at most 16 values of `eff_CSK`, the CSK included, so the derived keys stay cacheable.

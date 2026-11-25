@@ -279,11 +279,12 @@ class KLE:
     def clone(s, d, src):
         d, src = s._two(d, src)
         if d == NONE or src == NONE or d == src: return
+        m = s.md(src)            # an exception leaves the destination unchanged (<<KLE-instruction-clone>>)
+        if s.config(m): raise Trap('privilege_violation')
+        if mdh_get(m, 'State') != 0 and s.slots + s.L[d].slot == 0: raise Trap('out_of_memory')   # counting the destination's capacity
         s.free(d)
         if s.nl == d: s.nl = NONE
-        m = s.md(src)
         if mdh_get(m, 'State') == 0: s.L[d].mdh = m; return
-        if s.config(m): raise Trap('privilege_violation')
         s.alloc(d); s.L[d].mdh = m; s.L[d].content = s.L[src].content; s.L[d].tag = s.L[src].tag
     def rename(s, d, src):
         d, src = s._two(d, src)

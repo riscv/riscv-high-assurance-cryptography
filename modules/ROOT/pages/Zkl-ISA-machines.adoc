@@ -352,7 +352,8 @@ Whether zero is admissible depends on the Machine.
 --
 
 [[KLE-MGR-tag-verify,MR12]]MR12:: _Verification of a tag._
-A Machine that verifies a tag or a MAC without disclosing the value it computes does so in constant time, and transitions to _Success_ if the verification succeeds and to _Failure_ otherwise (Rule <<KLE-MGR-config-data-error>>).
+A Machine that verifies a tag or a MAC without disclosing the value it computes compares that value to the expected value with <<Zkl-ISA-unpriv.adoc#KLE-def-DIEL>>, so the comparison reveals only its outcome, not where the values differ.
+It transitions to _Success_ if the verification succeeds and to _Failure_ otherwise (Rule <<KLE-MGR-config-data-error>>).
 The instruction that provides the tag or MAC to verify performs the verification. It is:
 +
 --
@@ -459,6 +460,31 @@ Randomness that the implementation needs, such as masks, is supplied in advance,
 An internal algorithmic random value, such as a signing nonce or an ephemeral scalar, serves only the one instance of the scheme that requires it, and no other instance or purpose.
 It is never reused, not even when an interrupted operation restarts (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-progress-discard>>).
 Resuming copies of one interrupted operation, restored from one image, completes that one instance on the same inputs and is not a reuse.
+
+=== Public Values
+
+[horizontal]
+[[KLE-MGR-public-values,MR20]]MR20:: _Public values._
+Besides the MDH, the operands that control the instruction and the public fields of the Content, the public values of an operation (<<Zkl-ISA-unpriv.adoc#KLE-def-public>>) are:
++
+--
+* the lengths, counts and flags that the Machine sets only from the operands that control its instructions (<<Zkl-ISA-unpriv.adoc#KLE-public-operands>>) and from its State transitions, such as `tag_len`, `ctxlen`, `last_block_len`, `cumul_len`, `out_len` and `absorbed_all`, also where it holds them in the Content, and once an SCC import has authenticated and restored them;
+* an input operand that the Machine takes as a tag to verify, also where the method uses that tag as an IV, such as the SIV of a GCM-SIV decryption (<<KLE-GCM-SIV-mode>>), and one that it loads into a public field, such as a public key or the ciphertext of a key encapsulation; but, except as the next item allows, not one that it holds in another field, such as a digest to sign in `Hash`;
+* in a signature verification, the signature, and a digest of the message, such as `Hash` of the Elliptic Curve Machines or `mu` of ML-DSA, a public key or the context string `ctx` of EdDSA that software loaded by an input operand, wherever the Machine holds them, unless an operation has taken that value as a secret since, and the `k'` that an EdDSA verification pass computes where its `A` is public, but not once an import has restored it (<<KLE-EdDSA>>); but not the message itself, which the verification pass of pure EdDSA absorbs as a secret;
+* a value that the Machine computes only from public values, such as the precomputed multiples of a public `Generator` (<<KLE-ECC>>), also where it holds it, but not one that an import restored;
+* a value that the operation outputs as a signature or as the ciphertext of a key encapsulation, and what the State that it enters reveals;
+* the number of iterations of a rejection loop, which the method repeats on fresh candidates until it accepts one, also where a secret determines the candidates, as for `SampleNTT` of ML-KEM (<<KLE-PQC-ML-KEM>>), the rejection loops of ML-DSA, deterministic signing included (<<KLE-PQC-ML-DSA>>), and the signature retries of ECDSA and SM2 (<<KLE-ECC>>); and
+* a value that the description of a Machine designates public, such as a public `Generator` of the Elliptic Curve Machines and the values that they derive from it (<<KLE-ECC>>).
+--
++
+Only the number of iterations of a rejection loop is public: the latency of each iteration, and which check rejects it, are <<Zkl-ISA-unpriv.adoc#KLE-def-secrets,secrets>>.
++
+The digest of a message to verify is public although the message is a secret: the hash is one-way, so the digest reveals of the message only what the public signature and public key already do, against which anyone can test a guessed message.
+The message itself stays a secret wherever the KLE unit handles it, as in a hash, XOF or MAC Machine (<<KLE-hash-functions-MACs-XOFs>>): the operation that absorbs it is a protected one, and only the digest that it computes is public.
++
+NOTE: A public signature or digest lets whoever obtains it test a guessed message, which matters only for a message that an adversary can guess.
+A protocol that signs and then encrypts, such as CMS, JWS within JWE or OpenPGP, keeps the signature confidential as well, but a verification may still reveal the signature and the digest through its latency.
+Software that verifies signatures over confidential data that an adversary can guess cannot rely on the KLE unit to hide the data; the signer can prevent the guess by including an unpredictable value in the signed data.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1230,13 +1256,13 @@ NOTE: Zeroing `data_len` lets the second pass absorb and count the PT again.
 +
 --
 . `T <- compute_tag()`.
-. If `T[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>): `OUTPUT <- rx_tag[tag_len_p-1:0]`, and the locker transitions to State _Success_.
+. If `T[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared as Rule <<KLE-MGR-tag-verify>> states: `OUTPUT <- rx_tag[tag_len_p-1:0]`, and the locker transitions to State _Success_.
 . Otherwise: `OUTPUT <- zeros(tag_len_p)`, and the locker transitions to State _Failure_.
 --
  ** In State _Dec_Tag_Finalize_, a single Form D `kl.exec`:
 +
 --
-. If `compute_tag()[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared in constant time (Rule <<KLE-MGR-tag-verify>>), the locker transitions to State _Success_.
+. If `compute_tag()[tag_len_p-1:0]` = `rx_tag[tag_len_p-1:0]`, compared as Rule <<KLE-MGR-tag-verify>> states, the locker transitions to State _Success_.
 . Otherwise, the locker transitions to State _Failure_.
 --
  ** In a Machine with `TwoPTPasses`, `generated_siv` tells the two _Enc_Tag_Finalize_ apart: it is clear in _AEAD_Prepass_ and _AEAD_Prepass_Last_, and set in _Encrypt_ and _Enc_Last_Block_.
@@ -1485,9 +1511,9 @@ They apply the cited Machine Rules without restating them at each invocation.
 . `Xs` must be a multiple of 8 with `min(Xs, cap)` = `tag_len_p` (Rule <<KLE-MGR-tag-verify>>).
 . Any other `Xs` transitions the locker to Error State _Invalid_.
 
-`VERIFY_TAG(expected, len)`, with `len` = `tag_len_p` where the invocation omits it, is invoked by the single Form B `kl.exec` that verifies a tag or MAC (Rule <<KLE-MGR-tag-verify>>):
+`VERIFY_TAG(computed, len)`, with `len` = `tag_len_p` where the invocation omits it, is invoked by the single Form B `kl.exec` that verifies a tag or MAC (Rule <<KLE-MGR-tag-verify>>):
 
-. It verifies `INPUT[len-1:0]` against `expected[len-1:0]`, in constant time with the outcomes of Rule <<KLE-MGR-tag-verify>>.
+. It verifies `INPUT[len-1:0]` against `computed[len-1:0]`, with the outcomes of Rule <<KLE-MGR-tag-verify>>.
 . It consumes a value of fixed width `len` from `INPUT` under Rule <<KLE-MGR-fixed-width-input>>.
 
 
@@ -2478,7 +2504,7 @@ With `last_block_len` nonzero, that `kl.setst` transitions the locker to Error S
    It performs `OUTPUT <- trunc(checksum_P, tag_len)`, and the locker transitions to _Success_.
    A `KLLEN` smaller than `tag_len` violates the granularity of the State (Rule <<KLE-MGR-granularity>>).
 
-** In State _Hash_Verify_, a single Form B `kl.exec` completes decryption: `VERIFY_TAG(checksum_P)` (<<KLE-op-verify-tag>>) compares the `tag_len` least significant bits of `INPUT` with those of `checksum_P`, with the `tag_len` set on entering _Hash_Absorb_.
+** In State _Hash_Verify_, a single Form B `kl.exec` completes decryption: `VERIFY_TAG(checksum_P)` (<<KLE-op-verify-tag>>) compares the `tag_len` least significant bits of `INPUT` to those of `checksum_P`, with the `tag_len` set on entering _Hash_Absorb_.
 
 //
 
@@ -2703,7 +2729,7 @@ A `kl.exec` with `absorbed_all` = `true` transitions the locker to Error State _
 ** A Form B `kl.setst` with immediate `kl_state_hash_verify` enters _Hash_Verify_ by invoking `SET_TAG_LEN(b)` (<<KLE-op-verify-tag>>).
 With `absorbed_all` = `false`, the `kl.setst` transitions the locker to Error State _Invalid_.
 
-** In State _Hash_Verify_, a single Form B `kl.exec` verifies the tag by invoking `VERIFY_TAG(hash)` (<<KLE-op-verify-tag>>), which compares `INPUT[tag_len_p-1:0]` with `hash[tag_len_p-1:0]`, the first `tag_len_p`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2.
+** In State _Hash_Verify_, a single Form B `kl.exec` verifies the tag by invoking `VERIFY_TAG(hash)` (<<KLE-op-verify-tag>>), which compares `INPUT[tag_len_p-1:0]` to `hash[tag_len_p-1:0]`, the first `tag_len_p`/8 bytes of the CMAC, MSB~Tlen~ of cite:[nist-SP-800-38B] {sect}6.2.
 
 //
 
@@ -3324,7 +3350,7 @@ A non-zero `Xs` of a Form B `kl.setst` into _Hash_Output_ is at least 64 (<<KLE-
    . the Form B `kl.setst` that enters State _Hash_Verify_ invokes `SET_TAG_LEN(t)` (<<KLE-op-verify-tag>>):
      `min(Xs, t)` must equal `tag_len_p`;
    . in State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state[tag_offset+t-1 : tag_offset])` (<<KLE-op-verify-tag>>):
-     it compares `INPUT[tag_len_p-1:0]` with `state[tag_offset+tag_len_p-1 : tag_offset]`, the first `tag_len_p`/8 bytes of the HMAC.
+     it compares `INPUT[tag_len_p-1:0]` to `state[tag_offset+tag_len_p-1 : tag_offset]`, the first `tag_len_p`/8 bytes of the HMAC.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3580,7 +3606,7 @@ a Form A `kl.setst`, or `Xs` = 0, sets `L` {leftarrow} 0, for an unbounded outpu
 * with `L` = 0, `KMACXOF128` and `KMACXOF256` squeeze arbitrarily many bits and never transition to _Success_.
 --
 
- ** In State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state)` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len_p-1:0]` with `state[tag_len_p-1:0]`.
+ ** In State _Hash_Verify_, the single Form B `kl.exec` invokes `VERIFY_TAG(state)` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len_p-1:0]` to `state[tag_len_p-1:0]`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3883,7 +3909,7 @@ It performs:
 --
 
 ** In State _Hash_Verify_, which the decryption path enters by itself (Rule <<KLE-MGR-tag-verify>>), a single Form B `kl.exec` performs
-   `VERIFY_TAG(ASCON_TAG())` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len-1:0]` with the computed tag in constant time, and transitions the locker to _Success_ if they match and to _Failure_ otherwise.
+   `VERIFY_TAG(ASCON_TAG())` (<<KLE-op-verify-tag>>): it compares `INPUT[tag_len-1:0]` to the computed tag, and transitions the locker to _Success_ if they match and to _Failure_ otherwise.
 
 ////
 
@@ -4231,8 +4257,15 @@ It is defined for every Elliptic Curve Machine, and is unsupported Metadata wher
 
 With _MachineExtension_ = 2, the _sealed variant_, `Generator` always holds the default generator, as in the public-points variant, but both points are private, _Point_Mul_ may multiply `SecondPt`, and the shared secret is a sealed source (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-sealed>>) that no `kl.exec` emits (_Output_ below).
 It suits a key exchange whose key derivation runs in lockers.
-In it, a `kl.setst` that enters _Ready_ while `OutputType` = _shared secret_ acts as if bit 1 of `Xs` were set, also in Form A, and sets `OutputType` to _point_: `SecondPt` is erased, so that a sealed shared secret is never the public key of a signature verification, an operation that needs no protection (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+In it, a `kl.setst` that enters _Ready_ while `OutputType` = _shared secret_ acts as if bit 1 of `Xs` were set, also in Form A, and sets `OutputType` to _point_: `SecondPt` is erased, so that a sealed shared secret is never the public key of a signature verification, whose outcome is a public value (Rule <<KLE-MGR-public-values>>).
 It is defined for every Elliptic Curve Machine except those of <<KLE-EdDSA>>, and is unsupported Metadata where not implemented.
+
+A _public_ `Generator` is one with _MachineExtension_ {ne} 0, which fixes it to the default generator, and otherwise one that provisioning or a `kl.setst` set to the default; not one that software loaded or copied from `SecondPt`, or that an import restored, even where it equals the default.
+A public `Generator` is a public value (Rule <<KLE-MGR-public-values>>), and so are:
+
+* the precomputed multiples of a public `Generator`, which the Machine computes only from public values;
+* in the operation that derives it, a public key that the operation derives from the private key of the locker with a public `Generator`; and
+* in a signature verification, a public key that a scalar multiplication derived from the private key of the locker with a public `Generator`, wherever the Machine holds it, unless an operation has taken it as a secret since, and not once an import has restored it.
 
 All values (integers, coordinates, etc.) are in little-endian format, except the shared secret of the Weierstrass curves that _Output_ emits, which follows the byte order of its standard (see _Output_ below).
 
@@ -4356,7 +4389,7 @@ It sets `HasSecondPt`, `HasHash`, resp. `HasSignature` for a converted `SecondPt
  ** `Progress`: integer, held in bits [13:2] of the MDH field _MachineUse_ (<<KLE-ECC-MachineUse>>): the
     implementation-defined progress of a checkpointable operation.
  ** `block_base`: 8 bits, held in bits [15:8] of the MDH field _AuxInfo_. The field _W_ of Rule <<KLE-MGR-load-long-field>>, in bytes, of the “set” and “output”
-    operations; it is public, since the instructions that the transfer issues determine it. Provisioning and a system-specific import zero it, and every `kl.setst` zeroes it; an immediate assignment of _Set_Generator_ or _Set_Scalar_ then sets it to the field size.
+    operations; it is public (Rule <<KLE-MGR-public-values>>), since the instructions that the transfer issues determine it. Provisioning and a system-specific import zero it, and every `kl.setst` zeroes it; an immediate assignment of _Set_Generator_ or _Set_Scalar_ then sets it to the field size.
     It is distinct from the counters `H.block_base` and `H'.block_base` of the hash instances of <<KLE-EdDSA>>.
  ** `Generator` (X, \{Y}): one or two `b`-bit strings representing the X {and Y} coordinate\{s}.
  ** `SecondPt` (X, \{Y}): one or two `b`-bit strings representing the X {and Y} coordinate\{s}.
@@ -4696,7 +4729,8 @@ transitions the locker to Error State _Invalid_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-
   . If `P` is `SecondPt` and _MachineExtension_ = 1, the locker transitions to Error State _Invalid_.
   . `R` {leftarrow} `X25519(Scalar, P)`, resp. `X448(Scalar, P)`.
   . If `R` is the all-zero string, the locker transitions to _Failure_, and `SecondPt` and `HasSecondPt` are left
-    unchanged. The check is made in constant time; cite:[RFC7748] {sect}6 makes it optional.
+    unchanged; cite:[RFC7748] {sect}6 makes this check optional.
+    By <<Zkl-ISA-unpriv.adoc#KLE-def-DIEL>>, the check reveals only whether `R` is all zero.
   . Otherwise `SecondPt` {leftarrow} `R`, `HasSecondPt` is set, `OutputType` {leftarrow} _shared secret_ if `P` is
     `SecondPt`, and _point_ otherwise, and the locker transitions to _Output_.
 
@@ -4786,7 +4820,11 @@ In addition to the fields of <<KLE-ECC>>:
   completed, or 3 once the verification pass has completed; the value 1 that leaving signing pass 1 sets is held only until
   the next entry condition is checked.
 * `k'`: `b` bits, `bin(int(H(dom {vvert} R {vvert} A {vvert} M)) mod L, b)`, the whole hash read as a little-endian integer and
-  reduced modulo `L`, computed by signing pass 2 or by the verification pass, and zero otherwise; it is always below `L`. It is not secret: anyone holding `R`, `A` and `M` can compute it.
+  reduced modulo `L`, computed by signing pass 2 or by the verification pass, and zero otherwise; it is always below `L`.
+  Anyone holding `R`, `A`, `ctx` and `M` can compute it.
+  With `msg_pass` = 3, it is the digest of the message that the verification pass computes, and a public value if `A`, which is `SecondPt`, is public (<<KLE-ECC>>, Rule <<KLE-MGR-public-values>>), but not once an import has restored it.
+  The message that the pass absorbs, and the state of `H` while it does, stay secrets.
+  Signing pass 2 computes `k'` from the message of a signature generation, a secret, and it is then a secret too.
 * `r`: `b` bits, the secret scalar produced by the first signing pass, reduced modulo the
   group order `L`.
 
@@ -4911,7 +4949,7 @@ State Machine::
 ... requires `msg_pass` = 1;
 ... initializes `H` with `dom {vvert} R {vvert} A`, with `R` from `Signature` and `A` derived from the seed;
 ... initializes a second instance `H'` with `dom {vvert} prefix`, as in pass 1; `H'` absorbs the same message bytes and recomputes `r`, which finalization compares with the `r` of pass 1.
-.. `Xs` = 2, *verification pass*:
+.. `Xs` = 2, *verification pass*, a protected operation, since the message that it absorbs is a secret (Rule <<KLE-MGR-public-values>>):
 ... requires that signature verification be allowed and that `HasSignature` and `HasSecondPt` hold;
 ... sets `msg_pass` {leftarrow} 3 and `k'` {leftarrow} 0;
 ... initializes `H` with `dom {vvert} R {vvert} A`, with `R` from `Signature` and `A` = `SecondPt`.
@@ -5000,7 +5038,7 @@ A `kl.setst` that enters _Msg_Absorb_, or leaves it for _Sign_Generate_ or _Sign
 ** a `Signature` substituted after the verification pass, to forge against the `k'` already computed.
 * The verification pass records 3, open or completed:
 ** while open, 3 tells it from signing pass 1, so that the finalization, also after an export and import, is that of the open pass;
-** once completed, 3 differs from the 2 of signing pass 2; otherwise _Sign_Generate_ would compute `S` from the public `k'` of the verification pass and the zero `r` that entering _Ready_ leaves, and reveal `s`.
+** once completed, 3 differs from the 2 of signing pass 2; otherwise _Sign_Generate_ would compute `S` from the `k'` of the verification pass, which anyone holding `R`, `A`, `ctx` and `M` can compute, and the zero `r` that entering _Ready_ leaves, and reveal `s`.
 * A completed signing pass 1 records 1, so that neither _Sign_Generate_ nor _Sign_Verify_ uses a `k'` never computed.
 * In pre-hash mode `msg_pass` plays no role: `PH(M)` in the `Hash` field feeds both hashes.
 ====
@@ -5112,7 +5150,7 @@ The procedures implemented by ML-KEM are taken directly from cite:[nist-fips-203
 // which a correct execution reaches with probability at most 2^-261.
 Following cite:[nist-fips-203] Appendix B, the loop of `SampleNTT` (Algorithm 7) iterates an indeterminate number of times.
 An implementation bounds it by an implementation-defined limit of at least the value given in Table 4 of that standard.
-The execution time need not be independent of the number of iterations (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+The execution time may depend on its number of iterations, which is a public value (Rule <<KLE-MGR-public-values>>).
 If the limit is reached, the operation ends in _Failure_, without output: its intermediate values and the values drawn for it are destroyed, and _MachineUse_ is zeroed.
 
 NOTE: cite:[nist-fips-203] Appendix B recommends not bounding the loop; KLE requires a bound, as for <<KLE-PQC-ML-DSA>>, so that every operation ends in bounded time.
@@ -5438,7 +5476,7 @@ The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204
 Following cite:[nist-fips-204] Appendix C, the loops of `ML-DSA.Sign_internal`, `RejBoundedPoly`, `RejNTTPoly` and
 `SampleInBall` iterate an indeterminate number of times.
 An implementation bounds each by an implementation-defined limit of at least the value given in Table 3 of that standard.
-The execution time need not be independent of the number of iterations (<<Zkl-ISA-unpriv.adoc#KLE-SCProtection-field>>).
+As cite:[nist-fips-204] allows, the execution time may depend on the number of iterations, which is a public value (Rule <<KLE-MGR-public-values>>).
 If a limit is reached, the operation ends in _Failure_, without output: its intermediate values and the values drawn
 for it, `xi` and `rnd` included, are destroyed, and _MachineUse_ is zeroed.
 

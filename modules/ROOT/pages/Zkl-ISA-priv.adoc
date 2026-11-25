@@ -350,11 +350,9 @@ Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>>, item 6, orders the `
 The hardware state of a locker with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the locker.
 +
 A KLE instruction _accesses_ ``K(``__i__``)`` if it names the locker as an operand, directly or as `KLNL` while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-klnamedlocker-override>>); if it is a `kl.load`, `kl.store`, `kl.mvin` or `kl.mvout` issued while `klnamedlocker` = _i_ (Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-locker-less-transfers>>); or if it is `kl.clearall`.
-An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except the accesses that item 6 of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> exempts.
-An exempted <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>> on a locker with an _Off_ field in effect sets every field in effect for the locker to _Dirty_, even if the locker was already _Unconfigured_, except a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination, which performs no operation (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>).
-An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized or overwritten the locker.
-+
-A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware locker as authoritative: a mode that held the authoritative image of the locker for lazy loading discards it, and M-mode, which alone emulates a locker, never again uses the emulated copy it held (<<KLE-unsupported-handling>>).
+An access to a locker with an _Off_ field in effect raises a KLE locker-Off exception, except the accesses that item 6 of Rule <<Zkl-ISA-unpriv.adoc#KLE-GR-management-check-order>> exempts: those of a `kl.clone`, `kl.rename` or `kl.swap` with identical source and destination, which performs no operation (<<Zkl-ISA-unpriv.adoc#KLE-instruction-clone>>).
+A <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,_destructive configuration instruction_>> is not exempt, although it would only discard the CC of the locker: it raises the exception and changes nothing.
+No instruction replaces an _Off_ field with _Dirty_ or any other value; only the mode that owns the field changes it, by a write to its CSR, once it has restored the locker, discarded its image or, for M-mode, stopped emulating the locker (<<KLE-unsupported-handling>>).
 +
 `kl.getmd*` on a locker with an _Off_ field in effect traps like any other access.
 +
@@ -377,7 +375,7 @@ The fields in effect are those owned by modes above the executing mode:
 `vsstatus.KLS` is in effect in Debug mode only when the debug access privilege is VS or VU.
 
 An access to ``K(``__i__``)`` raises KLE locker-Off if any field in effect for it is _Off_, subject to the exemptions above.
-An instruction that modifies the locker sets every field in effect for it to _Dirty_; it never writes its own mode's field.
+An instruction that modifies the locker, which it can only do when no field in effect for it is _Off_, sets every field in effect for it to _Dirty_; it never writes its own mode's field.
 A direct write to a `*llockerstatus` CSR changes no other distinct register in that group (<<KLE-priv-config-requirements>>).
 `mstatus.KLS`, and `vsstatus.KLS` when V=1, are also in effect (<<KLE-KLS-field-in-mstatus>>).
 
@@ -425,9 +423,9 @@ An emulator keeps one copy per locker slot and replaces it:
 The emulator discards the copy of a slot that an emulated `kl.rename` or `kl.swap` moves away, and of a destination slot that receives a native locker; for the latter it executes the instruction on the hardware lockers.
 In every case it leaves the `*llockerstatus` and `KLS` fields as the instruction would have set them.
 
-A copy orphaned by a <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,destructive configuration instruction>> is never used again but lingers until replaced.
-For robustness, as for a cleared locker (<<Zkl-ISA-unpriv.adoc#KLE-destructive-config>>), an emulator should zeroize a copy whose _Off_ mark is gone before M-mode next returns control to a less privileged mode.
-Checking `mllockerstatus` whenever the emulator runs finds such copies.
+A <<Zkl-ISA-unpriv.adoc#KLE-destructive-config,destructive configuration instruction>> that names an emulated slot, like a `kl.clearall` while any slot is emulated, raises a KLE locker-Off exception that M-mode takes like any other (<<KLE-CSR-llockerstatus>>).
+The emulator then either emulates the instruction, or stops emulating the slot: it zeroizes its copy, as for a cleared locker (<<Zkl-ISA-unpriv.adoc#KLE-destructive-config>>), writes the slot's `mllockerstatus` field to _Dirty_, and returns to the instruction, which executes on the hardware locker.
+No instruction thus leaves an emulated copy behind.
 
 // ////////////////////////////////////////////////////////////////////
 

@@ -162,7 +162,7 @@ section('Configuration States  <<KLE-GR-config-states>>')
 e = KLE(); e.mgmt(1, 56, md=mk())
 check('usage instruction on Provisioning -> privilege violation, State kept', trap(e.exec, 1) == 'privilege_violation' and trap(e.setst, 1, 2) == 'privilege_violation' and trap(e.clearads, 1) == 'privilege_violation' and e.getst(1) == 56)
 check('restrict on a Configuration-State locker -> privilege violation', trap(e.rstr, 1, mk()) == 'privilege_violation')
-check('clone from Configuration State -> privilege violation, destination cleared', (lambda: (prov(e, 2), trap(e.clone, 2, 1), e.md(2))[1:])() == ('privilege_violation', 0))
+check('clone from Configuration State -> privilege violation, destination unchanged', (lambda t: t[2] == 'privilege_violation' and t[1] == t[3] != 0)((prov(e, 2), e.md(2), trap(e.clone, 2, 1), e.md(2))))
 check('admitted in every State: getmd, getst, kl.size, clear, setste', trap(e.getmd, 1) is None and e.getst(1) == 56 and e.size(1) == 32 and trap(e.setste, 1, 2) is None)
 e = KLE(); e.mgmt(1, 56, md=mk()); FIN(e,1); e.mgmt(1, 57); check('kl.mgmt export opening in Ready: State 57 only change', stx(e, 1) == (57, 0))
 e = KLE(); prov(e, 1); m0 = e.md(1); e.mgmt(1, 57, form='A'); check('export opening changes no other MDH field', e.md(1) == mdh_put(m0, 'State', 57))
@@ -268,10 +268,12 @@ e = two(); e.nl = 3; e.clone(3, 1); check('clone: klnamedlocker naming dest -> 3
 e = two(); e.clone(3, 9); check('clone of Unconfigured source -> dest Unconfigured', e.md(3) == 0)
 e = two(); e.clone(2, 9); check('clone Unconfigured over a configured dest clears it', e.md(2) == 0 and e.slots == 7 + 1 - 1 + 1 - 1 + 0 + 0 + 0 or e.md(2) == 0)
 e = two(); e.setste(4, 3); e.clone(5, 4); check('clone of Error State: MDH alone, no capacity', stx(e, 5) == (0, 3) and e.slots == 6)
-e = two(); e.mgmt(4, 56, md=mk()); check('clone from Configuration State -> privilege violation; dest already cleared', trap(e.clone, 2, 4) == 'privilege_violation' and e.md(2) == 0)
+e = two(); e.mgmt(4, 56, md=mk()); m2 = e.md(2); e.nl = 2; check('clone from Configuration State -> privilege violation; dest and klnamedlocker unchanged', trap(e.clone, 2, 4) == 'privilege_violation' and e.md(2) == m2 and e.nl == 2)
 e = two(); e.slots = 0; check('clone out of memory -> kl_exc_out_of_memory, dest Unconfigured', trap(e.clone, 3, 1) == 'out_of_memory' and e.md(3) == 0)
+e = two(); e.slots = 0; check('clone counts the capacity of the destination as available', trap(e.clone, 2, 1) is None and e.md(2) == e.md(1) and e.slots == 0)
+e = two(); e.slots = 0; e.setste(4, 3); m4 = e.md(4); check('clone out of memory over an Error-State dest (no capacity): dest unchanged', trap(e.clone, 4, 1) == 'out_of_memory' and e.md(4) == m4)
 e = two(); e.nl = 1; e.clone(3, 'NL'); check('clone with source = KLNL (R=10)', e.md(3) == e.md(1))
-e = two(); e.nl = 3; e.clone('NL', 1); check('clone with dest = KLNL (R=01): dest cleared first, klnamedlocker 32, then copied', e.md(3) == e.md(1) and e.nl == 32)
+e = two(); e.nl = 3; e.clone('NL', 1); check('clone with dest = KLNL (R=01): dest replaced by the copy, klnamedlocker 32', e.md(3) == e.md(1) and e.nl == 32)
 e = two(); m1, m2 = e.md(1), e.md(2); e.rename(3, 1); check('rename moves CC; source Unconfigured', e.md(3) == m1 and e.md(1) == 0 and e.L[3].content == 0x55)
 e = two(); e.nl = 1; e.rename(3, 1); check('rename: klnamedlocker s -> d (GR21)', e.nl == 3)
 e = two(); e.nl = 4; e.rename(3, 4); check('rename with an Unconfigured named source: klnamedlocker s -> d all the same (GR21 item 3)', e.nl == 3 and e.md(3) == 0)
@@ -708,8 +710,8 @@ e = csks(); prov(e, 1, SCProtection=2); e.priv = 'S'; e.lstat[1] = 0
 check('Off precedes per-level CSK check on export; no automatic selection',
       trap_detail(e.mgmt, 1, 57) == ('locker_off', None) and e.csk_sel == 1 and e.csk_partial == [0x1234])
 e = csks(); e.priv = 'S'; e.lstat[1] = 0
-check('destructive import opening is Off-exempt and reaches the per-level check',
-      trap_detail(e.mgmt, 1, 58, md=im) == ('no_csk', 10) and e.csk_sel == 2 and e.csk_partial == [])
+check('destructive import opening is not Off-exempt: locker-Off precedes the per-level check, no automatic selection',
+      trap_detail(e.mgmt, 1, 58, md=im) == ('locker_off', None) and e.csk_sel == 1 and e.csk_partial == [0x1234] and e.lstat[1] == 0)
 for md, expected in ((mdh_put(im, 'Machine', 0x99), ('unsupported', None)), (mdh_put(im, 'Reserved46', 1), None)):
     e = csks(); e.siv = e.impqual = e.siv2 = 7
     check('invalid/support checks precede per-level CSK selection at import',
@@ -794,9 +796,11 @@ e = lowp(); e.lstat[1] = 0
 check('locker Off in lower modes: exec, setst, getmd, getst, restrict, size, clearads and KLNL aliases trap (kl_exc locker-Off)', all(trap(f, *a) == 'locker_off' for f, a in
       ((e.exec, (1,)), (e.setst, (1, 2)), (e.getmd, (1,)), (e.getst, (1,)), (e.rstr, (1, 0)), (e.size, (1,)), (e.clearads, (1,)), (e.setste, (1, 2)))) and (setattr(e, 'nl', 1), trap(e.getmd, 0, 1))[1] == 'locker_off')
 check('locker Off in M-mode: no gate (the field governs the modes below)', (setattr(e, 'priv', 'M'), trap(e.getmd, 1))[1] is None)
-e = lowp(); e.lstat[1] = 0
-check('destructive configuration is exempt: kl.clear, provisioning-opening and import-opening kl.mgmt', trap(e.clear, 1) is None and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 56, md=mk()))[1] is None
-      and (e.lstat.__setitem__(1, 0), trap(e.mgmt, 1, 58, md=mk(State=1)))[1] is None)
+e = lowp(); e.lstat[1] = 0; s0 = e.snap()
+check('destructive configuration is not exempt: kl.clear, provisioning-opening and import-opening kl.mgmt, clone/rename into the locker, kl.clearall raise locker-Off, change nothing, leave Off',
+      all(trap(e.run, f, *a, **kw) == 'locker_off' for f, a, kw in ((e.clear, (1,), {}), (e.mgmt, (1, 56), {'md': mk()}), (e.mgmt, (1, 58), {'md': mk(State=1)}), (e.clone, (1, 2), {}), (e.rename, (1, 2), {}), (e.clearall, (), {})))
+      and e.snap() == s0 and e.lstat[1] == 0)
+e = lowp(); e.clear(3); e.lstat[3] = 0; check('kl.clear of an Off, Unconfigured locker: locker-Off, the field stays Off', trap(e.run, e.clear, 3) == 'locker_off' and e.lstat[3] == 0)
 e = lowp(); e.lstat[1] = 0
 check('not exempt: export-opening and completing kl.mgmt, clone or rename into or out of it, kl.swap, the named-locker transfers', trap(e.mgmt, 1, 57, form='A') == 'locker_off' and trap(e.mgmt, 1, 63, form='A') == 'locker_off'
       and trap(e.clone, 2, 1) == 'locker_off' and trap(e.clone, 1, 2) == 'locker_off' and trap(e.rename, 2, 1) == 'locker_off' and trap(e.rename, 1, 2) == 'locker_off' and trap(e.swap, 1, 2) == 'locker_off' and trap(e.swap, 2, 1) == 'locker_off'
@@ -956,6 +960,10 @@ e = dl(); e.run(e.clearads, 1); check('kl.clearads on a locker with no ADS modif
 e = dl(); e.mode = 2; e.priv = 'S'; e.run(e.setst, 1, 2); check('kl.setst Encrypt (modifies): Dirty; other lockers untouched', e.lstat[1] == 3 and e.lstat[2] == 2)
 e = dl(); e.run(e.clear, 1); check('kl.clear of a configured locker: Dirty', e.lstat[1] == 3)
 e = dl(); e.run(e.clone, 3, 1); check('kl.clone: destination Dirty, source Clean', e.lstat[3] == 3 and e.lstat[1] == 2)
+e = dl(); e.mgmt(3, 56, md=mk()); e.lstat[2] = 0; m2 = e.md(2)
+check('kl.clone from a Configuration State into an Off destination: locker-Off, destination unchanged and still Off', trap(e.run, e.clone, 2, 3) == 'locker_off' and e.md(2) == m2 and e.lstat[2] == 0)
+e = dl(); e.mgmt(3, 56, md=mk()); m2 = e.md(2)
+check('kl.clone from a Configuration State: privilege violation, destination unchanged and still Clean', trap(e.run, e.clone, 2, 3) == 'privilege_violation' and e.md(2) == m2 and e.lstat[2] == 2)
 e = dl(); e.run(e.rename, 3, 1); check('kl.rename: both Dirty', e.lstat[1] == 3 and e.lstat[3] == 3)
 e = dl(); e.run(e.swap, 1, 3); check('kl.swap of two lockers with different contents: both Dirty', e.lstat[1] == 3 and e.lstat[3] == 3)
 e = dl(); e.run(e.swap, 1, 1); check('same-index swap: nothing modified, Clean', e.lstat[1] == 2)
@@ -963,7 +971,8 @@ e = dl(); e.run(e.mgmt, 3, 56, md=mk()); check('provisioning-opening kl.mgmt: Di
 e = dl(); e.run(e.setste, 1, 3); check('kl.setste: Dirty', e.lstat[1] == 3)
 e = dl(); e.run(e.rstr, 1, mdh_pack(MachinePolicy=1), part='l'); check('kl.rstrl that narrows: Dirty', e.lstat[1] == 3)
 e = dl(); e.run(e.rstr, 1, mdh_pack(MachinePolicy=3), part='l'); check('kl.rstrl that changes nothing: Clean', e.lstat[1] == 2)
-e = dl(); e.lstat[1] = 0; e.lstat[2] = 3; e.run(e.clearall); check('kl.clearall: Off stays Off, the Dirty one stays Dirty', e.lstat[1] == 0 and e.lstat[2] == 3)
+e = dl(); e.lstat[1] = 0; e.lstat[2] = 3; s0 = e.snap(); check('kl.clearall with an Off locker: locker-Off, nothing changed, Off stays Off, the Dirty one stays Dirty', trap(e.run, e.clearall) == 'locker_off' and e.snap() == s0 and e.lstat[1] == 0 and e.lstat[2] == 3)
+e = dl(); e.lstat[2] = 3; e.run(e.clearall); check('kl.clearall without an Off locker: changed lockers Dirty', e.lstat[1] == 3 and e.lstat[2] == 3 and e.md(1) == 0)
 
 section('kl.setste matrix, KLNL no-ops, moves of Error/Success/Failure  <<KLE-instruction-setste>>, <<KLE-GR-error-state-transition>>, <<KLE-GR-klnamedlocker-override>>')
 for se in (2, 3, 4, 5, 6):
